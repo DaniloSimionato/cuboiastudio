@@ -35,6 +35,7 @@ import {
 } from "../assistants/assistant-runtime";
 import { type CreateAssistantConversationDto } from "./dto/create-assistant-conversation.dto";
 import { type SendAssistantConversationMessageDto } from "./dto/send-assistant-conversation-message.dto";
+import { CalendarToolsService } from "../apps/calendar-tools.service";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -259,6 +260,7 @@ export class AssistantConversationsService {
     private readonly aiService: AiService,
     private readonly attachmentInterpreterService: AttachmentInterpreterService,
     private readonly chatwootInboxConfigService: ChatwootInboxConfigService,
+    private readonly calendarToolsService: CalendarToolsService,
   ) {}
 
   private assertTenantContext(input: { user: AuthenticatedUser; tenant: RequestTenant }): void {
@@ -1292,10 +1294,16 @@ export class AssistantConversationsService {
     });
 
     const conversationHistory = [...recentMessages].reverse();
-    const priorHistory = conversationHistory.slice(0, -1).map((message) => ({
-      role: message.role as "user" | "assistant",
-      content: message.content,
-    }));
+    const priorHistory = conversationHistory.slice(0, -1).map((message) => {
+      const payload = message.externalPayload && typeof message.externalPayload === "object" ? (message.externalPayload as any) : {};
+      return {
+        role: message.role as "user" | "assistant" | "tool",
+        content: message.content,
+        ...(payload.tool_calls ? { tool_calls: payload.tool_calls } : {}),
+        ...(payload.tool_call_id ? { tool_call_id: payload.tool_call_id } : {}),
+        ...(payload.name ? { name: payload.name } : {}),
+      };
+    });
     const contextMetadata = {
       historyMessagesUsed: priorHistory.length,
       historyLimit: MAX_RUNTIME_HISTORY_MESSAGES,
@@ -1356,20 +1364,114 @@ export class AssistantConversationsService {
         };
       } else {
         try {
-          const completion = await this.aiService.generateChatCompletion({
-            companyId: input.tenant.companyId,
-            messages: buildConversationPromptMessages({
-              assistantName: assistant.name,
-              assistantDescription: assistant.description,
-              initialMessage: assistant.initialMessage,
-              instructions: assistant.instructions,
-              knowledgeItems,
-              historyMessages: priorHistory,
-              currentMessage: interpretedMessage,
-            }),
-            model: resolvedModel.model,
-            temperature,
+          const calendarToolsActive = await this.areGoogleCalendarToolsAvailable(input.tenant.companyId);
+          const contactPhone = await this.resolveContactPhone(conversation.id, input.tenant.companyId, input.dto);
+          const tools = calendarToolsActive ? this.getGoogleCalendarToolsDefinitions() : undefined;
+
+          const promptMessages = buildConversationPromptMessages({
+            assistantName: assistant.name,
+            assistantDescription: assistant.description,
+            initialMessage: assistant.initialMessage,
+            instructions: assistant.instructions,
+            knowledgeItems,
+            historyMessages: priorHistory,
+            currentMessage: interpretedMessage,
+            calendarContext: calendarToolsActive ? {
+              conversationId: conversation.id,
+              contactPhone,
+            } : null,
           });
+
+          let loopCount = 0;
+          let toolCallsResolved = false;
+          let completion: any;
+
+          while (loopCount < 5 && !toolCallsResolved) {
+            completion = await this.aiService.generateChatCompletion({
+              companyId: input.tenant.companyId,
+              messages: promptMessages,
+              model: resolvedModel.model,
+              temperature,
+              tools,
+            });
+
+            if (completion.toolCalls && completion.toolCalls.length > 0) {
+              promptMessages.push({
+                role: "assistant",
+                content: completion.answer || "",
+                tool_calls: completion.toolCalls,
+              } as any);
+
+              await this.prisma.assistantConversationMessage.create({
+                data: {
+                  companyId: input.tenant.companyId,
+                  assistantId: input.assistantId,
+                  conversationId: conversation.id,
+                  role: "assistant",
+                  content: completion.answer || "",
+                  externalPayload: this.toSerializableJsonValue({
+                    tool_calls: completion.toolCalls,
+                  }),
+                  mode: "ai-runtime",
+                },
+              });
+
+              for (const toolCall of completion.toolCalls) {
+                const toolName = toolCall.function.name;
+                const toolArgs = JSON.parse(toolCall.function.arguments);
+                let resultString = "";
+
+                try {
+                  const isMutating = ["calendar.createBooking", "calendar.rescheduleBooking", "calendar.cancelBooking"].includes(toolName);
+                  if (isMutating) {
+                    await this.logToolAction(input.tenant.companyId, "confirmation_required", { toolName, args: toolArgs });
+
+                    const isConfirmed = /(sim|pode|confirmo|confirmar|isso\s+mesmo|ok|fechado|perfeito|pode\s+reservar|pode\s+cancelar|pode\s+remarcar)/i.test(interpretedMessage);
+                    if (!isConfirmed) {
+                      await this.logToolAction(input.tenant.companyId, "confirmation_missing", { toolName, args: toolArgs });
+                      resultString = JSON.stringify({
+                        error: "Confirmação pendente. Você deve apresentar os detalhes da ação (resumo claro) e pedir confirmação explícita ao usuário (ex: 'Confirmando: ..., posso confirmar?') antes de prosseguir."
+                      });
+                    } else {
+                      await this.logToolAction(input.tenant.companyId, "confirmation_received", { toolName, args: toolArgs });
+                      resultString = await this.executeTool(input.tenant.companyId, toolName, toolArgs);
+                    }
+                  } else {
+                    resultString = await this.executeTool(input.tenant.companyId, toolName, toolArgs);
+                  }
+                } catch (err) {
+                  const errMsg = err instanceof Error ? err.message : "Erro desconhecido na chamada da ferramenta.";
+                  resultString = JSON.stringify({ error: errMsg });
+                }
+
+                promptMessages.push({
+                  role: "tool",
+                  tool_call_id: toolCall.id,
+                  name: toolName,
+                  content: resultString,
+                } as any);
+
+                await this.prisma.assistantConversationMessage.create({
+                  data: {
+                    companyId: input.tenant.companyId,
+                    assistantId: input.assistantId,
+                    conversationId: conversation.id,
+                    role: "tool",
+                    content: resultString,
+                    externalPayload: this.toSerializableJsonValue({
+                      tool_call_id: toolCall.id,
+                      name: toolName,
+                    }),
+                    mode: "ai-runtime",
+                  },
+                });
+              }
+
+              loopCount++;
+            } else {
+              toolCallsResolved = true;
+            }
+          }
 
           answer = completion.answer;
           runtime = {
@@ -1382,6 +1484,7 @@ export class AssistantConversationsService {
             reason: undefined,
           };
         } catch (error) {
+          console.error("COMPLETION ERROR TRACE:", error);
           const fallbackReason = this.resolveProviderFallbackReason(error);
           providerErrorLogFields = this.extractProviderErrorLogFields(error);
           runtime = {
@@ -1497,5 +1600,340 @@ export class AssistantConversationsService {
       assistantMessage: toConversationMessageItem(assistantMessage),
       runtime,
     };
+  }
+
+  private async resolveContactPhone(
+    conversationId: string,
+    companyId: string,
+    dto: SendAssistantConversationMessageDto
+  ): Promise<string> {
+    if (dto.externalSenderPhone?.trim()) {
+      return dto.externalSenderPhone.trim();
+    }
+    if (dto.contact?.phone?.trim()) {
+      return dto.contact.phone.trim();
+    }
+
+    const lastUserMsg = await this.prisma.assistantConversationMessage.findFirst({
+      where: {
+        conversationId,
+        companyId,
+        role: "user",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (lastUserMsg && lastUserMsg.externalPayload) {
+      const payload = lastUserMsg.externalPayload as any;
+      if (payload.externalSenderPhone) return payload.externalSenderPhone;
+      if (payload.contact?.phone) return payload.contact.phone;
+    }
+
+    return "";
+  }
+
+  private async areGoogleCalendarToolsAvailable(companyId: string): Promise<boolean> {
+    try {
+      const app = await this.prisma.app.findUnique({
+        where: { slug: "google_calendar" },
+        select: { id: true },
+      });
+      if (!app) return false;
+
+      const installation = await this.prisma.appInstallation.findUnique({
+        where: {
+          companyId_appId: {
+            companyId,
+            appId: app.id,
+          },
+        },
+        select: { status: true, id: true },
+      });
+      if (!installation || installation.status !== "ACTIVE") return false;
+
+      const credential = await this.prisma.appCredential.findFirst({
+        where: {
+          companyId,
+          installationId: installation.id,
+          provider: "google",
+          status: "ACTIVE",
+        },
+      });
+      if (!credential) return false;
+
+      const activeResource = await this.prisma.googleCalendarResource.findFirst({
+        where: {
+          companyId,
+          installationId: installation.id,
+          active: true,
+        },
+      });
+      return !!activeResource;
+    } catch {
+      return false;
+    }
+  }
+
+  private getGoogleCalendarToolsDefinitions() {
+    return [
+      {
+        type: "function",
+        function: {
+          name: "calendar.checkAvailability",
+          description: "Consulta horários disponíveis (slots livres) em recursos conectados ao Google Agenda para um esporte, tipo de recurso ou cobertura específica em uma data e intervalo de horas.",
+          parameters: {
+            type: "object",
+            properties: {
+              date: {
+                type: "string",
+                description: "A data no formato YYYY-MM-DD (ex: 2026-07-04)"
+              },
+              timeFrom: {
+                type: "string",
+                description: "O horário de início no formato HH:MM (ex: 08:00)"
+              },
+              timeTo: {
+                type: "string",
+                description: "O horário de fim no formato HH:MM (ex: 18:00)"
+              },
+              sportType: {
+                type: "string",
+                description: "Opcional. Tipo de esporte (ex: beach_tennis, padel, futebol)"
+              },
+              resourceType: {
+                type: "string",
+                description: "Opcional. Tipo de recurso/quadra (ex: aberta, coberta, quadra)"
+              },
+              isCovered: {
+                type: "boolean",
+                description: "Opcional. Se o recurso deve ser coberto (true) ou descoberto (false)"
+              },
+              durationMinutes: {
+                type: "integer",
+                description: "Opcional. Duração do agendamento em minutos. Padrão é 60."
+              }
+            },
+            required: ["date", "timeFrom", "timeTo"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "calendar.createBooking",
+          description: "Cria uma nova reserva localmente e no Google Agenda. ATENÇÃO: Esta ação exige confirmação explícita prévia do cliente (como 'sim', 'confirmo', 'pode reservar') contendo um resumo claro dos detalhes antes de ser executada.",
+          parameters: {
+            type: "object",
+            properties: {
+              resourceId: {
+                type: "string",
+                description: "O ID do recurso (quadra/sala) a ser reservado"
+              },
+              contactName: {
+                type: "string",
+                description: "Nome do contato para a reserva"
+              },
+              contactPhone: {
+                type: "string",
+                description: "Telefone do contato para a reserva"
+              },
+              startAt: {
+                type: "string",
+                description: "Data e hora de início no formato ISO 8601 (ex: 2026-07-04T13:00:00.000Z)"
+              },
+              endAt: {
+                type: "string",
+                description: "Data e hora de fim no formato ISO 8601 (ex: 2026-07-04T14:00:00.000Z)"
+              },
+              notes: {
+                type: "string",
+                description: "Opcional. Observações ou notas adicionais para a reserva"
+              }
+            },
+            required: ["resourceId", "contactName", "contactPhone", "startAt", "endAt"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "calendar.getBookingsByContact",
+          description: "Lista agendamentos/reservas futuras ativas de um cliente baseado no número de telefone do contato.",
+          parameters: {
+            type: "object",
+            properties: {
+              contactPhone: {
+                type: "string",
+                description: "O número de telefone do contato (ex: 67999999999)"
+              }
+            },
+            required: ["contactPhone"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "calendar.rescheduleBooking",
+          description: "Remarca uma reserva confirmada para uma nova data, horário e opcionalmente um novo recurso. ATENÇÃO: Esta ação exige confirmação explícita prévia do cliente contendo um resumo claro antes de ser executada.",
+          parameters: {
+            type: "object",
+            properties: {
+              bookingId: {
+                type: "string",
+                description: "O ID da reserva existente a ser remarcada"
+              },
+              newStartAt: {
+                type: "string",
+                description: "Nova data e hora de início no formato ISO 8601 (ex: 2026-07-04T15:00:00.000Z)"
+              },
+              newEndAt: {
+                type: "string",
+                description: "Nova data e hora de fim no formato ISO 8601 (ex: 2026-07-04T16:00:00.000Z)"
+              },
+              newResourceId: {
+                type: "string",
+                description: "Opcional. Novo ID do recurso se estiver mudando de quadra/sala"
+              },
+              reason: {
+                type: "string",
+                description: "Opcional. Motivo da remarcação"
+              }
+            },
+            required: ["bookingId", "newStartAt", "newEndAt"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "calendar.cancelBooking",
+          description: "Cancela uma reserva confirmada existente e a remove do Google Agenda. ATENÇÃO: Esta ação exige confirmação explícita prévia do cliente contendo um resumo claro antes de ser executada.",
+          parameters: {
+            type: "object",
+            properties: {
+              bookingId: {
+                type: "string",
+                description: "O ID da reserva a ser cancelada"
+              },
+              reason: {
+                type: "string",
+                description: "Opcional. Motivo do cancelamento"
+              }
+            },
+            required: ["bookingId"]
+          }
+        }
+      }
+    ];
+  }
+
+  private async executeTool(companyId: string, toolName: string, args: any): Promise<string> {
+    const startedAt = Date.now();
+    await this.logToolAction(companyId, "tool_call_requested", { toolName, arguments: args });
+
+    try {
+      let result: any;
+      if (toolName === "calendar.checkAvailability") {
+        result = await this.calendarToolsService.checkAvailability({
+          companyId,
+          dto: args,
+        });
+      } else if (toolName === "calendar.createBooking") {
+        result = await this.calendarToolsService.createBooking({
+          companyId,
+          dto: args,
+        });
+      } else if (toolName === "calendar.getBookingsByContact") {
+        result = await this.calendarToolsService.getBookingsByContact({
+          companyId,
+          query: args,
+        });
+      } else if (toolName === "calendar.rescheduleBooking") {
+        result = await this.calendarToolsService.rescheduleBooking({
+          companyId,
+          bookingId: args.bookingId,
+          dto: args,
+        });
+      } else if (toolName === "calendar.cancelBooking") {
+        result = await this.calendarToolsService.cancelBooking({
+          companyId,
+          bookingId: args.bookingId,
+          dto: args,
+        });
+      } else {
+        throw new Error(`Tool not found: ${toolName}`);
+      }
+
+      await this.logToolAction(companyId, "tool_call_completed", { toolName, durationMs: Date.now() - startedAt });
+      return JSON.stringify(result);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : "Erro na chamada do Google Agenda.";
+      await this.logToolAction(companyId, "tool_call_failed", { toolName, error: errMsg }, "ERROR");
+      throw err;
+    }
+  }
+
+  private sanitizeMetadata(metadata: any): any {
+    if (!metadata) return metadata;
+    try {
+      const str = JSON.stringify(metadata);
+      const sanitized = str
+        .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+        .replace(/"[^"]*token[^"]*"\s*:\s*"[^"]*"/gi, (match) => {
+          const parts = match.split(":");
+          return `${parts[0]}:"[redacted]"`;
+        })
+        .replace(/"[^"]*secret[^"]*"\s*:\s*"[^"]*"/gi, (match) => {
+          const parts = match.split(":");
+          return `${parts[0]}:"[redacted]"`;
+        })
+        .replace(/access_token\s*[:=]\s*[^\s,;}]+/gi, "access_token: [redacted]")
+        .replace(/refresh_token\s*[:=]\s*[^\s,;}]+/gi, "refresh_token: [redacted]")
+        .replace(/client_secret\s*[:=]\s*[^\s,;}]+/gi, "client_secret: [redacted]");
+      return JSON.parse(sanitized);
+    } catch {
+      return metadata;
+    }
+  }
+
+  private async logToolAction(
+    companyId: string,
+    action: string,
+    metadata: any,
+    status: "SUCCESS" | "ERROR" = "SUCCESS"
+  ): Promise<void> {
+    try {
+      const app = await this.prisma.app.findFirst({
+        where: { slug: "google_calendar" },
+        select: { id: true },
+      });
+      if (!app) return;
+
+      const installation = await this.prisma.appInstallation.findUnique({
+        where: {
+          companyId_appId: {
+            companyId,
+            appId: app.id,
+          },
+        },
+        select: { id: true },
+      });
+
+      const sanitizedMetadata = this.sanitizeMetadata(metadata);
+
+      await this.prisma.appActionLog.create({
+        data: {
+          companyId,
+          appId: app.id,
+          installationId: installation?.id ?? null,
+          action,
+          status,
+          metadata: this.toSerializableJsonValue(sanitizedMetadata),
+        },
+      });
+    } catch (err) {
+      this.logger.error("Failed to write safe log for Google Calendar tool", err);
+    }
   }
 }

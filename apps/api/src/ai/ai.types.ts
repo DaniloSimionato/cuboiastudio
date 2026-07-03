@@ -29,8 +29,11 @@ export interface AiResolvedRuntimeConfig extends AiRuntimeConfig {
 }
 
 export interface AiChatCompletionMessage {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
+  tool_calls?: any[];
+  tool_call_id?: string;
+  name?: string;
 }
 
 export interface AiChatCompletionInput {
@@ -38,6 +41,7 @@ export interface AiChatCompletionInput {
   temperature?: number;
   model?: string;
   companyId?: string;
+  tools?: any[];
 }
 
 export interface AiChatCompletionResult {
@@ -45,6 +49,7 @@ export interface AiChatCompletionResult {
   model: string;
   answer: string;
   durationMs: number;
+  toolCalls?: any[];
 }
 
 export interface AiProviderErrorDetails {

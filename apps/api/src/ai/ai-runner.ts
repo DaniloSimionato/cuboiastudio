@@ -16,7 +16,8 @@ import type {
 
 type OpenAiCompatibleChoice = {
   message?: {
-    content?: string;
+    content?: string | null;
+    tool_calls?: any[];
   };
   text?: string;
 };
@@ -80,6 +81,7 @@ export async function runOpenAiCompatibleChatCompletion(
     model,
     messages,
     temperature: typeof input.temperature === "number" ? input.temperature : 0.2,
+    ...(input.tools ? { tools: input.tools } : {}),
   };
   const url = buildChatCompletionsUrl(config.baseUrl);
   const startedAt = Date.now();
@@ -106,8 +108,10 @@ export async function runOpenAiCompatibleChatCompletion(
 
     const data = (await response.json().catch(() => null)) as OpenAiCompatibleResponse | null;
     const answer = extractAnswer(data);
+    const choice = data?.choices?.[0];
+    const toolCalls = choice?.message?.tool_calls;
 
-    if (!answer) {
+    if (!answer && (!toolCalls || toolCalls.length === 0)) {
       throw new BadGatewayException("AI provider returned an invalid response.");
     }
 
@@ -116,6 +120,7 @@ export async function runOpenAiCompatibleChatCompletion(
       model,
       answer,
       durationMs: Date.now() - startedAt,
+      ...(toolCalls ? { toolCalls } : {}),
     };
   } catch (error) {
     if (
@@ -136,13 +141,25 @@ export async function runOpenAiCompatibleChatCompletion(
   }
 }
 
-function normalizeMessages(messages: AiChatCompletionMessage[]): AiChatCompletionMessage[] {
+function normalizeMessages(messages: AiChatCompletionMessage[]): any[] {
   return messages
-    .map((message) => ({
-      role: message.role,
-      content: message.content.trim(),
-    }))
-    .filter((message) => message.content.length > 0);
+    .map((message) => {
+      const normalized: any = {
+        role: message.role,
+        content: message.content ? message.content.trim() : "",
+      };
+      if (message.tool_calls) {
+        normalized.tool_calls = message.tool_calls;
+      }
+      if (message.tool_call_id) {
+        normalized.tool_call_id = message.tool_call_id;
+      }
+      if (message.name) {
+        normalized.name = message.name;
+      }
+      return normalized;
+    })
+    .filter((message) => message.content.length > 0 || message.tool_calls || message.role === "tool");
 }
 
 function buildChatCompletionsUrl(baseUrl: string): string {

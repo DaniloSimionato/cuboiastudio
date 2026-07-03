@@ -7,8 +7,11 @@ type AssistantKnowledgeInput = {
 };
 
 type AssistantConversationHistoryMessage = {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "tool";
   content: string;
+  tool_calls?: any[];
+  tool_call_id?: string;
+  name?: string;
 };
 
 export type AssistantRuntimeSource = {
@@ -24,6 +27,10 @@ type AssistantConversationPromptInput = {
   knowledgeItems: AssistantKnowledgeInput[];
   historyMessages: AssistantConversationHistoryMessage[];
   currentMessage: string;
+  calendarContext?: {
+    conversationId: string;
+    contactPhone: string;
+  } | null;
 };
 
 const MAX_PROMPT_TEXT_LENGTH = 1200;
@@ -134,6 +141,20 @@ export function buildConversationPromptMessages(
     },
   ];
 
+  if (input.calendarContext) {
+    messages.push({
+      role: "system",
+      content: [
+        "Instruções do Sistema de Reservas/Calendário:",
+        "- Para consultar horários disponíveis, use a ferramenta 'calendar.checkAvailability'. Se houver várias opções, apresente no máximo 5 opções claras.",
+        "- Antes de criar, remarcar ou cancelar uma reserva, você DEVE apresentar um resumo claro dos detalhes (recurso, data, horário, nome e telefone) e pedir a confirmação explícita do usuário (ex: 'Confirmando: ..., posso confirmar?'). NUNCA chame as ferramentas de criação, remarcação ou cancelamento sem obter essa confirmação explícita.",
+        `- Dados do cliente atual: Telefone: ${input.calendarContext.contactPhone}. ID da conversa: ${input.calendarContext.conversationId}.`,
+        "- Nunca invente disponibilidade ou diga que reservou sem que a ferramenta retorne sucesso.",
+        "- Se a ferramenta falhar, explique de forma amigável sem expor detalhes técnicos e sem mostrar segredos."
+      ].join("\n"),
+    });
+  }
+
   const assistantIdentity = [
     `Nome do assistente: ${input.assistantName}`,
     input.assistantDescription?.trim()
@@ -179,7 +200,10 @@ export function buildConversationPromptMessages(
     messages.push({
       role: message.role,
       content: truncateText(message.content, MAX_HISTORY_MESSAGE_LENGTH),
-    });
+      ...(message.tool_calls ? { tool_calls: message.tool_calls } : {}),
+      ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
+      ...(message.name ? { name: message.name } : {}),
+    } as any);
   }
 
   messages.push({
