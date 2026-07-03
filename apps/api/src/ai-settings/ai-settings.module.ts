@@ -1,0 +1,11 @@
+import { Global, Module } from "@nestjs/common";
+import { AiSettingsController } from "./ai-settings.controller";
+import { AiSettingsService } from "./ai-settings.service";
+
+@Global()
+@Module({
+  controllers: [AiSettingsController],
+  providers: [AiSettingsService],
+  exports: [AiSettingsService],
+})
+export class AiSettingsModule {}

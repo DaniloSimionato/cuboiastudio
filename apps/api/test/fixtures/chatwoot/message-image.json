@@ -1,0 +1,28 @@
+{
+  "event": "message_created",
+  "account": { "id": "account-1" },
+  "inbox": { "id": "inbox-1", "identifier": "inbox-1" },
+  "conversation": { "id": "conversation-1", "meta": { "title": "Conversa WhatsApp" } },
+  "message": {
+    "id": "message-image-1",
+    "content": "",
+    "sender_type": "contact",
+    "message_type": "incoming",
+    "attachments": [
+      {
+        "file_name": "print-tela.png",
+        "mime_type": "image/png",
+        "type": "image",
+        "size": 128734,
+        "data_url": "https://example.com/print-tela.png",
+        "thumb_url": "https://example.com/print-tela-thumb.png",
+        "caption": "Print com texto visível"
+      }
+    ]
+  },
+  "contact": {
+    "id": "contact-1",
+    "name": "Cliente Teste",
+    "phone_number": "+5511999999999"
+  }
+}

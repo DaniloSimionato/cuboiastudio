@@ -1,0 +1,27 @@
+{
+  "event": "message_created",
+  "account": { "id": "account-1" },
+  "inbox": { "id": "inbox-1", "identifier": "inbox-1" },
+  "conversation": { "id": "conversation-1", "meta": { "title": "Conversa WhatsApp" } },
+  "message": {
+    "id": "message-pdf-1",
+    "content": "",
+    "sender_type": "contact",
+    "message_type": "incoming",
+    "attachments": [
+      {
+        "file_name": "arquivo.pdf",
+        "mime_type": "application/pdf",
+        "type": "document",
+        "size": 248193,
+        "data_url": "https://example.com/arquivo.pdf",
+        "caption": "PDF com texto"
+      }
+    ]
+  },
+  "contact": {
+    "id": "contact-1",
+    "name": "Cliente Teste",
+    "phone_number": "+5511999999999"
+  }
+}

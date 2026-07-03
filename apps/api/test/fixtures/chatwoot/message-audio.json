@@ -1,0 +1,27 @@
+{
+  "event": "message_created",
+  "account": { "id": "account-1" },
+  "inbox": { "id": "inbox-1", "identifier": "inbox-1" },
+  "conversation": { "id": "conversation-1", "meta": { "title": "Conversa WhatsApp" } },
+  "message": {
+    "id": "message-audio-1",
+    "content": "",
+    "sender_type": "contact",
+    "message_type": "incoming",
+    "attachments": [
+      {
+        "file_name": "audio.webm",
+        "mime_type": "audio/webm",
+        "type": "audio",
+        "size": 45218,
+        "data_url": "https://example.com/audio.webm",
+        "caption": "Áudio curto"
+      }
+    ]
+  },
+  "contact": {
+    "id": "contact-1",
+    "name": "Cliente Teste",
+    "phone_number": "+5511999999999"
+  }
+}

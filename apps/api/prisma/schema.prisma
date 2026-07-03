@@ -1,0 +1,562 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Status {
+  ACTIVE
+  INACTIVE
+}
+
+enum ConversationSource {
+  UNKNOWN
+  MANUAL_TEST
+  CHATWOOT
+  SMOKE
+  SYSTEM
+}
+
+enum ConversationChannelType {
+  UNKNOWN
+  WHATSAPP
+  INSTAGRAM
+  WEBCHAT
+}
+
+enum AppInstallationStatus {
+  ACTIVE
+  INACTIVE
+  ERROR
+}
+
+enum AppCredentialType {
+  OAUTH2
+  API_KEY
+}
+
+enum AppActionStatus {
+  SUCCESS
+  ERROR
+}
+
+enum GoogleCalendarBookingStatus {
+  CONFIRMED
+  CANCELLED
+  RESCHEDULED
+  ERROR
+  FAILED
+}
+
+model Company {
+  id        String    @id @default(cuid())
+  name      String
+  document  String?
+  status    Status    @default(ACTIVE)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  users                         User[]
+  aiSettings                    CompanyAiSettings?
+  chatwootInboxConfigs          ChatwootInboxConfig[]
+  roles                         Role[]
+  assistants                    Assistant[]
+  assistantConversations        AssistantConversation[]
+  assistantConversationMessages AssistantConversationMessage[]
+  assistantKnowledgeItems       AssistantKnowledge[]
+  assistantPreviewLogs          AssistantPreviewLog[]
+  assistantRuntimeLogs          AssistantRuntimeLog[]
+  appInstallations              AppInstallation[]
+  appCredentials                AppCredential[]
+  appActionLogs                 AppActionLog[]
+  googleCalendarResources       GoogleCalendarResource[]
+  googleCalendarBookings        GoogleCalendarBooking[]
+
+  @@index([status])
+  @@index([deletedAt])
+  @@map("companies")
+}
+
+model App {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String?
+  status      Status   @default(ACTIVE)
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  installations AppInstallation[]
+  actionLogs    AppActionLog[]
+
+  @@index([status])
+  @@map("apps")
+}
+
+model AppInstallation {
+  id                String                @id @default(cuid())
+  companyId         String
+  appId             String
+  status            AppInstallationStatus @default(ACTIVE)
+  lastErrorCode     String?
+  lastErrorMessage  String?
+  installedByUserId String?
+  metadata          Json?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  company                 Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  app                     App                      @relation(fields: [appId], references: [id], onDelete: Restrict)
+  credentials             AppCredential[]
+  actionLogs              AppActionLog[]
+  googleCalendarResources GoogleCalendarResource[]
+  googleCalendarBookings  GoogleCalendarBooking[]
+
+  @@unique([companyId, appId])
+  @@index([companyId])
+  @@index([appId])
+  @@index([status])
+  @@map("app_installations")
+}
+
+model AppCredential {
+  id                    String            @id @default(cuid())
+  companyId             String
+  installationId        String
+  type                  AppCredentialType @default(OAUTH2)
+  provider              String            @default("google")
+  providerAccountEmail  String?
+  encryptedAccessToken  String?
+  accessTokenIv         String?
+  accessTokenAuthTag    String?
+  encryptedRefreshToken String?
+  refreshTokenIv        String?
+  refreshTokenAuthTag   String?
+  scopes                String?
+  expiresAt             DateTime?
+  status                Status            @default(ACTIVE)
+  connectedAt           DateTime?
+  lastRefreshAt         DateTime?
+  metadata              Json?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  company      Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  installation AppInstallation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([installationId])
+  @@index([provider])
+  @@index([status])
+  @@map("app_credentials")
+}
+
+model AppActionLog {
+  id             String          @id @default(cuid())
+  companyId      String
+  appId          String
+  installationId String?
+  action         String
+  status         AppActionStatus
+  targetType     String?
+  targetId       String?
+  errorCode      String?
+  errorMessage   String?
+  metadata       Json?
+  createdAt      DateTime        @default(now())
+
+  company      Company          @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  app          App              @relation(fields: [appId], references: [id], onDelete: Restrict)
+  installation AppInstallation? @relation(fields: [installationId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
+  @@index([appId, createdAt])
+  @@index([installationId, createdAt])
+  @@index([action])
+  @@index([status])
+  @@map("app_action_logs")
+}
+
+model CompanyAiSettings {
+  id               String    @id @default(cuid())
+  companyId        String    @unique
+  runtimeEnabled   Boolean   @default(false)
+  provider         String    @default("openai-compatible")
+  baseUrl          String?
+  model            String?
+  encryptedApiKey  String?
+  apiKeyIv         String?
+  apiKeyAuthTag    String?
+  requestTimeoutMs Int       @default(30000)
+  status           Status    @default(ACTIVE)
+  lastTestAt       DateTime?
+  lastTestStatus   String?
+  lastTestError    String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+  @@map("company_ai_settings")
+}
+
+model ChatwootInboxConfig {
+  id                      String   @id @default(cuid())
+  companyId               String
+  assistantId             String?
+  name                    String
+  baseUrl                 String
+  accountId               String
+  inboxId                 String
+  apiAccessTokenEncrypted String?
+  apiAccessTokenIv        String?
+  apiAccessTokenAuthTag   String?
+  webhookSecretEncrypted  String?
+  webhookSecretIv         String?
+  webhookSecretAuthTag    String?
+  isActive                Boolean  @default(true)
+  metadataJson            Json?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  assistant Assistant? @relation(fields: [assistantId], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, accountId, inboxId])
+  @@index([companyId])
+  @@index([assistantId])
+  @@index([accountId])
+  @@index([inboxId])
+  @@index([isActive])
+  @@map("chatwoot_inbox_configs")
+}
+
+model User {
+  id        String    @id @default(cuid())
+  companyId String
+  name      String
+  email     String    @unique
+  status    Status    @default(ACTIVE)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  company                Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  userRoles              UserRole[]
+  assistantConversations AssistantConversation[]
+  assistantPreviewLogs   AssistantPreviewLog[]
+
+  @@index([companyId])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  companyId   String?
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company         Company?         @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String   @id @default(cuid())
+  roleId       String
+  permissionId String
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  id        String   @id @default(cuid())
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model Assistant {
+  id             String   @id @default(cuid())
+  companyId      String
+  name           String
+  description    String?
+  initialMessage String?
+  instructions   String?
+  model          String?
+  temperature    Float?
+  status         Status   @default(ACTIVE)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  company                       Company                        @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  knowledgeItems                AssistantKnowledge[]
+  conversations                 AssistantConversation[]
+  chatwootInboxConfigs          ChatwootInboxConfig[]
+  previewLogs                   AssistantPreviewLog[]
+  runtimeLogs                   AssistantRuntimeLog[]
+  assistantConversationMessages AssistantConversationMessage[]
+
+  @@index([companyId])
+  @@index([status])
+  @@index([updatedAt])
+  @@map("assistants")
+}
+
+model AssistantKnowledge {
+  id          String   @id @default(cuid())
+  assistantId String
+  companyId   String
+  title       String
+  content     String
+  status      Status   @default(ACTIVE)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  assistant Assistant @relation(fields: [assistantId], references: [id], onDelete: Restrict)
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+  @@index([assistantId])
+  @@index([status])
+  @@index([updatedAt])
+  @@map("assistant_knowledge")
+}
+
+model AssistantConversation {
+  id                     String                  @id @default(cuid())
+  companyId              String
+  assistantId            String
+  userId                 String?
+  title                  String?
+  source                 ConversationSource      @default(UNKNOWN)
+  channelType            ConversationChannelType @default(UNKNOWN)
+  externalAccountId      String?
+  sourceProvider         String?
+  externalConversationId String?
+  externalContactId      String?
+  externalChannelId      String?
+  externalInboxId        String?
+  pausedByHuman          Boolean                 @default(false)
+  lastMessageAt          DateTime?
+  status                 Status                  @default(ACTIVE)
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+
+  company                Company                        @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  assistant              Assistant                      @relation(fields: [assistantId], references: [id], onDelete: Restrict)
+  user                   User?                          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  messages               AssistantConversationMessage[]
+  googleCalendarBookings GoogleCalendarBooking[]
+
+  @@unique([companyId, assistantId, externalAccountId, externalConversationId])
+  @@index([companyId])
+  @@index([assistantId])
+  @@index([source])
+  @@index([channelType])
+  @@index([externalAccountId])
+  @@index([externalConversationId])
+  @@index([externalChannelId])
+  @@index([createdAt])
+  @@index([updatedAt])
+  @@map("assistant_conversations")
+}
+
+model AssistantConversationMessage {
+  id                String   @id @default(cuid())
+  companyId         String
+  assistantId       String
+  conversationId    String
+  role              String
+  content           String
+  source            String?
+  messageType       String?
+  externalMessageId String?
+  externalPayload   Json?
+  attachments       Json?
+  sources           Json?
+  mode              String?
+  createdAt         DateTime @default(now())
+
+  company      Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  assistant    Assistant             @relation(fields: [assistantId], references: [id], onDelete: Restrict)
+  conversation AssistantConversation @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, source, externalMessageId])
+  @@index([companyId])
+  @@index([assistantId])
+  @@index([conversationId])
+  @@index([externalMessageId])
+  @@index([createdAt])
+  @@map("assistant_conversation_messages")
+}
+
+model AssistantPreviewLog {
+  id          String   @id @default(cuid())
+  companyId   String
+  assistantId String
+  userId      String?
+  question    String
+  answer      String
+  mode        String
+  sources     Json?
+  createdAt   DateTime @default(now())
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  assistant Assistant @relation(fields: [assistantId], references: [id], onDelete: Restrict)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([companyId])
+  @@index([assistantId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("assistant_preview_logs")
+}
+
+model AssistantRuntimeLog {
+  id                     String   @id @default(cuid())
+  companyId              String
+  assistantId            String?
+  conversationId         String?
+  userMessageId          String?
+  assistantMessageId     String?
+  mode                   String
+  status                 String
+  provider               String?
+  model                  String?
+  configurationSource    String?
+  fallback               Boolean  @default(false)
+  fallbackReason         String?
+  outcome                String?
+  durationMs             Int?
+  providerStatus         Int?
+  providerErrorType      String?
+  providerErrorCode      String?
+  providerErrorMessage   String?
+  knowledgeCount         Int?
+  historyMessagesUsed    Int?
+  historyLimit           Int?
+  initialMessageIncluded Boolean  @default(false)
+  instructionsIncluded   Boolean  @default(false)
+  createdAt              DateTime @default(now())
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  assistant Assistant? @relation(fields: [assistantId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
+  @@index([assistantId, createdAt])
+  @@index([conversationId])
+  @@map("assistant_runtime_logs")
+}
+
+model GoogleCalendarResource {
+  id                     String   @id @default(cuid())
+  companyId              String
+  installationId         String
+  calendarId             String
+  name                   String
+  resourceType           String
+  sportType              String
+  isCovered              Boolean  @default(false)
+  timezone               String   @default("America/Campo_Grande")
+  slotMinutes            Int      @default(30)
+  defaultDurationMinutes Int      @default(60)
+  minAdvanceMinutes      Int      @default(60)
+  maxDaysAhead           Int      @default(14)
+  active                 Boolean  @default(true)
+  metadata               Json?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  company      Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  installation AppInstallation         @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  bookings     GoogleCalendarBooking[]
+
+  @@unique([companyId, installationId, calendarId])
+  @@index([companyId])
+  @@index([installationId])
+  @@index([active])
+  @@index([resourceType])
+  @@index([sportType])
+  @@map("google_calendar_resources")
+}
+
+model GoogleCalendarBooking {
+  id                       String                      @id @default(cuid())
+  companyId                String
+  installationId           String
+  resourceId               String
+  googleEventId            String
+  conversationId           String?
+  contactName              String?
+  contactPhone             String?
+  contactPhoneNormalized   String?
+  startAt                  DateTime
+  endAt                    DateTime
+  status                   GoogleCalendarBookingStatus @default(CONFIRMED)
+  createdBy                String
+  source                   String                      @default("ai_tool")
+  idempotencyKey           String?
+  cancelledAt              DateTime?
+  rescheduledFromBookingId String?
+  metadata                 Json?
+  createdAt                DateTime                    @default(now())
+  updatedAt                DateTime                    @updatedAt
+
+  company      Company                @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  installation AppInstallation        @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  resource     GoogleCalendarResource @relation(fields: [resourceId], references: [id], onDelete: Restrict)
+  conversation AssistantConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, installationId, googleEventId])
+  @@unique([companyId, idempotencyKey])
+  @@index([companyId])
+  @@index([installationId])
+  @@index([resourceId])
+  @@index([conversationId])
+  @@index([contactPhoneNormalized])
+  @@index([startAt])
+  @@index([status])
+  @@map("google_calendar_bookings")
+}

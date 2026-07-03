@@ -1,0 +1,149 @@
+import { apiFetch } from "./apiClient";
+import type {
+  BackendAssistantListItem,
+  BackendAssistantPreviewResponse,
+  BackendAssistantResponse,
+  BackendAssistantRunResponse,
+  BackendStatus,
+} from "@/types";
+
+type AssistantsListResponse = {
+  items: BackendAssistantListItem[];
+};
+
+type AssistantKnowledgeListResponse = {
+  items: Array<{
+    id: string;
+    title: string;
+    content: string;
+    status: BackendStatus;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+};
+
+type PreviewLogsResponse = {
+  items: Array<{
+    id: string;
+    question: string;
+    answer: string;
+    mode: string;
+    sources: Array<{ id: string; title: string }>;
+    createdAt: string;
+  }>;
+};
+
+export const backendAssistantsService = {
+  async list(options: { signal?: AbortSignal } = {}): Promise<BackendAssistantListItem[]> {
+    const response = await apiFetch<AssistantsListResponse>("/assistants", {
+      signal: options.signal,
+    });
+    return response.items;
+  },
+
+  async get(id: string): Promise<BackendAssistantResponse> {
+    return apiFetch<BackendAssistantResponse>(`/assistants/${id}`);
+  },
+
+  async create(input: {
+    name: string;
+    description?: string | null;
+    initialMessage?: string | null;
+    instructions?: string | null;
+    model?: string | null;
+    temperature?: number | null;
+  }): Promise<BackendAssistantResponse> {
+    return apiFetch<BackendAssistantResponse>("/assistants", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  async update(
+    id: string,
+    input: {
+      name?: string;
+      description?: string | null;
+      initialMessage?: string | null;
+      instructions?: string | null;
+      model?: string | null;
+      temperature?: number | null;
+    },
+  ): Promise<BackendAssistantResponse> {
+    return apiFetch<BackendAssistantResponse>(`/assistants/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  },
+
+  async updateStatus(id: string, status: BackendStatus): Promise<BackendAssistantResponse> {
+    return apiFetch<BackendAssistantResponse>(`/assistants/${id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    });
+  },
+
+  async preview(id: string, question: string): Promise<BackendAssistantPreviewResponse> {
+    return apiFetch<BackendAssistantPreviewResponse>(`/assistants/${id}/preview`, {
+      method: "POST",
+      body: JSON.stringify({ question }),
+    });
+  },
+
+  async run(id: string, message: string): Promise<BackendAssistantRunResponse> {
+    return apiFetch<BackendAssistantRunResponse>(`/assistants/${id}/run`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    });
+  },
+
+  async previewLogs(assistantId: string): Promise<PreviewLogsResponse> {
+    return apiFetch<PreviewLogsResponse>(`/assistants/${assistantId}/preview-logs`);
+  },
+
+  async knowledgeList(assistantId: string): Promise<AssistantKnowledgeListResponse["items"]> {
+    const response = await apiFetch<AssistantKnowledgeListResponse>(
+      `/assistants/${assistantId}/knowledge`,
+    );
+    return response.items;
+  },
+
+  async knowledgeCreate(
+    assistantId: string,
+    input: { title: string; content: string },
+  ): Promise<AssistantKnowledgeListResponse["items"][number]> {
+    return apiFetch<AssistantKnowledgeListResponse["items"][number]>(
+      `/assistants/${assistantId}/knowledge`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    );
+  },
+
+  async knowledgeUpdate(
+    assistantId: string,
+    knowledgeId: string,
+    input: { title?: string; content?: string },
+  ): Promise<AssistantKnowledgeListResponse["items"][number]> {
+    return apiFetch<AssistantKnowledgeListResponse["items"][number]>(
+      `/assistants/${assistantId}/knowledge/${knowledgeId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      },
+    );
+  },
+
+  async knowledgeDelete(
+    assistantId: string,
+    knowledgeId: string,
+  ): Promise<AssistantKnowledgeListResponse["items"][number]> {
+    return apiFetch<AssistantKnowledgeListResponse["items"][number]>(
+      `/assistants/${assistantId}/knowledge/${knowledgeId}`,
+      {
+        method: "DELETE",
+      },
+    );
+  },
+};

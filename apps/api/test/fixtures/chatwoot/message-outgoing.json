@@ -1,0 +1,18 @@
+{
+  "event": "message_created",
+  "account": { "id": "account-1" },
+  "inbox": { "id": "inbox-1", "identifier": "inbox-1" },
+  "conversation": { "id": "conversation-1", "meta": { "title": "Conversa WhatsApp" } },
+  "message": {
+    "id": "message-outgoing-1",
+    "content": "Olá, tudo bem?",
+    "sender_type": "agent",
+    "message_type": "outgoing",
+    "attachments": []
+  },
+  "contact": {
+    "id": "contact-1",
+    "name": "Cliente Teste",
+    "phone_number": "+5511999999999"
+  }
+}
