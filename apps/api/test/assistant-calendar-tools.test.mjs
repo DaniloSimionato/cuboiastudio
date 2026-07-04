@@ -1,3 +1,17 @@
+const RealDate = globalThis.Date;
+const MOCK_TIME = new RealDate("2026-07-04T00:00:00.000Z").getTime();
+class MockDate extends RealDate {
+  constructor(...args) {
+    if (args.length === 0) {
+      super(MOCK_TIME);
+    } else {
+      super(...args);
+    }
+  }
+}
+MockDate.now = () => MOCK_TIME;
+globalThis.Date = MockDate;
+
 import assert from "node:assert/strict";
 import { randomBytes, createCipheriv } from "node:crypto";
 import { test } from "node:test";
@@ -143,6 +157,10 @@ function createMockPrisma() {
         state.apps.find((app) => app.slug === where.slug || app.id === where.id) ?? null,
     },
     appInstallation: {
+      findMany: async ({ where }) =>
+        state.installations
+          .filter((installation) => !where || !where.companyId || installation.companyId === where.companyId)
+          .map(shapeInstallation),
       findUnique: async ({ where }) => {
         const input = where.companyId_appId;
         const installation =
@@ -155,8 +173,22 @@ function createMockPrisma() {
         state.installations.find(
           (item) =>
             (!where.id || item.id === where.id) &&
-            (!where.companyId || item.companyId === where.companyId),
+            (!where.companyId || item.companyId === where.companyId) &&
+            (!where.appId || item.appId === where.appId),
         ) ?? null,
+      create: async ({ data }) => {
+        const installation = {
+          id: `installation-${state.installations.length + 1}`,
+          ...data,
+          lastErrorCode: null,
+          lastErrorMessage: null,
+          metadata: null,
+          createdAt: now,
+          updatedAt: now,
+        };
+        state.installations.push(installation);
+        return shapeInstallation(installation);
+      },
       upsert: async ({ where, update, create }) => {
         const input = where.companyId_appId;
         let installation = state.installations.find(
@@ -186,7 +218,10 @@ function createMockPrisma() {
         state.credentials.find(
           (credential) =>
             (!where.companyId || credential.companyId === where.companyId) &&
-            (!where.installationId || credential.installationId === where.installationId) &&
+            (!where.installationId || 
+              (typeof where.installationId === "object" && where.installationId.in
+                ? where.installationId.in.includes(credential.installationId)
+                : credential.installationId === where.installationId)) &&
             (!where.provider || credential.provider === where.provider) &&
             (!where.status || credential.status === where.status),
         ) ?? null,
@@ -202,19 +237,23 @@ function createMockPrisma() {
       },
     },
     googleCalendarResource: {
-      findFirst: async ({ where }) =>
-        state.resources.find(
+      findFirst: async ({ where }) => {
+        const found = state.resources.find(
           (resource) =>
             (!where.id || resource.id === where.id) &&
             (!where.companyId || resource.companyId === where.companyId) &&
             (!where.active || resource.active === where.active),
-        ) ?? null,
+        );
+        return found ? { ...found, installation: { appId: "app-google-calendar" } } : null;
+      },
       findMany: async ({ where }) =>
-        state.resources.filter(
-          (resource) =>
-            (!where.companyId || resource.companyId === where.companyId) &&
-            (!where.active || resource.active === where.active),
-        ),
+        state.resources
+          .filter(
+            (resource) =>
+              (!where.companyId || resource.companyId === where.companyId) &&
+              (!where.active || resource.active === where.active),
+          )
+          .map((found) => ({ ...found, installation: { appId: "app-google-calendar" } })),
       create: async ({ data }) => {
         const resource = {
           id: `resource-${state.resources.length + 1}`,
@@ -224,7 +263,7 @@ function createMockPrisma() {
           ...data,
         };
         state.resources.push(resource);
-        return resource;
+        return { ...resource, installation: { appId: "app-google-calendar" } };
       },
     },
     googleCalendarBooking: {

@@ -8,9 +8,10 @@ import { GoogleCalendarBookingService } from "./google-calendar/google-calendar-
 import { GoogleCalendarClientService } from "./google-calendar/google-calendar-client.service";
 import { GoogleCalendarController } from "./google-calendar/google-calendar.controller";
 import { GoogleCalendarOAuthService } from "./google-calendar/google-calendar-oauth.service";
+import { ResourceClassificationsController } from "./google-calendar/resource-classifications.controller";
 
 @Module({
-  controllers: [AppsController, AppInstallationsController, GoogleCalendarController],
+  controllers: [AppsController, AppInstallationsController, GoogleCalendarController, ResourceClassificationsController],
   providers: [
     AppsService,
     GoogleCalendarOAuthService,
@@ -18,6 +19,10 @@ import { GoogleCalendarOAuthService } from "./google-calendar/google-calendar-oa
     GoogleCalendarAvailabilityService,
     GoogleCalendarBookingService,
     CalendarToolsService,
+    {
+      provide: "GOOGLE_CALENDAR_FETCH",
+      useValue: fetch,
+    },
   ],
   exports: [
     AppsService,
@@ -26,6 +31,7 @@ import { GoogleCalendarOAuthService } from "./google-calendar/google-calendar-oa
     GoogleCalendarAvailabilityService,
     GoogleCalendarBookingService,
     CalendarToolsService,
+    "GOOGLE_CALENDAR_FETCH",
   ],
 })
 export class AppsModule {}

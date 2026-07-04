@@ -1,9 +1,11 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable } from "@nestjs/common";
 import {
   AppActionStatus,
   GoogleCalendarBookingStatus,
   Prisma,
   type GoogleCalendarResource,
+  AppInstallationStatus,
+  Status,
 } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
 import { CheckCalendarAvailabilityDto } from "../dto/calendar-tool.dto";
@@ -17,6 +19,7 @@ import {
 } from "./google-calendar-tools.util";
 
 const GOOGLE_FREEBUSY_URL = "https://www.googleapis.com/calendar/v3/freeBusy";
+const GOOGLE_CALENDAR_SLUG = "google_calendar";
 
 type FetchLike = typeof fetch;
 
@@ -36,7 +39,15 @@ type ResourceRecord = Pick<
   | "minAdvanceMinutes"
   | "maxDaysAhead"
   | "active"
->;
+> & {
+  resourceTypeId?: string | null;
+  categoryId?: string | null;
+  attributeId?: string | null;
+  resourceTypeRef?: { name: string; slug: string } | null;
+  categoryRef?: { name: string; slug: string } | null;
+  attributeRef?: { name: string; slug: string } | null;
+  installation: { appId: string };
+};
 
 type BusyBlock = {
   start: Date;
@@ -77,6 +88,7 @@ export class GoogleCalendarAvailabilityService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly oauthService: GoogleCalendarOAuthService,
+    @Inject("GOOGLE_CALENDAR_FETCH")
     private readonly fetchImpl: FetchLike = fetch,
   ) {}
 
@@ -84,10 +96,40 @@ export class GoogleCalendarAvailabilityService {
     companyId: string;
     dto: CheckCalendarAvailabilityDto;
   }): Promise<CalendarAvailabilityResponse> {
-    const credential = await this.oauthService.getAuthorizedCredential(input.companyId);
+    const app = await this.prisma.app.findUnique({
+      where: { slug: GOOGLE_CALENDAR_SLUG },
+      select: { id: true },
+    });
+    if (!app) {
+      throw new BadRequestException("Google Agenda is not available in the app catalog.");
+    }
+    const installations = await this.prisma.appInstallation.findMany({
+      where: { companyId: input.companyId, appId: app.id },
+      select: { id: true, status: true },
+    });
+    if (installations.length === 0) {
+      throw new BadRequestException("Install Google Agenda before configuring resources.");
+    }
+    const activeInstallations = installations.filter(i => i.status === AppInstallationStatus.ACTIVE);
+    if (activeInstallations.length === 0) {
+      throw new BadRequestException("Google Agenda installation is not active.");
+    }
+
+    const credential = await this.prisma.appCredential.findFirst({
+      where: {
+        companyId: input.companyId,
+        installationId: { in: activeInstallations.map(i => i.id) },
+        provider: "google",
+        status: Status.ACTIVE,
+      },
+      select: { id: true },
+    });
+    if (!credential) {
+      throw new BadRequestException("Google Agenda is not connected.");
+    }
+
     const resources = await this.findCandidateResources({
       companyId: input.companyId,
-      installationId: credential.installationId,
       dto: input.dto,
     });
     const durationMinutes = input.dto.durationMinutes ?? resources[0]?.defaultDurationMinutes ?? 60;
@@ -97,15 +139,6 @@ export class GoogleCalendarAvailabilityService {
     }
 
     if (resources.length === 0) {
-      await this.logAction({
-        companyId: input.companyId,
-        appId: credential.appId,
-        installationId: credential.installationId,
-        action: "availability_check",
-        status: AppActionStatus.SUCCESS,
-        metadata: { resources: 0 },
-      });
-
       return {
         available: false,
         date: input.dto.date,
@@ -124,13 +157,35 @@ export class GoogleCalendarAvailabilityService {
 
     const searchStart = new Date(Math.min(...windows.map((window) => window.start.getTime())));
     const searchEnd = new Date(Math.max(...windows.map((window) => window.end.getTime())));
-    const [googleBusyByCalendarId, localBusyByResourceId] = await Promise.all([
-      this.fetchFreeBusy({
-        accessToken: credential.accessToken,
-        calendarIds: resources.map((resource) => resource.calendarId),
-        timeMin: searchStart,
-        timeMax: searchEnd,
-      }),
+
+    // Group resources by installationId to fetch FreeBusy from correct accounts
+    const resourcesByInstId = new Map<string, ResourceRecord[]>();
+    for (const r of resources) {
+      const list = resourcesByInstId.get(r.installationId) ?? [];
+      list.push(r);
+      resourcesByInstId.set(r.installationId, list);
+    }
+
+    const googleBusyByCalendarId = new Map<string, BusyBlock[]>();
+    const freeBusyPromises = Array.from(resourcesByInstId.entries()).map(async ([instId, instResources]) => {
+      try {
+        const credential = await this.oauthService.getAuthorizedCredential(input.companyId, instId);
+        const freeBusy = await this.fetchFreeBusy({
+          accessToken: credential.accessToken,
+          calendarIds: instResources.map((r) => r.calendarId),
+          timeMin: searchStart,
+          timeMax: searchEnd,
+        });
+        for (const [calId, blocks] of freeBusy.entries()) {
+          googleBusyByCalendarId.set(calId, blocks);
+        }
+      } catch (err) {
+        console.error(`Failed to fetch FreeBusy for installation ${instId}:`, err);
+      }
+    });
+
+    const [_, localBusyByResourceId] = await Promise.all([
+      Promise.all(freeBusyPromises),
       this.findLocalBusy({
         companyId: input.companyId,
         resourceIds: resources.map((resource) => resource.id),
@@ -148,19 +203,22 @@ export class GoogleCalendarAvailabilityService {
       maxOptions: input.dto.maxOptions ?? 5,
     });
 
-    await this.logAction({
-      companyId: input.companyId,
-      appId: credential.appId,
-      installationId: credential.installationId,
-      action: "availability_check",
-      status: AppActionStatus.SUCCESS,
-      metadata: {
-        resources: resources.length,
-        options: options.length,
-        date: input.dto.date,
-        durationMinutes,
-      },
-    });
+    const refResource = resources[0];
+    if (refResource) {
+      await this.logAction({
+        companyId: input.companyId,
+        appId: refResource.installation.appId,
+        installationId: refResource.installationId,
+        action: "availability_check",
+        status: AppActionStatus.SUCCESS,
+        metadata: {
+          resources: resources.length,
+          options: options.length,
+          date: input.dto.date,
+          durationMinutes,
+        },
+      });
+    }
 
     return {
       available: options.length > 0,
@@ -177,12 +235,10 @@ export class GoogleCalendarAvailabilityService {
     endAt: Date;
     excludeBookingId?: string | null;
   }): Promise<ResourceRecord> {
-    const credential = await this.oauthService.getAuthorizedCredential(input.companyId);
     const resource = await this.prisma.googleCalendarResource.findFirst({
       where: {
         id: input.resourceId,
         companyId: input.companyId,
-        installationId: credential.installationId,
         active: true,
       },
       select: resourceSelect,
@@ -191,6 +247,8 @@ export class GoogleCalendarAvailabilityService {
     if (!resource) {
       throw new BadRequestException("Calendar resource not found or inactive.");
     }
+
+    const credential = await this.oauthService.getAuthorizedCredential(input.companyId, resource.installationId);
 
     const now = new Date();
     if (input.startAt.getTime() < now.getTime() + minutesToMs(resource.minAdvanceMinutes)) {
@@ -231,13 +289,11 @@ export class GoogleCalendarAvailabilityService {
 
   private async findCandidateResources(input: {
     companyId: string;
-    installationId: string;
     dto: CheckCalendarAvailabilityDto;
   }): Promise<ResourceRecord[]> {
     const resources = await this.prisma.googleCalendarResource.findMany({
       where: {
         companyId: input.companyId,
-        installationId: input.installationId,
         active: true,
       },
       select: resourceSelect,
@@ -245,14 +301,47 @@ export class GoogleCalendarAvailabilityService {
     });
 
     return resources.filter((resource) => {
-      const sportMatches =
-        !input.dto.sportType || matchesFlexibleType(resource.sportType, input.dto.sportType);
-      const resourceMatches =
-        !input.dto.resourceType || matchesFlexibleType(resource.resourceType, input.dto.resourceType);
-      const coverageMatches =
-        input.dto.isCovered === null ||
-        input.dto.isCovered === undefined ||
-        resource.isCovered === input.dto.isCovered;
+      let sportMatches = true;
+      if (input.dto.sportType) {
+        const expected = input.dto.sportType;
+        const actualOld = resource.sportType;
+        const actualCatName = resource.categoryRef?.name ?? "";
+        const actualCatSlug = resource.categoryRef?.slug ?? "";
+        
+        sportMatches = 
+          matchesFlexibleType(actualOld, expected) ||
+          matchesFlexibleType(actualCatName, expected) ||
+          matchesFlexibleType(actualCatSlug, expected);
+      }
+
+      let resourceMatches = true;
+      if (input.dto.resourceType) {
+        const expected = input.dto.resourceType;
+        const actualOld = resource.resourceType;
+        const actualTypeName = resource.resourceTypeRef?.name ?? "";
+        const actualTypeSlug = resource.resourceTypeRef?.slug ?? "";
+        
+        resourceMatches = 
+          matchesFlexibleType(actualOld, expected) ||
+          matchesFlexibleType(actualTypeName, expected) ||
+          matchesFlexibleType(actualTypeSlug, expected);
+      }
+
+      let coverageMatches = true;
+      if (input.dto.isCovered !== null && input.dto.isCovered !== undefined) {
+        const expected = input.dto.isCovered;
+        let actualOld = resource.isCovered;
+        if (resource.attributeRef) {
+          const slug = resource.attributeRef.slug.toLowerCase();
+          const name = resource.attributeRef.name.toLowerCase();
+          if (slug === "coberta" || name === "coberta") {
+            actualOld = true;
+          } else if (slug === "aberta" || name === "aberta") {
+            actualOld = false;
+          }
+        }
+        coverageMatches = actualOld === expected;
+      }
 
       return sportMatches && resourceMatches && coverageMatches;
     });
@@ -476,6 +565,32 @@ const resourceSelect = {
   minAdvanceMinutes: true,
   maxDaysAhead: true,
   active: true,
+  resourceTypeId: true,
+  categoryId: true,
+  attributeId: true,
+  resourceTypeRef: {
+    select: {
+      name: true,
+      slug: true,
+    },
+  },
+  categoryRef: {
+    select: {
+      name: true,
+      slug: true,
+    },
+  },
+  attributeRef: {
+    select: {
+      name: true,
+      slug: true,
+    },
+  },
+  installation: {
+    select: {
+      appId: true,
+    },
+  },
 } satisfies Prisma.GoogleCalendarResourceSelect;
 
 function addDays(date: string, days: number): string {

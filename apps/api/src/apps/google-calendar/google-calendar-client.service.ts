@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable } from "@nestjs/common";
 import { AppActionStatus, Prisma } from "@prisma/client";
 import { PrismaService } from "../../database/prisma.service";
 import { GoogleCalendarOAuthService } from "./google-calendar-oauth.service";
@@ -48,11 +48,12 @@ export class GoogleCalendarClientService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly oauthService: GoogleCalendarOAuthService,
+    @Inject("GOOGLE_CALENDAR_FETCH")
     private readonly fetchImpl: FetchLike = fetch,
   ) {}
 
-  async listCalendars(companyId: string): Promise<GoogleCalendarListResponseSafe> {
-    const credential = await this.oauthService.getAuthorizedCredential(companyId);
+  async listCalendars(companyId: string, installationId?: string): Promise<GoogleCalendarListResponseSafe> {
+    const credential = await this.oauthService.getAuthorizedCredential(companyId, installationId);
     const calendars = await this.fetchCalendarList(credential.accessToken);
     const resources = await this.prisma.googleCalendarResource.findMany({
       where: {
@@ -113,8 +114,8 @@ export class GoogleCalendarClientService {
 
     const data = {
       name: input.dto.name,
-      resourceType: input.dto.resourceType,
-      sportType: input.dto.sportType,
+      resourceType: input.dto.resourceType ?? "",
+      sportType: input.dto.sportType ?? "",
       isCovered: input.dto.isCovered ?? false,
       timezone: input.dto.timezone ?? calendar.timeZone ?? "America/Campo_Grande",
       slotMinutes: input.dto.slotMinutes ?? 30,
@@ -122,6 +123,9 @@ export class GoogleCalendarClientService {
       minAdvanceMinutes: input.dto.minAdvanceMinutes ?? 60,
       maxDaysAhead: input.dto.maxDaysAhead ?? 14,
       active: input.dto.active ?? true,
+      resourceTypeId: input.dto.resourceTypeId ?? null,
+      categoryId: input.dto.categoryId ?? null,
+      attributeId: input.dto.attributeId ?? null,
       metadata: {
         source: "google_calendar_list",
         accessRole: calendar.accessRole,
@@ -246,6 +250,9 @@ const googleCalendarResourceSafeSelect = {
   maxDaysAhead: true,
   active: true,
   metadata: true,
+  resourceTypeId: true,
+  categoryId: true,
+  attributeId: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.GoogleCalendarResourceSelect;

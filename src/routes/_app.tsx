@@ -18,6 +18,17 @@ function AppLayout() {
     if (!loading && !isAuthenticated) navigate({ to: "/auth" });
   }, [loading, isAuthenticated, navigate]);
 
+  useEffect(() => {
+    if (isAuthenticated) {
+      document.body.style.overflow = "hidden";
+      document.body.style.height = "100vh";
+      return () => {
+        document.body.style.overflow = "";
+        document.body.style.height = "";
+      };
+    }
+  }, [isAuthenticated]);
+
   if (loading || !isAuthenticated) {
     return (
       <div className="min-h-screen grid place-items-center bg-background text-muted-foreground">

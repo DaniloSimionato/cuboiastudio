@@ -75,6 +75,9 @@ model Company {
   appActionLogs                 AppActionLog[]
   googleCalendarResources       GoogleCalendarResource[]
   googleCalendarBookings        GoogleCalendarBooking[]
+  reservableResourceTypes       ReservableResourceType[]
+  reservableResourceCategories  ReservableResourceCategory[]
+  reservableResourceAttributes  ReservableResourceAttribute[]
 
   @@index([status])
   @@index([deletedAt])
@@ -82,14 +85,19 @@ model Company {
 }
 
 model App {
-  id          String   @id @default(cuid())
-  slug        String   @unique
-  name        String
-  description String?
-  status      Status   @default(ACTIVE)
-  metadata    Json?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(cuid())
+  slug         String   @unique
+  name         String
+  description  String?
+  category     String?
+  icon         String?
+  availability String   @default("AVAILABLE")
+  status       Status   @default(ACTIVE)
+  sortOrder    Int      @default(0)
+  isFeatured   Boolean  @default(false)
+  metadata     Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   installations AppInstallation[]
   actionLogs    AppActionLog[]
@@ -117,7 +125,7 @@ model AppInstallation {
   googleCalendarResources GoogleCalendarResource[]
   googleCalendarBookings  GoogleCalendarBooking[]
 
-  @@unique([companyId, appId])
+  @@index([companyId, appId])
   @@index([companyId])
   @@index([appId])
   @@index([status])
@@ -506,12 +514,18 @@ model GoogleCalendarResource {
   maxDaysAhead           Int      @default(14)
   active                 Boolean  @default(true)
   metadata               Json?
+  resourceTypeId         String?
+  categoryId             String?
+  attributeId            String?
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
-  company      Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  installation AppInstallation         @relation(fields: [installationId], references: [id], onDelete: Cascade)
-  bookings     GoogleCalendarBooking[]
+  company         Company                      @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  installation    AppInstallation              @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  bookings        GoogleCalendarBooking[]
+  resourceTypeRef ReservableResourceType?      @relation(fields: [resourceTypeId], references: [id], onDelete: SetNull)
+  categoryRef     ReservableResourceCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  attributeRef    ReservableResourceAttribute? @relation(fields: [attributeId], references: [id], onDelete: SetNull)
 
   @@unique([companyId, installationId, calendarId])
   @@index([companyId])
@@ -519,6 +533,9 @@ model GoogleCalendarResource {
   @@index([active])
   @@index([resourceType])
   @@index([sportType])
+  @@index([resourceTypeId])
+  @@index([categoryId])
+  @@index([attributeId])
   @@map("google_calendar_resources")
 }
 
@@ -559,4 +576,61 @@ model GoogleCalendarBooking {
   @@index([startAt])
   @@index([status])
   @@map("google_calendar_bookings")
+}
+
+model ReservableResourceType {
+  id          String   @id @default(cuid())
+  companyId   String
+  name        String
+  slug        String
+  description String?
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company   Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  resources GoogleCalendarResource[]
+
+  @@unique([companyId, slug])
+  @@index([companyId])
+  @@map("reservable_resource_types")
+}
+
+model ReservableResourceCategory {
+  id          String   @id @default(cuid())
+  companyId   String
+  name        String
+  slug        String
+  description String?
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company   Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  resources GoogleCalendarResource[]
+
+  @@unique([companyId, slug])
+  @@index([companyId])
+  @@map("reservable_resource_categories")
+}
+
+model ReservableResourceAttribute {
+  id          String   @id @default(cuid())
+  companyId   String
+  name        String
+  slug        String
+  description String?
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company   Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  resources GoogleCalendarResource[]
+
+  @@unique([companyId, slug])
+  @@index([companyId])
+  @@map("reservable_resource_attributes")
 }

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, UseGuards } from "@nestjs/common";
 import {
   ApiForbiddenResponse,
   ApiHeader,
@@ -23,6 +23,8 @@ import { UpdateAppInstallationStatusDto } from "./dto/update-app-installation-st
 @ApiTags("app-installations")
 @Controller("app-installations")
 @UseGuards(AuthGuard, PermissionsGuard)
+@ApiUnauthorizedResponse({ description: "Authentication is required." })
+@ApiForbiddenResponse({ description: "Missing tools:read or tools:write permissions." })
 export class AppInstallationsController {
   constructor(private readonly appsService: AppsService) {}
 
@@ -33,8 +35,6 @@ export class AppInstallationsController {
   @ApiHeader({ name: "x-dev-company-id", required: true })
   @ApiHeader({ name: "x-dev-user-email", required: true })
   @ApiOkResponse({ description: "Safe installation list without tokens or secrets." })
-  @ApiUnauthorizedResponse({ description: "Authentication is required." })
-  @ApiForbiddenResponse({ description: "Missing tools:read permission." })
   findAll(
     @CurrentUser() user: AuthenticatedUser,
     @Tenant() tenant: RequestTenant,
@@ -56,5 +56,20 @@ export class AppInstallationsController {
     @Tenant() tenant: RequestTenant,
   ): Promise<AppInstallationResponse> {
     return this.appsService.updateInstallationStatus({ id, dto, user, tenant });
+  }
+
+  @Delete(":id")
+  @RequirePermissions("tools:write")
+  @ApiOperation({ summary: "Delete an app installation" })
+  @ApiHeader({ name: "x-dev-user-id", required: true })
+  @ApiHeader({ name: "x-dev-company-id", required: true })
+  @ApiHeader({ name: "x-dev-user-email", required: true })
+  @ApiOkResponse({ description: "Returns the deleted app installation details." })
+  delete(
+    @Param("id") id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Tenant() tenant: RequestTenant,
+  ): Promise<AppInstallationResponse> {
+    return this.appsService.deleteInstallation({ id, user, tenant });
   }
 }

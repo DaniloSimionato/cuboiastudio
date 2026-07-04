@@ -1640,12 +1640,10 @@ export class AssistantConversationsService {
       });
       if (!app) return false;
 
-      const installation = await this.prisma.appInstallation.findUnique({
+      const installation = await this.prisma.appInstallation.findFirst({
         where: {
-          companyId_appId: {
-            companyId,
-            appId: app.id,
-          },
+          companyId,
+          appId: app.id,
         },
         select: { status: true, id: true },
       });
@@ -1910,12 +1908,10 @@ export class AssistantConversationsService {
       });
       if (!app) return;
 
-      const installation = await this.prisma.appInstallation.findUnique({
+      const installation = await this.prisma.appInstallation.findFirst({
         where: {
-          companyId_appId: {
-            companyId,
-            appId: app.id,
-          },
+          companyId,
+          appId: app.id,
         },
         select: { id: true },
       });

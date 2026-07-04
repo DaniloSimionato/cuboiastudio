@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import {
   AppActionStatus,
   GoogleCalendarBookingStatus,
@@ -93,6 +93,7 @@ export class GoogleCalendarBookingService {
     private readonly prisma: PrismaService,
     private readonly oauthService: GoogleCalendarOAuthService,
     private readonly availabilityService: GoogleCalendarAvailabilityService,
+    @Inject("GOOGLE_CALENDAR_FETCH")
     private readonly fetchImpl: FetchLike = fetch,
   ) {}
 
@@ -119,7 +120,14 @@ export class GoogleCalendarBookingService {
       return toCreateResponse(existing);
     }
 
-    const credential = await this.oauthService.getAuthorizedCredential(input.companyId);
+    const resourceRecord = await this.prisma.googleCalendarResource.findFirst({
+      where: { id: input.dto.resourceId, companyId: input.companyId },
+      select: { installationId: true },
+    });
+    if (!resourceRecord) {
+      throw new BadRequestException("Calendar resource not found or inactive.");
+    }
+    const credential = await this.oauthService.getAuthorizedCredential(input.companyId, resourceRecord.installationId);
     await this.logAction({
       companyId: input.companyId,
       appId: credential.appId,
@@ -253,7 +261,14 @@ export class GoogleCalendarBookingService {
       throw new BadRequestException("newEndAt must be after newStartAt.");
     }
 
-    const credential = await this.oauthService.getAuthorizedCredential(input.companyId);
+    const newResourceRecord = await this.prisma.googleCalendarResource.findFirst({
+      where: { id: newResourceId, companyId: input.companyId },
+      select: { installationId: true },
+    });
+    if (!newResourceRecord) {
+      throw new BadRequestException("Calendar resource not found or inactive.");
+    }
+    const credential = await this.oauthService.getAuthorizedCredential(input.companyId, newResourceRecord.installationId);
     await this.logAction({
       companyId: input.companyId,
       appId: credential.appId,
@@ -372,7 +387,7 @@ export class GoogleCalendarBookingService {
     dto: CancelCalendarBookingDto;
   }): Promise<CancelCalendarBookingResponse> {
     const booking = await this.findTenantBookingOrThrow(input.companyId, input.bookingId);
-    const credential = await this.oauthService.getAuthorizedCredential(input.companyId);
+    const credential = await this.oauthService.getAuthorizedCredential(input.companyId, booking.installationId);
 
     await this.logAction({
       companyId: input.companyId,

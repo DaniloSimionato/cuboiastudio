@@ -310,6 +310,31 @@ async function ensureAssistant(companyId: string): Promise<Assistant> {
   });
 }
 
+const COMING_SOON_APPS = [
+  { slug: "webhook", name: "Webhook", description: "Envie e receba eventos em tempo real via gatilhos customizados.", category: "Automação", icon: "webhook" },
+  { slug: "google_sheets", name: "Google Sheets", description: "Escreva e leia linhas em planilhas para sincronizar dados automaticamente.", category: "Dados e Planilhas", icon: "spreadsheet" },
+  { slug: "google_docs", name: "Google Docs", description: "Crie relatórios, contratos e documentos dinâmicos pela IA.", category: "Agenda e Produtividade", icon: "file-text" },
+  { slug: "gmail", name: "Gmail", description: "Envie emails, crie rascunhos e faça buscas na sua caixa de entrada.", category: "Comunicação", icon: "mail" },
+  { slug: "google_drive", name: "Google Drive", description: "Armazene e gerencie arquivos e pastas gerados pelo Cubo.", category: "Agenda e Produtividade", icon: "hard-drive" },
+  { slug: "mercado_livre", name: "Mercado Livre", description: "Consulte perguntas, vendas e atualize anúncios no marketplace.", category: "Marketplaces", icon: "shopping-bag" },
+  { slug: "olx", name: "OLX", description: "Integre anúncios e chats do portal diretamente no Cubo.", category: "Marketplaces", icon: "shopping-cart" },
+  { slug: "shopee", name: "Shopee", description: "Monitore pedidos, estoque e responda chats de clientes Shopee.", category: "Marketplaces", icon: "store" },
+  { slug: "chatwoot", name: "Chatwoot", description: "Sincronize conversas multicanal e conecte agentes humanos.", category: "Comunicação", icon: "message-square" },
+  { slug: "whatsapp_business", name: "WhatsApp Business API", description: "Envie mensagens ativas e faça atendimento pelo canal mais usado.", category: "Comunicação", icon: "message-circle" },
+  { slug: "instagram", name: "Instagram Direct", description: "Responda mensagens diretas, comentários e stories automaticamente.", category: "Comunicação", icon: "instagram" },
+  { slug: "facebook_messenger", name: "Facebook Messenger", description: "Responda chats da sua página de forma centralizada.", category: "Comunicação", icon: "message-circle" },
+  { slug: "make", name: "Make (Integromat)", description: "Conecte fluxos complexos e milhares de aplicativos sem código.", category: "Automação", icon: "git-pull-request" },
+  { slug: "zapier", name: "Zapier", description: "Envie triggers e consuma Zaps para integrar sua operação.", category: "Automação", icon: "zap" },
+  { slug: "notion", name: "Notion", description: "Consulte páginas, adicione linhas a databases e crie notas rápidas.", category: "Agenda e Produtividade", icon: "book-open" },
+  { slug: "hubspot", name: "HubSpot", description: "Crie contatos, negócios e atualize deals no funil de vendas.", category: "CRM e Vendas", icon: "users" },
+  { slug: "rd_station", name: "RD Station", description: "Envie leads gerados pela IA direto para fluxos de marketing.", category: "CRM e Vendas", icon: "target" },
+  { slug: "pipedrive", name: "Pipedrive", description: "Crie pessoas, organizações e deals para seu time comercial.", category: "CRM e Vendas", icon: "inbox" },
+  { slug: "trello", name: "Trello", description: "Crie cards, mova listas e organize demandas visuais por quadros.", category: "Agenda e Produtividade", icon: "trello" },
+  { slug: "asana", name: "Asana", description: "Cadastre tarefas e colabore em projetos ágeis no Asana.", category: "Agenda e Produtividade", icon: "activity" },
+  { slug: "slack", name: "Slack", description: "Envie notificações, interaja em canais e faça alertas internos.", category: "Comunicação", icon: "message-square" },
+  { slug: "discord", name: "Discord", description: "Envie mensagens via webhooks para servidores Discord.", category: "Comunicação", icon: "message-square" }
+];
+
 async function ensureGoogleCalendarApp(): Promise<void> {
   await prisma.app.upsert({
     where: {
@@ -319,16 +344,91 @@ async function ensureGoogleCalendarApp(): Promise<void> {
       name: "Google Agenda",
       description:
         "Conecte agendas Google para permitir que a IA consulte horários, crie reservas, remarque e cancele eventos.",
+      category: "Agenda e Produtividade",
+      icon: "calendar",
+      availability: "AVAILABLE",
       status: Status.ACTIVE,
+      isFeatured: true,
     },
     create: {
       slug: "google_calendar",
       name: "Google Agenda",
       description:
         "Conecte agendas Google para permitir que a IA consulte horários, crie reservas, remarque e cancele eventos.",
+      category: "Agenda e Produtividade",
+      icon: "calendar",
+      availability: "AVAILABLE",
       status: Status.ACTIVE,
+      isFeatured: true,
     },
   });
+}
+
+async function ensureComingSoonApps(): Promise<void> {
+  for (const app of COMING_SOON_APPS) {
+    await prisma.app.upsert({
+      where: { slug: app.slug },
+      update: {
+        name: app.name,
+        description: app.description,
+        category: app.category,
+        icon: app.icon,
+        availability: "COMING_SOON",
+        status: Status.ACTIVE,
+      },
+      create: {
+        slug: app.slug,
+        name: app.name,
+        description: app.description,
+        category: app.category,
+        icon: app.icon,
+        availability: "COMING_SOON",
+        status: Status.ACTIVE,
+      },
+    });
+  }
+}
+
+async function ensureDefaultClassifications(companyId: string): Promise<void> {
+  const types = [
+    { slug: "quadra", name: "Quadra", description: "Quadra esportiva para locação", sortOrder: 0 },
+    { slug: "sala", name: "Sala", description: "Sala de reuniões, aulas ou atendimento", sortOrder: 1 },
+    { slug: "profissional", name: "Profissional", description: "Profissional prestador de serviços", sortOrder: 2 },
+    { slug: "recurso", name: "Recurso", description: "Recurso ou equipamento geral", sortOrder: 3 },
+  ];
+  for (const t of types) {
+    await prisma.reservableResourceType.upsert({
+      where: { companyId_slug: { companyId, slug: t.slug } },
+      update: { name: t.name, description: t.description, sortOrder: t.sortOrder, active: true },
+      create: { companyId, slug: t.slug, name: t.name, description: t.description, sortOrder: t.sortOrder, active: true },
+    });
+  }
+
+  const categories = [
+    { slug: "geral", name: "Geral", description: "Categoria geral de serviços", sortOrder: 0 },
+    { slug: "beach-tennis", name: "Beach Tennis", description: "Treino ou locação de Beach Tennis", sortOrder: 1 },
+    { slug: "padel", name: "Padel", description: "Treino ou locação de Padel", sortOrder: 2 },
+  ];
+  for (const c of categories) {
+    await prisma.reservableResourceCategory.upsert({
+      where: { companyId_slug: { companyId, slug: c.slug } },
+      update: { name: c.name, description: c.description, sortOrder: c.sortOrder, active: true },
+      create: { companyId, slug: c.slug, name: c.name, description: c.description, sortOrder: c.sortOrder, active: true },
+    });
+  }
+
+  const attributes = [
+    { slug: "padrao", name: "Padrão", description: "Ambiente ou característica padrão", sortOrder: 0 },
+    { slug: "aberta", name: "Aberta", description: "Instalação ao ar livre", sortOrder: 1 },
+    { slug: "coberta", name: "Coberta", description: "Instalação coberta / protegida", sortOrder: 2 },
+  ];
+  for (const a of attributes) {
+    await prisma.reservableResourceAttribute.upsert({
+      where: { companyId_slug: { companyId, slug: a.slug } },
+      update: { name: a.name, description: a.description, sortOrder: a.sortOrder, active: true },
+      create: { companyId, slug: a.slug, name: a.name, description: a.description, sortOrder: a.sortOrder, active: true },
+    });
+  }
 }
 
 async function main(): Promise<void> {
@@ -339,12 +439,14 @@ async function main(): Promise<void> {
   await ensureUser(company.id, roles);
   await ensureAssistant(company.id);
   await ensureGoogleCalendarApp();
+  await ensureComingSoonApps();
+  await ensureDefaultClassifications(company.id);
 
   console.log("Development RBAC seed completed.");
   console.log(`Company: ${company.id}`);
   console.log(`User: ${DEMO_IDS.user}`);
   console.log(`Assistant: ${DEMO_IDS.assistant}`);
-  console.log("App catalog: google_calendar");
+  console.log("App catalog: google_calendar + 22 coming soon apps");
   console.log(`Roles: ${Object.values(DEMO_IDS.roles).join(", ")}`);
 }
 

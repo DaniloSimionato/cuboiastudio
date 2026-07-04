@@ -43,27 +43,51 @@ export class CreateGoogleCalendarResourceDto {
   name!: string;
 
   @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  installationId?: string;
+
+  @Transform(({ value }) => trimString(value))
   @IsString()
   @IsNotEmpty()
   @MaxLength(300)
   calendarId!: string;
 
   @Transform(({ value }) => trimString(value))
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(80)
-  resourceType!: string;
+  resourceType?: string;
 
   @Transform(({ value }) => trimString(value))
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(80)
-  sportType!: string;
+  sportType?: string;
 
   @Transform(({ value }) => toOptionalBoolean(value))
   @IsOptional()
   @IsBoolean()
   isCovered?: boolean;
+
+  @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  resourceTypeId?: string;
+
+  @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  categoryId?: string;
+
+  @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  attributeId?: string;
 
   @Transform(({ value }) => trimString(value))
   @IsOptional()

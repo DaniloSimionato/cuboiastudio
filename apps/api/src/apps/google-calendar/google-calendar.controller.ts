@@ -67,14 +67,33 @@ export class GoogleCalendarController {
   async startOAuth(
     @CurrentUser() user: AuthenticatedUser,
     @Tenant() tenant: RequestTenant,
+    @Query("installationId") installationId: string | undefined,
     @Res() response: Response,
   ): Promise<void> {
     const authorizationUrl = await this.oauthService.buildAuthorizationUrl({
       companyId: tenant.companyId,
       userId: user.id,
+      installationId,
     });
 
     response.redirect(authorizationUrl);
+  }
+
+  @Get("oauth/start-url")
+  @UseGuards(AuthGuard, PermissionsGuard)
+  @RequirePermissions("tools:write")
+  @ApiOperation({ summary: "Get Google Calendar OAuth authorization URL" })
+  async getOAuthStartUrl(
+    @CurrentUser() user: AuthenticatedUser,
+    @Tenant() tenant: RequestTenant,
+    @Query("installationId") installationId: string | undefined,
+  ): Promise<{ authorizationUrl: string }> {
+    const authorizationUrl = await this.oauthService.buildAuthorizationUrl({
+      companyId: tenant.companyId,
+      userId: user.id,
+      installationId,
+    });
+    return { authorizationUrl };
   }
 
   @Get("oauth/callback")
@@ -86,12 +105,16 @@ export class GoogleCalendarController {
     @Res() response: Response,
   ): Promise<void> {
     if (!code || !state) {
-      response.redirect("/apps/google-calendar?connected=0");
+      response.redirect(this.oauthService.buildFrontendRedirectUrl("connected=0"));
       return;
     }
 
-    const result = await this.oauthService.handleCallback({ code, state });
-    response.redirect(result.redirectUrl);
+    try {
+      const result = await this.oauthService.handleCallback({ code, state });
+      response.redirect(result.redirectUrl);
+    } catch {
+      response.redirect(this.oauthService.buildFrontendRedirectUrl("connected=0"));
+    }
   }
 
   @Post("oauth/disconnect")
@@ -99,24 +122,33 @@ export class GoogleCalendarController {
   @UseGuards(AuthGuard, PermissionsGuard)
   @RequirePermissions("tools:write")
   @ApiOperation({ summary: "Disconnect Google Calendar OAuth credential" })
-  disconnectOAuth(@Tenant() tenant: RequestTenant): Promise<GoogleCalendarOAuthStatus> {
-    return this.oauthService.disconnect({ companyId: tenant.companyId });
+  disconnectOAuth(
+    @Tenant() tenant: RequestTenant,
+    @Query("installationId") installationId: string | undefined,
+  ): Promise<GoogleCalendarOAuthStatus> {
+    return this.oauthService.disconnect({ companyId: tenant.companyId, installationId });
   }
 
   @Get("oauth/status")
   @UseGuards(AuthGuard, PermissionsGuard)
   @RequirePermissions("tools:read")
   @ApiOperation({ summary: "Return safe Google Calendar OAuth status" })
-  getOAuthStatus(@Tenant() tenant: RequestTenant): Promise<GoogleCalendarOAuthStatus> {
-    return this.oauthService.getStatus(tenant.companyId);
+  getOAuthStatus(
+    @Tenant() tenant: RequestTenant,
+    @Query("installationId") installationId: string | undefined,
+  ): Promise<GoogleCalendarOAuthStatus> {
+    return this.oauthService.getStatus(tenant.companyId, installationId);
   }
 
   @Get("calendars")
   @UseGuards(AuthGuard, PermissionsGuard)
   @RequirePermissions("tools:read")
   @ApiOperation({ summary: "List calendars from connected Google account" })
-  listCalendars(@Tenant() tenant: RequestTenant): Promise<GoogleCalendarListResponseSafe> {
-    return this.calendarClientService.listCalendars(tenant.companyId);
+  listCalendars(
+    @Tenant() tenant: RequestTenant,
+    @Query("installationId") installationId: string | undefined,
+  ): Promise<GoogleCalendarListResponseSafe> {
+    return this.calendarClientService.listCalendars(tenant.companyId, installationId);
   }
 
   @Get("resources")
@@ -132,8 +164,9 @@ export class GoogleCalendarController {
   findAll(
     @CurrentUser() user: AuthenticatedUser,
     @Tenant() tenant: RequestTenant,
+    @Query("installationId") installationId: string | undefined,
   ): Promise<FindAllGoogleCalendarResourcesResponse> {
-    return this.appsService.findGoogleCalendarResources({ user, tenant });
+    return this.appsService.findGoogleCalendarResources({ user, tenant, installationId });
   }
 
   @Post("resources")

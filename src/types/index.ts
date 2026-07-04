@@ -45,7 +45,12 @@ export interface AppCatalogItem {
   slug: string;
   name: string;
   description: string | null;
+  category: string | null;
+  icon: string | null;
+  availability: "AVAILABLE" | "COMING_SOON" | "HIDDEN";
   status: BackendStatus;
+  sortOrder: number;
+  isFeatured: boolean;
   metadata: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
@@ -71,6 +76,9 @@ export interface AppInstallationItem {
     slug: string;
     name: string;
     description: string | null;
+    category?: string | null;
+    icon?: string | null;
+    availability?: "AVAILABLE" | "COMING_SOON" | "HIDDEN";
     status: BackendStatus;
     metadata: Record<string, unknown> | null;
     createdAt: string;
@@ -96,6 +104,9 @@ export interface GoogleCalendarResourceItem {
   minAdvanceMinutes: number;
   maxDaysAhead: number;
   active: boolean;
+  resourceTypeId: string | null;
+  categoryId: string | null;
+  attributeId: string | null;
   metadata: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
@@ -124,8 +135,8 @@ export interface GoogleCalendarAccountCalendar {
 export interface SaveGoogleCalendarResourcePayload {
   name: string;
   calendarId: string;
-  resourceType: string;
-  sportType: string;
+  resourceType?: string;
+  sportType?: string;
   isCovered?: boolean;
   timezone?: string;
   slotMinutes?: number;
@@ -133,6 +144,46 @@ export interface SaveGoogleCalendarResourcePayload {
   minAdvanceMinutes?: number;
   maxDaysAhead?: number;
   active?: boolean;
+  resourceTypeId?: string | null;
+  categoryId?: string | null;
+  attributeId?: string | null;
+  installationId?: string | null;
+}
+
+export interface ReservableResourceType {
+  id: string;
+  companyId: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  active: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReservableResourceCategory {
+  id: string;
+  companyId: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  active: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReservableResourceAttribute {
+  id: string;
+  companyId: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  active: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AiSettings {

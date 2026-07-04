@@ -1,1 +1,0 @@
-import{n as e}from"./apiClient-D88Zl7ZW.js";var t={async get(){return e(`/companies/current`)}};export{t};

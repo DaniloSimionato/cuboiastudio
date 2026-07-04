@@ -23,7 +23,7 @@ import { Route as AppConsumoRouteImport } from './routes/_app.consumo'
 import { Route as AppConhecimentoRouteImport } from './routes/_app.conhecimento'
 import { Route as AppConfiguracoesRouteImport } from './routes/_app.configuracoes'
 import { Route as AppCanaisRouteImport } from './routes/_app.canais'
-import { Route as AppAppsRouteImport } from './routes/_app.apps'
+import { Route as AppAppsIndexRouteImport } from './routes/_app.apps.index'
 import { Route as AppAgentesIndexRouteImport } from './routes/_app.agentes.index'
 import { Route as AppAppsGoogleCalendarRouteImport } from './routes/_app.apps.google-calendar'
 import { Route as AppAgentesNovoRouteImport } from './routes/_app.agentes.novo'
@@ -97,9 +97,9 @@ const AppCanaisRoute = AppCanaisRouteImport.update({
   path: '/canais',
   getParentRoute: () => AppRoute,
 } as any)
-const AppAppsRoute = AppAppsRouteImport.update({
-  id: '/apps',
-  path: '/apps',
+const AppAppsIndexRoute = AppAppsIndexRouteImport.update({
+  id: '/apps/',
+  path: '/apps/',
   getParentRoute: () => AppRoute,
 } as any)
 const AppAgentesIndexRoute = AppAgentesIndexRouteImport.update({
@@ -108,9 +108,9 @@ const AppAgentesIndexRoute = AppAgentesIndexRouteImport.update({
   getParentRoute: () => AppRoute,
 } as any)
 const AppAppsGoogleCalendarRoute = AppAppsGoogleCalendarRouteImport.update({
-  id: '/google-calendar',
-  path: '/google-calendar',
-  getParentRoute: () => AppAppsRoute,
+  id: '/apps/google-calendar',
+  path: '/apps/google-calendar',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppAgentesNovoRoute = AppAgentesNovoRouteImport.update({
   id: '/agentes/novo',
@@ -121,7 +121,6 @@ const AppAgentesNovoRoute = AppAgentesNovoRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/auth': typeof AuthRoute
-  '/apps': typeof AppAppsRouteWithChildren
   '/canais': typeof AppCanaisRoute
   '/configuracoes': typeof AppConfiguracoesRoute
   '/conhecimento': typeof AppConhecimentoRoute
@@ -136,10 +135,10 @@ export interface FileRoutesByFullPath {
   '/agentes/novo': typeof AppAgentesNovoRoute
   '/apps/google-calendar': typeof AppAppsGoogleCalendarRoute
   '/agentes/': typeof AppAgentesIndexRoute
+  '/apps/': typeof AppAppsIndexRoute
 }
 export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
-  '/apps': typeof AppAppsRouteWithChildren
   '/canais': typeof AppCanaisRoute
   '/configuracoes': typeof AppConfiguracoesRoute
   '/conhecimento': typeof AppConhecimentoRoute
@@ -155,12 +154,12 @@ export interface FileRoutesByTo {
   '/agentes/novo': typeof AppAgentesNovoRoute
   '/apps/google-calendar': typeof AppAppsGoogleCalendarRoute
   '/agentes': typeof AppAgentesIndexRoute
+  '/apps': typeof AppAppsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/auth': typeof AuthRoute
-  '/_app/apps': typeof AppAppsRouteWithChildren
   '/_app/canais': typeof AppCanaisRoute
   '/_app/configuracoes': typeof AppConfiguracoesRoute
   '/_app/conhecimento': typeof AppConhecimentoRoute
@@ -176,13 +175,13 @@ export interface FileRoutesById {
   '/_app/agentes/novo': typeof AppAgentesNovoRoute
   '/_app/apps/google-calendar': typeof AppAppsGoogleCalendarRoute
   '/_app/agentes/': typeof AppAgentesIndexRoute
+  '/_app/apps/': typeof AppAppsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/auth'
-    | '/apps'
     | '/canais'
     | '/configuracoes'
     | '/conhecimento'
@@ -197,10 +196,10 @@ export interface FileRouteTypes {
     | '/agentes/novo'
     | '/apps/google-calendar'
     | '/agentes/'
+    | '/apps/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/auth'
-    | '/apps'
     | '/canais'
     | '/configuracoes'
     | '/conhecimento'
@@ -216,11 +215,11 @@ export interface FileRouteTypes {
     | '/agentes/novo'
     | '/apps/google-calendar'
     | '/agentes'
+    | '/apps'
   id:
     | '__root__'
     | '/_app'
     | '/auth'
-    | '/_app/apps'
     | '/_app/canais'
     | '/_app/configuracoes'
     | '/_app/conhecimento'
@@ -236,6 +235,7 @@ export interface FileRouteTypes {
     | '/_app/agentes/novo'
     | '/_app/apps/google-calendar'
     | '/_app/agentes/'
+    | '/_app/apps/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -343,11 +343,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppCanaisRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/apps': {
-      id: '/_app/apps'
+    '/_app/apps/': {
+      id: '/_app/apps/'
       path: '/apps'
-      fullPath: '/apps'
-      preLoaderRoute: typeof AppAppsRouteImport
+      fullPath: '/apps/'
+      preLoaderRoute: typeof AppAppsIndexRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/agentes/': {
@@ -359,10 +359,10 @@ declare module '@tanstack/react-router' {
     }
     '/_app/apps/google-calendar': {
       id: '/_app/apps/google-calendar'
-      path: '/google-calendar'
+      path: '/apps/google-calendar'
       fullPath: '/apps/google-calendar'
       preLoaderRoute: typeof AppAppsGoogleCalendarRouteImport
-      parentRoute: typeof AppAppsRoute
+      parentRoute: typeof AppRoute
     }
     '/_app/agentes/novo': {
       id: '/_app/agentes/novo'
@@ -374,19 +374,7 @@ declare module '@tanstack/react-router' {
   }
 }
 
-interface AppAppsRouteChildren {
-  AppAppsGoogleCalendarRoute: typeof AppAppsGoogleCalendarRoute
-}
-
-const AppAppsRouteChildren: AppAppsRouteChildren = {
-  AppAppsGoogleCalendarRoute: AppAppsGoogleCalendarRoute,
-}
-
-const AppAppsRouteWithChildren =
-  AppAppsRoute._addFileChildren(AppAppsRouteChildren)
-
 interface AppRouteChildren {
-  AppAppsRoute: typeof AppAppsRouteWithChildren
   AppCanaisRoute: typeof AppCanaisRoute
   AppConfiguracoesRoute: typeof AppConfiguracoesRoute
   AppConhecimentoRoute: typeof AppConhecimentoRoute
@@ -400,11 +388,12 @@ interface AppRouteChildren {
   AppVariaveisRoute: typeof AppVariaveisRoute
   AppIndexRoute: typeof AppIndexRoute
   AppAgentesNovoRoute: typeof AppAgentesNovoRoute
+  AppAppsGoogleCalendarRoute: typeof AppAppsGoogleCalendarRoute
   AppAgentesIndexRoute: typeof AppAgentesIndexRoute
+  AppAppsIndexRoute: typeof AppAppsIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
-  AppAppsRoute: AppAppsRouteWithChildren,
   AppCanaisRoute: AppCanaisRoute,
   AppConfiguracoesRoute: AppConfiguracoesRoute,
   AppConhecimentoRoute: AppConhecimentoRoute,
@@ -418,7 +407,9 @@ const AppRouteChildren: AppRouteChildren = {
   AppVariaveisRoute: AppVariaveisRoute,
   AppIndexRoute: AppIndexRoute,
   AppAgentesNovoRoute: AppAgentesNovoRoute,
+  AppAppsGoogleCalendarRoute: AppAppsGoogleCalendarRoute,
   AppAgentesIndexRoute: AppAgentesIndexRoute,
+  AppAppsIndexRoute: AppAppsIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

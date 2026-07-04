@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
+import { Controller, Get, Param, Post, UseGuards, Query } from "@nestjs/common";
 import {
   ApiForbiddenResponse,
   ApiHeader,
@@ -53,8 +53,9 @@ export class AppsController {
     @Param("slug") slug: string,
     @CurrentUser() user: AuthenticatedUser,
     @Tenant() tenant: RequestTenant,
+    @Query("installationId") installationId?: string,
   ): Promise<FindOneAppResponse> {
-    return this.appsService.findOneApp({ slug, user, tenant });
+    return this.appsService.findOneApp({ slug, installationId, user, tenant });
   }
 
   @Post(":slug/install")

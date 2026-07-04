@@ -1,6 +1,21 @@
+const RealDate = globalThis.Date;
+const MOCK_TIME = new RealDate("2026-07-04T00:00:00.000Z").getTime();
+class MockDate extends RealDate {
+  constructor(...args) {
+    if (args.length === 0) {
+      super(MOCK_TIME);
+    } else {
+      super(...args);
+    }
+  }
+}
+MockDate.now = () => MOCK_TIME;
+globalThis.Date = MockDate;
+
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { test } from "node:test";
+import { Prisma } from "@prisma/client";
 import { AppsService } from "../dist/apps/apps.service.js";
 import { GoogleCalendarClientService } from "../dist/apps/google-calendar/google-calendar-client.service.js";
 import { GoogleCalendarOAuthService } from "../dist/apps/google-calendar/google-calendar-oauth.service.js";
@@ -152,6 +167,18 @@ function createMockPrisma() {
         description:
           "Conecte agendas Google para permitir que a IA consulte horários, crie reservas, remarque e cancele eventos.",
         status: "ACTIVE",
+        availability: "AVAILABLE",
+        metadata: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: "app-webhook",
+        slug: "webhook",
+        name: "Webhook",
+        description: "Webhook integration",
+        status: "ACTIVE",
+        availability: "COMING_SOON",
         metadata: null,
         createdAt: now,
         updatedAt: now,
@@ -162,6 +189,9 @@ function createMockPrisma() {
     resources: [],
     bookings: [],
     logs: [],
+    types: [],
+    categories: [],
+    attributes: [],
   };
 
   function shapeInstallation(installation) {
@@ -203,6 +233,21 @@ function createMockPrisma() {
     };
   }
 
+  function shapeResource(resource) {
+    if (!resource) return null;
+    const resourceTypeRef = state.types.find(t => t.id === resource.resourceTypeId) || null;
+    const categoryRef = state.categories.find(c => c.id === resource.categoryId) || null;
+    const attributeRef = state.attributes.find(a => a.id === resource.attributeId) || null;
+    const inst = state.installations.find(i => i.id === resource.installationId) || null;
+    return {
+      ...resource,
+      resourceTypeRef,
+      categoryRef,
+      attributeRef,
+      installation: inst ? { appId: inst.appId } : { appId: "google_calendar" },
+    };
+  }
+
   function sortDescByUpdatedAt(items) {
     return [...items].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
   }
@@ -228,12 +273,28 @@ function createMockPrisma() {
           ) ?? null;
         return installation ? shapeInstallation(installation) : null;
       },
-      findFirst: async ({ where }) =>
-        state.installations.find(
+      findFirst: async ({ where }) => {
+        const found = state.installations.find(
           (item) =>
             (!where.id || item.id === where.id) &&
-            (!where.companyId || item.companyId === where.companyId),
-        ) ?? null,
+            (!where.companyId || item.companyId === where.companyId) &&
+            (!where.appId || item.appId === where.appId),
+        );
+        return found ? shapeInstallation(found) : null;
+      },
+      create: async ({ data }) => {
+        const installation = {
+          id: `installation-${state.installations.length + 1}`,
+          ...data,
+          lastErrorCode: null,
+          lastErrorMessage: null,
+          metadata: null,
+          createdAt: now,
+          updatedAt: now,
+        };
+        state.installations.push(installation);
+        return shapeInstallation(installation);
+      },
       upsert: async ({ where, update, create }) => {
         const input = where.companyId_appId;
         let installation = state.installations.find(
@@ -262,6 +323,12 @@ function createMockPrisma() {
         Object.assign(installation, data, { updatedAt: now });
         return shapeInstallation(installation);
       },
+      delete: async ({ where }) => {
+        const idx = state.installations.findIndex((item) => item.id === where.id);
+        if (idx === -1) throw new Error("Installation not found");
+        const deleted = state.installations.splice(idx, 1)[0];
+        return shapeInstallation(deleted);
+      },
     },
     appCredential: {
       findFirst: async ({ where }) =>
@@ -269,7 +336,10 @@ function createMockPrisma() {
           state.credentials.filter(
             (credential) =>
               (!where.companyId || credential.companyId === where.companyId) &&
-              (!where.installationId || credential.installationId === where.installationId) &&
+              (!where.installationId || 
+                (typeof where.installationId === "object" && where.installationId.in
+                  ? where.installationId.in.includes(credential.installationId)
+                  : credential.installationId === where.installationId)) &&
               (!where.provider || credential.provider === where.provider) &&
               (!where.status || credential.status === where.status),
           ),
@@ -309,21 +379,25 @@ function createMockPrisma() {
     },
     googleCalendarResource: {
       findMany: async ({ where }) =>
-        state.resources.filter(
-          (resource) =>
-            (!where.companyId || resource.companyId === where.companyId) &&
-            (!where.installationId || resource.installationId === where.installationId) &&
-            (!where.active || resource.active === where.active),
-        ),
-      findFirst: async ({ where }) =>
-        state.resources.find(
+        state.resources
+          .filter(
+            (resource) =>
+              (!where.companyId || resource.companyId === where.companyId) &&
+              (!where.installationId || resource.installationId === where.installationId) &&
+              (!where.active || resource.active === where.active),
+          )
+          .map(shapeResource),
+      findFirst: async ({ where }) => {
+        const found = state.resources.find(
           (resource) =>
             (!where.id || resource.id === where.id) &&
             (!where.companyId || resource.companyId === where.companyId) &&
             (!where.installationId || resource.installationId === where.installationId) &&
             (!where.calendarId || resource.calendarId === where.calendarId) &&
             (!where.active || resource.active === where.active),
-        ) ?? null,
+        );
+        return found ? shapeResource(found) : null;
+      },
       create: async ({ data }) => {
         const resource = {
           id: `resource-${state.resources.length + 1}`,
@@ -333,12 +407,12 @@ function createMockPrisma() {
           ...data,
         };
         state.resources.push(resource);
-        return resource;
+        return shapeResource(resource);
       },
       update: async ({ where, data }) => {
         const resource = state.resources.find((item) => item.id === where.id);
         Object.assign(resource, data, { updatedAt: now });
-        return resource;
+        return shapeResource(resource);
       },
       updateMany: async ({ where, data }) => {
         let count = 0;
@@ -352,6 +426,135 @@ function createMockPrisma() {
           }
         }
         return { count };
+      },
+      count: async ({ where }) => {
+        let items = state.resources;
+        if (where) {
+          if (where.resourceTypeId) {
+            items = items.filter(r => r.resourceTypeId === where.resourceTypeId);
+          }
+          if (where.categoryId) {
+            items = items.filter(r => r.categoryId === where.categoryId);
+          }
+          if (where.attributeId) {
+            items = items.filter(r => r.attributeId === where.attributeId);
+          }
+        }
+        return items.length;
+      },
+    },
+    reservableResourceType: {
+      findMany: async ({ where }) =>
+        state.types.filter((t) => t.companyId === where.companyId),
+      findFirst: async ({ where }) =>
+        state.types.find(
+          (t) =>
+            (!where.id || t.id === where.id) &&
+            (!where.companyId || t.companyId === where.companyId)
+        ) ?? null,
+      create: async ({ data }) => {
+        const duplicated = state.types.some(t => t.companyId === data.companyId && t.slug === data.slug);
+        if (duplicated) {
+          throw new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+            code: "P2002",
+            clientVersion: "mock",
+          });
+        }
+        const created = {
+          id: `type-${state.types.length + 1}`,
+          createdAt: now,
+          updatedAt: now,
+          active: true,
+          sortOrder: 0,
+          ...data,
+        };
+        state.types.push(created);
+        return created;
+      },
+      update: async ({ where, data }) => {
+        const found = state.types.find((t) => t.id === where.id);
+        Object.assign(found, data, { updatedAt: now });
+        return found;
+      },
+      delete: async ({ where }) => {
+        state.types = state.types.filter((t) => t.id !== where.id);
+        return { id: where.id };
+      },
+    },
+    reservableResourceCategory: {
+      findMany: async ({ where }) =>
+        state.categories.filter((c) => c.companyId === where.companyId),
+      findFirst: async ({ where }) =>
+        state.categories.find(
+          (c) =>
+            (!where.id || c.id === where.id) &&
+            (!where.companyId || c.companyId === where.companyId)
+        ) ?? null,
+      create: async ({ data }) => {
+        const duplicated = state.categories.some(c => c.companyId === data.companyId && c.slug === data.slug);
+        if (duplicated) {
+          throw new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+            code: "P2002",
+            clientVersion: "mock",
+          });
+        }
+        const created = {
+          id: `cat-${state.categories.length + 1}`,
+          createdAt: now,
+          updatedAt: now,
+          active: true,
+          sortOrder: 0,
+          ...data,
+        };
+        state.categories.push(created);
+        return created;
+      },
+      update: async ({ where, data }) => {
+        const found = state.categories.find((c) => c.id === where.id);
+        Object.assign(found, data, { updatedAt: now });
+        return found;
+      },
+      delete: async ({ where }) => {
+        state.categories = state.categories.filter((c) => c.id !== where.id);
+        return { id: where.id };
+      },
+    },
+    reservableResourceAttribute: {
+      findMany: async ({ where }) =>
+        state.attributes.filter((a) => a.companyId === where.companyId),
+      findFirst: async ({ where }) =>
+        state.attributes.find(
+          (a) =>
+            (!where.id || a.id === where.id) &&
+            (!where.companyId || a.companyId === where.companyId)
+        ) ?? null,
+      create: async ({ data }) => {
+        const duplicated = state.attributes.some(a => a.companyId === data.companyId && a.slug === data.slug);
+        if (duplicated) {
+          throw new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+            code: "P2002",
+            clientVersion: "mock",
+          });
+        }
+        const created = {
+          id: `attr-${state.attributes.length + 1}`,
+          createdAt: now,
+          updatedAt: now,
+          active: true,
+          sortOrder: 0,
+          ...data,
+        };
+        state.attributes.push(created);
+        return created;
+      },
+      update: async ({ where, data }) => {
+        const found = state.attributes.find((a) => a.id === where.id);
+        Object.assign(found, data, { updatedAt: now });
+        return found;
+      },
+      delete: async ({ where }) => {
+        state.attributes = state.attributes.filter((a) => a.id !== where.id);
+        return { id: where.id };
       },
     },
     googleCalendarBooking: {
@@ -441,6 +644,10 @@ function createMockPrisma() {
         state.logs.push({ id: `log-${state.logs.length + 1}`, ...data, createdAt: now });
         return state.logs.at(-1);
       },
+      deleteMany: async ({ where }) => {
+        state.logs = state.logs.filter((l) => l.installationId !== where.installationId);
+        return { count: 0 };
+      },
     },
   };
 
@@ -465,7 +672,7 @@ test("lista apps disponíveis no catálogo sem instalar automaticamente", async 
 
   const response = await service.findAllApps(auth);
 
-  assert.equal(response.items.length, 1);
+  assert.equal(response.items.length, 2);
   assert.equal(response.items[0].slug, "google_calendar");
   assert.equal(response.items[0].installation, null);
 });
@@ -1225,3 +1432,202 @@ test("garantir que logs não têm tokens", async () => {
   const serializedLogs = JSON.stringify(env.state.logs);
   assert.doesNotMatch(serializedLogs, /google-access-token|google-refresh-token/);
 });
+
+test("impedir instalacao de app coming soon", async () => {
+  const env = await setupAvailabilityEnv();
+  const appsService = new AppsService(env.prisma);
+  // 'webhook' is seeded as COMING_SOON
+  const auth = createAuth("company-1");
+
+  await assert.rejects(
+    () => appsService.installApp({
+      slug: "webhook",
+      user: auth.user,
+      tenant: auth.tenant,
+    }),
+    /Este aplicativo ainda não está disponível para instalação/,
+  );
+});
+
+test("CRUD de classificacoes de recurso", async () => {
+  const env = await setupAvailabilityEnv();
+  const appsService = new AppsService(env.prisma);
+  const companyId = "company-1";
+
+  // 1. Criar Tipo
+  const type = await appsService.createResourceType(companyId, {
+    name: "Quadra de Squash",
+    slug: "squash",
+    description: "Para jogos de squash",
+  });
+  assert.equal(type.name, "Quadra de Squash");
+  assert.equal(type.slug, "squash");
+
+  // 2. Duplicado deve falhar
+  await assert.rejects(
+    () => appsService.createResourceType(companyId, {
+      name: "Outra de Squash",
+      slug: "squash",
+    }),
+    /Já existe um tipo com este slug nesta empresa/,
+  );
+
+  // 3. Atualizar Tipo
+  const updated = await appsService.updateResourceType(companyId, type.id, {
+    name: "Squash Premium",
+  });
+  assert.equal(updated.name, "Squash Premium");
+
+  // 4. Listar Tipos
+  const list = await appsService.findResourceTypes(companyId);
+  assert.ok(list.some(t => t.id === type.id));
+
+  // 5. Deletar Tipo
+  await appsService.deleteResourceType(companyId, type.id);
+  const listAfter = await appsService.findResourceTypes(companyId);
+  assert.ok(!listAfter.some(t => t.id === type.id));
+});
+
+test("Filtros de classificacoes na disponibilidade", async () => {
+  const env = await setupAvailabilityEnv();
+  const appsService = new AppsService(env.prisma);
+  const companyId = "company-1";
+
+  // Criar classificações
+  const type = await appsService.createResourceType(companyId, { name: "Auditório", slug: "auditorio" });
+  const category = await appsService.createResourceCategory(companyId, { name: "Palestra", slug: "palestra" });
+  const attribute = await appsService.createResourceAttribute(companyId, { name: "Climatizado", slug: "climatizado" });
+
+  // Associar ao recurso existente
+  await env.prisma.googleCalendarResource.update({
+    where: { id: env.resource.id },
+    data: {
+      resourceTypeId: type.id,
+      categoryId: category.id,
+      attributeId: attribute.id,
+    },
+  });
+
+  // Check availability with old and new query filters
+  const res1 = await env.availabilityService.checkAvailability({
+    companyId,
+    dto: {
+      date: "2026-07-04",
+      timeFrom: "09:00",
+      timeTo: "11:00",
+      sportType: "palestra", // matches category slug
+    },
+  });
+  assert.equal(res1.available, true);
+
+  const res2 = await env.availabilityService.checkAvailability({
+    companyId,
+    dto: {
+      date: "2026-07-04",
+      timeFrom: "09:00",
+      timeTo: "11:00",
+      resourceType: "Auditório", // matches type name
+    },
+  });
+  assert.equal(res2.available, true);
+
+  const resNotFound = await env.availabilityService.checkAvailability({
+    companyId,
+    dto: {
+      date: "2026-07-04",
+      timeFrom: "09:00",
+      timeTo: "11:00",
+      sportType: "futebol", // unmatched
+    },
+  });
+  assert.equal(resNotFound.available, false);
+});
+
+test("suporte a múltiplas instalações e isolamento de configuração", async () => {
+  const { prisma, oauth, fetchImpl } = await setupAvailabilityEnv();
+  const service = new AppsService(prisma);
+  const auth = {
+    user: { companyId: "company-1", id: "user-1", email: "a@a.com", name: "User", roles: [], permissions: ["tools:write", "tools:read"] },
+    tenant: { companyId: "company-1" },
+  };
+
+  // 1. Já existe uma instalação
+  const initialInstallations = await service.findAllInstallations(auth);
+  assert.ok(initialInstallations.items.length >= 1);
+
+  // 2. Instalação adicional de Google Agenda deve criar uma NOVA instalação
+  const newInstallation = await service.installApp({ ...auth, slug: "google_calendar" });
+  assert.ok(newInstallation.id);
+  assert.notEqual(newInstallation.id, initialInstallations.items[0].id);
+
+  // 3. Meus Apps deve listar múltiplas instalações
+  const updatedInstallations = await service.findAllInstallations(auth);
+  const googleCalendarInsts = updatedInstallations.items.filter(i => i.app.slug === "google_calendar");
+  assert.equal(googleCalendarInsts.length, 2);
+
+  // 4. Buscar detalhes específicos de uma instalação via findOneApp
+  const firstAppDetail = await service.findOneApp({ ...auth, slug: "google_calendar", installationId: initialInstallations.items[0].id });
+  assert.equal(firstAppDetail.installation.id, initialInstallations.items[0].id);
+
+  const secondAppDetail = await service.findOneApp({ ...auth, slug: "google_calendar", installationId: newInstallation.id });
+  assert.equal(secondAppDetail.installation.id, newInstallation.id);
+  assert.equal(secondAppDetail.installation.credentialsConfigured, false);
+
+  // 5. OAuth start url usa installationId correto
+  const config = createConfig();
+  const oauthService = new GoogleCalendarOAuthService(prisma, config, fetchImpl);
+  const startUrlRes = await oauthService.buildAuthorizationUrl({
+    companyId: "company-1",
+    userId: "user-1",
+    redirectUri: "http://localhost:3000/callback",
+    installationId: newInstallation.id,
+  });
+  assert.ok(startUrlRes);
+  assert.match(startUrlRes, /state=/);
+
+  // 6. Impedir cross-tenant lookup
+  const crossTenantAuth = {
+    user: { companyId: "company-2", id: "user-2", email: "b@b.com", name: "User 2", roles: [], permissions: ["tools:write", "tools:read"] },
+    tenant: { companyId: "company-2" },
+  };
+  await assert.rejects(
+    () => service.findOneApp({ ...crossTenantAuth, slug: "google_calendar", installationId: newInstallation.id }),
+    /Google Agenda installation not found or cross-tenant access denied/
+  );
+
+  // 7. PATCH status inativa/reativa
+  const updatedStatusInactive = await service.updateInstallationStatus({
+    id: newInstallation.id,
+    dto: { status: "INACTIVE" },
+    user: auth.user,
+    tenant: auth.tenant,
+  });
+  assert.equal(updatedStatusInactive.status, "INACTIVE");
+
+  const updatedStatusActive = await service.updateInstallationStatus({
+    id: newInstallation.id,
+    dto: { status: "ACTIVE" },
+    user: auth.user,
+    tenant: auth.tenant,
+  });
+  assert.equal(updatedStatusActive.status, "ACTIVE");
+
+  // 8. DELETE remove apenas instalação vazia
+  const deleteRes = await service.deleteInstallation({
+    id: newInstallation.id,
+    user: auth.user,
+    tenant: auth.tenant,
+  });
+  assert.equal(deleteRes.id, newInstallation.id);
+
+  // A primeira instalação initialInstallations.items[0] tem credencial e recursos e não deve poder ser excluída
+  await assert.rejects(
+    () => service.deleteInstallation({
+      id: initialInstallations.items[0].id,
+      user: auth.user,
+      tenant: auth.tenant,
+    }),
+    /Não é possível excluir/
+  );
+});
+

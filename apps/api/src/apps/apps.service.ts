@@ -25,6 +25,11 @@ const appSafeSelect = {
   slug: true,
   name: true,
   description: true,
+  category: true,
+  icon: true,
+  availability: true,
+  sortOrder: true,
+  isFeatured: true,
   status: true,
   metadata: true,
   createdAt: true,
@@ -70,6 +75,9 @@ const googleCalendarResourceSafeSelect = {
   maxDaysAhead: true,
   active: true,
   metadata: true,
+  resourceTypeId: true,
+  categoryId: true,
+  attributeId: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.GoogleCalendarResourceSelect;
@@ -204,21 +212,36 @@ export class AppsService {
 
   async findOneApp(input: {
     slug: string;
+    installationId?: string;
     user: AuthenticatedUser;
     tenant: RequestTenant;
   }): Promise<FindOneAppResponse> {
     assertTenant(input);
 
     const app = await this.findActiveAppBySlug(input.slug);
-    const installation = await this.prisma.appInstallation.findUnique({
-      where: {
-        companyId_appId: {
+    let installation = null;
+    if (input.installationId) {
+      installation = await this.prisma.appInstallation.findFirst({
+        where: {
+          id: input.installationId,
           companyId: input.tenant.companyId,
           appId: app.id,
         },
-      },
-      select: installationSafeSelect,
-    });
+        select: installationSafeSelect,
+      });
+
+      if (!installation) {
+        throw new BadRequestException("Google Agenda installation not found or cross-tenant access denied.");
+      }
+    } else {
+      installation = await this.prisma.appInstallation.findFirst({
+        where: {
+          companyId: input.tenant.companyId,
+          appId: app.id,
+        },
+        select: installationSafeSelect,
+      });
+    }
 
     return toAppCatalogItem(app, installation);
   }
@@ -249,19 +272,14 @@ export class AppsService {
 
     const app = await this.findActiveAppBySlug(input.slug);
 
-    const installation = await this.prisma.appInstallation.upsert({
-      where: {
-        companyId_appId: {
-          companyId: input.tenant.companyId,
-          appId: app.id,
-        },
-      },
-      update: {
-        status: AppInstallationStatus.ACTIVE,
-        lastErrorCode: null,
-        lastErrorMessage: null,
-      },
-      create: {
+    if (app.availability === "COMING_SOON") {
+      throw new BadRequestException(
+        "Este aplicativo ainda não está disponível para instalação.",
+      );
+    }
+
+    const installation = await this.prisma.appInstallation.create({
+      data: {
         companyId: input.tenant.companyId,
         appId: app.id,
         status: AppInstallationStatus.ACTIVE,
@@ -332,12 +350,13 @@ export class AppsService {
   }
 
   async findGoogleCalendarResources(input: {
+    installationId?: string;
     user: AuthenticatedUser;
     tenant: RequestTenant;
   }): Promise<FindAllGoogleCalendarResourcesResponse> {
     assertTenant(input);
 
-    const installation = await this.findGoogleCalendarInstallation(input.tenant.companyId, false);
+    const installation = await this.findGoogleCalendarInstallation(input.tenant.companyId, false, input.installationId);
 
     if (!installation) {
       return { items: [] };
@@ -362,7 +381,11 @@ export class AppsService {
   }): Promise<GoogleCalendarResourceItem> {
     assertTenant(input);
 
-    const installation = await this.findGoogleCalendarInstallation(input.tenant.companyId, true);
+    const installation = await this.findGoogleCalendarInstallation(
+      input.tenant.companyId,
+      true,
+      input.dto.installationId,
+    );
 
     try {
       const resource = await this.prisma.googleCalendarResource.create({
@@ -371,8 +394,8 @@ export class AppsService {
           installationId: installation.id,
           calendarId: input.dto.calendarId,
           name: input.dto.name,
-          resourceType: input.dto.resourceType,
-          sportType: input.dto.sportType,
+          resourceType: input.dto.resourceType ?? "",
+          sportType: input.dto.sportType ?? "",
           isCovered: input.dto.isCovered ?? false,
           timezone: input.dto.timezone ?? "America/Campo_Grande",
           slotMinutes: input.dto.slotMinutes ?? 30,
@@ -380,6 +403,9 @@ export class AppsService {
           minAdvanceMinutes: input.dto.minAdvanceMinutes ?? 60,
           maxDaysAhead: input.dto.maxDaysAhead ?? 14,
           active: input.dto.active ?? true,
+          resourceTypeId: input.dto.resourceTypeId ?? null,
+          categoryId: input.dto.categoryId ?? null,
+          attributeId: input.dto.attributeId ?? null,
         },
         select: googleCalendarResourceSafeSelect,
       });
@@ -509,14 +535,17 @@ export class AppsService {
   private async findGoogleCalendarInstallation(
     companyId: string,
     requireActive: true,
+    installationId?: string,
   ): Promise<Pick<AppInstallation, "id" | "appId" | "status">>;
   private async findGoogleCalendarInstallation(
     companyId: string,
     requireActive: false,
+    installationId?: string,
   ): Promise<Pick<AppInstallation, "id" | "appId" | "status"> | null>;
   private async findGoogleCalendarInstallation(
     companyId: string,
     requireActive: boolean,
+    installationId?: string,
   ): Promise<Pick<AppInstallation, "id" | "appId" | "status"> | null> {
     const app = await this.prisma.app.findUnique({
       where: { slug: GOOGLE_CALENDAR_SLUG },
@@ -531,12 +560,33 @@ export class AppsService {
       return null;
     }
 
-    const installation = await this.prisma.appInstallation.findUnique({
-      where: {
-        companyId_appId: {
+    if (installationId) {
+      const installation = await this.prisma.appInstallation.findFirst({
+        where: {
+          id: installationId,
           companyId,
           appId: app.id,
         },
+        select: {
+          id: true,
+          appId: true,
+          status: true,
+        },
+      });
+
+      if (!installation && requireActive) {
+        throw new BadRequestException("Google Agenda installation not found or cross-tenant access denied.");
+      }
+      if (installation && requireActive && installation.status !== AppInstallationStatus.ACTIVE) {
+        throw new BadRequestException("Google Agenda installation is not active.");
+      }
+      return installation;
+    }
+
+    const installation = await this.prisma.appInstallation.findFirst({
+      where: {
+        companyId,
+        appId: app.id,
       },
       select: {
         id: true,
@@ -562,11 +612,11 @@ export class AppsService {
 
   private toGoogleCalendarResourceUpdateData(
     dto: UpdateGoogleCalendarResourceDto,
-  ): Prisma.GoogleCalendarResourceUpdateInput {
+  ): Prisma.GoogleCalendarResourceUncheckedUpdateInput {
     const hasField = (field: keyof UpdateGoogleCalendarResourceDto) =>
       Object.prototype.hasOwnProperty.call(dto, field);
 
-    const data: Prisma.GoogleCalendarResourceUpdateInput = {};
+    const data: Prisma.GoogleCalendarResourceUncheckedUpdateInput = {};
 
     if (hasField("name")) data.name = dto.name;
     if (hasField("calendarId")) data.calendarId = dto.calendarId;
@@ -581,6 +631,9 @@ export class AppsService {
     if (hasField("minAdvanceMinutes")) data.minAdvanceMinutes = dto.minAdvanceMinutes;
     if (hasField("maxDaysAhead")) data.maxDaysAhead = dto.maxDaysAhead;
     if (hasField("active")) data.active = dto.active;
+    if (hasField("resourceTypeId")) data.resourceTypeId = dto.resourceTypeId ?? null;
+    if (hasField("categoryId")) data.categoryId = dto.categoryId ?? null;
+    if (hasField("attributeId")) data.attributeId = dto.attributeId ?? null;
 
     if (Object.keys(data).length === 0) {
       throw new BadRequestException("At least one editable field must be provided.");
@@ -646,5 +699,190 @@ export class AppsService {
     } catch {
       // App action logs must never break the operational request path.
     }
+  }
+
+  // ── Resource Classification CRUD ──────────────────────────────────
+
+  async findResourceTypes(companyId: string) {
+    return this.prisma.reservableResourceType.findMany({
+      where: { companyId },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    });
+  }
+
+  async createResourceType(companyId: string, data: { name: string; slug: string; description?: string }) {
+    try {
+      return await this.prisma.reservableResourceType.create({
+        data: { companyId, name: data.name, slug: data.slug, description: data.description ?? null },
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new BadRequestException("Já existe um tipo com este slug nesta empresa.");
+      }
+      throw error;
+    }
+  }
+
+  async updateResourceType(companyId: string, id: string, data: { name?: string; slug?: string; description?: string; active?: boolean; sortOrder?: number }) {
+    const existing = await this.prisma.reservableResourceType.findFirst({ where: { id, companyId } });
+    if (!existing) throw new NotFoundException("Tipo de recurso não encontrado.");
+    try {
+      return await this.prisma.reservableResourceType.update({ where: { id }, data });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new BadRequestException("Já existe um tipo com este slug nesta empresa.");
+      }
+      throw error;
+    }
+  }
+
+  async deleteResourceType(companyId: string, id: string) {
+    const existing = await this.prisma.reservableResourceType.findFirst({ where: { id, companyId } });
+    if (!existing) throw new NotFoundException("Tipo de recurso não encontrado.");
+    const inUse = await this.prisma.googleCalendarResource.count({ where: { resourceTypeId: id } });
+    if (inUse > 0) {
+      throw new BadRequestException("Este tipo está em uso por recursos existentes. Remova a associação primeiro.");
+    }
+    await this.prisma.reservableResourceType.delete({ where: { id } });
+    return { deleted: true };
+  }
+
+  async findResourceCategories(companyId: string) {
+    return this.prisma.reservableResourceCategory.findMany({
+      where: { companyId },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    });
+  }
+
+  async createResourceCategory(companyId: string, data: { name: string; slug: string; description?: string }) {
+    try {
+      return await this.prisma.reservableResourceCategory.create({
+        data: { companyId, name: data.name, slug: data.slug, description: data.description ?? null },
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new BadRequestException("Já existe uma categoria com este slug nesta empresa.");
+      }
+      throw error;
+    }
+  }
+
+  async updateResourceCategory(companyId: string, id: string, data: { name?: string; slug?: string; description?: string; active?: boolean; sortOrder?: number }) {
+    const existing = await this.prisma.reservableResourceCategory.findFirst({ where: { id, companyId } });
+    if (!existing) throw new NotFoundException("Categoria de recurso não encontrada.");
+    try {
+      return await this.prisma.reservableResourceCategory.update({ where: { id }, data });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new BadRequestException("Já existe uma categoria com este slug nesta empresa.");
+      }
+      throw error;
+    }
+  }
+
+  async deleteResourceCategory(companyId: string, id: string) {
+    const existing = await this.prisma.reservableResourceCategory.findFirst({ where: { id, companyId } });
+    if (!existing) throw new NotFoundException("Categoria de recurso não encontrada.");
+    const inUse = await this.prisma.googleCalendarResource.count({ where: { categoryId: id } });
+    if (inUse > 0) {
+      throw new BadRequestException("Esta categoria está em uso por recursos existentes. Remova a associação primeiro.");
+    }
+    await this.prisma.reservableResourceCategory.delete({ where: { id } });
+    return { deleted: true };
+  }
+
+  async findResourceAttributes(companyId: string) {
+    return this.prisma.reservableResourceAttribute.findMany({
+      where: { companyId },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    });
+  }
+
+  async createResourceAttribute(companyId: string, data: { name: string; slug: string; description?: string }) {
+    try {
+      return await this.prisma.reservableResourceAttribute.create({
+        data: { companyId, name: data.name, slug: data.slug, description: data.description ?? null },
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new BadRequestException("Já existe uma característica com este slug nesta empresa.");
+      }
+      throw error;
+    }
+  }
+
+  async updateResourceAttribute(companyId: string, id: string, data: { name?: string; slug?: string; description?: string; active?: boolean; sortOrder?: number }) {
+    const existing = await this.prisma.reservableResourceAttribute.findFirst({ where: { id, companyId } });
+    if (!existing) throw new NotFoundException("Característica de recurso não encontrada.");
+    try {
+      return await this.prisma.reservableResourceAttribute.update({ where: { id }, data });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new BadRequestException("Já existe uma característica com este slug nesta empresa.");
+      }
+      throw error;
+    }
+  }
+
+  async deleteResourceAttribute(companyId: string, id: string) {
+    const existing = await this.prisma.reservableResourceAttribute.findFirst({ where: { id, companyId } });
+    if (!existing) throw new NotFoundException("Característica de recurso não encontrada.");
+    const inUse = await this.prisma.googleCalendarResource.count({ where: { attributeId: id } });
+    if (inUse > 0) {
+      throw new BadRequestException("Esta característica está em uso por recursos existentes. Remova a associação primeiro.");
+    }
+    await this.prisma.reservableResourceAttribute.delete({ where: { id } });
+    return { deleted: true };
+  }
+
+  async deleteInstallation(input: {
+    id: string;
+    user: AuthenticatedUser;
+    tenant: RequestTenant;
+  }): Promise<AppInstallationResponse> {
+    assertTenant(input);
+
+    const installation = await this.prisma.appInstallation.findFirst({
+      where: {
+        id: input.id,
+        companyId: input.tenant.companyId,
+      },
+      include: {
+        credentials: true,
+        googleCalendarResources: true,
+        googleCalendarBookings: true,
+      },
+    });
+
+    if (!installation) {
+      throw new BadRequestException("Instalação não encontrada.");
+    }
+
+    if ((installation.googleCalendarBookings ?? []).length > 0) {
+      throw new BadRequestException(
+        "Não é possível excluir a conexão pois existem reservas associadas a ela. Por favor, inative-a."
+      );
+    }
+    if ((installation.googleCalendarResources ?? []).length > 0) {
+      throw new BadRequestException(
+        "Não é possível excluir a conexão pois existem recursos vinculados. Por favor, inative-a."
+      );
+    }
+    if ((installation.credentials ?? []).length > 0) {
+      throw new BadRequestException(
+        "Não é possível excluir a conexão pois existe uma conta Google conectada. Por favor, desconecte a conta ou inative a extensão primeiro."
+      );
+    }
+
+    await this.prisma.appActionLog.deleteMany({
+      where: { installationId: installation.id },
+    });
+
+    const deleted = await this.prisma.appInstallation.delete({
+      where: { id: installation.id },
+      select: installationSafeSelect,
+    });
+
+    return toInstallationResponse(deleted);
   }
 }

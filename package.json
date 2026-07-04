@@ -30,7 +30,8 @@
     "db:migrate": "npm --prefix apps/api run prisma:migrate",
     "db:seed": "npm --prefix apps/api run prisma:seed",
     "db:reset:dev": "npm --prefix apps/api exec prisma migrate reset --schema prisma/schema.prisma --force",
-    "db:check": "npm --prefix apps/api run db:check"
+    "db:check": "npm --prefix apps/api run db:check",
+    "icons:export": "node scripts/export-app-icons.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -79,6 +80,7 @@
     "react-hook-form": "^7.71.2",
     "react-resizable-panels": "^4.6.5",
     "recharts": "^2.15.4",
+    "simple-icons": "^16.24.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.1",

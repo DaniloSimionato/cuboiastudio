@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, ServiceUnavailableException } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, ServiceUnavailableException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
   AppActionStatus,
@@ -112,15 +112,17 @@ export class GoogleCalendarOAuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    @Inject("GOOGLE_CALENDAR_FETCH")
     private readonly fetchImpl: FetchLike = fetch,
   ) {}
 
   async buildAuthorizationUrl(input: {
     companyId: string;
     userId: string | null;
+    installationId?: string;
   }): Promise<string> {
     const config = this.getRequiredOAuthConfig();
-    const installation = await this.ensureGoogleCalendarInstallation(input.companyId, input.userId);
+    const installation = await this.ensureGoogleCalendarInstallation(input.companyId, input.userId, input.installationId);
     const state = this.signState({
       companyId: input.companyId,
       userId: input.userId,
@@ -287,11 +289,11 @@ export class GoogleCalendarOAuthService {
     }
   }
 
-  async disconnect(input: { companyId: string }): Promise<GoogleCalendarOAuthStatus> {
-    const installation = await this.findGoogleCalendarInstallation(input.companyId, false);
+  async disconnect(input: { companyId: string; installationId?: string }): Promise<GoogleCalendarOAuthStatus> {
+    const installation = await this.findGoogleCalendarInstallation(input.companyId, false, input.installationId);
 
     if (!installation) {
-      return this.getStatus(input.companyId);
+      return this.getStatus(input.companyId, input.installationId);
     }
 
     const credential = await this.findActiveCredential(input.companyId, installation.id);
@@ -336,13 +338,16 @@ export class GoogleCalendarOAuthService {
       });
     });
 
-    return this.getStatus(input.companyId);
+    return this.getStatus(input.companyId, input.installationId);
   }
 
-  async getStatus(companyId: string): Promise<GoogleCalendarOAuthStatus> {
-    const installation = await this.findGoogleCalendarInstallation(companyId, false);
+  async getStatus(companyId: string, installationId?: string): Promise<GoogleCalendarOAuthStatus> {
+    const installation = await this.findGoogleCalendarInstallation(companyId, false, installationId);
 
     if (!installation) {
+      if (installationId) {
+        throw new BadRequestException("Google Agenda installation not found or cross-tenant access denied.");
+      }
       return this.emptyStatus();
     }
 
@@ -362,8 +367,8 @@ export class GoogleCalendarOAuthService {
     };
   }
 
-  async getAuthorizedCredential(companyId: string): Promise<GoogleAuthorizedCredential> {
-    const installation = await this.findGoogleCalendarInstallation(companyId, true);
+  async getAuthorizedCredential(companyId: string, installationId?: string): Promise<GoogleAuthorizedCredential> {
+    const installation = await this.findGoogleCalendarInstallation(companyId, true, installationId);
     if (installation.status !== AppInstallationStatus.ACTIVE) {
       throw new BadRequestException("Google Agenda installation is not active.");
     }
@@ -506,6 +511,7 @@ export class GoogleCalendarOAuthService {
   private async ensureGoogleCalendarInstallation(
     companyId: string,
     userId: string | null,
+    installationId?: string,
   ): Promise<Pick<AppInstallation, "id" | "appId" | "status">> {
     const app = await this.prisma.app.findUnique({
       where: { slug: GOOGLE_CALENDAR_SLUG },
@@ -516,15 +522,18 @@ export class GoogleCalendarOAuthService {
       throw new BadRequestException("Google Agenda is not available in the app catalog.");
     }
 
-    return this.prisma.appInstallation.upsert({
-      where: {
-        companyId_appId: {
-          companyId,
-          appId: app.id,
-        },
-      },
-      update: {},
-      create: {
+    if (installationId) {
+      const existing = await this.prisma.appInstallation.findFirst({
+        where: { id: installationId, companyId, appId: app.id },
+        select: { id: true, appId: true, status: true },
+      });
+      if (existing) {
+        return existing;
+      }
+    }
+
+    return this.prisma.appInstallation.create({
+      data: {
         companyId,
         appId: app.id,
         status: AppInstallationStatus.INACTIVE,
@@ -541,14 +550,17 @@ export class GoogleCalendarOAuthService {
   private async findGoogleCalendarInstallation(
     companyId: string,
     requireInstalled: true,
+    installationId?: string,
   ): Promise<Pick<AppInstallation, "id" | "appId" | "status">>;
   private async findGoogleCalendarInstallation(
     companyId: string,
     requireInstalled: false,
+    installationId?: string,
   ): Promise<Pick<AppInstallation, "id" | "appId" | "status"> | null>;
   private async findGoogleCalendarInstallation(
     companyId: string,
     requireInstalled: boolean,
+    installationId?: string,
   ): Promise<Pick<AppInstallation, "id" | "appId" | "status"> | null> {
     const app = await this.prisma.app.findUnique({
       where: { slug: GOOGLE_CALENDAR_SLUG },
@@ -562,12 +574,30 @@ export class GoogleCalendarOAuthService {
       return null;
     }
 
-    const installation = await this.prisma.appInstallation.findUnique({
-      where: {
-        companyId_appId: {
+    if (installationId) {
+      const installation = await this.prisma.appInstallation.findFirst({
+        where: {
+          id: installationId,
           companyId,
           appId: app.id,
         },
+        select: {
+          id: true,
+          appId: true,
+          status: true,
+        },
+      });
+
+      if (!installation && requireInstalled) {
+        throw new BadRequestException("Google Agenda installation not found or cross-tenant access denied.");
+      }
+      return installation;
+    }
+
+    const installation = await this.prisma.appInstallation.findFirst({
+      where: {
+        companyId,
+        appId: app.id,
       },
       select: {
         id: true,
@@ -576,8 +606,12 @@ export class GoogleCalendarOAuthService {
       },
     });
 
-    if (!installation && requireInstalled) {
-      throw new BadRequestException("Install Google Agenda before connecting Google.");
+    if (!installation) {
+      if (requireInstalled) {
+        throw new BadRequestException("Install Google Agenda before connecting Google.");
+      }
+
+      return null;
     }
 
     return installation;
@@ -822,7 +856,7 @@ export class GoogleCalendarOAuthService {
     return this.getEncryptionKeyBuffer();
   }
 
-  private buildFrontendRedirectUrl(queryString: string): string {
+  public buildFrontendRedirectUrl(queryString: string): string {
     const configuredCorsOrigin = this.configService.get<string>("CORS_ORIGIN")?.split(",")[0]?.trim();
     const origin = configuredCorsOrigin || DEFAULT_CORS_ORIGIN;
     return `${origin.replace(/\/$/, "")}/apps/google-calendar?${queryString}`;
