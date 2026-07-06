@@ -1,5 +1,6 @@
+import { Status } from "@prisma/client";
 import { Transform } from "class-transformer";
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from "class-validator";
+import { IsEnum, IsNotEmpty, IsOptional, IsString, MaxLength } from "class-validator";
 
 function trimString(value: unknown): unknown {
   return typeof value === "string" ? value.trim() : value;
@@ -19,4 +20,11 @@ export class UpdateAssistantKnowledgeDto {
   @IsNotEmpty()
   @MaxLength(5000)
   content?: string;
+
+  @IsOptional()
+  @IsEnum(Status)
+  status?: Status;
+
+  @IsOptional()
+  metadata?: any;
 }

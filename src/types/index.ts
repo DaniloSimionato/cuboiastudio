@@ -423,6 +423,9 @@ export interface BackendAssistantListItem {
   instructions: string | null;
   model: string | null;
   temperature: number | null;
+  fallbackMessage: string | null;
+  safetyInstruction: string | null;
+  ragEnabled: boolean;
   status: BackendStatus;
   createdAt: string;
   updatedAt: string;
@@ -430,14 +433,19 @@ export interface BackendAssistantListItem {
 
 export type BackendAssistantResponse = BackendAssistantListItem;
 
-export interface BackendAssistantKnowledgeItem {
+export type BackendAssistantKnowledgeItem = {
   id: string;
   title: string;
   content: string;
   status: BackendStatus;
+  processingStatus: string;
+  chunkCount: number;
+  processedAt?: string;
+  processingError?: string;
   createdAt: string;
   updatedAt: string;
-}
+  metadata?: any;
+};
 
 export interface BackendConversationItem {
   id: string;
@@ -569,7 +577,16 @@ export interface BackendAssistantPreviewResponse {
     id: string;
     title: string;
   }>;
-  mode: "deterministic-preview";
+  mode: "deterministic-preview" | "ai-preview-rag";
+  usedKnowledge?: Array<{
+    knowledgeId: string;
+    title: string;
+    chunkId: string;
+    score: number;
+    contentPreview: string;
+  }>;
+  ragEnabled?: boolean;
+  totalChunksScanned?: number;
 }
 
 export interface BackendAssistantRunResponse {

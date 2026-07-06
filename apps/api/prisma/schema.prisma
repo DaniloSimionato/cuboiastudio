@@ -70,6 +70,7 @@ model Company {
   assistantKnowledgeItems       AssistantKnowledge[]
   assistantPreviewLogs          AssistantPreviewLog[]
   assistantRuntimeLogs          AssistantRuntimeLog[]
+  assistantKnowledgeChunks      AssistantKnowledgeChunk[]
   appInstallations              AppInstallation[]
   appCredentials                AppCredential[]
   appActionLogs                 AppActionLog[]
@@ -326,17 +327,20 @@ model UserRole {
 }
 
 model Assistant {
-  id             String   @id @default(cuid())
-  companyId      String
-  name           String
-  description    String?
-  initialMessage String?
-  instructions   String?
-  model          String?
-  temperature    Float?
-  status         Status   @default(ACTIVE)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                String   @id @default(cuid())
+  companyId         String
+  name              String
+  description       String?
+  initialMessage    String?
+  instructions      String?
+  model             String?
+  temperature       Float?
+  fallbackMessage   String?
+  safetyInstruction String?
+  ragEnabled        Boolean  @default(false)
+  status            Status   @default(ACTIVE)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   company                       Company                        @relation(fields: [companyId], references: [id], onDelete: Restrict)
   knowledgeItems                AssistantKnowledge[]
@@ -344,6 +348,7 @@ model Assistant {
   chatwootInboxConfigs          ChatwootInboxConfig[]
   previewLogs                   AssistantPreviewLog[]
   runtimeLogs                   AssistantRuntimeLog[]
+  knowledgeChunks               AssistantKnowledgeChunk[]
   assistantConversationMessages AssistantConversationMessage[]
 
   @@index([companyId])
@@ -358,12 +363,18 @@ model AssistantKnowledge {
   companyId   String
   title       String
   content     String
-  status      Status   @default(ACTIVE)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  status          Status   @default(ACTIVE)
+  processingStatus String  @default("DRAFT")
+  chunkCount      Int      @default(0)
+  processedAt     DateTime?
+  processingError String?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   assistant Assistant @relation(fields: [assistantId], references: [id], onDelete: Restrict)
   company   Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  chunks    AssistantKnowledgeChunk[]
 
   @@index([companyId])
   @@index([assistantId])
@@ -386,6 +397,13 @@ model AssistantConversation {
   externalContactId      String?
   externalChannelId      String?
   externalInboxId        String?
+  aiActive               Boolean                 @default(true)
+  lastAiActiveAt         DateTime?
+  lastAiPausedAt         DateTime?
+  lastResumeRunAt        DateTime?
+  pauseReason            String?
+  resumeReason           String?
+  lastExternalMessageId  String?
   pausedByHuman          Boolean                 @default(false)
   lastMessageAt          DateTime?
   status                 Status                  @default(ACTIVE)
@@ -633,4 +651,28 @@ model ReservableResourceAttribute {
   @@unique([companyId, slug])
   @@index([companyId])
   @@map("reservable_resource_attributes")
+}
+
+model AssistantKnowledgeChunk {
+  id                 String   @id @default(cuid())
+  companyId          String   @map("company_id")
+  assistantId        String   @map("assistant_id")
+  knowledgeId        String   @map("knowledge_id")
+  chunkIndex         Int      @map("chunk_index")
+  content            String
+  embedding          Float[]
+  embeddingModel     String   @map("embedding_model")
+  embeddingDimension Int      @map("embedding_dimension")
+  status             Status   @default(ACTIVE)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  assistant Assistant          @relation(fields: [assistantId], references: [id], onDelete: Restrict)
+  company   Company            @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  knowledge AssistantKnowledge @relation(fields: [knowledgeId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([assistantId])
+  @@index([knowledgeId])
+  @@map("assistant_knowledge_chunks")
 }

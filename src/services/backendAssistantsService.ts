@@ -17,9 +17,29 @@ type AssistantKnowledgeListResponse = {
     title: string;
     content: string;
     status: BackendStatus;
+    processingStatus: string;
+    chunkCount: number;
+    processedAt?: string;
+    processingError?: string;
     createdAt: string;
     updatedAt: string;
+    metadata?: any;
   }>;
+};
+
+export type AssistantKnowledgeSearchResult = {
+  query: string;
+  totalChunksScanned: number;
+  results: Array<{
+    knowledgeId: string;
+    knowledgeTitle: string;
+    chunkId: string;
+    chunkIndex: number;
+    contentPreview: string;
+    score: number;
+    metadata?: any;
+  }>;
+  warning?: string;
 };
 
 type PreviewLogsResponse = {
@@ -52,6 +72,9 @@ export const backendAssistantsService = {
     instructions?: string | null;
     model?: string | null;
     temperature?: number | null;
+    fallbackMessage?: string | null;
+    safetyInstruction?: string | null;
+    ragEnabled?: boolean;
   }): Promise<BackendAssistantResponse> {
     return apiFetch<BackendAssistantResponse>("/assistants", {
       method: "POST",
@@ -68,6 +91,9 @@ export const backendAssistantsService = {
       instructions?: string | null;
       model?: string | null;
       temperature?: number | null;
+      fallbackMessage?: string | null;
+      safetyInstruction?: string | null;
+      ragEnabled?: boolean;
     },
   ): Promise<BackendAssistantResponse> {
     return apiFetch<BackendAssistantResponse>(`/assistants/${id}`, {
@@ -83,10 +109,10 @@ export const backendAssistantsService = {
     });
   },
 
-  async preview(id: string, question: string): Promise<BackendAssistantPreviewResponse> {
+  async preview(id: string, question: string, usePreparedKnowledge?: boolean): Promise<BackendAssistantPreviewResponse> {
     return apiFetch<BackendAssistantPreviewResponse>(`/assistants/${id}/preview`, {
       method: "POST",
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, usePreparedKnowledge }),
     });
   },
 
@@ -110,7 +136,7 @@ export const backendAssistantsService = {
 
   async knowledgeCreate(
     assistantId: string,
-    input: { title: string; content: string },
+    input: { title: string; content: string; metadata?: any },
   ): Promise<AssistantKnowledgeListResponse["items"][number]> {
     return apiFetch<AssistantKnowledgeListResponse["items"][number]>(
       `/assistants/${assistantId}/knowledge`,
@@ -124,7 +150,7 @@ export const backendAssistantsService = {
   async knowledgeUpdate(
     assistantId: string,
     knowledgeId: string,
-    input: { title?: string; content?: string },
+    input: { title?: string; content?: string; status?: BackendStatus; metadata?: any },
   ): Promise<AssistantKnowledgeListResponse["items"][number]> {
     return apiFetch<AssistantKnowledgeListResponse["items"][number]>(
       `/assistants/${assistantId}/knowledge/${knowledgeId}`,
@@ -145,5 +171,28 @@ export const backendAssistantsService = {
         method: "DELETE",
       },
     );
+  },
+
+  async knowledgePrepare(
+    assistantId: string,
+    knowledgeId: string,
+  ): Promise<AssistantKnowledgeListResponse["items"][number]> {
+    return apiFetch<AssistantKnowledgeListResponse["items"][number]>(
+      `/assistants/${assistantId}/knowledge/${knowledgeId}/prepare`,
+      {
+        method: "POST",
+      },
+    );
+  },
+
+  async knowledgeSearch(
+    assistantId: string,
+    query: string,
+    topK: number = 5,
+  ): Promise<AssistantKnowledgeSearchResult> {
+    return apiFetch<AssistantKnowledgeSearchResult>(`/assistants/${assistantId}/knowledge/search`, {
+      method: "POST",
+      body: JSON.stringify({ query, topK }),
+    });
   },
 };

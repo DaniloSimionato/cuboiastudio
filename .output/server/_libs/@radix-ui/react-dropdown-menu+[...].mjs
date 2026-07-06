@@ -3,48 +3,13 @@ import { a as offset, c as useFloating, i as limitShift, n as flip, o as shift, 
 import { c as composeRefs, i as require_jsx_runtime, l as useComposedRefs, n as Primitive, o as createSlot, r as dispatchDiscreteCustomEvent, t as Root$1 } from "./react-arrow+[...].mjs";
 import { t as composeEventHandlers } from "../radix-ui__primitive.mjs";
 import { a as useLayoutEffect2, i as useCallbackRef, o as createContextScope } from "./react-avatar+[...].mjs";
-import { _ as useControllableState, d as Presence, f as Portal$1, g as DismissableLayer, h as useFocusGuards, l as ReactRemoveScroll, m as FocusScope, p as useId, u as hideOthers } from "./react-dialog+[...].mjs";
+import { a as useSize, i as Presence, o as useControllableState } from "./react-checkbox+[...].mjs";
 import { t as createCollection } from "../radix-ui__react-collection.mjs";
 import { t as useDirection } from "../radix-ui__react-direction.mjs";
+import { d as Portal$1, f as useId, h as DismissableLayer, l as ReactRemoveScroll, m as useFocusGuards, p as FocusScope, u as hideOthers } from "./react-dialog+[...].mjs";
 import { n as autoUpdate } from "../@floating-ui/dom+[...].mjs";
-//#region node_modules/@radix-ui/react-use-size/dist/index.mjs
-var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
-function useSize(element) {
-	const [size, setSize] = import_react.useState(void 0);
-	useLayoutEffect2(() => {
-		if (element) {
-			setSize({
-				width: element.offsetWidth,
-				height: element.offsetHeight
-			});
-			const resizeObserver = new ResizeObserver((entries) => {
-				if (!Array.isArray(entries)) return;
-				if (!entries.length) return;
-				const entry = entries[0];
-				let width;
-				let height;
-				if ("borderBoxSize" in entry) {
-					const borderSizeEntry = entry["borderBoxSize"];
-					const borderSize = Array.isArray(borderSizeEntry) ? borderSizeEntry[0] : borderSizeEntry;
-					width = borderSize["inlineSize"];
-					height = borderSize["blockSize"];
-				} else {
-					width = element.offsetWidth;
-					height = element.offsetHeight;
-				}
-				setSize({
-					width,
-					height
-				});
-			});
-			resizeObserver.observe(element, { box: "border-box" });
-			return () => resizeObserver.unobserve(element);
-		} else setSize(void 0);
-	}, [element]);
-	return size;
-}
-//#endregion
 //#region node_modules/@radix-ui/react-popper/dist/index.mjs
+var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 var import_jsx_runtime = require_jsx_runtime();
 var POPPER_NAME = "Popper";
 var [createPopperContext, createPopperScope] = createContextScope(POPPER_NAME);
@@ -1518,4 +1483,4 @@ var Separator2 = DropdownMenuSeparator;
 var SubTrigger2 = DropdownMenuSubTrigger;
 var SubContent2 = DropdownMenuSubContent;
 //#endregion
-export { Arrow as _, Label2 as a, createPopperScope as b, Root2 as c, SubTrigger2 as d, Trigger as f, Anchor as g, createRovingFocusGroupScope as h, ItemIndicator2 as i, Separator2 as l, Root as m, Content2 as n, Portal2 as o, Item as p, Item2 as r, RadioItem2 as s, CheckboxItem2 as t, SubContent2 as u, Content as v, useSize as x, Root2$1 as y };
+export { Arrow as _, Label2 as a, createPopperScope as b, Root2 as c, SubTrigger2 as d, Trigger as f, Anchor as g, createRovingFocusGroupScope as h, ItemIndicator2 as i, Separator2 as l, Root as m, Content2 as n, Portal2 as o, Item as p, Item2 as r, RadioItem2 as s, CheckboxItem2 as t, SubContent2 as u, Content as v, Root2$1 as y };

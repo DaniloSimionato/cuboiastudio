@@ -8,8 +8,10 @@ import {
 import { Prisma, Status } from "@prisma/client";
 import { type AuthenticatedUser, type RequestTenant } from "../auth/auth.types";
 import { PrismaService } from "../database/prisma.service";
+import { buildDeterministicAssistantResponse } from "./assistant-runtime";
+import { AiService } from "../ai/ai.service";
+import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
 import {
-  buildDeterministicAssistantResponse,
   toAssistantRuntimeSources,
   type AssistantRuntimeSource,
 } from "./assistant-runtime";
@@ -27,6 +29,9 @@ export type AssistantListItem = {
   instructions: string | null;
   model: string | null;
   temperature: number | null;
+  fallbackMessage: string | null;
+  safetyInstruction: string | null;
+  ragEnabled: boolean;
   status: Status;
   createdAt: Date;
   updatedAt: Date;
@@ -53,7 +58,16 @@ export type PreviewAssistantResponse = {
   question: string;
   answer: string;
   sources: AssistantRuntimeSource[];
-  mode: "deterministic-preview";
+  mode: "deterministic-preview" | "ai-preview-rag";
+  usedKnowledge?: Array<{
+    knowledgeId: string;
+    title: string;
+    chunkId: string;
+    score: number;
+    contentPreview: string;
+  }>;
+  ragEnabled?: boolean;
+  totalChunksScanned?: number;
 };
 
 export type RunAssistantResponse = {
@@ -93,6 +107,9 @@ const assistantSafeSelect = {
   instructions: true,
   model: true,
   temperature: true,
+  fallbackMessage: true,
+  safetyInstruction: true,
+  ragEnabled: true,
   status: true,
   createdAt: true,
   updatedAt: true,
@@ -187,6 +204,9 @@ function toAssistantResponse(assistant: AssistantSafeRecord): AssistantListItem 
     instructions: assistant.instructions,
     model: assistant.model,
     temperature: assistant.temperature,
+    fallbackMessage: assistant.fallbackMessage,
+    safetyInstruction: assistant.safetyInstruction,
+    ragEnabled: assistant.ragEnabled,
     status: assistant.status,
     createdAt: assistant.createdAt,
     updatedAt: assistant.updatedAt,
@@ -206,7 +226,11 @@ function toPreviewLogItem(record: AssistantPreviewLogRecord): PreviewAssistantLo
 
 @Injectable()
 export class AssistantsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly aiService: AiService,
+    private readonly retrievalService: AssistantKnowledgeRetrievalService,
+  ) {}
 
   private async loadDeterministicExecution(input: {
     id: string;
@@ -263,7 +287,7 @@ export class AssistantsService {
     userId: string | null;
     question: string;
     answer: string;
-    mode: "deterministic-preview" | "deterministic-runtime";
+    mode: "deterministic-preview" | "deterministic-runtime" | "ai-preview-rag";
     sources: AssistantRuntimeSource[];
   }): Promise<{ id: string }> {
     const previewLogClient = this.prisma as unknown as {
@@ -331,6 +355,8 @@ export class AssistantsService {
         instructions: input.dto.instructions ?? null,
         model: input.dto.model ?? null,
         temperature: input.dto.temperature ?? null,
+        fallbackMessage: input.dto.fallbackMessage ?? null,
+        safetyInstruction: input.dto.safetyInstruction ?? null,
         status: Status.ACTIVE,
       },
       select: assistantSafeSelect,
@@ -381,6 +407,8 @@ export class AssistantsService {
     const hasInstructions = hasField("instructions");
     const hasModel = hasField("model");
     const hasTemperature = hasField("temperature");
+    const hasFallbackMessage = hasField("fallbackMessage");
+    const hasSafetyInstruction = hasField("safetyInstruction");
 
     if (
       !hasName &&
@@ -388,7 +416,9 @@ export class AssistantsService {
       !hasInitialMessage &&
       !hasInstructions &&
       !hasModel &&
-      !hasTemperature
+      !hasTemperature &&
+      !hasFallbackMessage &&
+      !hasSafetyInstruction
     ) {
       throw new BadRequestException("At least one editable field must be provided.");
     }
@@ -418,6 +448,8 @@ export class AssistantsService {
         ...(hasInstructions ? { instructions: input.dto.instructions ?? null } : {}),
         ...(hasModel ? { model: input.dto.model ?? null } : {}),
         ...(hasTemperature ? { temperature: input.dto.temperature ?? null } : {}),
+        ...(hasFallbackMessage ? { fallbackMessage: input.dto.fallbackMessage ?? null } : {}),
+        ...(hasSafetyInstruction ? { safetyInstruction: input.dto.safetyInstruction ?? null } : {}),
       },
       select: assistantSafeSelect,
     });
@@ -468,6 +500,82 @@ export class AssistantsService {
     user: AuthenticatedUser;
     tenant: RequestTenant;
   }): Promise<PreviewAssistantResponse> {
+    if (input.dto.usePreparedKnowledge) {
+      // 1. Validar Assistente
+      const assistant = await this.prisma.assistant.findFirst({
+        where: { id: input.id, companyId: input.tenant.companyId },
+        select: { id: true, name: true, instructions: true, model: true, temperature: true },
+      });
+      if (!assistant) throw new NotFoundException("Assistant not found.");
+
+      // 2. Buscar RAG Chunks
+      const ragSearch = await this.retrievalService.searchRelevantKnowledge({
+        assistantId: assistant.id,
+        companyId: input.tenant.companyId,
+        query: input.dto.question,
+        topK: 5,
+        user: input.user,
+        tenant: input.tenant,
+      });
+
+      // 3. Montar Contexto
+      let contextBlock = "";
+      let answer = "";
+      const usedKnowledge: any[] = [];
+      
+      if (ragSearch.results.length > 0) {
+        contextBlock = `\n\nConhecimentos relevantes encontrados:\n` + ragSearch.results.map((r, i) => `[${i + 1}] Título: ${r.knowledgeTitle}\nTrecho: ${r.contentPreview}`).join("\n\n") + `\n\nUse essas informações apenas quando forem relevantes para responder. Se a resposta não estiver nos conhecimentos, não invente.`;
+        usedKnowledge.push(...ragSearch.results);
+      } else {
+        contextBlock = `\n\n(Nenhum conhecimento relevante encontrado na base para esta pergunta.)`;
+      }
+
+      // 4. Chamar LLM Real (apenas se Provider configurado)
+      try {
+        const isProviderConfigured = await this.aiService.isProviderConfigured(input.tenant.companyId);
+        if (!isProviderConfigured) {
+          answer = "ERRO: Provedor de IA não configurado para realizar o teste de RAG.";
+        } else {
+          const sysPrompt = (assistant.instructions || "") + contextBlock;
+          const completion = await this.aiService.generateChatCompletion({
+            companyId: input.tenant.companyId,
+            model: assistant.model || undefined,
+            temperature: assistant.temperature || 0.2,
+            messages: [
+              { role: "system", content: sysPrompt },
+              { role: "user", content: input.dto.question }
+            ]
+          });
+          answer = completion.answer;
+        }
+      } catch (err) {
+        answer = "ERRO AO CHAMAR IA: " + (err instanceof Error ? err.message : String(err));
+      }
+
+      const previewLog = await this.persistDeterministicExecutionLog({
+        assistantId: assistant.id,
+        companyId: input.tenant.companyId,
+        userId: input.user.id,
+        question: input.dto.question,
+        answer,
+        mode: "ai-preview-rag",
+        sources: [], // Fake deterministic sources
+      });
+
+      return {
+        previewLogId: previewLog.id,
+        assistant: { id: assistant.id, name: assistant.name },
+        question: input.dto.question,
+        answer,
+        sources: [],
+        mode: "ai-preview-rag",
+        usedKnowledge,
+        ragEnabled: true,
+        totalChunksScanned: ragSearch.totalChunksScanned
+      };
+    }
+
+    // Comportamento Antigo Determinístico
     const { assistant, answer, sources } = await this.loadDeterministicExecution({
       id: input.id,
       question: input.dto.question,

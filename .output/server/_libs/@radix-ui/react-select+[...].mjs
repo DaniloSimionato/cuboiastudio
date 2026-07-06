@@ -3,9 +3,10 @@ import { l as require_react_dom, u as require_react } from "../@floating-ui/reac
 import { i as require_jsx_runtime, l as useComposedRefs, n as Primitive, o as createSlot } from "./react-arrow+[...].mjs";
 import { t as composeEventHandlers } from "../radix-ui__primitive.mjs";
 import { a as useLayoutEffect2, i as useCallbackRef, o as createContextScope } from "./react-avatar+[...].mjs";
-import { _ as useControllableState, d as Presence, f as Portal, g as DismissableLayer, h as useFocusGuards, l as ReactRemoveScroll, m as FocusScope, p as useId, u as hideOthers } from "./react-dialog+[...].mjs";
+import { i as Presence, o as useControllableState, r as usePrevious } from "./react-checkbox+[...].mjs";
 import { t as createCollection } from "../radix-ui__react-collection.mjs";
 import { t as useDirection } from "../radix-ui__react-direction.mjs";
+import { d as Portal, f as useId, h as DismissableLayer, l as ReactRemoveScroll, m as useFocusGuards, p as FocusScope, u as hideOthers } from "./react-dialog+[...].mjs";
 import { _ as Arrow, b as createPopperScope, g as Anchor, v as Content, y as Root2 } from "./react-dropdown-menu+[...].mjs";
 import { t as clamp } from "../radix-ui__number.mjs";
 //#region node_modules/@radix-ui/react-visually-hidden/dist/index.mjs
@@ -37,21 +38,6 @@ var VisuallyHidden = import_react.forwardRef((props, forwardedRef) => {
 });
 VisuallyHidden.displayName = NAME;
 var Root = VisuallyHidden;
-//#endregion
-//#region node_modules/@radix-ui/react-use-previous/dist/index.mjs
-function usePrevious(value) {
-	const ref = import_react.useRef({
-		value,
-		previous: value
-	});
-	return import_react.useMemo(() => {
-		if (ref.current.value !== value) {
-			ref.current.previous = ref.current.value;
-			ref.current.value = value;
-		}
-		return ref.current.previous;
-	}, [value]);
-}
 //#endregion
 //#region node_modules/@radix-ui/react-select/dist/index.mjs
 var OPEN_KEYS = [
@@ -1037,4 +1023,4 @@ function wrapArray(array, startIndex) {
 	return array.map((_, index) => array[(startIndex + index) % array.length]);
 }
 //#endregion
-export { SelectItemIndicator as a, SelectPortal as c, SelectSeparator as d, SelectTrigger as f, Root as g, usePrevious as h, SelectItem as i, SelectScrollDownButton as l, SelectViewport as m, SelectContent as n, SelectItemText as o, SelectValue as p, SelectIcon as r, SelectLabel as s, Select as t, SelectScrollUpButton as u };
+export { SelectItemIndicator as a, SelectPortal as c, SelectSeparator as d, SelectTrigger as f, Root as h, SelectItem as i, SelectScrollDownButton as l, SelectViewport as m, SelectContent as n, SelectItemText as o, SelectValue as p, SelectIcon as r, SelectLabel as s, Select as t, SelectScrollUpButton as u };

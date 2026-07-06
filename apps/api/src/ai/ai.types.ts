@@ -52,6 +52,20 @@ export interface AiChatCompletionResult {
   toolCalls?: any[];
 }
 
+export interface AiEmbeddingInput {
+  text: string;
+  model?: string;
+  companyId?: string;
+}
+
+export interface AiEmbeddingResult {
+  provider: string;
+  model: string;
+  embedding: number[];
+  dimension: number;
+  durationMs: number;
+}
+
 export interface AiProviderErrorDetails {
   message: string;
   type?: string;

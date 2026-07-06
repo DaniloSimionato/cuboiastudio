@@ -36,6 +36,7 @@ import {
 import { type CreateAssistantConversationDto } from "./dto/create-assistant-conversation.dto";
 import { type SendAssistantConversationMessageDto } from "./dto/send-assistant-conversation-message.dto";
 import { CalendarToolsService } from "../apps/calendar-tools.service";
+import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -75,7 +76,7 @@ export type AssistantConversationMessageItem = {
 };
 
 export type AssistantConversationRuntime = {
-  mode: "ai-runtime" | "deterministic-runtime";
+  mode: "ai-runtime" | "deterministic-runtime" | "ai-runtime-rag";
   assistant: {
     id: string;
     name: string;
@@ -104,6 +105,7 @@ export type AssistantConversationRuntime = {
     | "ai-provider-quota-error"
     | "ai-provider-error";
   warning?: string;
+  ragData?: any;
 };
 
 export type FindConversationMessagesResponse = {
@@ -179,6 +181,9 @@ const assistantConversationRuntimeAssistantSelect = {
   instructions: true,
   model: true,
   temperature: true,
+  ragEnabled: true,
+  fallbackMessage: true,
+  safetyInstruction: true,
 } satisfies Prisma.AssistantSelect;
 
 type AssistantConversationRuntimeAssistantRecord = Prisma.AssistantGetPayload<{
@@ -261,6 +266,7 @@ export class AssistantConversationsService {
     private readonly attachmentInterpreterService: AttachmentInterpreterService,
     private readonly chatwootInboxConfigService: ChatwootInboxConfigService,
     private readonly calendarToolsService: CalendarToolsService,
+    private readonly assistantKnowledgeRetrievalService: AssistantKnowledgeRetrievalService,
   ) {}
 
   private assertTenantContext(input: { user: AuthenticatedUser; tenant: RequestTenant }): void {
@@ -585,7 +591,7 @@ export class AssistantConversationsService {
       assistant.temperature >= 0 &&
       assistant.temperature <= 2
     ) {
-      return assistant.temperature;
+        return assistant.temperature;
     }
 
     return 0.2;
@@ -824,7 +830,9 @@ export class AssistantConversationsService {
   private async sendChatwootOutboundText(input: {
     conversation: AssistantConversationSafeRecord;
     assistantMessageId: string;
+    assistantId: string;
     content: string;
+    handoff?: boolean;
   }): Promise<void> {
     const accountIdentifier = (input.conversation.externalAccountId ?? "").trim();
     const inboxIdentifier = (input.conversation.externalInboxId ?? "").trim();
@@ -854,12 +862,23 @@ export class AssistantConversationsService {
       content: input.content,
       message_type: "outgoing",
       private: false,
+      content_attributes: {
+        automation_rule_id: "cubo_ai_studio",
+        source: "cubo_ai_studio",
+        assistant_id: input.assistantId,
+        internal_conversation_id: input.conversation.id,
+        ...(input.handoff ? { handoff: true } : {}),
+      },
     };
 
     try {
       this.logger.log(
         `Chatwoot outbound started: company=${input.conversation.companyId} outboundUrl=${outboundUrl} account=${accountIdentifier} externalConversation=${conversationIdentifier} inbox=${inboxIdentifier || "unknown"} assistantMessageId=${input.assistantMessageId} messageType=${outboundBody.message_type} private=${outboundBody.private} contentLength=${input.content.length}`,
       );
+      this.logger.log(
+        `Chatwoot outbound payload (secure): ${JSON.stringify({ ...outboundBody, content: "[REDACTED]" })}`
+      );
+
       const response = await fetch(outboundUrl, {
         method: "POST",
         headers: {
@@ -891,6 +910,86 @@ export class AssistantConversationsService {
         `Chatwoot outbound failed: company=${input.conversation.companyId} outboundUrl=${outboundUrl} account=${accountIdentifier} externalConversation=${conversationIdentifier} inbox=${inboxIdentifier || "unknown"} assistantMessageId=${input.assistantMessageId} error=${this.summarizeOutboundError(error)}`,
       );
       // Non-blocking by design. The conversation turn still succeeds locally.
+    }
+  }
+
+  public async setExternalConversationAiActive(input: {
+    conversationId: string;
+    aiActive: boolean;
+    reason?: string;
+  }): Promise<void> {
+    const conversation = await this.prisma.assistantConversation.findUnique({
+      where: { id: input.conversationId },
+    });
+    if (!conversation || conversation.source !== "CHATWOOT") {
+      return;
+    }
+
+    const accountIdentifier = (conversation.externalAccountId ?? "").trim();
+    const inboxIdentifier = (conversation.externalInboxId ?? "").trim();
+    const conversationIdentifier = (conversation.externalConversationId ?? "").trim();
+
+    if (!accountIdentifier || !conversationIdentifier) {
+      return;
+    }
+
+    const resolvedConfig = await this.chatwootInboxConfigService.resolveActiveForConversation({
+      companyId: conversation.companyId,
+      accountId: accountIdentifier,
+      inboxId: inboxIdentifier || null,
+    });
+
+    const baseUrl = resolvedConfig?.baseUrl?.trim() || "";
+    if (!baseUrl) {
+      return;
+    }
+
+    const apiUrl = `${baseUrl.replace(/\/$/, "")}/api/v1/accounts/${encodeURIComponent(
+      accountIdentifier,
+    )}/conversations/${encodeURIComponent(conversationIdentifier)}`;
+    
+    const body = {
+      ai_active: input.aiActive,
+    };
+
+    try {
+      this.logger.log(
+        `Chatwoot updating ai_active: company=${conversation.companyId} apiUrl=${apiUrl} aiActive=${input.aiActive} reason=${input.reason || "none"}`,
+      );
+      const response = await fetch(apiUrl, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          ...(resolvedConfig?.apiAccessToken
+            ? {
+                api_access_token: resolvedConfig.apiAccessToken,
+              }
+            : {}),
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        this.logger.warn(
+          `Chatwoot update ai_active failed: company=${conversation.companyId} status=${response.status} responseBody=${errorText}`,
+        );
+      } else {
+        // Also update local DB tracking
+        await this.prisma.assistantConversation.update({
+          where: { id: conversation.id },
+          data: {
+            aiActive: input.aiActive,
+            ...(input.aiActive
+              ? { lastAiActiveAt: new Date(), resumeReason: input.reason }
+              : { lastAiPausedAt: new Date(), pauseReason: input.reason }),
+          },
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Chatwoot update ai_active failed: company=${conversation.companyId} error=${this.summarizeOutboundError(error)}`,
+      );
     }
   }
 
@@ -1271,16 +1370,58 @@ export class AssistantConversationsService {
       },
     });
 
-    const knowledgeItems = await this.prisma.assistantKnowledge.findMany({
-      where: {
+    let knowledgeItems: { id: string; title: string; content: string }[] = [];
+    let ragContextBlock = "";
+    let ragLogData: any = null;
+
+    if (assistant.ragEnabled) {
+      const searchResult = await this.assistantKnowledgeRetrievalService.searchRelevantKnowledge({
+        tenant: input.tenant,
         assistantId: input.assistantId,
-        companyId: input.tenant.companyId,
-        status: Status.ACTIVE,
-      },
-      select: assistantConversationKnowledgeSelect,
-      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-      take: 5,
-    });
+        query: interpretedMessage,
+        topK: 5,
+      });
+
+      ragLogData = {
+        ragEnabled: true,
+        totalChunksScanned: searchResult.totalChunksScanned,
+        warning: searchResult.warning,
+        usedKnowledge: searchResult.results.map((r) => ({
+          knowledgeId: r.knowledgeId,
+          title: r.knowledgeTitle,
+          chunkId: r.chunkId,
+          score: r.score,
+        })),
+      };
+
+      if (searchResult.results.length > 0) {
+        let block = "Conhecimentos relevantes encontrados:\n";
+        searchResult.results.forEach((res, i) => {
+          block += `[${i + 1}] Título: ${res.knowledgeTitle}\nTrecho: ${res.contentPreview}\n`;
+        });
+        block += "\nUse os conhecimentos acima apenas se forem relevantes para responder. Se a resposta não estiver nos conhecimentos nem nas instruções do agente, não invente.";
+        ragContextBlock = block;
+      } else {
+        ragContextBlock = "(Nenhum conhecimento relevante encontrado na base para esta pergunta.)";
+      }
+
+      this.logger.log(`[RAG Runtime] Assistant ${input.assistantId} | Scanned: ${ragLogData.totalChunksScanned} | Found: ${ragLogData.usedKnowledge.length}`);
+    } else {
+      knowledgeItems = await this.prisma.assistantKnowledge.findMany({
+        where: {
+          assistantId: input.assistantId,
+          companyId: input.tenant.companyId,
+          status: Status.ACTIVE,
+        },
+        select: assistantConversationKnowledgeSelect,
+        orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+        take: 5,
+      });
+    }
+
+    const effectiveInstructions = assistant.ragEnabled
+      ? [assistant.instructions, ragContextBlock].filter(Boolean).join("\n\n---\n\n")
+      : assistant.instructions;
 
     const recentMessages = await this.prisma.assistantConversationMessage.findMany({
       where: {
@@ -1314,7 +1455,7 @@ export class AssistantConversationsService {
     const deterministicRuntime = buildDeterministicAssistantResponse({
       question: interpretedMessage,
       assistantName: assistant.name,
-      instructions: assistant.instructions,
+      instructions: effectiveInstructions,
       knowledgeItems,
     });
 
@@ -1343,6 +1484,21 @@ export class AssistantConversationsService {
       reason: "ai-runtime-disabled",
     };
 
+    const isDebugLogsEnabled = process.env.CALENDAR_DEBUG_LOGS === "true" || process.env.NODE_ENV === "development";
+
+    if (isDebugLogsEnabled) {
+      // DIAGNOSTIC: runtime gate check
+      console.log("\n=== DIAGNOSTIC: RUNTIME GATE CHECK ===");
+      console.log("CompanyId:", input.tenant.companyId);
+      console.log("AssistantId:", assistant.id);
+      console.log("Source:", source);
+      console.log("RuntimeEnabled:", runtimeConfig.runtimeEnabled);
+      console.log("RuntimeSource:", runtimeConfig.source);
+      console.log("Model:", resolvedModel.model);
+      console.log("ModelSource:", resolvedModel.source);
+      console.log("=== END RUNTIME GATE CHECK ===\n");
+    }
+
     if (runtimeConfig.runtimeEnabled) {
       const configured = await this.aiService.isProviderConfigured(
         input.tenant.companyId,
@@ -1354,6 +1510,16 @@ export class AssistantConversationsService {
           resolvedModel.source === "not-configured"
             ? "ai-model-not-configured"
             : "ai-provider-not-configured";
+
+        if (isDebugLogsEnabled) {
+          // DIAGNOSTIC: provider not configured
+          console.log("\n=== DIAGNOSTIC: AI PROVIDER NOT CONFIGURED ===");
+          console.log("CompanyId:", input.tenant.companyId);
+          console.log("Model:", resolvedModel.model);
+          console.log("ModelSource:", resolvedModel.source);
+          console.log("FallbackReason:", fallbackReason);
+          console.log("=== END DIAGNOSTIC ===\n");
+        }
 
         runtime = {
           ...runtime,
@@ -1368,19 +1534,43 @@ export class AssistantConversationsService {
           const contactPhone = await this.resolveContactPhone(conversation.id, input.tenant.companyId, input.dto);
           const tools = calendarToolsActive ? this.getGoogleCalendarToolsDefinitions() : undefined;
 
+          const resourcesContext = calendarToolsActive
+            ? await this.getCalendarResourcesContext(input.tenant.companyId)
+            : "";
+          const serverTime = calendarToolsActive
+            ? new Date().toISOString()
+            : null;
+
           const promptMessages = buildConversationPromptMessages({
             assistantName: assistant.name,
             assistantDescription: assistant.description,
             initialMessage: assistant.initialMessage,
-            instructions: assistant.instructions,
+            instructions: effectiveInstructions,
             knowledgeItems,
             historyMessages: priorHistory,
             currentMessage: interpretedMessage,
             calendarContext: calendarToolsActive ? {
               conversationId: conversation.id,
               contactPhone,
+              resourcesContext,
+              serverTime,
             } : null,
           });
+
+          if (isDebugLogsEnabled) {
+            // TEMPORARY DIAGNOSTIC LOGS
+            console.log("\n=== TEMPORARY DIAGNOSTIC LOGS: START ===");
+            console.log("Source:", input.dto.source || conversation.source);
+            console.log("CompanyId (Tenant):", input.tenant.companyId);
+            console.log("AssistantId:", assistant.id);
+            console.log("Assistant CompanyId:", input.tenant.companyId);
+            console.log("CalendarToolsActive:", calendarToolsActive);
+            console.log("Tools count:", tools?.length || 0);
+            console.log("Has calendar_checkAvailability:", tools?.some(t => t.function.name === "calendar_checkAvailability") || false);
+            console.log("ResourcesContext populated:", !!resourcesContext, "| Length:", resourcesContext?.length || 0);
+            console.log("Prompt Messages Calendar Context:", promptMessages.some(m => typeof m.content === 'string' && m.content.includes("Instruções do Sistema de Reservas")));
+            console.log("=== TEMPORARY DIAGNOSTIC LOGS: END ===\n");
+          }
 
           let loopCount = 0;
           let toolCallsResolved = false;
@@ -1422,7 +1612,7 @@ export class AssistantConversationsService {
                 let resultString = "";
 
                 try {
-                  const isMutating = ["calendar.createBooking", "calendar.rescheduleBooking", "calendar.cancelBooking"].includes(toolName);
+                  const isMutating = ["calendar_createBooking", "calendar_rescheduleBooking", "calendar_cancelBooking"].includes(toolName);
                   if (isMutating) {
                     await this.logToolAction(input.tenant.companyId, "confirmation_required", { toolName, args: toolArgs });
 
@@ -1442,6 +1632,16 @@ export class AssistantConversationsService {
                 } catch (err) {
                   const errMsg = err instanceof Error ? err.message : "Erro desconhecido na chamada da ferramenta.";
                   resultString = JSON.stringify({ error: errMsg });
+                }
+
+                if (isDebugLogsEnabled) {
+                  console.log(`\n=== DIAGNOSTIC: TOOL EXECUTION: ${toolName} ===`);
+                  const isError = resultString.includes('"error"');
+                  console.log("Status:", isError ? "ERROR" : "SUCCESS");
+                  if (isError) {
+                    console.log("Result (sanitized):", resultString);
+                  }
+                  console.log("=== END TOOL ===\n");
                 }
 
                 promptMessages.push({
@@ -1476,12 +1676,13 @@ export class AssistantConversationsService {
           answer = completion.answer;
           runtime = {
             ...runtime,
-            mode: "ai-runtime",
+            mode: assistant.ragEnabled ? "ai-runtime-rag" : "ai-runtime",
             fallback: false,
             outcome: "success",
             provider: completion.provider,
             model: completion.model,
             reason: undefined,
+            ragData: ragLogData,
           };
         } catch (error) {
           console.error("COMPLETION ERROR TRACE:", error);
@@ -1544,7 +1745,7 @@ export class AssistantConversationsService {
           providerErrorType: providerErrorLogFields.providerErrorType ?? null,
           providerErrorCode: providerErrorLogFields.providerErrorCode ?? null,
           providerErrorMessage: providerErrorLogFields.providerErrorMessage ?? null,
-          knowledgeCount: knowledgeItems.length,
+          knowledgeCount: runtime.ragData?.usedKnowledge?.length ?? knowledgeItems.length,
           historyMessagesUsed: runtime.context.historyMessagesUsed,
           historyLimit: runtime.context.historyLimit,
           initialMessageIncluded: runtime.context.initialMessageIncluded,
@@ -1590,7 +1791,8 @@ export class AssistantConversationsService {
           externalChannelId: input.dto.externalChannelId ?? conversation.externalChannelId,
         },
         assistantMessageId: assistantMessage.id,
-        content: answer,
+        assistantId: input.assistantId,
+        content: assistantMessage.content,
       });
     }
 
@@ -1677,8 +1879,8 @@ export class AssistantConversationsService {
       {
         type: "function",
         function: {
-          name: "calendar.checkAvailability",
-          description: "Consulta horários disponíveis (slots livres) em recursos conectados ao Google Agenda para um esporte, tipo de recurso ou cobertura específica em uma data e intervalo de horas.",
+          name: "calendar_checkAvailability",
+          description: "Consulta horários disponíveis (slots livres) em recursos ou serviços conectados ao Google Agenda para uma data e intervalo de horas.",
           parameters: {
             type: "object",
             properties: {
@@ -1694,17 +1896,17 @@ export class AssistantConversationsService {
                 type: "string",
                 description: "O horário de fim no formato HH:MM (ex: 18:00)"
               },
-              sportType: {
+              category: {
                 type: "string",
-                description: "Opcional. Tipo de esporte (ex: beach_tennis, padel, futebol)"
+                description: "Opcional. Categoria, modalidade ou serviço do recurso (ex: Beach Tennis, Padel, Consulta Médica, Reunião Comercial)"
               },
               resourceType: {
                 type: "string",
-                description: "Opcional. Tipo de recurso/quadra (ex: aberta, coberta, quadra)"
+                description: "Opcional. Tipo do recurso (ex: Quadra, Sala, Consultório, Profissional)"
               },
-              isCovered: {
-                type: "boolean",
-                description: "Opcional. Se o recurso deve ser coberto (true) ou descoberto (false)"
+              attribute: {
+                type: "string",
+                description: "Opcional. Característica ou atributo específico do recurso (ex: Coberta, Aberta, Com Ar, VIP)"
               },
               durationMinutes: {
                 type: "integer",
@@ -1718,22 +1920,22 @@ export class AssistantConversationsService {
       {
         type: "function",
         function: {
-          name: "calendar.createBooking",
-          description: "Cria uma nova reserva localmente e no Google Agenda. ATENÇÃO: Esta ação exige confirmação explícita prévia do cliente (como 'sim', 'confirmo', 'pode reservar') contendo um resumo claro dos detalhes antes de ser executada.",
+          name: "calendar_createBooking",
+          description: "Cria um novo agendamento/reserva localmente e no Google Agenda. ATENÇÃO: Esta ação exige confirmação explícita prévia do cliente (como 'sim', 'confirmo', 'pode reservar') contendo um resumo claro dos detalhes antes de ser executada.",
           parameters: {
             type: "object",
             properties: {
               resourceId: {
                 type: "string",
-                description: "O ID do recurso (quadra/sala) a ser reservado"
+                description: "O ID do recurso/serviço a ser reservado"
               },
               contactName: {
                 type: "string",
-                description: "Nome do contato para a reserva"
+                description: "Nome do contato para o agendamento"
               },
               contactPhone: {
                 type: "string",
-                description: "Telefone do contato para a reserva"
+                description: "Telefone do contato para o agendamento"
               },
               startAt: {
                 type: "string",
@@ -1745,7 +1947,7 @@ export class AssistantConversationsService {
               },
               notes: {
                 type: "string",
-                description: "Opcional. Observações ou notas adicionais para a reserva"
+                description: "Opcional. Observações ou notas adicionais para o agendamento"
               }
             },
             required: ["resourceId", "contactName", "contactPhone", "startAt", "endAt"]
@@ -1755,7 +1957,7 @@ export class AssistantConversationsService {
       {
         type: "function",
         function: {
-          name: "calendar.getBookingsByContact",
+          name: "calendar_getBookingsByContact",
           description: "Lista agendamentos/reservas futuras ativas de um cliente baseado no número de telefone do contato.",
           parameters: {
             type: "object",
@@ -1772,14 +1974,14 @@ export class AssistantConversationsService {
       {
         type: "function",
         function: {
-          name: "calendar.rescheduleBooking",
-          description: "Remarca uma reserva confirmada para uma nova data, horário e opcionalmente um novo recurso. ATENÇÃO: Esta ação exige confirmação explícita prévia do cliente contendo um resumo claro antes de ser executada.",
+          name: "calendar_rescheduleBooking",
+          description: "Remarca um agendamento/reserva para uma nova data, horário e opcionalmente um novo recurso. ATENÇÃO: Esta ação exige confirmação explícita prévia do cliente contendo um resumo claro antes de ser executada.",
           parameters: {
             type: "object",
             properties: {
               bookingId: {
                 type: "string",
-                description: "O ID da reserva existente a ser remarcada"
+                description: "O ID do agendamento existente a ser remarcado"
               },
               newStartAt: {
                 type: "string",
@@ -1791,7 +1993,7 @@ export class AssistantConversationsService {
               },
               newResourceId: {
                 type: "string",
-                description: "Opcional. Novo ID do recurso se estiver mudando de quadra/sala"
+                description: "Opcional. Novo ID do recurso se estiver mudando de recurso/serviço"
               },
               reason: {
                 type: "string",
@@ -1805,14 +2007,14 @@ export class AssistantConversationsService {
       {
         type: "function",
         function: {
-          name: "calendar.cancelBooking",
-          description: "Cancela uma reserva confirmada existente e a remove do Google Agenda. ATENÇÃO: Esta ação exige confirmação explícita prévia do cliente contendo um resumo claro antes de ser executada.",
+          name: "calendar_cancelBooking",
+          description: "Cancela um agendamento/reserva existente e a remove do Google Agenda. ATENÇÃO: Esta ação exige confirmação explícita prévia do cliente contendo um resumo claro antes de ser executada.",
           parameters: {
             type: "object",
             properties: {
               bookingId: {
                 type: "string",
-                description: "O ID da reserva a ser cancelada"
+                description: "O ID do agendamento a ser cancelado"
               },
               reason: {
                 type: "string",
@@ -1826,34 +2028,84 @@ export class AssistantConversationsService {
     ];
   }
 
+  private async getCalendarResourcesContext(companyId: string): Promise<string> {
+    try {
+      const app = await this.prisma.app.findUnique({
+        where: { slug: "google_calendar" },
+        select: { id: true },
+      });
+      if (!app) return "";
+
+      const installation = await this.prisma.appInstallation.findFirst({
+        where: {
+          companyId,
+          appId: app.id,
+          status: "ACTIVE",
+        },
+        select: { id: true },
+      });
+      if (!installation) return "";
+
+      const resources = await this.prisma.googleCalendarResource.findMany({
+        where: {
+          companyId,
+          installationId: installation.id,
+          active: true,
+        },
+        include: {
+          resourceTypeRef: { select: { name: true } },
+          categoryRef: { select: { name: true } },
+          attributeRef: { select: { name: true } },
+        },
+        orderBy: { name: "asc" },
+      });
+
+      if (resources.length === 0) return "";
+
+      const lines = ["Recursos/Serviços disponíveis para agendamento:"];
+      for (const r of resources) {
+        const typeStr = r.resourceTypeRef?.name || r.resourceType || "—";
+        const catStr = r.categoryRef?.name || r.sportType || "—";
+        const attrStr = r.attributeRef?.name || (r.isCovered ? "Coberta" : r.isCovered === false ? "Aberta" : "—");
+        lines.push(
+          `- "${r.name}" (ID: ${r.id}) — Tipo: ${typeStr} | Categoria: ${catStr} | Característica: ${attrStr} | Fuso horário: ${r.timezone} | Duração padrão: ${r.defaultDurationMinutes} min`
+        );
+      }
+      return lines.join("\n");
+    } catch (err) {
+      this.logger.error("Failed to load calendar resources context for prompt", err);
+      return "";
+    }
+  }
+
   private async executeTool(companyId: string, toolName: string, args: any): Promise<string> {
     const startedAt = Date.now();
     await this.logToolAction(companyId, "tool_call_requested", { toolName, arguments: args });
 
     try {
       let result: any;
-      if (toolName === "calendar.checkAvailability") {
+      if (toolName === "calendar_checkAvailability") {
         result = await this.calendarToolsService.checkAvailability({
           companyId,
           dto: args,
         });
-      } else if (toolName === "calendar.createBooking") {
+      } else if (toolName === "calendar_createBooking") {
         result = await this.calendarToolsService.createBooking({
           companyId,
           dto: args,
         });
-      } else if (toolName === "calendar.getBookingsByContact") {
+      } else if (toolName === "calendar_getBookingsByContact") {
         result = await this.calendarToolsService.getBookingsByContact({
           companyId,
           query: args,
         });
-      } else if (toolName === "calendar.rescheduleBooking") {
+      } else if (toolName === "calendar_rescheduleBooking") {
         result = await this.calendarToolsService.rescheduleBooking({
           companyId,
           bookingId: args.bookingId,
           dto: args,
         });
-      } else if (toolName === "calendar.cancelBooking") {
+      } else if (toolName === "calendar_cancelBooking") {
         result = await this.calendarToolsService.cancelBooking({
           companyId,
           bookingId: args.bookingId,
@@ -1930,6 +2182,130 @@ export class AssistantConversationsService {
       });
     } catch (err) {
       this.logger.error("Failed to write safe log for Google Calendar tool", err);
+    }
+  }
+
+  public async resumeConversation(input: {
+    assistantId: string;
+    conversationId: string;
+    runAi: boolean;
+    reason?: string;
+    tenant: RequestTenant;
+  }): Promise<void> {
+    const conversation = await this.prisma.assistantConversation.findUnique({
+      where: { id: input.conversationId, companyId: input.tenant.companyId },
+      include: {
+        assistant: true,
+      },
+    });
+
+    if (!conversation || conversation.assistantId !== input.assistantId) {
+      throw new BadRequestException("Conversa não encontrada.");
+    }
+
+    // 1. Atualizar state local e enviar comando PUT para Chatwoot
+    await this.setExternalConversationAiActive({
+      conversationId: conversation.id,
+      aiActive: true,
+      reason: input.reason || "resume_endpoint",
+    });
+
+    // 2. Se runAi for verdadeiro, fazemos o fetch do histórico do Chatwoot e rodamos a AI
+    if (input.runAi) {
+      const messages = await this.fetchExternalConversationMessages(conversation.id);
+      
+      // Monta as promptMessages
+      const promptMessages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [];
+      
+      for (const msg of messages) {
+        if (msg.message_type === 0 || msg.message_type === "incoming") {
+          promptMessages.push({ role: "user", content: msg.content });
+        } else if (msg.message_type === 1 || msg.message_type === "outgoing") {
+          // Se tiver automation_rule_id é bot, se não é humano
+          const isBot = msg.content_attributes?.automation_rule_id === "cubo_ai_studio";
+          promptMessages.push({
+            role: isBot ? "assistant" : "system",
+            content: isBot ? msg.content : `[MENSAGEM DE ATENDENTE HUMANO]\n${msg.content}`,
+          });
+        }
+      }
+
+      promptMessages.push({
+        role: "system",
+        content: `[AVISO DE SISTEMA] O atendimento estava em modo humano e agora foi transferido novamente para você. Analise o histórico recente. Se o usuário estiver esperando uma resposta, continue o atendimento de forma natural. Se a última mensagem humana resolver a questão ou se despedir, você pode dar uma resposta curta ou não responder nada.`,
+      });
+
+      // Remove provider/apikey hard checks for simplicity.
+      // Runtime engine will validate and throw/fallback correctly if provider is missing.
+
+      // Chama a IA redirecionando para sendMessage com o histórico incluído em uma mensagem de usuário
+      const messagesText = promptMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join("\n");
+      const hiddenMessage = `[AVISO DE SISTEMA]\nO atendimento estava com um humano e acabou de ser devolvido para você.\nHistórico recente da conversa com o humano:\n${messagesText}\n\nPor favor, analise e continue o atendimento a partir daqui de forma natural (não mencione que você é uma IA retomando, apenas continue o fluxo).`;
+      
+      const resumeDto: SendAssistantConversationMessageDto = {
+        message: hiddenMessage,
+        source: "chatwoot",
+        externalConversationId: conversation.externalConversationId ?? undefined,
+        externalAccountId: conversation.externalAccountId ?? undefined,
+        externalInboxId: conversation.externalInboxId ?? undefined,
+      };
+
+      // Nós podemos apenas chamar this.sendMessage(...)
+      // que vai salvar no banco local, rodar as rules, e enviar resposta ao Chatwoot.
+      const mockUser: any = { id: "system", email: "system@localhost", roles: [], companyId: input.tenant.companyId, name: "System", permissions: [] };
+      await this.sendMessage({
+        assistantId: input.assistantId,
+        conversationId: input.conversationId,
+        dto: resumeDto,
+        user: mockUser,
+        tenant: input.tenant,
+      });
+    }
+  }
+
+  private async fetchExternalConversationMessages(conversationId: string): Promise<any[]> {
+    const conversation = await this.prisma.assistantConversation.findUnique({
+      where: { id: conversationId },
+    });
+    if (!conversation || conversation.source !== "CHATWOOT") return [];
+
+    const accountIdentifier = (conversation.externalAccountId ?? "").trim();
+    const inboxIdentifier = (conversation.externalInboxId ?? "").trim();
+    const conversationIdentifier = (conversation.externalConversationId ?? "").trim();
+
+    if (!accountIdentifier || !conversationIdentifier) return [];
+
+    const resolvedConfig = await this.chatwootInboxConfigService.resolveActiveForConversation({
+      companyId: conversation.companyId,
+      accountId: accountIdentifier,
+      inboxId: inboxIdentifier || null,
+    });
+
+    const baseUrl = resolvedConfig?.baseUrl?.trim() || "";
+    if (!baseUrl || !resolvedConfig?.apiAccessToken) return [];
+
+    const apiUrl = `${baseUrl.replace(/\/$/, "")}/api/v1/accounts/${encodeURIComponent(
+      accountIdentifier,
+    )}/conversations/${encodeURIComponent(conversationIdentifier)}/messages`;
+
+    try {
+      const response = await fetch(apiUrl, {
+        headers: {
+          api_access_token: resolvedConfig.apiAccessToken,
+        },
+      });
+      if (!response.ok) return [];
+      const json = await response.json() as any;
+      const payloadMessages = json?.payload ?? [];
+      
+      // Ordena por data (crescente)
+      payloadMessages.sort((a: any, b: any) => a.created_at - b.created_at);
+      
+      // Retorna as últimas 20 mensagens
+      return payloadMessages.slice(-20);
+    } catch (err) {
+      this.logger.warn(`Failed to fetch Chatwoot messages for conversation ${conversationId}: ${err}`);
+      return [];
     }
   }
 }

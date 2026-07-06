@@ -302,16 +302,16 @@ export class GoogleCalendarAvailabilityService {
 
     return resources.filter((resource) => {
       let sportMatches = true;
-      if (input.dto.sportType) {
-        const expected = input.dto.sportType;
+      const expectedSport = input.dto.category || input.dto.sportType;
+      if (expectedSport) {
         const actualOld = resource.sportType;
         const actualCatName = resource.categoryRef?.name ?? "";
         const actualCatSlug = resource.categoryRef?.slug ?? "";
         
         sportMatches = 
-          matchesFlexibleType(actualOld, expected) ||
-          matchesFlexibleType(actualCatName, expected) ||
-          matchesFlexibleType(actualCatSlug, expected);
+          matchesFlexibleType(actualOld, expectedSport) ||
+          matchesFlexibleType(actualCatName, expectedSport) ||
+          matchesFlexibleType(actualCatSlug, expectedSport);
       }
 
       let resourceMatches = true;
@@ -325,6 +325,21 @@ export class GoogleCalendarAvailabilityService {
           matchesFlexibleType(actualOld, expected) ||
           matchesFlexibleType(actualTypeName, expected) ||
           matchesFlexibleType(actualTypeSlug, expected);
+      }
+
+      let attributeMatches = true;
+      if (input.dto.attribute) {
+        const expected = input.dto.attribute.toLowerCase();
+        const actualAttrName = resource.attributeRef?.name?.toLowerCase() ?? "";
+        const actualAttrSlug = resource.attributeRef?.slug?.toLowerCase() ?? "";
+        
+        if (expected === "coberta" || expected === "coberto") {
+          attributeMatches = resource.isCovered === true || actualAttrName.includes("coberta") || actualAttrSlug.includes("coberta");
+        } else if (expected === "aberta" || expected === "aberto") {
+          attributeMatches = resource.isCovered === false || actualAttrName.includes("aberta") || actualAttrSlug.includes("aberta");
+        } else {
+          attributeMatches = actualAttrName.includes(expected) || actualAttrSlug.includes(expected);
+        }
       }
 
       let coverageMatches = true;
@@ -343,7 +358,7 @@ export class GoogleCalendarAvailabilityService {
         coverageMatches = actualOld === expected;
       }
 
-      return sportMatches && resourceMatches && coverageMatches;
+      return sportMatches && resourceMatches && coverageMatches && attributeMatches;
     });
   }
 

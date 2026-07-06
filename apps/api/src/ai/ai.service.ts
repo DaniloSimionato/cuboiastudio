@@ -4,6 +4,8 @@ import { runOpenAiCompatibleChatCompletion } from "./ai-runner";
 import type {
   AiChatCompletionInput,
   AiChatCompletionResult,
+  AiEmbeddingInput,
+  AiEmbeddingResult,
   AiProviderStatus,
   AiResolvedRuntimeConfig,
 } from "./ai.types";
@@ -35,5 +37,14 @@ export class AiService {
     const runtime = await this.resolveRuntimeConfig(input.companyId);
 
     return runOpenAiCompatibleChatCompletion(runtime, input);
+  }
+
+  async generateEmbedding(input: AiEmbeddingInput): Promise<AiEmbeddingResult> {
+    const runtime = await this.resolveRuntimeConfig(input.companyId);
+    
+    // We import runOpenAiCompatibleEmbedding here or at the top
+    const { runOpenAiCompatibleEmbedding } = await import("./ai-runner");
+
+    return runOpenAiCompatibleEmbedding(runtime, input);
   }
 }

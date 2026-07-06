@@ -26,6 +26,7 @@ export type NormalizedChatwootMessage = {
   messageId: string | null;
   messageType: string | null;
   isPrivate: boolean;
+  aiActive: boolean | null;
   externalConversationId: string;
   externalContactId: string | null;
   externalChannelId: string | null;
@@ -308,6 +309,12 @@ export function normalizeChatwootMessageCreatedPayload(
     messageId: dto.externalMessageId ?? null,
     messageType: pickFirstString(message.message_type, raw.message_type, data?.message_type) ?? null,
     isPrivate: readBoolean(message.private ?? raw.private ?? data?.private) ?? false,
+    aiActive:
+      readBoolean(conversation.ai_active) ??
+      readBoolean(readObject(conversation.custom_attributes)?.ai_active) ??
+      readBoolean(readObject(conversation.additional_attributes)?.ai_active) ??
+      readBoolean(readObject(conversation.meta)?.ai_active) ??
+      null,
     externalConversationId: conversationId,
     externalContactId: dto.externalContactId ?? null,
     externalChannelId: dto.externalChannelId ?? null,

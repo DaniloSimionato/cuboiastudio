@@ -1,5 +1,5 @@
 import { Transform } from "class-transformer";
-import { IsNumber, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min } from "class-validator";
+import { IsNumber, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min, IsBoolean } from "class-validator";
 
 function trimString(value: unknown): unknown {
   return typeof value === "string" ? value.trim() : value;
@@ -49,4 +49,20 @@ export class CreateAssistantDto {
   @Min(0)
   @Max(2)
   temperature?: number;
+
+  @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  fallbackMessage?: string;
+
+  @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  safetyInstruction?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  ragEnabled?: boolean;
 }

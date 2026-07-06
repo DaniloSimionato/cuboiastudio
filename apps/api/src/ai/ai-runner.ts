@@ -9,6 +9,8 @@ import type {
   AiChatCompletionInput,
   AiChatCompletionMessage,
   AiChatCompletionResult,
+  AiEmbeddingInput,
+  AiEmbeddingResult,
   AiProviderErrorDetails,
   AiProviderErrorResponse,
   AiResolvedRuntimeConfig,
@@ -283,4 +285,93 @@ function isAbortError(error: unknown): boolean {
     "name" in error &&
     (error as { name?: unknown }).name === "AbortError"
   );
+}
+
+export async function runOpenAiCompatibleEmbedding(
+  config: AiResolvedRuntimeConfig,
+  input: AiEmbeddingInput,
+): Promise<AiEmbeddingResult> {
+  if (!config.runtimeEnabled) {
+    throw new BadRequestException("AI runtime is disabled.");
+  }
+
+  // Se o usuário não passou model, e não temos model fallback, vamos sugerir um padrão leve
+  const model = input.model?.trim() || "text-embedding-3-small";
+
+  if (config.baseUrl.length === 0 || config.apiKey.length === 0) {
+    throw new BadRequestException("AI provider is enabled but not fully configured.");
+  }
+
+  const text = input.text.trim();
+  if (text.length === 0) {
+    throw new BadRequestException("Text is required for embeddings.");
+  }
+
+  const payload = {
+    model,
+    input: text,
+  };
+
+  const url = buildEmbeddingsUrl(config.baseUrl);
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), config.requestTimeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new AiProviderRequestException(
+        response.status,
+        await sanitizeAiProviderError(response),
+      );
+    }
+
+    const data = (await response.json().catch(() => null)) as any;
+    const embedding = data?.data?.[0]?.embedding;
+
+    if (!embedding || !Array.isArray(embedding) || embedding.length === 0) {
+      throw new BadGatewayException("AI provider returned an invalid embedding response.");
+    }
+
+    return {
+      provider: config.provider,
+      model,
+      embedding,
+      dimension: embedding.length,
+      durationMs: Date.now() - startedAt,
+    };
+  } catch (error) {
+    if (
+      error instanceof BadRequestException ||
+      error instanceof BadGatewayException ||
+      error instanceof AiProviderRequestException
+    ) {
+      throw error;
+    }
+
+    if (isAbortError(error)) {
+      throw new ServiceUnavailableException("AI provider request timed out.");
+    }
+
+    throw new ServiceUnavailableException("AI provider request failed.");
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
+function buildEmbeddingsUrl(baseUrl: string): string {
+  try {
+    return new URL("embeddings", `${baseUrl.replace(/\/$/, "")}/`).toString();
+  } catch {
+    throw new BadRequestException("AI provider base URL is invalid.");
+  }
 }

@@ -3,9 +3,7 @@ import { u as require_react } from "./@floating-ui/react-dom+[...].mjs";
 import { i as require_jsx_runtime, l as useComposedRefs, n as Primitive } from "./@radix-ui/react-arrow+[...].mjs";
 import { t as composeEventHandlers } from "./radix-ui__primitive.mjs";
 import { o as createContextScope } from "./@radix-ui/react-avatar+[...].mjs";
-import { _ as useControllableState } from "./@radix-ui/react-dialog+[...].mjs";
-import { x as useSize } from "./@radix-ui/react-dropdown-menu+[...].mjs";
-import { h as usePrevious } from "./@radix-ui/react-select+[...].mjs";
+import { a as useSize, o as useControllableState, r as usePrevious } from "./@radix-ui/react-checkbox+[...].mjs";
 //#region node_modules/@radix-ui/react-switch/dist/index.mjs
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 var import_jsx_runtime = require_jsx_runtime();

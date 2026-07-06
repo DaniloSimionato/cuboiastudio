@@ -30,6 +30,8 @@ type AssistantConversationPromptInput = {
   calendarContext?: {
     conversationId: string;
     contactPhone: string;
+    resourcesContext?: string | null;
+    serverTime?: string | null;
   } | null;
 };
 
@@ -142,16 +144,26 @@ export function buildConversationPromptMessages(
   ];
 
   if (input.calendarContext) {
+    const calendarLines = [
+      "Instruções do Sistema de Reservas/Calendário:",
+      "- Para consultar horários disponíveis, use a ferramenta 'calendar_checkAvailability'. Se houver várias opções, apresente no máximo 5 opções claras.",
+      "- Antes de criar, remarcar ou cancelar um agendamento ou reserva, você DEVE apresentar um resumo claro dos detalhes (recurso/serviço, data, horário, nome e telefone) e pedir a confirmação explícita do usuário (ex: 'Confirmando: ..., posso confirmar?'). NUNCA chame as ferramentas de criação, remarcação ou cancelamento sem obter essa confirmação explícita.",
+      `- Dados do cliente atual: Telefone: ${input.calendarContext.contactPhone}. ID da conversa: ${input.calendarContext.conversationId}.`,
+      "- Nunca invente disponibilidade ou diga que reservou sem que a ferramenta retorne sucesso.",
+      "- Se a ferramenta falhar, explique de forma amigável sem expor detalhes técnicos e sem mostrar segredos."
+    ];
+
+    if (input.calendarContext.serverTime) {
+      calendarLines.push(`- Data e hora atual do servidor: ${input.calendarContext.serverTime}. Sempre utilize esta referência para interpretar expressões de data/hora relativas informadas pelo usuário (ex: 'amanhã', 'hoje', 'terça que vem às 15h').`);
+    }
+
+    if (input.calendarContext.resourcesContext) {
+      calendarLines.push("", input.calendarContext.resourcesContext);
+    }
+
     messages.push({
       role: "system",
-      content: [
-        "Instruções do Sistema de Reservas/Calendário:",
-        "- Para consultar horários disponíveis, use a ferramenta 'calendar.checkAvailability'. Se houver várias opções, apresente no máximo 5 opções claras.",
-        "- Antes de criar, remarcar ou cancelar uma reserva, você DEVE apresentar um resumo claro dos detalhes (recurso, data, horário, nome e telefone) e pedir a confirmação explícita do usuário (ex: 'Confirmando: ..., posso confirmar?'). NUNCA chame as ferramentas de criação, remarcação ou cancelamento sem obter essa confirmação explícita.",
-        `- Dados do cliente atual: Telefone: ${input.calendarContext.contactPhone}. ID da conversa: ${input.calendarContext.conversationId}.`,
-        "- Nunca invente disponibilidade ou diga que reservou sem que a ferramenta retorne sucesso.",
-        "- Se a ferramenta falhar, explique de forma amigável sem expor detalhes técnicos e sem mostrar segredos."
-      ].join("\n"),
+      content: calendarLines.join("\n"),
     });
   }
 

@@ -1,5 +1,5 @@
 import { Transform } from "class-transformer";
-import { IsNotEmpty, IsString, MaxLength } from "class-validator";
+import { IsNotEmpty, IsOptional, IsString, MaxLength } from "class-validator";
 
 function trimString(value: unknown): unknown {
   return typeof value === "string" ? value.trim() : value;
@@ -17,4 +17,7 @@ export class CreateAssistantKnowledgeDto {
   @IsNotEmpty()
   @MaxLength(5000)
   content!: string;
+
+  @IsOptional()
+  metadata?: any;
 }

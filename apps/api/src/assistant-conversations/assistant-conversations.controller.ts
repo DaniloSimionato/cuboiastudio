@@ -830,4 +830,61 @@ export class AssistantConversationsController {
         throw error;
       });
   }
+
+  @Post(":conversationId/resume")
+  @UseGuards(AuthGuard, PermissionsGuard)
+  @RequirePermissions("assistants:write")
+  @ApiOperation({ summary: "Resume an AI conversation that was paused or handed off to human" })
+  @ApiParam({ name: "assistantId", required: true, example: "assistant_demo" })
+  @ApiParam({ name: "conversationId", required: true, example: "conv_demo" })
+  @ApiHeader({
+    name: "x-dev-user-id",
+    required: true,
+    description: "DEV ONLY. Local authentication user id. Never use in production.",
+  })
+  @ApiHeader({
+    name: "x-dev-company-id",
+    required: true,
+    description: "DEV ONLY. Local tenant/company id. Never use in production.",
+  })
+  @ApiHeader({
+    name: "x-dev-user-email",
+    required: true,
+    description: "DEV ONLY. Local authentication email. Never use in production.",
+  })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        runAi: { type: "boolean", default: true },
+        reason: { type: "string", nullable: true },
+      },
+    },
+  })
+  async resumeConversation(
+    @Param("assistantId") assistantId: string,
+    @Param("conversationId") conversationId: string,
+    @Body() body: { runAi?: boolean; reason?: string },
+    @CurrentUser() user: AuthenticatedUser,
+    @Tenant() tenant: RequestTenant,
+  ) {
+    if (process.env.ENABLE_RESUME_AND_RUN !== "true") {
+      throw new BadRequestException("O recurso Resume And Run está desativado neste ambiente.");
+    }
+
+    this.logger.log({
+      event: "tests.conversation.resume.start",
+      assistantId,
+      conversationId,
+      companyId: tenant.companyId,
+    });
+    
+    return this.assistantConversationsService.resumeConversation({
+      assistantId,
+      conversationId,
+      runAi: body.runAi ?? true,
+      reason: body.reason,
+      tenant,
+    });
+  }
 }

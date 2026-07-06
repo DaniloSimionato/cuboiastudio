@@ -24,14 +24,22 @@ import {
   type CreateAssistantKnowledgeResponse,
   type FindAllAssistantKnowledgeResponse,
   type UpdateAssistantKnowledgeResponse,
+  type AssistantKnowledgeItem,
 } from "./assistant-knowledge.service";
+import { 
+  AssistantKnowledgeRetrievalService, 
+  type AssistantKnowledgeSearchResult 
+} from "./assistant-knowledge-retrieval.service";
 import { CreateAssistantKnowledgeDto } from "./dto/create-assistant-knowledge.dto";
 import { UpdateAssistantKnowledgeDto } from "./dto/update-assistant-knowledge.dto";
 
 @ApiTags("assistant-knowledge")
 @Controller("assistants/:assistantId/knowledge")
 export class AssistantKnowledgeController {
-  constructor(private readonly assistantKnowledgeService: AssistantKnowledgeService) {}
+  constructor(
+    private readonly assistantKnowledgeService: AssistantKnowledgeService,
+    private readonly retrievalService: AssistantKnowledgeRetrievalService,
+  ) {}
 
   @Get()
   @UseGuards(AuthGuard, PermissionsGuard)
@@ -336,5 +344,65 @@ export class AssistantKnowledgeController {
     @Tenant() tenant: RequestTenant,
   ): Promise<DeleteAssistantKnowledgeResponse> {
     return this.assistantKnowledgeService.delete({ assistantId, knowledgeId, user, tenant });
+  }
+
+  @Post(":knowledgeId/prepare")
+  @UseGuards(AuthGuard, PermissionsGuard)
+  @RequirePermissions("assistants:write")
+  @ApiOperation({ summary: "Prepare a manual knowledge item for AI (chunk and embed)" })
+  @ApiParam({ name: "assistantId", required: true, example: "assistant_demo" })
+  @ApiParam({ name: "knowledgeId", required: true, example: "knowledge_demo" })
+  @ApiHeader({ name: "x-dev-user-id", required: true })
+  @ApiHeader({ name: "x-dev-company-id", required: true })
+  @ApiHeader({ name: "x-dev-user-email", required: true })
+  @ApiOkResponse({ description: "Returns the updated knowledge item with processing status" })
+  @ApiUnauthorizedResponse({ description: "Missing authentication" })
+  @ApiForbiddenResponse({ description: "Missing permissions" })
+  @ApiNotFoundResponse({ description: "Item not found" })
+  async prepare(
+    @Param("assistantId") assistantId: string,
+    @Param("knowledgeId") knowledgeId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Tenant() tenant: RequestTenant,
+  ): Promise<AssistantKnowledgeItem> {
+    return this.assistantKnowledgeService.prepare({ assistantId, knowledgeId, user, tenant });
+  }
+
+  @Post("search")
+  @UseGuards(AuthGuard, PermissionsGuard)
+  @RequirePermissions("assistants:read")
+  @ApiOperation({ summary: "Test semantic search (RAG) on prepared knowledge" })
+  @ApiParam({ name: "assistantId", required: true, example: "assistant_demo" })
+  @ApiHeader({ name: "x-dev-user-id", required: true })
+  @ApiHeader({ name: "x-dev-company-id", required: true })
+  @ApiHeader({ name: "x-dev-user-email", required: true })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", example: "Horário de atendimento" },
+        topK: { type: "number", example: 5 },
+      },
+      required: ["query"],
+    },
+  })
+  @ApiOkResponse({ description: "Returns top relevant knowledge chunks" })
+  @ApiUnauthorizedResponse({ description: "Missing authentication" })
+  @ApiForbiddenResponse({ description: "Missing permissions" })
+  @ApiNotFoundResponse({ description: "Assistant not found" })
+  async search(
+    @Param("assistantId") assistantId: string,
+    @Body() body: { query: string; topK?: number },
+    @CurrentUser() user: AuthenticatedUser,
+    @Tenant() tenant: RequestTenant,
+  ): Promise<AssistantKnowledgeSearchResult> {
+    return this.retrievalService.searchRelevantKnowledge({
+      companyId: tenant.companyId,
+      assistantId,
+      query: body.query,
+      topK: body.topK,
+      user,
+      tenant,
+    });
   }
 }

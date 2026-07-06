@@ -85,6 +85,18 @@ export class CheckCalendarAvailabilityDto {
   @IsBoolean()
   isCovered?: boolean | null;
 
+  @Transform(({ value }) => optionalTrimmedString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  category?: string;
+
+  @Transform(({ value }) => optionalTrimmedString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  attribute?: string;
+
   @Transform(({ value }) => trimString(value))
   @IsString()
   @Matches(/^\d{4}-\d{2}-\d{2}$/)
