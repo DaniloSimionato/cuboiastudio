@@ -1,6 +1,6 @@
 import { n as __toESM } from "../../_runtime.mjs";
 import { l as require_react_dom, u as require_react } from "../@floating-ui/react-dom+[...].mjs";
-import { i as require_jsx_runtime } from "../@radix-ui/react-arrow+[...].mjs";
+import { h as require_jsx_runtime } from "../@radix-ui/react-accordion+[...].mjs";
 import { _ as require_with_selector } from "../@tanstack/react-router+[...].mjs";
 //#region node_modules/unenv/dist/runtime/_internal/utils.mjs
 /* @__NO_SIDE_EFFECTS__ */

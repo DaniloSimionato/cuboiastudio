@@ -1,10 +1,8 @@
 import { n as __toESM } from "../_runtime.mjs";
 import { u as require_react } from "./@floating-ui/react-dom+[...].mjs";
-import { i as require_jsx_runtime, l as useComposedRefs, n as Primitive, o as createSlot } from "./@radix-ui/react-arrow+[...].mjs";
+import { _ as createSlot, b as useComposedRefs, f as useControllableState, h as require_jsx_runtime, m as createContextScope, o as Presence, s as useId, u as Primitive } from "./@radix-ui/react-accordion+[...].mjs";
 import { t as composeEventHandlers } from "./radix-ui__primitive.mjs";
-import { o as createContextScope } from "./@radix-ui/react-avatar+[...].mjs";
-import { i as Presence, o as useControllableState } from "./@radix-ui/react-checkbox+[...].mjs";
-import { d as Portal$1, f as useId, h as DismissableLayer, l as ReactRemoveScroll, m as useFocusGuards, p as FocusScope, u as hideOthers } from "./@radix-ui/react-dialog+[...].mjs";
+import { d as Portal$1, f as FocusScope, l as ReactRemoveScroll, m as DismissableLayer, p as useFocusGuards, u as hideOthers } from "./@radix-ui/react-dialog+[...].mjs";
 import { _ as Arrow, b as createPopperScope, g as Anchor, v as Content, y as Root2$1 } from "./@radix-ui/react-dropdown-menu+[...].mjs";
 //#region node_modules/@radix-ui/react-popover/dist/index.mjs
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);

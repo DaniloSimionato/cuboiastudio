@@ -20,17 +20,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, ErrorState, LoadingState } from "@/components/feedback/States";
+import { backendAssistantsService } from "@/services/backendAssistantsService";
+import type { BackendAssistantKnowledgeItem, BackendAssistantPreviewResponse, CurrentCompanyResponse, BackendAssistantListItem } from "@/types";
+import { currentCompanyService } from "@/services/currentCompanyService";
+import { toast } from "sonner";
 import { filterOperationalAssistants, resolveOperationalAssistantId } from "@/lib/assistants";
-import { backendAssistantsService, currentCompanyService } from "@/services";
-import type {
-  BackendAssistantKnowledgeItem,
-  BackendAssistantListItem,
-  BackendAssistantPreviewResponse,
-  CurrentCompanyResponse,
-} from "@/types";
 
 type RouteSearch = {
   assistantId?: string;
@@ -56,10 +54,24 @@ function NovoAgente() {
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [businessAddress, setBusinessAddress] = useState("");
+  const [businessCityRegion, setBusinessCityRegion] = useState("");
+  const [googleMapsUrl, setGoogleMapsUrl] = useState("");
+  const [latitude, setLatitude] = useState("");
+  const [longitude, setLongitude] = useState("");
+  const [weeklySchedule, setWeeklySchedule] = useState<any>(null);
+  const [aiAlwaysAvailable, setAiAlwaysAvailable] = useState(true);
   const [initialMessage, setInitialMessage] = useState("");
   const [ragEnabled, setRagEnabled] = useState(false);
   const [status, setStatus] = useState<"ACTIVE" | "INACTIVE">("ACTIVE");
-  const [instructions, setInstructions] = useState("");
+  const [instructions, setInstructions] = useState("Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.");
+  const [personality, setPersonality] = useState("");
+  const [toneOfVoice, setToneOfVoice] = useState("");
+  const [avoidPhrases, setAvoidPhrases] = useState("");
+  const [messageBufferEnabled, setMessageBufferEnabled] = useState(true);
+  const [messageBufferSeconds, setMessageBufferSeconds] = useState(6);
+  const [splitResponseEnabled, setSplitResponseEnabled] = useState(false);
+  const [splitResponseStyle, setSplitResponseStyle] = useState("");
   const [model, setModel] = useState("");
   const [temperature, setTemperature] = useState<number | null>(null);
   const [knowledge, setKnowledge] = useState<BackendAssistantKnowledgeItem[]>([]);
@@ -99,6 +111,25 @@ function NovoAgente() {
     [selectableAssistants, selectedAssistantId],
   );
 
+  const currentFormData = useMemo(() => ({
+    name, description, businessAddress, businessCityRegion, googleMapsUrl,
+    latitude, longitude, weeklySchedule,
+    aiAlwaysAvailable, initialMessage, ragEnabled, status, instructions,
+    personality, toneOfVoice, avoidPhrases, messageBufferEnabled,
+    messageBufferSeconds, splitResponseEnabled, splitResponseStyle,
+    model, temperature, noAnswerMessage, securityInstructions
+  }), [
+    name, description, businessAddress, businessCityRegion, googleMapsUrl,
+    latitude, longitude, weeklySchedule,
+    aiAlwaysAvailable, initialMessage, ragEnabled, status, instructions,
+    personality, toneOfVoice, avoidPhrases, messageBufferEnabled,
+    messageBufferSeconds, splitResponseEnabled, splitResponseStyle,
+    model, temperature, noAnswerMessage, securityInstructions
+  ]);
+
+  const [initialFormData, setInitialFormData] = useState<any>(currentFormData);
+  const isDirty = useMemo(() => JSON.stringify(currentFormData) !== JSON.stringify(initialFormData), [currentFormData, initialFormData]);
+
   const loadKnowledge = async (assistantId: string) => {
     if (!assistantId) {
       setKnowledge([]);
@@ -137,9 +168,34 @@ function NovoAgente() {
         if (!initialAssistantId) {
           setName("");
           setDescription("");
+          setBusinessAddress("");
+          setBusinessCityRegion("");
+          setGoogleMapsUrl("");
+          setLatitude("");
+          setLongitude("");
+          setWeeklySchedule(null);
+          setAiAlwaysAvailable(true);
+          setPersonality("");
+          setToneOfVoice("");
+          setAvoidPhrases("");
+          setMessageBufferEnabled(true);
+          setMessageBufferSeconds(6);
+          setSplitResponseEnabled(false);
+          setSplitResponseStyle("");
           setStatus("ACTIVE");
           setRagEnabled(false);
           setKnowledge([]);
+          
+          setInitialFormData({
+            name: "", description: "", businessAddress: "", businessCityRegion: "",
+            googleMapsUrl: "", latitude: "", longitude: "",
+            weeklySchedule: null, aiAlwaysAvailable: true, initialMessage: "",
+            ragEnabled: false, status: "ACTIVE", instructions: "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
+            personality: "", toneOfVoice: "", avoidPhrases: "",
+            messageBufferEnabled: true, messageBufferSeconds: 6,
+            splitResponseEnabled: false, splitResponseStyle: "",
+            model: "", temperature: null, noAnswerMessage: "", securityInstructions: ""
+          });
         }
       } catch (err) {
         if (!cancelled) {
@@ -170,15 +226,56 @@ function NovoAgente() {
         const assistant = await backendAssistantsService.get(selectedAssistantId);
         setName(assistant.name);
         setDescription(assistant.description ?? "");
+        setBusinessAddress(assistant.businessAddress ?? "");
+        setBusinessCityRegion(assistant.businessCityRegion ?? "");
+        setGoogleMapsUrl(assistant.googleMapsUrl ?? "");
+        setLatitude(assistant.latitude !== null && assistant.latitude !== undefined ? String(assistant.latitude) : "");
+        setLongitude(assistant.longitude !== null && assistant.longitude !== undefined ? String(assistant.longitude) : "");
+        setWeeklySchedule(assistant.weeklySchedule ?? null);
+        setAiAlwaysAvailable(assistant.aiAlwaysAvailable ?? true);
         setInitialMessage(assistant.initialMessage ?? "");
-        setInstructions(assistant.instructions ?? "");
+        setInstructions(assistant.instructions ?? "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.");
+        setPersonality(assistant.personality ?? "");
+        setToneOfVoice(assistant.toneOfVoice ?? "");
+        setAvoidPhrases(assistant.avoidPhrases ?? "");
         setModel(assistant.model ?? "");
         setTemperature(assistant.temperature ?? null);
         setNoAnswerMessage(assistant.fallbackMessage ?? "");
         setSecurityInstructions(assistant.safetyInstruction ?? "");
         setRagEnabled(assistant.ragEnabled ?? false);
+        setMessageBufferEnabled(assistant.messageBufferEnabled ?? true);
+        setMessageBufferSeconds(assistant.messageBufferSeconds ?? 6);
+        setSplitResponseEnabled(assistant.splitResponseEnabled ?? false);
+        setSplitResponseStyle(assistant.splitResponseStyle ?? "");
         setStatus(assistant.status);
         await loadKnowledge(selectedAssistantId);
+        
+        setInitialFormData({
+          name: assistant.name,
+          description: assistant.description ?? "",
+          businessAddress: assistant.businessAddress ?? "",
+          businessCityRegion: assistant.businessCityRegion ?? "",
+          googleMapsUrl: assistant.googleMapsUrl ?? "",
+          latitude: assistant.latitude !== null && assistant.latitude !== undefined ? String(assistant.latitude) : "",
+          longitude: assistant.longitude !== null && assistant.longitude !== undefined ? String(assistant.longitude) : "",
+          weeklySchedule: assistant.weeklySchedule ?? null,
+          aiAlwaysAvailable: assistant.aiAlwaysAvailable ?? true,
+          initialMessage: assistant.initialMessage ?? "",
+          instructions: assistant.instructions ?? "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
+          personality: assistant.personality ?? "",
+          toneOfVoice: assistant.toneOfVoice ?? "",
+          avoidPhrases: assistant.avoidPhrases ?? "",
+          model: assistant.model ?? "",
+          temperature: assistant.temperature ?? null,
+          noAnswerMessage: assistant.fallbackMessage ?? "",
+          securityInstructions: assistant.safetyInstruction ?? "",
+          ragEnabled: assistant.ragEnabled ?? false,
+          messageBufferEnabled: assistant.messageBufferEnabled ?? true,
+          messageBufferSeconds: assistant.messageBufferSeconds ?? 6,
+          splitResponseEnabled: assistant.splitResponseEnabled ?? false,
+          splitResponseStyle: assistant.splitResponseStyle ?? "",
+          status: assistant.status
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Não foi possível carregar o assistente.");
       }
@@ -189,8 +286,22 @@ function NovoAgente() {
     setSelectedAssistantId("");
     setName("");
     setDescription("");
+    setBusinessAddress("");
+    setBusinessCityRegion("");
+    setGoogleMapsUrl("");
+    setLatitude("");
+    setLongitude("");
+    setWeeklySchedule(null);
+    setAiAlwaysAvailable(true);
     setInitialMessage("");
-    setInstructions("");
+    setInstructions("Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.");
+    setPersonality("");
+    setToneOfVoice("");
+    setAvoidPhrases("");
+    setMessageBufferEnabled(true);
+    setMessageBufferSeconds(6);
+    setSplitResponseEnabled(false);
+    setSplitResponseStyle("");
     setModel("");
     setTemperature(null);
     setStatus("ACTIVE");
@@ -202,6 +313,17 @@ function NovoAgente() {
       { id: '1', name: 'Não informar preços sem base', type: 'Não inventar resposta', instruction: 'Se o preço não estiver na base de conhecimento ou ferramenta autorizada, diga que não possui essa informação e ofereça transferência para atendimento humano.', active: true }
     ]);
     setIsReviewConfirmed(false);
+    
+    setInitialFormData({
+      name: "", description: "", businessAddress: "", businessCityRegion: "",
+      googleMapsUrl: "", latitude: "", longitude: "",
+      weeklySchedule: null, aiAlwaysAvailable: true, initialMessage: "",
+      ragEnabled: false, status: "ACTIVE", instructions: "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
+      personality: "", toneOfVoice: "", avoidPhrases: "",
+      messageBufferEnabled: true, messageBufferSeconds: 6,
+      splitResponseEnabled: false, splitResponseStyle: "",
+      model: "", temperature: null, noAnswerMessage: "", securityInstructions: ""
+    });
   };
 
   const handleSave = async () => {
@@ -209,30 +331,74 @@ function NovoAgente() {
       return;
     }
 
+    if (googleMapsUrl.trim() && !/^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(googleMapsUrl.trim())) {
+      toast.error("O link do Google Maps deve ser uma URL válida (ex: https://maps.google.com/...)");
+      return;
+    }
+    if (latitude.trim() && isNaN(Number(latitude))) {
+      toast.error("A latitude deve ser um número válido.");
+      return;
+    }
+    if (longitude.trim() && isNaN(Number(longitude))) {
+      toast.error("A longitude deve ser um número válido.");
+      return;
+    }
+
     setSaving(true);
     try {
+      const payloadLatitude = latitude.trim() ? parseFloat(latitude) : null;
+      const payloadLongitude = longitude.trim() ? parseFloat(longitude) : null;
+
       if (selectedAssistantId) {
         const updated = await backendAssistantsService.update(selectedAssistantId, {
           name: name.trim(),
           description: description.trim() || null,
+          businessAddress: businessAddress.trim() || null,
+          businessCityRegion: businessCityRegion.trim() || null,
+          googleMapsUrl: googleMapsUrl.trim() || null,
+          latitude: payloadLatitude,
+          longitude: payloadLongitude,
+          weeklySchedule,
+          aiAlwaysAvailable,
           initialMessage: initialMessage.trim() || null,
           instructions: instructions.trim() || null,
+          personality: personality.trim() || null,
+          toneOfVoice: toneOfVoice.trim() || null,
+          avoidPhrases: avoidPhrases.trim() || null,
           model: model.trim() || null,
           temperature,
           fallbackMessage: noAnswerMessage.trim() || null,
           safetyInstruction: securityInstructions.trim() || null,
           ragEnabled,
+          messageBufferEnabled,
+          messageBufferSeconds,
+          splitResponseEnabled,
+          splitResponseStyle: splitResponseStyle.trim() || null,
         });
         setAssistants((items) => items.map((item) => (item.id === updated.id ? updated : item)));
         setName(updated.name);
         setDescription(updated.description ?? "");
+        setBusinessAddress(updated.businessAddress ?? "");
+        setBusinessCityRegion(updated.businessCityRegion ?? "");
+        setGoogleMapsUrl(updated.googleMapsUrl ?? "");
+        setLatitude(updated.latitude !== null && updated.latitude !== undefined ? String(updated.latitude) : "");
+        setLongitude(updated.longitude !== null && updated.longitude !== undefined ? String(updated.longitude) : "");
+        setWeeklySchedule(updated.weeklySchedule ?? null);
+        setAiAlwaysAvailable(updated.aiAlwaysAvailable ?? true);
         setInitialMessage(updated.initialMessage ?? "");
-        setInstructions(updated.instructions ?? "");
+        setInstructions(updated.instructions ?? "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.");
+        setPersonality(updated.personality ?? "");
+        setToneOfVoice(updated.toneOfVoice ?? "");
+        setAvoidPhrases(updated.avoidPhrases ?? "");
         setModel(updated.model ?? "");
         setTemperature(updated.temperature ?? null);
         setNoAnswerMessage(updated.fallbackMessage ?? "");
         setSecurityInstructions(updated.safetyInstruction ?? "");
         setRagEnabled(updated.ragEnabled ?? false);
+        setMessageBufferEnabled(updated.messageBufferEnabled ?? true);
+        setMessageBufferSeconds(updated.messageBufferSeconds ?? 6);
+        setSplitResponseEnabled(updated.splitResponseEnabled ?? false);
+        setSplitResponseStyle(updated.splitResponseStyle ?? "");
         if (updated.status !== status) {
           const updatedStatus = await backendAssistantsService.updateStatus(
             selectedAssistantId,
@@ -242,22 +408,69 @@ function NovoAgente() {
             items.map((item) => (item.id === updatedStatus.id ? updatedStatus : item)),
           );
         }
+        
+        setInitialFormData({
+          name: updated.name,
+          description: updated.description ?? "",
+          businessAddress: updated.businessAddress ?? "",
+          businessCityRegion: updated.businessCityRegion ?? "",
+          googleMapsUrl: updated.googleMapsUrl ?? "",
+          latitude: updated.latitude !== null && updated.latitude !== undefined ? String(updated.latitude) : "",
+          longitude: updated.longitude !== null && updated.longitude !== undefined ? String(updated.longitude) : "",
+          weeklySchedule: updated.weeklySchedule ?? null,
+          aiAlwaysAvailable: updated.aiAlwaysAvailable ?? true,
+          initialMessage: updated.initialMessage ?? "",
+          instructions: updated.instructions ?? "",
+          personality: updated.personality ?? "",
+          toneOfVoice: updated.toneOfVoice ?? "",
+          avoidPhrases: updated.avoidPhrases ?? "",
+          model: updated.model ?? "",
+          temperature: updated.temperature ?? null,
+          noAnswerMessage: updated.fallbackMessage ?? "",
+          securityInstructions: updated.safetyInstruction ?? "",
+          ragEnabled: updated.ragEnabled ?? false,
+          messageBufferEnabled: updated.messageBufferEnabled ?? true,
+          messageBufferSeconds: updated.messageBufferSeconds ?? 6,
+          splitResponseEnabled: updated.splitResponseEnabled ?? false,
+          splitResponseStyle: updated.splitResponseStyle ?? "",
+          status: status
+        });
+        toast.success("Agente salvo com sucesso.");
       } else {
         const created = await backendAssistantsService.create({
           name: name.trim(),
           description: description.trim() || null,
+          businessAddress: businessAddress.trim() || null,
+          businessCityRegion: businessCityRegion.trim() || null,
+          googleMapsUrl: googleMapsUrl.trim() || null,
+          latitude: payloadLatitude,
+          longitude: payloadLongitude,
+          weeklySchedule,
+          aiAlwaysAvailable,
           initialMessage: initialMessage.trim() || null,
           instructions: instructions.trim() || null,
+          personality: personality.trim() || null,
+          toneOfVoice: toneOfVoice.trim() || null,
+          avoidPhrases: avoidPhrases.trim() || null,
           model: model.trim() || null,
           temperature,
           fallbackMessage: noAnswerMessage.trim() || null,
           safetyInstruction: securityInstructions.trim() || null,
           ragEnabled,
+          messageBufferEnabled,
+          messageBufferSeconds,
+          splitResponseEnabled,
+          splitResponseStyle: splitResponseStyle.trim() || null,
         });
         setAssistants((items) => [created, ...items]);
         setSelectedAssistantId(created.id);
         setName(created.name);
         setDescription(created.description ?? "");
+        setBusinessAddress(created.businessAddress ?? "");
+        setBusinessCityRegion(created.businessCityRegion ?? "");
+        setGoogleMapsUrl(created.googleMapsUrl ?? "");
+        setLatitude(created.latitude !== null && created.latitude !== undefined ? String(created.latitude) : "");
+        setLongitude(created.longitude !== null && created.longitude !== undefined ? String(created.longitude) : "");
         setInitialMessage(created.initialMessage ?? "");
         setInstructions(created.instructions ?? "");
         setModel(created.model ?? "");
@@ -267,7 +480,39 @@ function NovoAgente() {
         setRagEnabled(created.ragEnabled ?? false);
         setStatus(created.status);
         await loadKnowledge(created.id);
+        
+        setInitialFormData({
+          name: created.name,
+          description: created.description ?? "",
+          businessAddress: created.businessAddress ?? "",
+          businessCityRegion: created.businessCityRegion ?? "",
+          googleMapsUrl: created.googleMapsUrl ?? "",
+          latitude: created.latitude !== null && created.latitude !== undefined ? String(created.latitude) : "",
+          longitude: created.longitude !== null && created.longitude !== undefined ? String(created.longitude) : "",
+          weeklySchedule: created.weeklySchedule ?? null,
+          aiAlwaysAvailable: created.aiAlwaysAvailable ?? true,
+          initialMessage: created.initialMessage ?? "",
+          instructions: created.instructions ?? "",
+          personality: created.personality ?? "",
+          toneOfVoice: created.toneOfVoice ?? "",
+          avoidPhrases: created.avoidPhrases ?? "",
+          model: created.model ?? "",
+          temperature: created.temperature ?? null,
+          noAnswerMessage: created.fallbackMessage ?? "",
+          securityInstructions: created.safetyInstruction ?? "",
+          ragEnabled: created.ragEnabled ?? false,
+          messageBufferEnabled: created.messageBufferEnabled ?? true,
+          messageBufferSeconds: created.messageBufferSeconds ?? 6,
+          splitResponseEnabled: created.splitResponseEnabled ?? false,
+          splitResponseStyle: created.splitResponseStyle ?? "",
+          status: created.status
+        });
+        toast.success("Agente criado com sucesso.");
       }
+      setIsReviewConfirmed(false);
+    } catch (err) {
+      console.error(err);
+      toast.error("Não foi possível salvar o agente. Tente novamente.");
     } finally {
       setSaving(false);
     }
@@ -418,36 +663,33 @@ function NovoAgente() {
     <div>
       <PageHeader
         title="Criar / Editar Agente"
-        description={
-          company
-            ? `Configure o assistente real do tenant ${company.name}.`
-            : "Configure o assistente real do tenant atual."
-        }
         actions={
-          <>
-            <Button variant="outline" asChild>
+          <div className="flex items-center gap-2">
+            {isDirty && (
+              <span className="text-xs text-amber-500 font-medium mr-2">● Alterações não salvas</span>
+            )}
+            <Button variant="outline" asChild size="sm">
               <Link to="/agentes">
-                <ArrowLeft className="h-4 w-4" /> Voltar
+                <ArrowLeft className="h-4 w-4 mr-1" /> Voltar
               </Link>
             </Button>
-            <Button variant="outline" onClick={handleCreateNew}>
-              Novo
+            {selectedAssistantId && (
+              <div className="flex items-center gap-2 mr-2">
+                <StatusBadge status={isActive ? "ativo" : "pausado"} />
+                <Button 
+                  variant={isActive ? "outline" : "destructive"} 
+                  onClick={handleToggleStatus} 
+                  size="sm"
+                >
+                  {isActive ? <Pause className="h-4 w-4 mr-1" /> : <PlayCircle className="h-4 w-4 mr-1" />}
+                  {isActive ? "Inativar" : "Ativar"}
+                </Button>
+              </div>
+            )}
+            <Button onClick={() => void handleSave()} disabled={saving || !name.trim()} size="sm">
+              <Save className="h-4 w-4 mr-1" /> {saving ? "Salvando..." : (selectedAssistantId ? "Salvar" : "Criar")}
             </Button>
-            <Button
-              variant="outline"
-              onClick={() => void handlePreview()}
-              disabled={!selectedAssistantId || previewLoading}
-            >
-              <Sparkles className="h-4 w-4" /> Preview
-            </Button>
-            <Button variant="outline" onClick={handleToggleStatus} disabled={!selectedAssistantId}>
-              {isActive ? <Pause className="h-4 w-4" /> : <PlayCircle className="h-4 w-4" />}
-              {isActive ? "Inativar" : "Ativar"}
-            </Button>
-            <Button onClick={() => void handleSave()} disabled={saving || !name.trim()}>
-              <Save className="h-4 w-4" /> {selectedAssistantId ? "Salvar" : "Criar"}
-            </Button>
-          </>
+          </div>
         }
       />
 
@@ -462,7 +704,7 @@ function NovoAgente() {
       ) : (
         <>
           <Card className="mb-4">
-            <CardContent className="p-4 grid gap-4 md:grid-cols-2">
+            <CardContent className="p-4 grid gap-4 max-w-md">
               <Field label="Selecionar assistente">
                 <Select
                   value={selectedAssistantId || "new"}
@@ -487,11 +729,6 @@ function NovoAgente() {
                   </SelectContent>
                 </Select>
               </Field>
-              <Field label="Status">
-                <div className="h-10 flex items-center">
-                  <StatusBadge status={isActive ? "ativo" : "pausado"} />
-                </div>
-              </Field>
             </CardContent>
           </Card>
 
@@ -508,66 +745,163 @@ function NovoAgente() {
 
             <TabsContent value="info">
               <Card>
-                <CardContent className="p-6 grid md:grid-cols-2 gap-4">
-                  <Field label="Nome do assistente">
-                    <Input value={name} onChange={(e) => setName(e.target.value)} />
-                  </Field>
-                  <Field label="Empresa atual">
-                    <Input value={company?.name ?? "Tenant atual"} disabled />
-                  </Field>
-                  <Field label="Descrição" className="md:col-span-2">
-                    <Textarea
-                      rows={3}
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Modelo">
-                    <Input
-                      value={model}
-                      onChange={(e) => setModel(e.target.value)}
-                      placeholder="Opcional. Se vazio, usa o modelo padrão do backend."
-                    />
-                  </Field>
-                  <Field label="Temperatura">
-                    <Input
-                      type="number"
-                      min={0}
-                      max={2}
-                      step={0.1}
-                      value={temperature ?? ""}
-                      onChange={(e) => {
-                        const nextValue = e.target.value.trim();
-                        if (nextValue === "") {
-                          setTemperature(null);
-                          return;
-                        }
+                <CardContent className="p-6 grid gap-6">
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <Field label="Nome do assistente">
+                      <Input value={name} onChange={(e) => setName(e.target.value)} />
+                    </Field>
+                    <Field label="Empresa atual">
+                      <Input value={company?.name ?? "Tenant atual"} disabled />
+                    </Field>
+                    <Field label="Sobre a empresa" className="md:col-span-2">
+                      <Textarea
+                        rows={3}
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                        placeholder="Ex: Clube de Padel e Beach Tennis com restaurante, área kids e locação de quadras."
+                      />
+                    </Field>
+                    <div className="md:col-span-2 pt-4 border-t space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-lg font-semibold">Localização</h3>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          type="button"
+                          onClick={() => {
+                            if (googleMapsUrl.trim()) {
+                              window.open(googleMapsUrl.trim(), "_blank");
+                            } else {
+                              toast.warning("Adicione um link do Google Maps para testar a localização.");
+                            }
+                          }}
+                        >
+                          Testar localização
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Use o link do Google Maps para que o agente possa enviar a localização quando o cliente perguntar onde fica a empresa.
+                      </p>
 
-                        const parsed = Number(nextValue);
-                        setTemperature(Number.isNaN(parsed) ? null : parsed);
-                      }}
-                      placeholder="0.2"
-                    />
-                  </Field>
-                  <div className="md:col-span-2 flex items-center justify-between p-3 border rounded-lg">
-                    <div>
-                      <div className="font-medium text-sm">Assistente ativo</div>
-                      <div className="text-xs text-muted-foreground">
-                        Receberá conversas quando o runtime persistido for acionado
+                      <div className="grid md:grid-cols-2 gap-4 pt-2">
+                        <Field label="Endereço" className="md:col-span-2">
+                          <Input
+                            value={businessAddress}
+                            onChange={(e) => setBusinessAddress(e.target.value)}
+                            placeholder="Ex: Av. Paulista, 1000 - Bela Vista"
+                          />
+                        </Field>
+                        <Field label="Cidade / Região" className="md:col-span-2">
+                          <Input
+                            value={businessCityRegion}
+                            onChange={(e) => setBusinessCityRegion(e.target.value)}
+                            placeholder="Ex: São Paulo, SP"
+                          />
+                        </Field>
+                        <Field label="Link do Google Maps" className="md:col-span-2">
+                          <Input
+                            value={googleMapsUrl}
+                            onChange={(e) => setGoogleMapsUrl(e.target.value)}
+                            placeholder="Ex: https://maps.app.goo.gl/..."
+                          />
+                        </Field>
+                        <Field label="Latitude">
+                          <Input
+                            value={latitude}
+                            onChange={(e) => setLatitude(e.target.value)}
+                            placeholder="Ex: -23.561684"
+                          />
+                        </Field>
+                        <Field label="Longitude">
+                          <Input
+                            value={longitude}
+                            onChange={(e) => setLongitude(e.target.value)}
+                            placeholder="Ex: -46.655981"
+                          />
+                        </Field>
                       </div>
                     </div>
-                    <Button
-                      variant="outline"
-                      onClick={handleToggleStatus}
-                      disabled={!selectedAssistantId}
-                    >
-                      {isActive ? (
-                        <Pause className="h-4 w-4" />
-                      ) : (
-                        <PlayCircle className="h-4 w-4" />
-                      )}
-                      {isActive ? "Inativar" : "Ativar"}
-                    </Button>
+                  </div>
+
+                  <div className="pt-4 border-t space-y-4">
+                    <h3 className="text-lg font-semibold">Horário de atendimento</h3>
+                    
+                    <div className="flex items-center justify-between bg-secondary/20 p-4 rounded-lg border">
+                      <div className="space-y-0.5 max-w-[80%]">
+                        <Label htmlFor="ai-always-available" className="text-base font-medium cursor-pointer">
+                          IA atende 24 horas
+                        </Label>
+                        <p className="text-sm text-muted-foreground">
+                          {aiAlwaysAvailable 
+                            ? "Quando ativado, o agente pode responder clientes mesmo fora do horário de atendimento. O horário abaixo serve como referência oficial da empresa." 
+                            : "Quando desativado, fora do horário o agente poderá usar a mensagem de indisponibilidade configurada."}
+                        </p>
+                      </div>
+                      <Switch
+                        id="ai-always-available"
+                        checked={aiAlwaysAvailable}
+                        onCheckedChange={setAiAlwaysAvailable}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+                      {[
+                        { id: 'monday', label: 'Segunda-feira', short: 'Seg' },
+                        { id: 'tuesday', label: 'Terça-feira', short: 'Ter' },
+                        { id: 'wednesday', label: 'Quarta-feira', short: 'Qua' },
+                        { id: 'thursday', label: 'Quinta-feira', short: 'Qui' },
+                        { id: 'friday', label: 'Sexta-feira', short: 'Sex' },
+                        { id: 'saturday', label: 'Sábado', short: 'Sáb' },
+                        { id: 'sunday', label: 'Domingo', short: 'Dom' }
+                      ].map(day => {
+                        const defaultDayConfig = day.id === 'sunday' 
+                          ? { open: false, start: "08:00", end: "18:00" } 
+                          : { open: true, start: "08:00", end: "18:00" };
+                        const dayConfig = weeklySchedule?.[day.id] || defaultDayConfig;
+                        const updateDay = (key: string, value: any) => {
+                          setWeeklySchedule((prev: any) => ({
+                            ...(prev || {}),
+                            [day.id]: { ...dayConfig, [key]: value }
+                          }));
+                        };
+                        
+                        return (
+                          <div key={day.id} className="flex flex-col gap-2 p-3 border rounded-md bg-card">
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium text-sm" title={day.label}>{day.short}</span>
+                              <Switch 
+                                checked={dayConfig.open} 
+                                onCheckedChange={(c) => updateDay('open', c)} 
+                              />
+                            </div>
+                            <div className="text-xs text-muted-foreground">{dayConfig.open ? "Aberto" : "Fechado"}</div>
+                            {dayConfig.open && (
+                              <div className="flex flex-col gap-1.5 mt-1">
+                                <div className="flex items-center gap-1">
+                                  <Input 
+                                    type="time" 
+                                    className="h-8 text-xs px-2 w-full" 
+                                    value={dayConfig.start} 
+                                    onChange={(e) => updateDay('start', e.target.value)} 
+                                  />
+                                </div>
+                                <div className="flex items-center gap-1 text-center justify-center">
+                                  <span className="text-[10px] text-muted-foreground">até</span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <Input 
+                                    type="time" 
+                                    className="h-8 text-xs px-2 w-full" 
+                                    value={dayConfig.end} 
+                                    onChange={(e) => updateDay('end', e.target.value)} 
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -575,7 +909,8 @@ function NovoAgente() {
 
             <TabsContent value="prompt">
               <Card>
-                <CardContent className="p-6 space-y-4">
+                <CardContent className="p-6 space-y-6">
+                  {/* Top section: AI settings */}
                   <div className="grid md:grid-cols-2 gap-4">
                     <Field label="Modelo da IA">
                       <Input
@@ -599,53 +934,175 @@ function NovoAgente() {
                         </div>
                       </div>
                     </Field>
+                    <Field label="Tom de voz">
+                      <Select value={toneOfVoice || "Profissional"} onValueChange={(val) => setToneOfVoice(val)}>
+                        <SelectTrigger><SelectValue placeholder="Selecione o tom de voz" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Profissional">Profissional</SelectItem>
+                          <SelectItem value="Amigável">Amigável</SelectItem>
+                          <SelectItem value="Descontraído">Descontraído</SelectItem>
+                          <SelectItem value="Consultivo">Consultivo</SelectItem>
+                          <SelectItem value="Objetivo">Objetivo</SelectItem>
+                          <SelectItem value="Formal">Formal</SelectItem>
+                          <SelectItem value="Personalizado">Personalizado</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field label="Personalidade da IA">
+                      <Input
+                        value={personality}
+                        onChange={(e) => setPersonality(e.target.value)}
+                        placeholder="Ex: Atendente simpática, objetiva, prestativa..."
+                      />
+                    </Field>
                   </div>
+
+                  {/* Message Behavior */}
+                  <div className="p-4 border rounded-lg bg-secondary/10">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <Label htmlFor="message-buffer" className="text-base font-semibold cursor-pointer">
+                          Comportamento de mensagens
+                        </Label>
+                        <p className="text-sm text-muted-foreground">
+                          Aguardar mensagens antes de responder (evita que o agente responda várias vezes quando o cliente manda mensagens quebradas).
+                        </p>
+                      </div>
+                      <Switch
+                        id="message-buffer"
+                        checked={messageBufferEnabled}
+                        onCheckedChange={setMessageBufferEnabled}
+                      />
+                    </div>
+                    {messageBufferEnabled && (
+                      <div className="grid md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-secondary/20">
+                        <Field label={`Tempo de espera: ${messageBufferSeconds} segundos`}>
+                          <Slider
+                            value={[messageBufferSeconds]}
+                            min={3}
+                            max={20}
+                            step={1}
+                            onValueChange={(vals) => setMessageBufferSeconds(vals[0])}
+                          />
+                        </Field>
+                        <Field label="Estilo da resposta">
+                           <Select value={splitResponseStyle || "SINGLE"} onValueChange={(val) => setSplitResponseStyle(val)}>
+                             <SelectTrigger><SelectValue placeholder="Selecione o estilo" /></SelectTrigger>
+                             <SelectContent>
+                               <SelectItem value="SINGLE">Mensagem Única</SelectItem>
+                               <SelectItem value="NATURAL_BLOCKS">Blocos Naturais (Separados)</SelectItem>
+                             </SelectContent>
+                           </Select>
+                        </Field>
+                      </div>
+                    )}
+                  </div>
+
                   <Field
                     label="Mensagem inicial"
-                    helper="Opcional. Ao criar uma conversa nova, essa mensagem aparece como a primeira resposta do assistente."
+                    helper="Opcional. Ao criar uma conversa nova, essa mensagem aparece como a primeira resposta."
                   >
                     <Textarea
-                      rows={3}
+                      rows={2}
                       value={initialMessage}
                       onChange={(e) => setInitialMessage(e.target.value)}
                       placeholder="Olá! Sou seu assistente. Como posso ajudar?"
                     />
                   </Field>
                   <Field
-                    label="Instruções do agente (Prompt Principal)"
-                    helper="Define a personalidade, função, tom de voz e comportamento do agente."
+                    label="Instruções principais do agente"
+                    helper="Define a personalidade, função e regras primárias do agente."
                   >
                     <Textarea
-                      rows={6}
+                      rows={5}
                       value={instructions}
                       onChange={(e) => setInstructions(e.target.value)}
-                      placeholder="Você é um atendente da Cubo.Chat. Responda de forma objetiva, educada e em português."
+                      placeholder="Você é um atendente da Cubo.Chat..."
                     />
                   </Field>
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <Field label="Mensagem quando não souber responder" helper="Resposta padrão quando a IA não encontra informação.">
-                      <Textarea
-                        rows={3}
-                        value={noAnswerMessage}
-                        onChange={(e) => setNoAnswerMessage(e.target.value)}
-                      />
-                    </Field>
-                    <Field label="Instrução de segurança (Guardrails básicos)" helper="Regras base obrigatórias incorporadas ao prompt.">
-                      <Textarea
-                        rows={3}
-                        value={securityInstructions}
-                        onChange={(e) => setSecurityInstructions(e.target.value)}
-                      />
-                    </Field>
+
+                  {/* Advanced Settings Accordion */}
+                  <div className="pt-6 border-t mt-6">
+                    <h3 className="text-lg font-semibold mb-4">Configurações Avançadas</h3>
+                    
+                    <Accordion type="single" collapsible className="w-full">
+                      
+                      <AccordionItem value="avoid-phrases" className="border rounded-lg mb-3 px-4 py-1 bg-secondary/5">
+                        <AccordionTrigger className="hover:no-underline py-3">
+                          <div className="flex flex-col text-left space-y-1">
+                            <span className="font-semibold text-sm">Frases a evitar</span>
+                            <span className="text-xs text-muted-foreground font-normal">
+                              {avoidPhrases ? "Evita repetições configuradas." : "Evita repetições como 'é só me avisar'."}
+                            </span>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent className="pt-2 pb-4">
+                          <p className="text-xs text-muted-foreground mb-3">
+                            Liste frases, vícios de linguagem ou encerramentos que o agente deve evitar repetir.
+                          </p>
+                          <Textarea
+                            rows={3}
+                            value={avoidPhrases}
+                            onChange={(e) => setAvoidPhrases(e.target.value)}
+                            placeholder="Ex: Evite repetir a mesma frase de encerramento em todas as respostas. Não finalize sempre com 'é só me avisar'. Varie naturalmente os encerramentos e só ofereça ajuda extra quando fizer sentido."
+                          />
+                        </AccordionContent>
+                      </AccordionItem>
+
+                      <AccordionItem value="fallback-message" className="border rounded-lg mb-3 px-4 py-1 bg-secondary/5">
+                        <AccordionTrigger className="hover:no-underline py-3">
+                          <div className="flex flex-col text-left space-y-1">
+                            <span className="font-semibold text-sm">Mensagem quando não souber responder</span>
+                            <span className="text-xs text-muted-foreground font-normal">
+                              {noAnswerMessage ? noAnswerMessage.substring(0, 80) + (noAnswerMessage.length > 80 ? "..." : "") : "Resposta padrão quando a IA não encontra informação."}
+                            </span>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent className="pt-2 pb-4">
+                          <p className="text-xs text-muted-foreground mb-3">
+                            Mensagem usada quando o agente não tiver informação suficiente para responder.
+                          </p>
+                          <Textarea
+                            rows={3}
+                            value={noAnswerMessage}
+                            onChange={(e) => setNoAnswerMessage(e.target.value)}
+                            placeholder="Infelizmente, não tenho essa informação..."
+                          />
+                        </AccordionContent>
+                      </AccordionItem>
+
+                      <AccordionItem value="guardrails" className="border rounded-lg px-4 py-1 bg-secondary/5">
+                        <AccordionTrigger className="hover:no-underline py-3">
+                          <div className="flex flex-col text-left space-y-1">
+                            <span className="font-semibold text-sm">Guardrails básicos</span>
+                            <span className="text-xs text-muted-foreground font-normal">
+                              Limites obrigatórios incorporados ao comportamento do agente.
+                            </span>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent className="pt-2 pb-4">
+                          <p className="text-xs text-muted-foreground mb-3">
+                            Defina limites obrigatórios, como não inventar informações, não expor dados internos e transferir para humano quando necessário.
+                          </p>
+                          <Textarea
+                            rows={4}
+                            value={securityInstructions}
+                            onChange={(e) => setSecurityInstructions(e.target.value)}
+                            placeholder="Regras de segurança incorporadas ao prompt."
+                          />
+                        </AccordionContent>
+                      </AccordionItem>
+                      
+                    </Accordion>
                   </div>
-                  
-                  <div className="flex items-center justify-between bg-primary/5 p-4 rounded-lg border border-primary/10 mt-4">
+
+                  <div className="flex items-center justify-between bg-primary/5 p-4 rounded-lg border border-primary/10 mt-6">
                     <div className="space-y-0.5 max-w-[80%]">
                       <Label htmlFor="use-rag-production" className="text-base font-medium cursor-pointer">
                         Usar conhecimento preparado no atendimento real
                       </Label>
                       <p className="text-sm text-muted-foreground">
-                        Quando ativado, o agente buscará informações nos conhecimentos preparados antes de responder no atendimento real. Use somente após testar no Preview.
+                        Busca respostas baseadas nos arquivos de conhecimento antes de responder ao cliente.
                       </p>
                       {ragEnabled && knowledge.filter(k => k.status === "ACTIVE" && k.processingStatus === "READY").length === 0 && (
                         <div className="text-amber-600 text-xs mt-2 flex items-center">
@@ -667,7 +1124,7 @@ function NovoAgente() {
             <TabsContent value="conhecimento">
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
-                  <CardTitle className="text-base">Base de Conhecimento Ativa</CardTitle>
+                  <CardTitle className="text-base">Conhecimentos do agente</CardTitle>
                   <Dialog open={isAddingKnowledge} onOpenChange={setIsAddingKnowledge}>
                     <Button size="sm" onClick={handleOpenNewKnowledge} disabled={!selectedAssistantId}>
                       <Plus className="h-4 w-4 mr-2" /> Adicionar conhecimento
@@ -709,7 +1166,7 @@ function NovoAgente() {
                            </div>
                         )}
                         <p className="text-xs text-muted-foreground mt-2 border-l-2 pl-3 border-amber-300">
-                           Este conteúdo ficará salvo na base de conhecimento do agente. A preparação para IA (vetorização) será feita em uma próxima etapa.
+                           Este conteúdo ficará salvo na base de conhecimento do agente. A preparação para a IA ler e analisar o texto será feita na próxima etapa.
                         </p>
                       </div>
                       <DialogFooter>
@@ -745,7 +1202,7 @@ function NovoAgente() {
                                Atualizado em {new Date(item.updatedAt).toLocaleDateString()}
                             </span>
                             {item.processingStatus === "READY" && (
-                              <span className="text-xs px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-md">Pronto ({item.chunkCount} blocos)</span>
+                              <span className="text-xs px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-md">Pronto para IA</span>
                             )}
                             {item.processingStatus === "PROCESSING" && (
                               <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-800 rounded-md">Processando...</span>
@@ -765,8 +1222,9 @@ function NovoAgente() {
                             size="sm" 
                             onClick={() => void handlePrepareForAI(item)}
                             disabled={preparingKnowledgeId === item.id || item.status === "INACTIVE"}
+                            title="A preparação organiza o conteúdo para que a IA encontre as informações durante o atendimento."
                           >
-                            {preparingKnowledgeId === item.id ? "Preparando..." : item.processingStatus === "ERROR" ? "Tentar Novamente" : item.processingStatus === "READY" ? "Reprocessar IA" : "Preparar para IA"}
+                            {preparingKnowledgeId === item.id ? "Preparando..." : item.processingStatus === "ERROR" ? "Tentar Novamente" : item.processingStatus === "READY" ? "Atualizar preparação" : "Preparar conhecimento"}
                           </Button>
                           <Button variant="outline" size="sm" onClick={() => handleOpenEditKnowledge(item)}>Editar</Button>
                         </div>
@@ -787,6 +1245,9 @@ function NovoAgente() {
               <Card className="mt-4">
                 <CardHeader>
                   <CardTitle className="text-base">Testar busca no conhecimento</CardTitle>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Use este teste para ver se a IA encontra informações dentro dos conhecimentos preparados.
+                  </p>
                 </CardHeader>
                 <CardContent className="p-6 pt-0 space-y-4">
                   {readyKnowledgeCount === 0 ? (
@@ -798,7 +1259,7 @@ function NovoAgente() {
                     <>
                       <div className="flex gap-2">
                         <Input 
-                          placeholder="Digite uma pergunta para testar a busca semântica..." 
+                          placeholder="Digite uma pergunta para testar a busca..." 
                           value={searchQuery}
                           onChange={(e) => setSearchQuery(e.target.value)}
                           onKeyDown={(e) => e.key === "Enter" && handleSearchKnowledge()}
@@ -868,7 +1329,10 @@ function NovoAgente() {
             <TabsContent value="seguranca">
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
-                  <CardTitle className="text-base">Regras de Segurança</CardTitle>
+                  <div>
+                    <CardTitle className="text-base">Regras de Segurança e Gatilhos</CardTitle>
+                    <p className="text-sm text-muted-foreground mt-1">Configure limites de comportamento (Guardrails) e ações automáticas (Gatilhos).</p>
+                  </div>
                   <Dialog open={isAddingSecurityRule} onOpenChange={setIsAddingSecurityRule}>
                     <DialogTrigger asChild>
                       <Button size="sm"><Plus className="h-4 w-4 mr-2" /> Adicionar regra de segurança</Button>
@@ -899,9 +1363,14 @@ function NovoAgente() {
                     </DialogContent>
                   </Dialog>
                 </CardHeader>
-                <CardContent className="p-6 pt-0">
+                <CardContent className="p-6 pt-0 space-y-6">
+                  {/* Guardrails Section */}
                   <div className="space-y-3">
-                    {securityRules.map(rule => (
+                    <h3 className="text-sm font-semibold flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4 text-amber-500" />
+                      Guardrails (Limites e Restrições)
+                    </h3>
+                    {securityRules.filter(r => r.type !== 'transferir').map(rule => (
                       <div key={rule.id} className="flex flex-col sm:flex-row gap-4 p-4 border rounded-lg">
                         <div className="flex-1">
                           <div className="font-medium flex items-center gap-2">
@@ -918,25 +1387,57 @@ function NovoAgente() {
                         </div>
                       </div>
                     ))}
+                  </div>
+
+                  {/* Gatilhos Section */}
+                  <div className="space-y-3 pt-4 border-t">
+                    <h3 className="text-sm font-semibold flex items-center gap-2">
+                      <Sparkles className="h-4 w-4 text-blue-500" />
+                      Gatilhos (Ações Automáticas)
+                      <Badge variant="secondary" className="text-[10px] uppercase">Em breve</Badge>
+                    </h3>
+                    <p className="text-xs text-muted-foreground mb-3">Defina comportamentos que disparam ações na plataforma, como agendar na agenda ou transferir o chat.</p>
+                    {securityRules.filter(r => r.type === 'transferir').map(rule => (
+                      <div key={rule.id} className="flex flex-col sm:flex-row gap-4 p-4 border rounded-lg bg-blue-50/50">
+                        <div className="flex-1">
+                          <div className="font-medium flex items-center gap-2">
+                            {rule.name}
+                            <Badge variant="outline" className="bg-blue-100 text-blue-800 border-blue-200">{rule.type}</Badge>
+                          </div>
+                          <div className="text-sm text-muted-foreground mt-1">{rule.instruction}</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-xs font-medium">{rule.active ? 'Ativa' : 'Inativa'}</div>
+                          <Checkbox checked={rule.active} onCheckedChange={(c) => {
+                            setSecurityRules(prev => prev.map(r => r.id === rule.id ? { ...r, active: !!c } : r));
+                          }} />
+                        </div>
+                      </div>
+                    ))}
+                    {securityRules.filter(r => r.type === 'transferir').length === 0 && (
+                      <div className="text-sm text-muted-foreground p-4 border border-dashed rounded-lg text-center">
+                        Nenhum gatilho configurado. Use o botão acima para adicionar.
+                      </div>
+                    )}
+                  </div>
                     
-                    <div className="pt-4 border-t space-y-3">
-                      <div className="text-sm font-medium">Filtros Nativos do Sistema</div>
-                      <ToggleRow
-                        label="Não responder sem base de conhecimento"
-                        desc="Mantido no runtime determinístico do backend"
-                        defaultChecked
-                      />
-                      <ToggleRow
-                        label="Não chamar IA externa"
-                        desc="Nenhuma integração com provedores é feita no frontend"
-                        defaultChecked
-                      />
-                      <ToggleRow
-                        label="Não expor segredos"
-                        desc="Todos os tokens continuam apenas no backend"
-                        defaultChecked
-                      />
-                    </div>
+                  <div className="pt-4 border-t space-y-3">
+                    <div className="text-sm font-medium">Filtros Nativos do Sistema</div>
+                    <ToggleRow
+                      label="Não responder sem base de conhecimento"
+                      desc="Mantido no runtime determinístico do backend"
+                      defaultChecked
+                    />
+                    <ToggleRow
+                      label="Não chamar IA externa"
+                      desc="Nenhuma integração com provedores é feita no frontend"
+                      defaultChecked
+                    />
+                    <ToggleRow
+                      label="Não expor segredos"
+                      desc="Todos os tokens continuam apenas no backend"
+                      defaultChecked
+                    />
                   </div>
                 </CardContent>
               </Card>
@@ -950,49 +1451,49 @@ function NovoAgente() {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     {!name.trim() && (
-                      <div className="flex items-center gap-2 text-amber-600 bg-amber-50 p-3 rounded-lg border border-amber-200">
+                      <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
                         <span className="text-sm font-medium">O nome do agente é obrigatório.</span>
                       </div>
                     )}
                     {!instructions.trim() && (
-                      <div className="flex items-center gap-2 text-amber-600 bg-amber-50 p-3 rounded-lg border border-amber-200">
+                      <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
                         <span className="text-sm font-medium">Você está usando o prompt padrão do sistema. Recomendamos personalizar as instruções.</span>
                       </div>
                     )}
                     {activeKnowledgeCount === 0 && (
-                      <div className="flex items-center gap-2 text-amber-600 bg-amber-50 p-3 rounded-lg border border-amber-200">
+                      <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
                         <span className="text-sm font-medium">Nenhum conhecimento ativo foi adicionado. O agente responderá apenas com base no prompt.</span>
                       </div>
                     )}
                     {activeKnowledgeCount > 0 && readyKnowledgeCount === 0 && (
-                      <div className="flex items-center gap-2 text-amber-600 bg-amber-50 p-3 rounded-lg border border-amber-200">
+                      <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
                         <span className="text-sm font-medium">O agente ainda não possui conhecimento preparado para IA. Ele responderá apenas com base no prompt.</span>
                       </div>
                     )}
                     {draftKnowledgeCount > 0 && readyKnowledgeCount > 0 && (
-                      <div className="flex items-center gap-2 text-amber-600 bg-amber-50 p-3 rounded-lg border border-amber-200">
+                      <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
                         <span className="text-sm font-medium">Existem conhecimentos ativos que ainda não foram preparados para IA.</span>
                       </div>
                     )}
                     {errorKnowledgeCount > 0 && (
-                      <div className="flex items-center gap-2 text-red-600 bg-red-50 p-3 rounded-lg border border-red-200">
+                      <div className="flex items-center gap-2 text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 p-3 rounded-lg border border-red-200 dark:border-red-900/50">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
                         <span className="text-sm font-medium">Alguns conhecimentos falharam na preparação. Revise antes de publicar.</span>
                       </div>
                     )}
                     {knowledge.filter(k => k.status === "INACTIVE").length > 0 && (
-                      <div className="flex items-center gap-2 text-amber-600 bg-amber-50 p-3 rounded-lg border border-amber-200">
+                      <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
                         <span className="text-sm font-medium">Você tem conhecimentos inativos que não serão utilizados pela IA.</span>
                       </div>
                     )}
                     {readyKnowledgeCount > 0 && (
-                      <div className={`flex items-center gap-2 p-3 rounded-lg border ${ragEnabled ? 'text-green-700 bg-green-50 border-green-200' : 'text-blue-600 bg-blue-50 border-blue-200'}`}>
+                      <div className={`flex items-center gap-2 p-3 rounded-lg border ${ragEnabled ? 'text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/50 border-green-200 dark:border-green-900/50' : 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/50 border-blue-200 dark:border-blue-900/50'}`}>
                         <span className="text-sm font-medium">
                           {ragEnabled
                             ? "Os conhecimentos preparados estão ATIVOS para o atendimento real! A IA usará esses documentos para responder."
@@ -1006,8 +1507,35 @@ function NovoAgente() {
                       <Summary label="Empresa" value={company?.name ?? "Tenant atual"} />
                       <Summary label="Nome do Agente" value={name || "Não definido"} />
                       <Summary label="Status Planejado" value={isActive ? "Ativo" : "Inativo"} />
+                      <Summary label="Endereço" value={businessAddress || "Não definido"} />
+                      <Summary label="Cidade / Região" value={businessCityRegion || "Não definido"} />
+                      <Summary 
+                        label="Link do Google Maps" 
+                        value={
+                          googleMapsUrl ? (
+                            <div className="flex items-center gap-2">
+                              <span>Sim</span>
+                              <Button
+                                variant="link"
+                                size="sm"
+                                className="h-auto p-0 text-xs font-semibold text-primary hover:underline"
+                                type="button"
+                                onClick={() => window.open(googleMapsUrl, "_blank")}
+                              >
+                                Abrir localização
+                              </Button>
+                            </div>
+                          ) : (
+                            "Não"
+                          )
+                        } 
+                      />
+                      <Summary label="Horário" value={aiAlwaysAvailable ? "Atende 24h" : "Respeita horário da empresa"} />
+                      <Summary label="Personalidade" value={personality || "Não definida"} />
+                      <Summary label="Tom de voz" value={toneOfVoice || "Não definido"} />
                       <Summary label="Modelo da IA" value={model || "Padrão do sistema"} />
                       <Summary label="Temperatura" value={`${temperature ?? 0.2} - ${getTemperatureDescription(temperature ?? 0.2)}`} />
+                      <Summary label="Buffer de mensagens" value={messageBufferEnabled ? `${messageBufferSeconds}s de espera` : "Desativado (Responde na hora)"} />
                       <Summary label="Mensagem inicial" value={initialMessage.trim() ? "Configurada" : "Não configurada"} />
                       <Summary label="Prompt Principal" value={instructions.trim() ? "Configurado" : "Padrão do sistema"} />
                       <Summary label="Mensagem fallback" value="Configurada" />
@@ -1033,7 +1561,7 @@ function NovoAgente() {
                         onClick={() => void handleSave()}
                         disabled={saving || !name.trim() || !isReviewConfirmed}
                       >
-                        <Save className="h-4 w-4 mr-2" /> Confirmar e salvar alterações
+                        <Save className="h-4 w-4 mr-2" /> {saving ? "Salvando..." : "Confirmar e salvar alterações"}
                       </Button>
                     </div>
                   </CardContent>
@@ -1043,8 +1571,8 @@ function NovoAgente() {
                   <CardHeader>
                     <CardTitle className="text-base">Exemplo de Conversa (Simulação)</CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="p-4 rounded-lg border bg-muted/20 space-y-4">
+                  <CardContent className="space-y-4 flex flex-col h-full">
+                    <div className="p-4 rounded-lg border bg-muted/20 space-y-4 min-h-[400px] flex-1 flex flex-col">
                       {initialMessage.trim() && (
                         <div className="flex gap-3">
                           <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs shrink-0">
@@ -1064,6 +1592,19 @@ function NovoAgente() {
                           {previewQuestion}
                         </div>
                       </div>
+                      
+                      {previewLoading && (
+                        <div className="flex gap-3">
+                          <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs shrink-0">
+                            IA
+                          </div>
+                          <div className="bg-primary/5 border rounded-lg p-3 text-sm flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 bg-primary/50 rounded-full animate-bounce"></span>
+                            <span className="w-1.5 h-1.5 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></span>
+                            <span className="w-1.5 h-1.5 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></span>
+                          </div>
+                        </div>
+                      )}
 
                       {previewResult && (
                         <div className="flex gap-3">
@@ -1103,7 +1644,7 @@ function NovoAgente() {
                                       </div>
                                     ))}
                                     <div className="text-[10px] text-muted-foreground pt-1">
-                                      Total de chunks escaneados: {previewResult.totalChunksScanned}
+                                      Total de blocos analisados: {previewResult.totalChunksScanned}
                                     </div>
                                   </div>
                                 ) : (
@@ -1203,11 +1744,11 @@ function ToggleRow({
   );
 }
 
-function Summary({ label, value }: { label: string; value: string }) {
+function Summary({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex justify-between gap-4 py-2 border-b last:border-0 text-sm">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-medium">{value}</span>
+      <span className="text-muted-foreground shrink-0">{label}</span>
+      <span className="font-medium text-right">{value}</span>
     </div>
   );
 }

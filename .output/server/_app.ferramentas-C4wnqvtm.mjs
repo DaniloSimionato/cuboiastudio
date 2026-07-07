@@ -11,8 +11,8 @@ import { a as SelectValue, i as SelectTrigger, n as SelectContent, r as SelectIt
 import { t as Label } from "./_ssr/label-BZdmkwq8.mjs";
 import { t as Textarea } from "./_ssr/textarea-CULRsq90.mjs";
 import { t as Switch } from "./_ssr/switch-Cit-Q60v.mjs";
-import { a as TableHeader, i as TableHead, n as TableBody, o as TableRow, r as TableCell, t as Table } from "./_ssr/table-BVRpIYgP.mjs";
 import { t as toast } from "./_libs/sonner.mjs";
+import { a as TableHeader, i as TableHead, n as TableBody, o as TableRow, r as TableCell, t as Table } from "./_ssr/table-BVRpIYgP.mjs";
 import { a as clientes, i as clienteNome, o as ferramentas } from "./_ssr/mock-CnsSa_CP.mjs";
 import { t as SecurityNotice } from "./_ssr/SecurityNotice-DyLr6C9z.mjs";
 import { t as MaskedSecretInput } from "./_ssr/MaskedSecretInput-BEfdpu1t.mjs";

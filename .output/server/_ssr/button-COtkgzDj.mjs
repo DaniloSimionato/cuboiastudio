@@ -3,7 +3,7 @@ import { u as require_react } from "../_libs/@floating-ui/react-dom+[...].mjs";
 import { t as require_jsx_dev_runtime } from "../_libs/react.mjs";
 import { t as cva } from "../_libs/class-variance-authority+clsx.mjs";
 import { t as cn } from "./utils-C_uf36nf.mjs";
-import { a as Slot } from "../_libs/@radix-ui/react-arrow+[...].mjs";
+import { g as Slot } from "../_libs/@radix-ui/react-accordion+[...].mjs";
 //#region node_modules/.nitro/vite/services/ssr/assets/button-COtkgzDj.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_dev_runtime = require_jsx_dev_runtime();

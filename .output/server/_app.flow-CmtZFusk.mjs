@@ -12,8 +12,8 @@ import { t as Label } from "./_ssr/label-BZdmkwq8.mjs";
 import { t as Textarea } from "./_ssr/textarea-CULRsq90.mjs";
 import { t as Switch } from "./_ssr/switch-Cit-Q60v.mjs";
 import { t as toast } from "./_libs/sonner.mjs";
-import "./_ssr/router-CdZJxh-N.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/_app.flow-CFKHj-Bg.js
+import "./_ssr/router-DAVYl4-z.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/_app.flow-CmtZFusk.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_dev_runtime = require_jsx_dev_runtime();
 var _jsxFileName = "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.flow.tsx?tsr-split=component";

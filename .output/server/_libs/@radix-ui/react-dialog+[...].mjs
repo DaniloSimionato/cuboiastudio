@@ -1,9 +1,8 @@
 import { n as __toESM } from "../../_runtime.mjs";
 import { l as require_react_dom, u as require_react } from "../@floating-ui/react-dom+[...].mjs";
-import { i as require_jsx_runtime, l as useComposedRefs, n as Primitive, o as createSlot, r as dispatchDiscreteCustomEvent } from "./react-arrow+[...].mjs";
+import { _ as createSlot, b as useComposedRefs, d as dispatchDiscreteCustomEvent, f as useControllableState, h as require_jsx_runtime, m as createContextScope, o as Presence, p as useLayoutEffect2, s as useId, u as Primitive } from "./react-accordion+[...].mjs";
 import { t as composeEventHandlers } from "../radix-ui__primitive.mjs";
-import { a as useLayoutEffect2, i as useCallbackRef$1, o as createContextScope } from "./react-avatar+[...].mjs";
-import { i as Presence, o as useControllableState } from "./react-checkbox+[...].mjs";
+import { i as useCallbackRef$1 } from "./react-avatar+[...].mjs";
 //#region node_modules/@radix-ui/react-use-escape-keydown/dist/index.mjs
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 function useEscapeKeydown(onEscapeKeyDownProp, ownerDocument = globalThis?.document) {
@@ -272,7 +271,7 @@ function handleAndDispatchCustomEvent(name, handler, detail, { discrete }) {
 //#endregion
 //#region node_modules/@radix-ui/react-focus-guards/dist/index.mjs
 var import_react_dom = /* @__PURE__ */ __toESM(require_react_dom(), 1);
-var count$1 = 0;
+var count = 0;
 var guards = null;
 function useFocusGuards() {
 	import_react.useEffect(() => {
@@ -283,14 +282,14 @@ function useFocusGuards() {
 		const { start, end } = guards;
 		if (document.body.firstElementChild !== start) document.body.insertAdjacentElement("afterbegin", start);
 		if (document.body.lastElementChild !== end) document.body.insertAdjacentElement("beforeend", end);
-		count$1++;
+		count++;
 		return () => {
-			if (count$1 === 1) {
+			if (count === 1) {
 				guards?.start.remove();
 				guards?.end.remove();
 				guards = null;
 			}
-			count$1 = Math.max(0, count$1 - 1);
+			count = Math.max(0, count - 1);
 		};
 	}, []);
 }
@@ -492,17 +491,6 @@ function arrayRemove(array, item) {
 }
 function removeLinks(items) {
 	return items.filter((item) => item.tagName !== "A");
-}
-//#endregion
-//#region node_modules/@radix-ui/react-id/dist/index.mjs
-var useReactId = import_react[" useId ".trim().toString()] || (() => void 0);
-var count = 0;
-function useId(deterministicId) {
-	const [id, setId] = import_react.useState(useReactId());
-	useLayoutEffect2(() => {
-		if (!deterministicId) setId((reactId) => reactId ?? String(count++));
-	}, [deterministicId]);
-	return deterministicId || (id ? `radix-${id}` : "");
 }
 //#endregion
 //#region node_modules/@radix-ui/react-portal/dist/index.mjs
@@ -1570,4 +1558,4 @@ function getState(open) {
 	return open ? "open" : "closed";
 }
 //#endregion
-export { DialogOverlay as a, DialogTrigger as c, Portal as d, useId as f, DismissableLayer as h, DialogDescription as i, ReactRemoveScroll as l, useFocusGuards as m, DialogClose as n, DialogPortal as o, FocusScope as p, DialogContent as r, DialogTitle as s, Dialog as t, hideOthers as u };
+export { DialogOverlay as a, DialogTrigger as c, Portal as d, FocusScope as f, DialogDescription as i, ReactRemoveScroll as l, DismissableLayer as m, DialogClose as n, DialogPortal as o, useFocusGuards as p, DialogContent as r, DialogTitle as s, Dialog as t, hideOthers as u };

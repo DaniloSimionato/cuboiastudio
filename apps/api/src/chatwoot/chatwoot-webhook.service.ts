@@ -39,6 +39,17 @@ export class ChatwootWebhookService {
     private readonly assistantConversationsService: AssistantConversationsService,
   ) {}
 
+  private readonly conversationBuffer = new Map<string, {
+    version: number;
+    timeoutId: NodeJS.Timeout;
+    items: {
+      dto: any;
+      attachments: InboundAttachmentRecord[];
+      messageId: string | null;
+    }[];
+  }>();
+
+
   async processMessageCreated(input: {
     assistantId?: string | null;
     payload: unknown;
@@ -137,6 +148,25 @@ export class ChatwootWebhookService {
         traceLabel,
       });
 
+      const assistantSettings = await this.prisma.assistant.findUnique({
+        where: { id: assistantId },
+        select: { messageBufferEnabled: true, messageBufferSeconds: true }
+      });
+
+      if (assistantSettings?.messageBufferEnabled && assistantSettings.messageBufferSeconds > 0) {
+        return this.handleBufferedMessage({
+          conversationId: conversation.id,
+          assistantId,
+          config,
+          normalized,
+          preparedAttachments,
+          traceLabel,
+          bufferSeconds: assistantSettings.messageBufferSeconds,
+          user,
+          tenant,
+        });
+      }
+
       this.logger.log(
         `Chatwoot runtime call started${traceLabel}: company=${config.companyId} assistant=${assistantId} attachments=${preparedAttachments.length}`,
       );
@@ -173,6 +203,102 @@ export class ChatwootWebhookService {
 
       throw error;
     }
+  }
+
+  private async handleBufferedMessage(input: {
+    conversationId: string;
+    assistantId: string;
+    config: ResolvedChatwootInboxConfig;
+    normalized: NormalizedChatwootMessage;
+    preparedAttachments: InboundAttachmentRecord[];
+    traceLabel: string;
+    bufferSeconds: number;
+    user: any;
+    tenant: any;
+  }): Promise<ChatwootWebhookProcessResult> {
+    const { conversationId, bufferSeconds } = input;
+    
+    let buffer = this.conversationBuffer.get(conversationId);
+    let jobSkippedBecauseNewerExists = false;
+    
+    if (buffer) {
+      clearTimeout(buffer.timeoutId);
+      jobSkippedBecauseNewerExists = true;
+      buffer.version++;
+    } else {
+      buffer = { version: 1, timeoutId: null as any, items: [] };
+      this.conversationBuffer.set(conversationId, buffer);
+    }
+
+    buffer.items.push({
+      dto: input.normalized.dto,
+      attachments: input.preparedAttachments,
+      messageId: input.normalized.messageId ?? null,
+    });
+
+    const bufferedMessageCount = buffer.items.length;
+    const scheduledVersion = buffer.version;
+    
+    this.logger.log(
+      `Chatwoot message buffered${input.traceLabel}: conversation=${conversationId} ` +
+      `bufferVersion=${scheduledVersion} bufferedMessageCount=${bufferedMessageCount} ` +
+      `skippedOldTimer=${jobSkippedBecauseNewerExists} receivedMessageId=${input.normalized.messageId ?? "unknown"}`
+    );
+
+    buffer.timeoutId = setTimeout(async () => {
+      const currentBuffer = this.conversationBuffer.get(conversationId);
+      if (!currentBuffer || currentBuffer.version !== scheduledVersion) {
+        this.logger.log(
+          `Chatwoot timer aborted for conversation=${conversationId} (scheduledVersion=${scheduledVersion}, currentVersion=${currentBuffer?.version ?? "deleted"})`
+        );
+        return;
+      }
+      
+      // Remove from map to start a fresh buffer for future messages
+      this.conversationBuffer.delete(conversationId);
+      
+      const itemsToProcess = currentBuffer.items;
+      if (itemsToProcess.length === 0) return;
+
+      // Combine DTOs
+      const combinedMessage = itemsToProcess
+        .map(i => i.dto.message)
+        .filter(m => m && typeof m === 'string' && m.trim().length > 0)
+        .join("\n");
+      
+      const textPreview = combinedMessage.length > 120 ? combinedMessage.substring(0, 120) + "..." : combinedMessage;
+      this.logger.log(
+        `Chatwoot flushing buffer for conversation=${conversationId}: processedMessageCount=${itemsToProcess.length}, preview="${textPreview}"`
+      );
+      
+      const combinedAttachments = itemsToProcess.flatMap(i => i.attachments);
+      
+      const combinedDto = {
+        ...itemsToProcess[0].dto, // Use base fields from the first message
+        message: combinedMessage,
+        attachments: itemsToProcess.flatMap(i => i.dto.attachments || [])
+      };
+
+      try {
+        await this.assistantConversationsService.sendMessage({
+          assistantId: input.assistantId,
+          conversationId: input.conversationId,
+          dto: combinedDto,
+          user: input.user,
+          tenant: input.tenant,
+          preparedAttachments: combinedAttachments,
+        });
+      } catch (err) {
+        this.logger.error(`Error processing buffered messages for conversation=${conversationId}: ${err}`);
+      }
+    }, bufferSeconds * 1000);
+
+    return {
+      ok: true,
+      source: "chatwoot",
+      conversationId,
+      messageId: input.normalized.messageId ?? undefined,
+    };
   }
 
   private async resolveAssistantIdOrIgnore(

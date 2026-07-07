@@ -25,13 +25,27 @@ export type AssistantListItem = {
   id: string;
   name: string;
   description: string | null;
+  businessAddress: string | null;
+  businessCityRegion: string | null;
+  googleMapsUrl: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  weeklySchedule?: any;
+  aiAlwaysAvailable: boolean;
   initialMessage: string | null;
   instructions: string | null;
+  personality: string | null;
+  toneOfVoice: string | null;
+  avoidPhrases: string | null;
   model: string | null;
   temperature: number | null;
   fallbackMessage: string | null;
   safetyInstruction: string | null;
   ragEnabled: boolean;
+  messageBufferEnabled: boolean;
+  messageBufferSeconds: number;
+  splitResponseEnabled: boolean;
+  splitResponseStyle: string | null;
   status: Status;
   createdAt: Date;
   updatedAt: Date;
@@ -103,13 +117,27 @@ const assistantSafeSelect = {
   id: true,
   name: true,
   description: true,
+  businessAddress: true,
+  businessCityRegion: true,
+  googleMapsUrl: true,
+  latitude: true,
+  longitude: true,
+  weeklySchedule: true,
+  aiAlwaysAvailable: true,
   initialMessage: true,
   instructions: true,
+  personality: true,
+  toneOfVoice: true,
+  avoidPhrases: true,
   model: true,
   temperature: true,
   fallbackMessage: true,
   safetyInstruction: true,
   ragEnabled: true,
+  messageBufferEnabled: true,
+  messageBufferSeconds: true,
+  splitResponseEnabled: true,
+  splitResponseStyle: true,
   status: true,
   createdAt: true,
   updatedAt: true,
@@ -200,13 +228,27 @@ function toAssistantResponse(assistant: AssistantSafeRecord): AssistantListItem 
     id: assistant.id,
     name: assistant.name,
     description: assistant.description,
+    businessAddress: assistant.businessAddress,
+    businessCityRegion: assistant.businessCityRegion,
+    googleMapsUrl: assistant.googleMapsUrl,
+    latitude: assistant.latitude,
+    longitude: assistant.longitude,
+    weeklySchedule: assistant.weeklySchedule ?? undefined,
+    aiAlwaysAvailable: assistant.aiAlwaysAvailable,
     initialMessage: assistant.initialMessage,
     instructions: assistant.instructions,
+    personality: assistant.personality,
+    toneOfVoice: assistant.toneOfVoice,
+    avoidPhrases: assistant.avoidPhrases,
     model: assistant.model,
     temperature: assistant.temperature,
     fallbackMessage: assistant.fallbackMessage,
     safetyInstruction: assistant.safetyInstruction,
     ragEnabled: assistant.ragEnabled,
+    messageBufferEnabled: assistant.messageBufferEnabled,
+    messageBufferSeconds: assistant.messageBufferSeconds,
+    splitResponseEnabled: assistant.splitResponseEnabled,
+    splitResponseStyle: assistant.splitResponseStyle,
     status: assistant.status,
     createdAt: assistant.createdAt,
     updatedAt: assistant.updatedAt,
@@ -351,12 +393,27 @@ export class AssistantsService {
         companyId: input.tenant.companyId,
         name: input.dto.name,
         description: input.dto.description ?? null,
+        businessAddress: input.dto.businessAddress ?? null,
+        businessCityRegion: input.dto.businessCityRegion ?? null,
+        googleMapsUrl: input.dto.googleMapsUrl ?? null,
+        latitude: input.dto.latitude ?? null,
+        longitude: input.dto.longitude ?? null,
+        weeklySchedule: input.dto.weeklySchedule ?? null,
+        aiAlwaysAvailable: input.dto.aiAlwaysAvailable ?? true,
         initialMessage: input.dto.initialMessage ?? null,
         instructions: input.dto.instructions ?? null,
+        personality: input.dto.personality ?? null,
+        toneOfVoice: input.dto.toneOfVoice ?? null,
+        avoidPhrases: input.dto.avoidPhrases ?? null,
         model: input.dto.model ?? null,
         temperature: input.dto.temperature ?? null,
         fallbackMessage: input.dto.fallbackMessage ?? null,
         safetyInstruction: input.dto.safetyInstruction ?? null,
+        ragEnabled: input.dto.ragEnabled ?? false,
+        messageBufferEnabled: input.dto.messageBufferEnabled ?? true,
+        messageBufferSeconds: input.dto.messageBufferSeconds ?? 6,
+        splitResponseEnabled: input.dto.splitResponseEnabled ?? false,
+        splitResponseStyle: input.dto.splitResponseStyle ?? null,
         status: Status.ACTIVE,
       },
       select: assistantSafeSelect,
@@ -403,22 +460,52 @@ export class AssistantsService {
       Object.prototype.hasOwnProperty.call(input.dto, field);
     const hasName = typeof input.dto.name === "string";
     const hasDescription = hasField("description");
+    const hasBusinessAddress = hasField("businessAddress");
+    const hasBusinessCityRegion = hasField("businessCityRegion");
+     const hasWeeklySchedule = hasField("weeklySchedule");
+    const hasAiAlwaysAvailable = hasField("aiAlwaysAvailable");
     const hasInitialMessage = hasField("initialMessage");
     const hasInstructions = hasField("instructions");
+    const hasPersonality = hasField("personality");
+    const hasToneOfVoice = hasField("toneOfVoice");
+    const hasAvoidPhrases = hasField("avoidPhrases");
+    const hasGoogleMapsUrl = hasField("googleMapsUrl");
+    const hasLatitude = hasField("latitude");
+    const hasLongitude = hasField("longitude");
     const hasModel = hasField("model");
     const hasTemperature = hasField("temperature");
     const hasFallbackMessage = hasField("fallbackMessage");
     const hasSafetyInstruction = hasField("safetyInstruction");
+    const hasRagEnabled = hasField("ragEnabled");
+    const hasMessageBufferEnabled = hasField("messageBufferEnabled");
+    const hasMessageBufferSeconds = hasField("messageBufferSeconds");
+    const hasSplitResponseEnabled = hasField("splitResponseEnabled");
+    const hasSplitResponseStyle = hasField("splitResponseStyle");
 
     if (
       !hasName &&
       !hasDescription &&
+      !hasBusinessAddress &&
+      !hasBusinessCityRegion &&
+      !hasWeeklySchedule &&
+      !hasAiAlwaysAvailable &&
       !hasInitialMessage &&
       !hasInstructions &&
+      !hasPersonality &&
+      !hasToneOfVoice &&
+      !hasAvoidPhrases &&
+      !hasGoogleMapsUrl &&
+      !hasLatitude &&
+      !hasLongitude &&
       !hasModel &&
       !hasTemperature &&
       !hasFallbackMessage &&
-      !hasSafetyInstruction
+      !hasSafetyInstruction &&
+      !hasRagEnabled &&
+      !hasMessageBufferEnabled &&
+      !hasMessageBufferSeconds &&
+      !hasSplitResponseEnabled &&
+      !hasSplitResponseStyle
     ) {
       throw new BadRequestException("At least one editable field must be provided.");
     }
@@ -444,12 +531,27 @@ export class AssistantsService {
       data: {
         ...(hasName ? { name: input.dto.name } : {}),
         ...(hasDescription ? { description: input.dto.description ?? null } : {}),
+        ...(hasBusinessAddress ? { businessAddress: input.dto.businessAddress ?? null } : {}),
+        ...(hasBusinessCityRegion ? { businessCityRegion: input.dto.businessCityRegion ?? null } : {}),
+        ...(hasGoogleMapsUrl ? { googleMapsUrl: input.dto.googleMapsUrl ?? null } : {}),
+        ...(hasLatitude ? { latitude: input.dto.latitude ?? null } : {}),
+        ...(hasLongitude ? { longitude: input.dto.longitude ?? null } : {}),
+        ...(hasWeeklySchedule ? { weeklySchedule: input.dto.weeklySchedule ?? null } : {}),
+        ...(hasAiAlwaysAvailable ? { aiAlwaysAvailable: input.dto.aiAlwaysAvailable ?? true } : {}),
         ...(hasInitialMessage ? { initialMessage: input.dto.initialMessage ?? null } : {}),
         ...(hasInstructions ? { instructions: input.dto.instructions ?? null } : {}),
+        ...(hasPersonality ? { personality: input.dto.personality ?? null } : {}),
+        ...(hasToneOfVoice ? { toneOfVoice: input.dto.toneOfVoice ?? null } : {}),
+        ...(hasAvoidPhrases ? { avoidPhrases: input.dto.avoidPhrases ?? null } : {}),
         ...(hasModel ? { model: input.dto.model ?? null } : {}),
         ...(hasTemperature ? { temperature: input.dto.temperature ?? null } : {}),
         ...(hasFallbackMessage ? { fallbackMessage: input.dto.fallbackMessage ?? null } : {}),
         ...(hasSafetyInstruction ? { safetyInstruction: input.dto.safetyInstruction ?? null } : {}),
+        ...(hasRagEnabled ? { ragEnabled: input.dto.ragEnabled ?? false } : {}),
+        ...(hasMessageBufferEnabled ? { messageBufferEnabled: input.dto.messageBufferEnabled ?? true } : {}),
+        ...(hasMessageBufferSeconds ? { messageBufferSeconds: input.dto.messageBufferSeconds ?? 6 } : {}),
+        ...(hasSplitResponseEnabled ? { splitResponseEnabled: input.dto.splitResponseEnabled ?? false } : {}),
+        ...(hasSplitResponseStyle ? { splitResponseStyle: input.dto.splitResponseStyle ?? null } : {}),
       },
       select: assistantSafeSelect,
     });

@@ -1,10 +1,8 @@
 import { n as __toESM } from "../_runtime.mjs";
 import { u as require_react } from "./@floating-ui/react-dom+[...].mjs";
-import { i as require_jsx_runtime, l as useComposedRefs, n as Primitive, s as createSlottable } from "./@radix-ui/react-arrow+[...].mjs";
+import { b as useComposedRefs, f as useControllableState, h as require_jsx_runtime, m as createContextScope, o as Presence, s as useId, u as Primitive, v as createSlottable } from "./@radix-ui/react-accordion+[...].mjs";
 import { t as composeEventHandlers } from "./radix-ui__primitive.mjs";
-import { o as createContextScope } from "./@radix-ui/react-avatar+[...].mjs";
-import { i as Presence, o as useControllableState } from "./@radix-ui/react-checkbox+[...].mjs";
-import { d as Portal$1, f as useId, h as DismissableLayer } from "./@radix-ui/react-dialog+[...].mjs";
+import { d as Portal$1, m as DismissableLayer } from "./@radix-ui/react-dialog+[...].mjs";
 import { _ as Arrow, b as createPopperScope, g as Anchor, v as Content, y as Root2 } from "./@radix-ui/react-dropdown-menu+[...].mjs";
 import { h as Root } from "./@radix-ui/react-select+[...].mjs";
 //#region node_modules/@radix-ui/react-tooltip/dist/index.mjs

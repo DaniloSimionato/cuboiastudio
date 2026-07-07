@@ -1,11 +1,8 @@
 import { n as __toESM } from "../_runtime.mjs";
 import { u as require_react } from "./@floating-ui/react-dom+[...].mjs";
-import { i as require_jsx_runtime, l as useComposedRefs, n as Primitive } from "./@radix-ui/react-arrow+[...].mjs";
+import { b as useComposedRefs, c as useDirection, f as useControllableState, h as require_jsx_runtime, l as createCollection, m as createContextScope, u as Primitive } from "./@radix-ui/react-accordion+[...].mjs";
 import { t as composeEventHandlers } from "./radix-ui__primitive.mjs";
-import { o as createContextScope } from "./@radix-ui/react-avatar+[...].mjs";
-import { a as useSize, o as useControllableState, r as usePrevious } from "./@radix-ui/react-checkbox+[...].mjs";
-import { t as createCollection } from "./radix-ui__react-collection.mjs";
-import { t as useDirection } from "./radix-ui__react-direction.mjs";
+import { i as useSize, r as usePrevious } from "./@radix-ui/react-checkbox+[...].mjs";
 import { t as clamp } from "./radix-ui__number.mjs";
 //#region node_modules/@radix-ui/react-slider/dist/index.mjs
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);

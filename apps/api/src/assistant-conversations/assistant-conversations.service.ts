@@ -176,6 +176,9 @@ const assistantConversationRuntimeAssistantSelect = {
   id: true,
   name: true,
   description: true,
+  businessAddress: true,
+  businessCityRegion: true,
+  googleMapsUrl: true,
   status: true,
   initialMessage: true,
   instructions: true,
@@ -184,6 +187,11 @@ const assistantConversationRuntimeAssistantSelect = {
   ragEnabled: true,
   fallbackMessage: true,
   safetyInstruction: true,
+  avoidPhrases: true,
+  splitResponseEnabled: true,
+  splitResponseStyle: true,
+  latitude: true,
+  longitude: true,
 } satisfies Prisma.AssistantSelect;
 
 type AssistantConversationRuntimeAssistantRecord = Prisma.AssistantGetPayload<{
@@ -862,6 +870,7 @@ export class AssistantConversationsService {
       content: input.content,
       message_type: "outgoing",
       private: false,
+      sender_type: "Captain::Assistant",
       content_attributes: {
         automation_rule_id: "cubo_ai_studio",
         source: "cubo_ai_studio",
@@ -873,7 +882,7 @@ export class AssistantConversationsService {
 
     try {
       this.logger.log(
-        `Chatwoot outbound started: company=${input.conversation.companyId} outboundUrl=${outboundUrl} account=${accountIdentifier} externalConversation=${conversationIdentifier} inbox=${inboxIdentifier || "unknown"} assistantMessageId=${input.assistantMessageId} messageType=${outboundBody.message_type} private=${outboundBody.private} contentLength=${input.content.length}`,
+        `Chatwoot outbound started: company=${input.conversation.companyId} outboundUrl=${outboundUrl} account=${accountIdentifier} externalConversation=${conversationIdentifier} inbox=${inboxIdentifier || "unknown"} assistantMessageId=${input.assistantMessageId} messageType=${outboundBody.message_type} senderType=${outboundBody.sender_type} private=${outboundBody.private} contentLength=${input.content.length}`,
       );
       this.logger.log(
         `Chatwoot outbound payload (secure): ${JSON.stringify({ ...outboundBody, content: "[REDACTED]" })}`
@@ -1419,9 +1428,27 @@ export class AssistantConversationsService {
       });
     }
 
+    let instructionsWithLocation = assistant.instructions || "";
+    if (assistant.businessAddress || assistant.businessCityRegion || assistant.googleMapsUrl || (assistant.latitude !== null && assistant.longitude !== null)) {
+      let googleMapsUrl = assistant.googleMapsUrl;
+      if (assistant.latitude !== null && assistant.longitude !== null) {
+        googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${assistant.latitude},${assistant.longitude}`;
+      }
+
+      const locationPrompt = [
+        "Localização da empresa:",
+        assistant.businessAddress ? `Endereço: ${assistant.businessAddress}` : null,
+        assistant.businessCityRegion ? `Cidade/Região: ${assistant.businessCityRegion}` : null,
+        googleMapsUrl ? `Google Maps: ${googleMapsUrl}` : null,
+        "Se o cliente perguntar onde fica, endereço ou localização, responda com essas informações e envie o link do Google Maps."
+      ].filter(Boolean).join("\n");
+      
+      instructionsWithLocation = [instructionsWithLocation, locationPrompt].filter(Boolean).join("\n\n---\n\n");
+    }
+
     const effectiveInstructions = assistant.ragEnabled
-      ? [assistant.instructions, ragContextBlock].filter(Boolean).join("\n\n---\n\n")
-      : assistant.instructions;
+      ? [instructionsWithLocation, ragContextBlock].filter(Boolean).join("\n\n---\n\n")
+      : instructionsWithLocation;
 
     const recentMessages = await this.prisma.assistantConversationMessage.findMany({
       where: {
@@ -1546,6 +1573,7 @@ export class AssistantConversationsService {
             assistantDescription: assistant.description,
             initialMessage: assistant.initialMessage,
             instructions: effectiveInstructions,
+            avoidPhrases: assistant.avoidPhrases,
             knowledgeItems,
             historyMessages: priorHistory,
             currentMessage: interpretedMessage,
@@ -1780,20 +1808,47 @@ export class AssistantConversationsService {
     };
 
     if (source === "chatwoot") {
-      await this.sendChatwootOutboundText({
-        conversation: {
-          ...conversation,
-          sourceProvider: source,
-          externalConversationId:
-            input.dto.externalConversationId ?? conversation.externalConversationId,
-          externalContactId: input.dto.externalContactId ?? conversation.externalContactId,
-          externalInboxId: input.dto.externalInboxId ?? conversation.externalInboxId,
-          externalChannelId: input.dto.externalChannelId ?? conversation.externalChannelId,
-        },
-        assistantMessageId: assistantMessage.id,
-        assistantId: input.assistantId,
-        content: assistantMessage.content,
-      });
+      let blocks = [assistantMessage.content];
+
+      if (assistant.splitResponseStyle === "NATURAL_BLOCKS") {
+        const rawBlocks = assistantMessage.content
+          .split(/\n\n+/)
+          .map((b) => b.trim())
+          .filter((b) => b.length > 0);
+
+        blocks = [];
+        for (const rb of rawBlocks) {
+          if (blocks.length > 0 && rb.length < 50) {
+            // Se o bloco for muito pequeno, anexe ao bloco anterior para não mandar mensagens curtas sem sentido isoladas.
+            blocks[blocks.length - 1] += "\n\n" + rb;
+          } else {
+            blocks.push(rb);
+          }
+        }
+      }
+
+      for (let i = 0; i < blocks.length; i++) {
+        const block = blocks[i];
+        await this.sendChatwootOutboundText({
+          conversation: {
+            ...conversation,
+            sourceProvider: source,
+            externalConversationId:
+              input.dto.externalConversationId ?? conversation.externalConversationId,
+            externalContactId: input.dto.externalContactId ?? conversation.externalContactId,
+            externalInboxId: input.dto.externalInboxId ?? conversation.externalInboxId,
+            externalChannelId: input.dto.externalChannelId ?? conversation.externalChannelId,
+          },
+          assistantMessageId: assistantMessage.id,
+          assistantId: input.assistantId,
+          content: block,
+        });
+
+        // Adiciona um pequeno delay entre as mensagens fatiadas
+        if (i < blocks.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+      }
     }
 
     return {

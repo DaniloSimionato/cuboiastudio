@@ -68,13 +68,27 @@ export const backendAssistantsService = {
   async create(input: {
     name: string;
     description?: string | null;
+    businessAddress?: string | null;
+    businessCityRegion?: string | null;
+    googleMapsUrl?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    weeklySchedule?: any | null;
+    aiAlwaysAvailable?: boolean;
     initialMessage?: string | null;
     instructions?: string | null;
+    personality?: string | null;
+    toneOfVoice?: string | null;
+    avoidPhrases?: string | null;
     model?: string | null;
     temperature?: number | null;
     fallbackMessage?: string | null;
     safetyInstruction?: string | null;
     ragEnabled?: boolean;
+    messageBufferEnabled?: boolean;
+    messageBufferSeconds?: number;
+    splitResponseEnabled?: boolean;
+    splitResponseStyle?: string | null;
   }): Promise<BackendAssistantResponse> {
     return apiFetch<BackendAssistantResponse>("/assistants", {
       method: "POST",
@@ -87,13 +101,27 @@ export const backendAssistantsService = {
     input: {
       name?: string;
       description?: string | null;
+      businessAddress?: string | null;
+      businessCityRegion?: string | null;
+      googleMapsUrl?: string | null;
+      latitude?: number | null;
+      longitude?: number | null;
+      weeklySchedule?: any | null;
+      aiAlwaysAvailable?: boolean;
       initialMessage?: string | null;
       instructions?: string | null;
+      personality?: string | null;
+      toneOfVoice?: string | null;
+      avoidPhrases?: string | null;
       model?: string | null;
       temperature?: number | null;
       fallbackMessage?: string | null;
       safetyInstruction?: string | null;
       ragEnabled?: boolean;
+      messageBufferEnabled?: boolean;
+      messageBufferSeconds?: number;
+      splitResponseEnabled?: boolean;
+      splitResponseStyle?: string | null;
     },
   ): Promise<BackendAssistantResponse> {
     return apiFetch<BackendAssistantResponse>(`/assistants/${id}`, {

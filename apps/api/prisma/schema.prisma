@@ -331,13 +331,30 @@ model Assistant {
   companyId         String
   name              String
   description       String?
+  businessAddress     String?
+  businessCityRegion  String?
+  weeklySchedule      Json?
+  aiAlwaysAvailable   Boolean  @default(true)
   initialMessage    String?
   instructions      String?
+  personality       String?
+  toneOfVoice       String?
+  avoidPhrases      String?
+  googleMapsUrl     String?
+  latitude          Float?
+  longitude         Float?
+  
   model             String?
   temperature       Float?
   fallbackMessage   String?
   safetyInstruction String?
   ragEnabled        Boolean  @default(false)
+  
+  messageBufferEnabled Boolean @default(true)
+  messageBufferSeconds Int     @default(6)
+  splitResponseEnabled Boolean @default(false)
+  splitResponseStyle   String?
+  
   status            Status   @default(ACTIVE)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt

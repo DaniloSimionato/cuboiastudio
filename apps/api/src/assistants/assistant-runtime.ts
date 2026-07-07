@@ -24,6 +24,7 @@ type AssistantConversationPromptInput = {
   assistantDescription?: string | null;
   initialMessage?: string | null;
   instructions?: string | null;
+  avoidPhrases?: string | null;
   knowledgeItems: AssistantKnowledgeInput[];
   historyMessages: AssistantConversationHistoryMessage[];
   currentMessage: string;
@@ -141,7 +142,27 @@ export function buildConversationPromptMessages(
       content:
         "Você é um assistente configurado no Cubo AI Studio. Responda em português do Brasil, salvo se o usuário pedir outro idioma. Siga as instruções do assistente. Use a base de conhecimento fornecida quando ela for relevante. Se não souber a resposta, diga que não sabe. Não invente informações que não estejam no contexto.",
     },
+    {
+      role: "system",
+      content:
+        "REGRAS OBRIGATÓRIAS DE CONVERSA:\n" +
+        "1. SAUDAÇÃO COM PERGUNTA/INTENÇÃO: Se o cliente cumprimentar (ex: 'Bom dia', 'Tudo bem?', 'Olá') e fizer uma pergunta ou expressar uma intenção (ex: 'Qual a localização?', 'Qual o valor?') na mesma mensagem ou sequência consolidada, responda com uma saudação CURTA (ex: 'Bom dia! Tudo bem.') e responda diretamente à pergunta. É EXPRESSAMENTE PROIBIDO incluir perguntas de ajuda genéricas (ex: 'Como posso ajudar?', 'Em que posso ajudar?') se o cliente já especificou o que quer.\n" +
+        "2. SAUDAÇÃO SEM PERGUNTA: Se o cliente enviar apenas saudações simples e vazias de conteúdo, cumprimente de volta de forma breve e pergunte como pode ajudar.\n" +
+        "3. NÃO REPETIR SAUDAÇÃO: Se você já cumprimentou o cliente nesta conversa, não repita 'bom dia', 'boa tarde', 'boa noite' ou 'olá' nas respostas seguintes.\n" +
+        "4. MENSAGENS SEQUENCIAIS: O usuário pode enviar múltiplas mensagens curtas em sequência. Interprete TODAS como uma única intenção contínua antes de responder.\n" +
+        "5. INTENÇÃO PRINCIPAL: Nunca deduza um assunto novo (como área kids, cardápio, etc) a partir de fragmentos curtos se o contexto óbvio apontar para outra intenção (ex: localização). Responda estritamente à intenção principal mais específica do bloco.\n" +
+        "6. ENCERRAMENTO: NÃO termine as mensagens oferecendo ajuda de forma repetitiva. Para respostas objetivas (como localização, horário, endereço), apenas responda e pare. Não adicione frases como 'é só avisar', 'estou à disposição', 'se precisar de mais alguma coisa'.",
+    },
   ];
+
+  if (input.avoidPhrases && input.avoidPhrases.trim().length > 0) {
+    messages.push({
+      role: "system",
+      content:
+        "PROIBIÇÃO ABSOLUTA DE FRASES: As seguintes palavras ou frases estão PROIBIDAS em suas respostas. NUNCA as use, nem variações delas:\n" +
+        input.avoidPhrases,
+    });
+  }
 
   if (input.calendarContext) {
     const calendarLines = [
@@ -183,7 +204,9 @@ export function buildConversationPromptMessages(
   if (initialMessage) {
     messages.push({
       role: "system",
-      content: `Mensagem inicial configurada do assistente:\n${truncateText(initialMessage, MAX_HISTORY_MESSAGE_LENGTH)}`,
+      content:
+        "Mensagem inicial configurada do assistente (use SOMENTE quando o cliente ainda não fez nenhuma pergunta e a conversa está começando. Se o cliente já perguntou algo, NÃO reproduza esta mensagem, responda diretamente à pergunta do cliente):\n" +
+        truncateText(initialMessage, MAX_HISTORY_MESSAGE_LENGTH),
     });
   }
 
@@ -191,7 +214,7 @@ export function buildConversationPromptMessages(
   if (instructions) {
     messages.push({
       role: "system",
-      content: `Instruções do assistente:\n${instructions}`,
+      content: `Instruções do assistente (siga rigorosamente, estas têm prioridade sobre comportamentos padrão):\n${instructions}`,
     });
   }
 
