@@ -9,6 +9,10 @@ import { AssistantKnowledgeModule } from "./assistant-knowledge/assistant-knowle
 import { AssistantRuntimeLogsModule } from "./assistant-runtime-logs/assistant-runtime-logs.module";
 import { DatabaseModule } from "./database/database.module";
 import { AssistantsModule } from "./assistants/assistants.module";
+import { AssistantBehaviorsModule } from "./assistant-behaviors/assistant-behaviors.module";
+import { AssistantFlowsModule } from "./assistant-flows/assistant-flows.module";
+import { PromptCompilerModule } from "./prompt-compiler/prompt-compiler.module";
+import { IntentRouterModule } from "./intent-router/intent-router.module";
 import { AppsModule } from "./apps/apps.module";
 import { AiSettingsModule } from "./ai-settings/ai-settings.module";
 import { DiagnosticsModule } from "./diagnostics/diagnostics.module";
@@ -53,6 +57,10 @@ import { validateEnvironment } from "./config/env";
     AppsModule,
     DatabaseModule,
     AssistantsModule,
+    AssistantBehaviorsModule,
+    AssistantFlowsModule,
+    PromptCompilerModule,
+    IntentRouterModule,
     CompaniesModule,
     DiagnosticsModule,
     HealthModule,

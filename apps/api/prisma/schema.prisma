@@ -367,6 +367,8 @@ model Assistant {
   runtimeLogs                   AssistantRuntimeLog[]
   knowledgeChunks               AssistantKnowledgeChunk[]
   assistantConversationMessages AssistantConversationMessage[]
+  behavior                      AssistantBehavior?
+  flows                         AssistantFlow[]
 
   @@index([companyId])
   @@index([status])
@@ -522,6 +524,18 @@ model AssistantRuntimeLog {
   historyLimit           Int?
   initialMessageIncluded Boolean  @default(false)
   instructionsIncluded   Boolean  @default(false)
+  
+  detectedIntent         String?
+  selectedFlowId         String?
+  selectedFlowName       String?
+  intentConfidence       Float?
+  toolsUsed              String?
+  handoffTriggered       Boolean  @default(false)
+  handoffTeam            String?
+  blockedByRule          Boolean  @default(false)
+  blockReason            String?
+  metadata               Json?
+  
   createdAt              DateTime @default(now())
 
   company   Company    @relation(fields: [companyId], references: [id], onDelete: Restrict)
@@ -668,6 +682,60 @@ model ReservableResourceAttribute {
   @@unique([companyId, slug])
   @@index([companyId])
   @@map("reservable_resource_attributes")
+}
+
+model AssistantBehavior {
+  id                    String   @id @default(cuid())
+  assistantId           String   @unique
+  attendantName         String?              // "Giovanna"
+  showAttendantName     Boolean  @default(true)
+  role                  String?              // "Secretária virtual"
+  howItActs             String?              // "Atende clientes, tira dúvidas..."
+  personality           String?              // "Educada, simpática..."
+  toneOfVoice           String?              // "Profissional"
+  responseStyle         String?  @default("whatsapp") // whatsapp, formal, concise
+  emojiUsage            String?  @default("low")      // none, low, moderate
+  greetingMessage       String?              // Saudação para primeiro contato
+  noInventInfo          Boolean  @default(true)
+  unknownBehavior       String?  @default("fallback") // fallback, handoff, search_base
+  maxBlockLength        Int?     @default(300)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  assistant Assistant @relation(fields: [assistantId], references: [id], onDelete: Cascade)
+
+  @@index([assistantId])
+  @@map("assistant_behaviors")
+}
+
+model AssistantFlow {
+  id                    String   @id @default(cuid())
+  assistantId           String
+  name                  String               // "Agendamento Padel"
+  description           String?
+  priority              Int      @default(0)
+  triggerKeywords       String?              // JSON array de keywords
+  triggerDescription    String?              // Descrição semântica para o roteador
+  triggerExamples       String?              // Exemplos de mensagens do cliente
+  flowInstructions      String?              // Prompt específico do fluxo
+  allowedToolSlugs      String?              // JSON array: ["calendar_check", "calendar_create"]
+  knowledgeScope        String?              // JSON array de knowledgeIds ou tags
+  finalAction           String?  @default("respond") // respond, handoff, fixed_message
+  fixedMessage          String?              // Mensagem fixa se finalAction=fixed_message
+  handoffTeamId         String?              // ID do time no Chatwoot
+  handoffTeamName       String?              // Nome do time (para display)
+  chatwootLabels        String?              // JSON array de labels a aplicar
+  autoRespond           Boolean  @default(true)
+  requiresHuman         Boolean  @default(false)
+  active                Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  assistant Assistant @relation(fields: [assistantId], references: [id], onDelete: Cascade)
+
+  @@index([assistantId])
+  @@index([active])
+  @@map("assistant_flows")
 }
 
 model AssistantKnowledgeChunk {

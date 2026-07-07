@@ -6,7 +6,7 @@ import { n as useAuth } from "./_ssr/auth-DBPceM1n.mjs";
 import { t as cn } from "./_ssr/utils-C_uf36nf.mjs";
 import { t as Button } from "./_ssr/button-COtkgzDj.mjs";
 import { t as currentCompanyService } from "./_ssr/currentCompanyService-DRGNNNW9.mjs";
-import { C as Rocket, Lt as ChartColumn, O as Plus, P as Moon, Pt as CirclePlay, Rt as Braces, T as Radio, V as LayoutDashboard, _ as Settings, a as User, bt as Bot, dt as ChevronsLeft, f as Sun, ht as ChevronDown, jt as LoaderCircle, kt as Sparkles, n as Wrench, p as Store, q as GitBranch, ut as ChevronsRight, x as ScrollText, xt as BookOpen, yt as Brain, z as LogOut } from "./_libs/lucide-react.mjs";
+import { At as Sparkles, B as LogOut, E as Radio, F as Moon, Ft as CirclePlay, H as LayoutDashboard, J as GitBranch, Mt as LoaderCircle, Rt as ChartColumn, S as ScrollText, St as BookOpen, a as User, bt as Brain, dt as ChevronsRight, ft as ChevronsLeft, gt as ChevronDown, k as Plus, m as Store, n as Wrench, p as Sun, v as Settings, w as Rocket, xt as Bot, zt as Braces } from "./_libs/lucide-react.mjs";
 import { n as AvatarFallback$1, r as AvatarImage$1, t as Avatar$1 } from "./_libs/@radix-ui/react-avatar+[...].mjs";
 import { a as DropdownMenuSeparator, c as TooltipContent, i as DropdownMenuLabel, l as TooltipProvider, n as DropdownMenuContent, o as DropdownMenuTrigger, r as DropdownMenuItem, s as Tooltip, t as DropdownMenu, u as TooltipTrigger } from "./_ssr/tooltip-JDz4WYjb.mjs";
 import { P as useNavigate, f as Outlet, g as Link, l as useRouterState } from "./_libs/@tanstack/react-router+[...].mjs";

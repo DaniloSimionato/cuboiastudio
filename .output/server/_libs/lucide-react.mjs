@@ -1799,6 +1799,26 @@ var Trash2 = createLucideIcon("trash-2", [
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var Trash = createLucideIcon("trash", [
+	["path", {
+		d: "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6",
+		key: "miytrc"
+	}],
+	["path", {
+		d: "M3 6h18",
+		key: "d0wm0j"
+	}],
+	["path", {
+		d: "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2",
+		key: "e791ji"
+	}]
+]);
+/**
+* @license lucide-react v0.575.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var TrendingDown = createLucideIcon("trending-down", [["path", {
 	d: "M16 17h6v-6",
 	key: "t6n2it"
@@ -1937,4 +1957,4 @@ var X = createLucideIcon("x", [["path", {
 	key: "d8bk6v"
 }]]);
 //#endregion
-export { Facebook as $, Pencil as A, SlidersVertical as At, Link2 as B, Rocket as C, ArrowUpRight as Ct, PowerOff as D, UserRound as Dt, Power as E, Activity as Et, Mic as F, CircleCheck as Ft, Image as G, KeyRound as H, MessageSquare as I, CircleAlert as It, FolderOpen as J, Globe as K, MessageCircle as L, ChartColumn as Lt, Pause as M, Layers as Mt, Network as N, Funnel as Nt, Plus as O, TriangleAlert as Ot, Moon as P, CirclePlay as Pt, FileText as Q, MapPin as R, Braces as Rt, Save as S, Blocks as St, Radio as T, ArrowLeft as Tt, Instagram as U, LayoutDashboard as V, Inbox as W, Film as X, Flag as Y, FileUp as Z, Settings as _, CalendarDays as _t, User as a, Clock as at, Search as b, Bot as bt, TrendingUp as c, CircleOff as ct, Timer as d, ChevronsLeft as dt, Eye as et, Sun as f, ChevronUp as ft, ShieldAlert as g, Check as gt, ShieldCheck as h, ChevronDown as ht, Video as i, Coins as it, PencilLine as j, LoaderCircle as jt, Play as k, Sparkles as kt, TrendingDown as l, ChevronsUpDown as lt, SmilePlus as m, ChevronLeft as mt, Wrench as n, DollarSign as nt, UserCheck as o, Clock3 as ot, Store as p, ChevronRight as pt, GitBranch as q, Webhook as r, Copy as rt, Upload as s, Circle as st, X as t, EyeOff as tt, Trash2 as u, ChevronsRight as ut, Settings2 as v, Building2 as vt, RefreshCw as w, ArrowRightLeft as wt, ScrollText as x, BookOpen as xt, Send as y, Brain as yt, LogOut as z };
+export { FileText as $, Play as A, Sparkles as At, LogOut as B, Save as C, Blocks as Ct, Power as D, Activity as Dt, Radio as E, ArrowLeft as Et, Moon as F, CirclePlay as Ft, Inbox as G, LayoutDashboard as H, Mic as I, CircleCheck as It, GitBranch as J, Image as K, MessageSquare as L, CircleAlert as Lt, PencilLine as M, LoaderCircle as Mt, Pause as N, Layers as Nt, PowerOff as O, UserRound as Ot, Network as P, Funnel as Pt, FileUp as Q, MessageCircle as R, ChartColumn as Rt, ScrollText as S, BookOpen as St, RefreshCw as T, ArrowRightLeft as Tt, KeyRound as U, Link2 as V, Instagram as W, Flag as X, FolderOpen as Y, Film as Z, ShieldAlert as _, Check as _t, User as a, Coins as at, Send as b, Brain as bt, TrendingUp as c, Circle as ct, Trash2 as d, ChevronsRight as dt, Facebook as et, Timer as f, ChevronsLeft as ft, ShieldCheck as g, ChevronDown as gt, SmilePlus as h, ChevronLeft as ht, Video as i, Copy as it, Pencil as j, SlidersVertical as jt, Plus as k, TriangleAlert as kt, TrendingDown as l, CircleOff as lt, Store as m, ChevronRight as mt, Wrench as n, EyeOff as nt, UserCheck as o, Clock as ot, Sun as p, ChevronUp as pt, Globe as q, Webhook as r, DollarSign as rt, Upload as s, Clock3 as st, X as t, Eye as tt, Trash as u, ChevronsUpDown as ut, Settings as v, CalendarDays as vt, Rocket as w, ArrowUpRight as wt, Search as x, Bot as xt, Settings2 as y, Building2 as yt, MapPin as z, Braces as zt };

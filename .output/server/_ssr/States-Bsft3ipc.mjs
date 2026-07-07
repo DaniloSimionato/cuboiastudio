@@ -1,7 +1,7 @@
 import { t as require_jsx_dev_runtime } from "../_libs/react.mjs";
 import { t as cn } from "./utils-C_uf36nf.mjs";
 import { t as Button } from "./button-COtkgzDj.mjs";
-import { Ot as TriangleAlert, W as Inbox, jt as LoaderCircle } from "../_libs/lucide-react.mjs";
+import { G as Inbox, Mt as LoaderCircle, kt as TriangleAlert } from "../_libs/lucide-react.mjs";
 //#region node_modules/.nitro/vite/services/ssr/assets/States-Bsft3ipc.js
 var import_jsx_dev_runtime = require_jsx_dev_runtime();
 var _jsxFileName = "/Users/danilosimionato/Projetos/CuboIAStudio/src/components/feedback/States.tsx";

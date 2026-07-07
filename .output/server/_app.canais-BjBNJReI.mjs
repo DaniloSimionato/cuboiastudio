@@ -1,6 +1,6 @@
 import { t as require_jsx_dev_runtime } from "./_libs/react.mjs";
 import { t as Button } from "./_ssr/button-COtkgzDj.mjs";
-import { $ as Facebook, I as MessageSquare, K as Globe, M as Pause, U as Instagram, _ as Settings, k as Play } from "./_libs/lucide-react.mjs";
+import { A as Play, L as MessageSquare, N as Pause, W as Instagram, et as Facebook, q as Globe, v as Settings } from "./_libs/lucide-react.mjs";
 import { t as PageHeader } from "./_ssr/PageHeader-D4Y71euA.mjs";
 import { t as StatusBadge } from "./_ssr/StatusBadge-CjcQaBDS.mjs";
 import { n as CardContent, t as Card } from "./_ssr/card-BW9s_OV3.mjs";

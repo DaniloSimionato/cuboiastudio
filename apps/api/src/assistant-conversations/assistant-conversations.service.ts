@@ -37,6 +37,8 @@ import { type CreateAssistantConversationDto } from "./dto/create-assistant-conv
 import { type SendAssistantConversationMessageDto } from "./dto/send-assistant-conversation-message.dto";
 import { CalendarToolsService } from "../apps/calendar-tools.service";
 import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
+import { PromptCompilerService } from "../prompt-compiler/prompt-compiler.service";
+import { IntentRouterService } from "../intent-router/intent-router.service";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -76,7 +78,7 @@ export type AssistantConversationMessageItem = {
 };
 
 export type AssistantConversationRuntime = {
-  mode: "ai-runtime" | "deterministic-runtime" | "ai-runtime-rag";
+  mode: "ai-runtime" | "deterministic-runtime" | "ai-runtime-rag" | "flow-bypass";
   assistant: {
     id: string;
     name: string;
@@ -88,13 +90,21 @@ export type AssistantConversationRuntime = {
   temperatureSource: "assistant" | "default";
   configurationSource: AiResolvedRuntimeConfig["source"];
   fallback: boolean;
-  outcome: "success" | "fallback" | "needs_human" | "unknown";
+  outcome: "success" | "fallback" | "needs_human" | "unknown" | "handoff";
   summary: string;
   context: {
     historyMessagesUsed: number;
     historyLimit: number;
     initialMessageIncluded: boolean;
     instructionsIncluded: boolean;
+    detectedIntent?: string | null;
+    selectedFlowId?: string | null;
+    selectedFlowName?: string | null;
+    intentConfidence?: number | null;
+    finalAction?: string | null;
+    llmSkipped?: boolean | null;
+    handoffPending?: boolean | null;
+    autoRespond?: boolean | null;
   };
   logId?: string;
   reason?:
@@ -192,6 +202,8 @@ const assistantConversationRuntimeAssistantSelect = {
   splitResponseStyle: true,
   latitude: true,
   longitude: true,
+  behavior: true,
+  flows: true,
 } satisfies Prisma.AssistantSelect;
 
 type AssistantConversationRuntimeAssistantRecord = Prisma.AssistantGetPayload<{
@@ -275,6 +287,8 @@ export class AssistantConversationsService {
     private readonly chatwootInboxConfigService: ChatwootInboxConfigService,
     private readonly calendarToolsService: CalendarToolsService,
     private readonly assistantKnowledgeRetrievalService: AssistantKnowledgeRetrievalService,
+    private readonly promptCompilerService: PromptCompilerService,
+    private readonly intentRouterService: IntentRouterService,
   ) {}
 
   private assertTenantContext(input: { user: AuthenticatedUser; tenant: RequestTenant }): void {
@@ -1472,7 +1486,7 @@ export class AssistantConversationsService {
         ...(payload.name ? { name: payload.name } : {}),
       };
     });
-    const contextMetadata = {
+    const contextMetadata: Record<string, any> = {
       historyMessagesUsed: priorHistory.length,
       historyLimit: MAX_RUNTIME_HISTORY_MESSAGES,
       initialMessageIncluded: Boolean(assistant.initialMessage?.trim()),
@@ -1507,7 +1521,7 @@ export class AssistantConversationsService {
       fallback: true,
       outcome: "fallback",
       summary: "",
-      context: contextMetadata,
+      context: contextMetadata as any,
       reason: "ai-runtime-disabled",
     };
 
@@ -1559,7 +1573,41 @@ export class AssistantConversationsService {
         try {
           const calendarToolsActive = await this.areGoogleCalendarToolsAvailable(input.tenant.companyId);
           const contactPhone = await this.resolveContactPhone(conversation.id, input.tenant.companyId, input.dto);
-          const tools = calendarToolsActive ? this.getGoogleCalendarToolsDefinitions() : undefined;
+
+          // 1. Intent Routing
+          const routeResult = await this.intentRouterService.route({
+            companyId: input.tenant.companyId,
+            assistantId: input.assistantId,
+            message: interpretedMessage,
+            flows: assistant.flows,
+            model: resolvedModel.model,
+            temperature,
+          });
+
+          const selectedFlow = routeResult.flowId 
+            ? assistant.flows.find(f => f.id === routeResult.flowId) 
+            : null;
+
+          let tools = calendarToolsActive ? this.getGoogleCalendarToolsDefinitions() : undefined;
+
+          // Filtro de ferramentas (Phase 1.5)
+          if (selectedFlow) {
+            const finalAction = selectedFlow.finalAction || "respond";
+            if (finalAction === "fixed_message" || finalAction === "handoff" || selectedFlow.autoRespond === false) {
+              tools = undefined; // Nenhuma ferramenta se for bypass
+            } else if (selectedFlow.allowedToolSlugs) {
+              try {
+                const allowedSlugs = JSON.parse(selectedFlow.allowedToolSlugs);
+                if (Array.isArray(allowedSlugs) && allowedSlugs.length > 0) {
+                  tools = tools?.filter(t => allowedSlugs.includes(t.function.name));
+                } else if (Array.isArray(allowedSlugs) && allowedSlugs.length === 0) {
+                  tools = undefined;
+                }
+              } catch (e) {
+                // Ignore invalid JSON
+              }
+            }
+          }
 
           const resourcesContext = calendarToolsActive
             ? await this.getCalendarResourcesContext(input.tenant.companyId)
@@ -1568,24 +1616,71 @@ export class AssistantConversationsService {
             ? new Date().toISOString()
             : null;
 
-          const promptMessages = buildConversationPromptMessages({
-            assistantName: assistant.name,
-            assistantDescription: assistant.description,
-            initialMessage: assistant.initialMessage,
-            instructions: effectiveInstructions,
-            avoidPhrases: assistant.avoidPhrases,
-            knowledgeItems,
-            historyMessages: priorHistory,
-            currentMessage: interpretedMessage,
-            calendarContext: calendarToolsActive ? {
-              conversationId: conversation.id,
-              contactPhone,
-              resourcesContext,
-              serverTime,
-            } : null,
+          // Update context metadata for logs
+          Object.assign(contextMetadata, {
+            detectedIntent: routeResult.reason || null,
+            selectedFlowId: routeResult.flowId,
+            selectedFlowName: routeResult.flowName,
+            intentConfidence: routeResult.confidence,
           });
 
-          if (isDebugLogsEnabled) {
+          let toolCallsResolved = false;
+
+          // Short-circuit logic (Phase 1.5)
+          if (selectedFlow) {
+            const finalAction = selectedFlow.finalAction || "respond";
+            const autoRespond = selectedFlow.autoRespond !== false; // true unless explicitly false
+
+            if (finalAction === "fixed_message") {
+              Object.assign(contextMetadata, { finalAction, llmSkipped: true, autoRespond });
+              answer = selectedFlow.fixedMessage || "Agradecemos o contato.";
+              runtime = {
+                ...runtime,
+                mode: "flow-bypass",
+                fallback: false,
+                outcome: "success",
+                reason: undefined,
+              };
+              // Skip LLM
+              toolCallsResolved = true;
+            } else if (finalAction === "handoff" || selectedFlow.requiresHuman || !autoRespond) {
+              Object.assign(contextMetadata, { finalAction, llmSkipped: true, handoffPending: true, autoRespond });
+              // We don't implement real chatwoot handoff yet, but we skip LLM.
+              // If we shouldn't respond at all, we could throw or return early, but sendMessage expects an answer.
+              // So we provide an internal fallback answer.
+              answer = "Transferindo para um atendente...";
+              runtime = {
+                ...runtime,
+                mode: "flow-bypass",
+                fallback: false,
+                outcome: "handoff",
+                reason: undefined,
+              };
+              // Skip LLM
+              toolCallsResolved = true;
+            }
+          }
+
+          let promptMessages: any[] = [];
+          if (!toolCallsResolved) {
+            // 2. Build Prompt using PromptCompiler
+            promptMessages = this.promptCompilerService.compile({
+              assistant,
+              behavior: assistant.behavior,
+              flow: selectedFlow,
+              knowledgeItems,
+              historyMessages: priorHistory,
+              currentMessage: interpretedMessage,
+              calendarContext: calendarToolsActive ? {
+                conversationId: conversation.id,
+                contactPhone,
+                resourcesContext,
+                serverTime,
+              } : null,
+            });
+          }
+
+          if (isDebugLogsEnabled && !toolCallsResolved) {
             // TEMPORARY DIAGNOSTIC LOGS
             console.log("\n=== TEMPORARY DIAGNOSTIC LOGS: START ===");
             console.log("Source:", input.dto.source || conversation.source);
@@ -1601,7 +1696,6 @@ export class AssistantConversationsService {
           }
 
           let loopCount = 0;
-          let toolCallsResolved = false;
           let completion: any;
 
           while (loopCount < 5 && !toolCallsResolved) {
@@ -1701,17 +1795,19 @@ export class AssistantConversationsService {
             }
           }
 
-          answer = completion.answer;
-          runtime = {
-            ...runtime,
-            mode: assistant.ragEnabled ? "ai-runtime-rag" : "ai-runtime",
-            fallback: false,
-            outcome: "success",
-            provider: completion.provider,
-            model: completion.model,
-            reason: undefined,
-            ragData: ragLogData,
-          };
+          if (!runtime || runtime.mode !== "flow-bypass") {
+            answer = completion.answer;
+            runtime = {
+              ...runtime,
+              mode: assistant.ragEnabled ? "ai-runtime-rag" : "ai-runtime",
+              fallback: false,
+              outcome: "success",
+              provider: completion.provider,
+              model: completion.model,
+              reason: undefined,
+              ragData: ragLogData,
+            };
+          }
         } catch (error) {
           console.error("COMPLETION ERROR TRACE:", error);
           const fallbackReason = this.resolveProviderFallbackReason(error);
@@ -1778,6 +1874,16 @@ export class AssistantConversationsService {
           historyLimit: runtime.context.historyLimit,
           initialMessageIncluded: runtime.context.initialMessageIncluded,
           instructionsIncluded: runtime.context.instructionsIncluded,
+          detectedIntent: runtime.context.detectedIntent,
+          selectedFlowId: runtime.context.selectedFlowId,
+          selectedFlowName: runtime.context.selectedFlowName,
+          intentConfidence: runtime.context.intentConfidence,
+          metadata: this.toSerializableJsonValue({
+            finalAction: runtime.context.finalAction,
+            llmSkipped: runtime.context.llmSkipped,
+            handoffPending: runtime.context.handoffPending,
+            autoRespond: runtime.context.autoRespond,
+          }),
         },
         select: {
           id: true,

@@ -4,8 +4,9 @@ import { t as require_jsx_dev_runtime } from "./_libs/react.mjs";
 import { t as cn } from "./_ssr/utils-C_uf36nf.mjs";
 import { a as Trigger2, i as Root2, n as Header, r as Item, t as Content2 } from "./_libs/@radix-ui/react-accordion+[...].mjs";
 import { t as Button } from "./_ssr/button-COtkgzDj.mjs";
+import { n as apiFetch } from "./_ssr/apiClient-Bei-u2-_.mjs";
 import { t as currentCompanyService } from "./_ssr/currentCompanyService-DRGNNNW9.mjs";
-import { B as Link2, M as Pause, O as Plus, Ot as TriangleAlert, Pt as CirclePlay, S as Save, Tt as ArrowLeft, gt as Check, ht as ChevronDown, kt as Sparkles } from "./_libs/lucide-react.mjs";
+import { At as Sparkles, C as Save, Et as ArrowLeft, Ft as CirclePlay, Mt as LoaderCircle, N as Pause, V as Link2, _t as Check, gt as ChevronDown, j as Pencil, k as Plus, kt as TriangleAlert, u as Trash } from "./_libs/lucide-react.mjs";
 import { n as CheckboxIndicator, t as Checkbox$1 } from "./_libs/@radix-ui/react-checkbox+[...].mjs";
 import { g as Link } from "./_libs/@tanstack/react-router+[...].mjs";
 import { t as PageHeader } from "./_ssr/PageHeader-D4Y71euA.mjs";
@@ -16,17 +17,1287 @@ import { t as Input } from "./_ssr/input-B8Ml971c.mjs";
 import { a as SelectValue, i as SelectTrigger, n as SelectContent, r as SelectItem, t as Select } from "./_ssr/select-vCNF5d_j.mjs";
 import { n as ErrorState, r as LoadingState, t as EmptyState } from "./_ssr/States-Bsft3ipc.mjs";
 import { a as resolveOperationalAssistantId, n as filterOperationalAssistants, t as backendAssistantsService } from "./_ssr/backendAssistantsService-Ca0QS27v.mjs";
-import { t as Route } from "./_app.agentes.novo-DTpEO37b.mjs";
+import { t as Route } from "./_app.agentes.novo-2UjU33Cj.mjs";
 import { t as Label } from "./_ssr/label-BZdmkwq8.mjs";
 import { t as Textarea } from "./_ssr/textarea-CULRsq90.mjs";
 import { t as Switch } from "./_ssr/switch-Cit-Q60v.mjs";
 import { a as DialogHeader, i as DialogFooter, n as DialogContent, o as DialogTitle, s as DialogTrigger, t as Dialog } from "./_ssr/dialog-BQR4UioY.mjs";
 import { i as TabsTrigger, n as TabsContent, r as TabsList, t as Tabs } from "./_ssr/tabs-Bfe67_Ib.mjs";
-import { i as SliderTrack, n as SliderRange, r as SliderThumb, t as Slider$1 } from "./_libs/radix-ui__react-slider.mjs";
 import { t as toast } from "./_libs/sonner.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/_app.agentes.novo-CzCdtXCt.js
+import { i as SliderTrack, n as SliderRange, r as SliderThumb, t as Slider$1 } from "./_libs/radix-ui__react-slider.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/_app.agentes.novo-PTKaumiF.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_dev_runtime = require_jsx_dev_runtime();
+var _jsxFileName$6 = "/Users/danilosimionato/Projetos/CuboIAStudio/src/components/ui/field.tsx";
+function Field({ label, children, className, helper }) {
+	return /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+		className: `space-y-2 ${className || ""}`,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Label, { children: label }, void 0, false, {
+				fileName: _jsxFileName$6,
+				lineNumber: 14,
+				columnNumber: 7
+			}, this),
+			children,
+			helper && /* @__PURE__ */ (void 0)("p", {
+				className: "text-[0.8rem] text-muted-foreground",
+				children: helper
+			}, void 0, false, {
+				fileName: _jsxFileName$6,
+				lineNumber: 16,
+				columnNumber: 18
+			}, this)
+		]
+	}, void 0, true, {
+		fileName: _jsxFileName$6,
+		lineNumber: 13,
+		columnNumber: 5
+	}, this);
+}
+var assistantBehaviorsService = {
+	findByAssistantId: async (assistantId) => {
+		try {
+			return await apiFetch(`/assistants/${assistantId}/behavior`);
+		} catch (error) {
+			if (error.status === 404 || error.statusCode === 404) return null;
+			throw error;
+		}
+	},
+	upsert: async (assistantId, data) => {
+		return await apiFetch(`/assistants/${assistantId}/behavior`, {
+			method: "PUT",
+			body: JSON.stringify(data),
+			headers: { "Content-Type": "application/json" }
+		});
+	}
+};
+var _jsxFileName$5 = "/Users/danilosimionato/Projetos/CuboIAStudio/src/components/assistant/AssistantBehaviorTab.tsx";
+var AssistantBehaviorTab = (0, import_react.forwardRef)(({ assistantId }, ref) => {
+	const [loading, setLoading] = (0, import_react.useState)(true);
+	const [saving, setSaving] = (0, import_react.useState)(false);
+	const [behavior, setBehavior] = (0, import_react.useState)({
+		attendantName: "",
+		showAttendantName: true,
+		role: "",
+		howItActs: "",
+		personality: "",
+		toneOfVoice: "",
+		responseStyle: "whatsapp",
+		emojiUsage: "low",
+		greetingMessage: "",
+		noInventInfo: true,
+		unknownBehavior: "fallback",
+		maxBlockLength: 300
+	});
+	(0, import_react.useEffect)(() => {
+		if (!assistantId) {
+			setLoading(false);
+			return;
+		}
+		const loadBehavior = async () => {
+			setLoading(true);
+			try {
+				const data = await assistantBehaviorsService.findByAssistantId(assistantId);
+				if (data) setBehavior(data);
+			} catch (error) {
+				toast.error("Erro ao carregar comportamento da IA");
+			} finally {
+				setLoading(false);
+			}
+		};
+		loadBehavior();
+	}, [assistantId]);
+	(0, import_react.useImperativeHandle)(ref, () => ({ saveBehavior: async (newId) => {
+		const targetId = newId || assistantId;
+		if (!targetId) return;
+		try {
+			await assistantBehaviorsService.upsert(targetId, behavior);
+		} catch (error) {
+			console.error("Erro ao salvar comportamento:", error);
+			throw error;
+		}
+	} }));
+	const handleSave = async () => {
+		if (!assistantId) return;
+		setSaving(true);
+		try {
+			await assistantBehaviorsService.upsert(assistantId, behavior);
+			toast.success("Comportamento salvo com sucesso!");
+		} catch (error) {
+			toast.error("Erro ao salvar comportamento");
+		} finally {
+			setSaving(false);
+		}
+	};
+	if (!assistantId) return /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Card, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(CardContent, {
+		className: "p-6",
+		children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
+			className: "text-muted-foreground text-center py-8",
+			children: "Salve o assistente primeiro para configurar o comportamento da IA."
+		}, void 0, false, {
+			fileName: _jsxFileName$5,
+			lineNumber: 93,
+			columnNumber: 11
+		}, void 0)
+	}, void 0, false, {
+		fileName: _jsxFileName$5,
+		lineNumber: 92,
+		columnNumber: 9
+	}, void 0) }, void 0, false, {
+		fileName: _jsxFileName$5,
+		lineNumber: 91,
+		columnNumber: 7
+	}, void 0);
+	if (loading) return /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Card, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(CardContent, {
+		className: "p-6 flex justify-center items-center h-40",
+		children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(LoaderCircle, { className: "h-8 w-8 animate-spin text-primary" }, void 0, false, {
+			fileName: _jsxFileName$5,
+			lineNumber: 105,
+			columnNumber: 11
+		}, void 0)
+	}, void 0, false, {
+		fileName: _jsxFileName$5,
+		lineNumber: 104,
+		columnNumber: 9
+	}, void 0) }, void 0, false, {
+		fileName: _jsxFileName$5,
+		lineNumber: 103,
+		columnNumber: 7
+	}, void 0);
+	return /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Card, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(CardContent, {
+		className: "p-6 grid gap-6",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+				className: "grid md:grid-cols-2 gap-4",
+				children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+					label: "Nome da Atendente",
+					children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Input, {
+						value: behavior.attendantName || "",
+						onChange: (e) => setBehavior({
+							...behavior,
+							attendantName: e.target.value
+						}),
+						placeholder: "Ex: Giovanna"
+					}, void 0, false, {
+						fileName: _jsxFileName$5,
+						lineNumber: 116,
+						columnNumber: 13
+					}, void 0)
+				}, void 0, false, {
+					fileName: _jsxFileName$5,
+					lineNumber: 115,
+					columnNumber: 11
+				}, void 0), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+					label: "Mostrar nome da atendente",
+					className: "flex flex-col justify-center mt-6",
+					children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+						className: "flex items-center space-x-2",
+						children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Switch, {
+							checked: behavior.showAttendantName,
+							onCheckedChange: (c) => setBehavior({
+								...behavior,
+								showAttendantName: c
+							})
+						}, void 0, false, {
+							fileName: _jsxFileName$5,
+							lineNumber: 124,
+							columnNumber: 15
+						}, void 0), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
+							className: "text-sm",
+							children: "Exibir na resposta"
+						}, void 0, false, {
+							fileName: _jsxFileName$5,
+							lineNumber: 128,
+							columnNumber: 15
+						}, void 0)]
+					}, void 0, true, {
+						fileName: _jsxFileName$5,
+						lineNumber: 123,
+						columnNumber: 13
+					}, void 0)
+				}, void 0, false, {
+					fileName: _jsxFileName$5,
+					lineNumber: 122,
+					columnNumber: 11
+				}, void 0)]
+			}, void 0, true, {
+				fileName: _jsxFileName$5,
+				lineNumber: 114,
+				columnNumber: 9
+			}, void 0),
+			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+				label: "Papel / Cargo",
+				children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Input, {
+					value: behavior.role || "",
+					onChange: (e) => setBehavior({
+						...behavior,
+						role: e.target.value
+					}),
+					placeholder: "Ex: Secretária virtual, Atendente de suporte"
+				}, void 0, false, {
+					fileName: _jsxFileName$5,
+					lineNumber: 134,
+					columnNumber: 11
+				}, void 0)
+			}, void 0, false, {
+				fileName: _jsxFileName$5,
+				lineNumber: 133,
+				columnNumber: 9
+			}, void 0),
+			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+				label: "Como ela atua",
+				children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
+					value: behavior.howItActs || "",
+					onChange: (e) => setBehavior({
+						...behavior,
+						howItActs: e.target.value
+					}),
+					placeholder: "Ex: Atende clientes pelo WhatsApp, tira dúvidas e agenda horários.",
+					rows: 3
+				}, void 0, false, {
+					fileName: _jsxFileName$5,
+					lineNumber: 142,
+					columnNumber: 11
+				}, void 0)
+			}, void 0, false, {
+				fileName: _jsxFileName$5,
+				lineNumber: 141,
+				columnNumber: 9
+			}, void 0),
+			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+				className: "grid md:grid-cols-2 gap-4",
+				children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+					label: "Uso de Emojis",
+					children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Select, {
+						value: behavior.emojiUsage || "low",
+						onValueChange: (val) => setBehavior({
+							...behavior,
+							emojiUsage: val
+						}),
+						children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectTrigger, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectValue, { placeholder: "Selecione" }, void 0, false, {
+							fileName: _jsxFileName$5,
+							lineNumber: 158,
+							columnNumber: 17
+						}, void 0) }, void 0, false, {
+							fileName: _jsxFileName$5,
+							lineNumber: 157,
+							columnNumber: 15
+						}, void 0), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectContent, { children: [
+							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
+								value: "none",
+								children: "Nenhum (Proibido)"
+							}, void 0, false, {
+								fileName: _jsxFileName$5,
+								lineNumber: 161,
+								columnNumber: 17
+							}, void 0),
+							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
+								value: "low",
+								children: "Baixo (Raramente)"
+							}, void 0, false, {
+								fileName: _jsxFileName$5,
+								lineNumber: 162,
+								columnNumber: 17
+							}, void 0),
+							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
+								value: "moderate",
+								children: "Moderado"
+							}, void 0, false, {
+								fileName: _jsxFileName$5,
+								lineNumber: 163,
+								columnNumber: 17
+							}, void 0)
+						] }, void 0, true, {
+							fileName: _jsxFileName$5,
+							lineNumber: 160,
+							columnNumber: 15
+						}, void 0)]
+					}, void 0, true, {
+						fileName: _jsxFileName$5,
+						lineNumber: 153,
+						columnNumber: 13
+					}, void 0)
+				}, void 0, false, {
+					fileName: _jsxFileName$5,
+					lineNumber: 152,
+					columnNumber: 11
+				}, void 0), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+					label: "Comportamento Desconhecido",
+					children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Select, {
+						value: behavior.unknownBehavior || "fallback",
+						onValueChange: (val) => setBehavior({
+							...behavior,
+							unknownBehavior: val
+						}),
+						children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectTrigger, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectValue, { placeholder: "Selecione" }, void 0, false, {
+							fileName: _jsxFileName$5,
+							lineNumber: 173,
+							columnNumber: 17
+						}, void 0) }, void 0, false, {
+							fileName: _jsxFileName$5,
+							lineNumber: 172,
+							columnNumber: 15
+						}, void 0), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectContent, { children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
+							value: "fallback",
+							children: "Responder mensagem padrão (Fallback)"
+						}, void 0, false, {
+							fileName: _jsxFileName$5,
+							lineNumber: 176,
+							columnNumber: 17
+						}, void 0), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
+							value: "handoff",
+							children: "Transferir para humano (Handoff)"
+						}, void 0, false, {
+							fileName: _jsxFileName$5,
+							lineNumber: 177,
+							columnNumber: 17
+						}, void 0)] }, void 0, true, {
+							fileName: _jsxFileName$5,
+							lineNumber: 175,
+							columnNumber: 15
+						}, void 0)]
+					}, void 0, true, {
+						fileName: _jsxFileName$5,
+						lineNumber: 168,
+						columnNumber: 13
+					}, void 0)
+				}, void 0, false, {
+					fileName: _jsxFileName$5,
+					lineNumber: 167,
+					columnNumber: 11
+				}, void 0)]
+			}, void 0, true, {
+				fileName: _jsxFileName$5,
+				lineNumber: 151,
+				columnNumber: 9
+			}, void 0),
+			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+				className: "flex justify-end pt-4 border-t",
+				children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
+					onClick: handleSave,
+					disabled: saving,
+					children: [saving && /* @__PURE__ */ (void 0)(LoaderCircle, { className: "mr-2 h-4 w-4 animate-spin" }, void 0, false, {
+						fileName: _jsxFileName$5,
+						lineNumber: 186,
+						columnNumber: 24
+					}, void 0), "Salvar Comportamento"]
+				}, void 0, true, {
+					fileName: _jsxFileName$5,
+					lineNumber: 185,
+					columnNumber: 11
+				}, void 0)
+			}, void 0, false, {
+				fileName: _jsxFileName$5,
+				lineNumber: 184,
+				columnNumber: 9
+			}, void 0)
+		]
+	}, void 0, true, {
+		fileName: _jsxFileName$5,
+		lineNumber: 113,
+		columnNumber: 7
+	}, void 0) }, void 0, false, {
+		fileName: _jsxFileName$5,
+		lineNumber: 112,
+		columnNumber: 5
+	}, void 0);
+});
+var assistantFlowsService = {
+	findAll: async (assistantId) => {
+		return await apiFetch(`/assistants/${assistantId}/flows`);
+	},
+	findOne: async (assistantId, flowId) => {
+		return await apiFetch(`/assistants/${assistantId}/flows/${flowId}`);
+	},
+	create: async (assistantId, data) => {
+		return await apiFetch(`/assistants/${assistantId}/flows`, {
+			method: "POST",
+			body: JSON.stringify(data),
+			headers: { "Content-Type": "application/json" }
+		});
+	},
+	update: async (assistantId, flowId, data) => {
+		return await apiFetch(`/assistants/${assistantId}/flows/${flowId}`, {
+			method: "PUT",
+			body: JSON.stringify(data),
+			headers: { "Content-Type": "application/json" }
+		});
+	},
+	delete: async (assistantId, flowId) => {
+		await apiFetch(`/assistants/${assistantId}/flows/${flowId}`, { method: "DELETE" });
+	}
+};
+var _jsxFileName$4 = "/Users/danilosimionato/Projetos/CuboIAStudio/src/components/assistant/AssistantFlowsTab.tsx";
+function AssistantFlowsTab({ assistantId }) {
+	const [loading, setLoading] = (0, import_react.useState)(true);
+	const [flows, setFlows] = (0, import_react.useState)([]);
+	const [isModalOpen, setIsModalOpen] = (0, import_react.useState)(false);
+	const [editingFlow, setEditingFlow] = (0, import_react.useState)(null);
+	const parseJsonToLines = (json) => {
+		try {
+			const parsed = JSON.parse(json || "[]");
+			if (Array.isArray(parsed)) return parsed.join("\n");
+		} catch {}
+		return json || "";
+	};
+	const parseLinesToJson = (lines) => {
+		const arr = lines.split("\n").map((line) => line.trim()).filter(Boolean);
+		return JSON.stringify(arr);
+	};
+	const [formData, setFormData] = (0, import_react.useState)({
+		name: "",
+		description: "",
+		priority: 0,
+		triggerKeywords: "",
+		triggerDescription: "",
+		triggerExamples: "",
+		flowInstructions: "",
+		allowedToolSlugs: "",
+		knowledgeScope: "",
+		finalAction: "respond",
+		fixedMessage: "",
+		handoffTeamId: "",
+		handoffTeamName: "",
+		chatwootLabels: "",
+		autoRespond: true,
+		requiresHuman: false,
+		active: true
+	});
+	const [saving, setSaving] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		if (!assistantId) {
+			setLoading(false);
+			return;
+		}
+		loadFlows();
+	}, [assistantId]);
+	const loadFlows = async () => {
+		setLoading(true);
+		try {
+			setFlows(await assistantFlowsService.findAll(assistantId));
+		} catch (error) {
+			toast.error("Erro ao carregar fluxos");
+		} finally {
+			setLoading(false);
+		}
+	};
+	const handleOpenNew = () => {
+		setEditingFlow(null);
+		setFormData({
+			name: "",
+			description: "",
+			priority: 0,
+			triggerKeywords: "[\"palavra\"]",
+			triggerDescription: "",
+			triggerExamples: "",
+			flowInstructions: "",
+			allowedToolSlugs: "",
+			knowledgeScope: "",
+			finalAction: "respond",
+			fixedMessage: "",
+			handoffTeamId: "",
+			handoffTeamName: "",
+			chatwootLabels: "",
+			autoRespond: true,
+			requiresHuman: false,
+			active: true
+		});
+		setIsModalOpen(true);
+	};
+	const handleOpenEdit = (flow) => {
+		setEditingFlow(flow);
+		setFormData({
+			name: flow.name,
+			description: flow.description || "",
+			priority: flow.priority,
+			triggerKeywords: flow.triggerKeywords || "",
+			triggerDescription: flow.triggerDescription || "",
+			triggerExamples: flow.triggerExamples || "",
+			flowInstructions: flow.flowInstructions || "",
+			allowedToolSlugs: flow.allowedToolSlugs || "",
+			knowledgeScope: flow.knowledgeScope || "",
+			finalAction: flow.finalAction || "respond",
+			fixedMessage: flow.fixedMessage || "",
+			handoffTeamId: flow.handoffTeamId || "",
+			handoffTeamName: flow.handoffTeamName || "",
+			chatwootLabels: flow.chatwootLabels || "",
+			autoRespond: flow.autoRespond,
+			requiresHuman: flow.requiresHuman,
+			active: flow.active
+		});
+		setIsModalOpen(true);
+	};
+	const handleDelete = async (flowId) => {
+		if (!assistantId) return;
+		if (!confirm("Tem certeza que deseja excluir este fluxo?")) return;
+		try {
+			await assistantFlowsService.delete(assistantId, flowId);
+			toast.success("Fluxo excluído");
+			loadFlows();
+		} catch (error) {
+			toast.error("Erro ao excluir fluxo");
+		}
+	};
+	const handleSave = async () => {
+		if (!assistantId) return;
+		if (!formData.name) {
+			toast.error("O nome do fluxo é obrigatório");
+			return;
+		}
+		setSaving(true);
+		try {
+			if (editingFlow) {
+				await assistantFlowsService.update(assistantId, editingFlow.id, formData);
+				toast.success("Fluxo atualizado");
+			} else {
+				await assistantFlowsService.create(assistantId, formData);
+				toast.success("Fluxo criado");
+			}
+			setIsModalOpen(false);
+			loadFlows();
+		} catch (error) {
+			toast.error("Erro ao salvar fluxo");
+		} finally {
+			setSaving(false);
+		}
+	};
+	if (!assistantId) return /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Card, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(CardContent, {
+		className: "p-6",
+		children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
+			className: "text-muted-foreground text-center py-8",
+			children: "Salve o assistente primeiro para configurar os fluxos."
+		}, void 0, false, {
+			fileName: _jsxFileName$4,
+			lineNumber: 170,
+			columnNumber: 11
+		}, this)
+	}, void 0, false, {
+		fileName: _jsxFileName$4,
+		lineNumber: 169,
+		columnNumber: 9
+	}, this) }, void 0, false, {
+		fileName: _jsxFileName$4,
+		lineNumber: 168,
+		columnNumber: 7
+	}, this);
+	if (loading) return /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Card, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(CardContent, {
+		className: "p-6 flex justify-center items-center h-40",
+		children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(LoaderCircle, { className: "h-8 w-8 animate-spin text-primary" }, void 0, false, {
+			fileName: _jsxFileName$4,
+			lineNumber: 182,
+			columnNumber: 11
+		}, this)
+	}, void 0, false, {
+		fileName: _jsxFileName$4,
+		lineNumber: 181,
+		columnNumber: 9
+	}, this) }, void 0, false, {
+		fileName: _jsxFileName$4,
+		lineNumber: 180,
+		columnNumber: 7
+	}, this);
+	return /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+		className: "space-y-4",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+				className: "flex justify-between items-start mb-6",
+				children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+					className: "max-w-3xl pr-4",
+					children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("h3", {
+						className: "text-lg font-medium",
+						children: "Fluxos da IA"
+					}, void 0, false, {
+						fileName: _jsxFileName$4,
+						lineNumber: 192,
+						columnNumber: 11
+					}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
+						className: "text-sm text-muted-foreground mt-1",
+						children: "Fluxos são regras específicas acionadas por intenção. Use fluxos para assuntos como agendamento, financeiro, restaurante, Goomer Delivery ou atendimento humano. O prompt global continua valendo, mas o fluxo selecionado pode limitar ferramentas, usar mensagem fixa ou encaminhar para humano."
+					}, void 0, false, {
+						fileName: _jsxFileName$4,
+						lineNumber: 193,
+						columnNumber: 11
+					}, this)]
+				}, void 0, true, {
+					fileName: _jsxFileName$4,
+					lineNumber: 191,
+					columnNumber: 9
+				}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
+					onClick: handleOpenNew,
+					children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Plus, { className: "mr-2 h-4 w-4" }, void 0, false, {
+						fileName: _jsxFileName$4,
+						lineNumber: 198,
+						columnNumber: 11
+					}, this), "Novo Fluxo"]
+				}, void 0, true, {
+					fileName: _jsxFileName$4,
+					lineNumber: 197,
+					columnNumber: 9
+				}, this)]
+			}, void 0, true, {
+				fileName: _jsxFileName$4,
+				lineNumber: 190,
+				columnNumber: 7
+			}, this),
+			flows.length === 0 ? /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Card, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(CardContent, {
+				className: "p-6 text-center text-muted-foreground py-12",
+				children: "Nenhum fluxo cadastrado. A IA responderá normalmente conforme o comportamento base."
+			}, void 0, false, {
+				fileName: _jsxFileName$4,
+				lineNumber: 205,
+				columnNumber: 11
+			}, this) }, void 0, false, {
+				fileName: _jsxFileName$4,
+				lineNumber: 204,
+				columnNumber: 9
+			}, this) : /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+				className: "grid gap-4",
+				children: flows.map((flow) => /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Card, {
+					className: "overflow-hidden",
+					children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+						className: "p-4 flex items-center justify-between bg-accent/5",
+						children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", { children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+							className: "flex items-center gap-2 mb-1",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("h4", {
+									className: "font-semibold",
+									children: flow.name
+								}, void 0, false, {
+									fileName: _jsxFileName$4,
+									lineNumber: 216,
+									columnNumber: 21
+								}, this),
+								!flow.active && /* @__PURE__ */ (void 0)(Badge, {
+									variant: "secondary",
+									children: "Inativo"
+								}, void 0, false, {
+									fileName: _jsxFileName$4,
+									lineNumber: 217,
+									columnNumber: 38
+								}, this),
+								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Badge, {
+									variant: "outline",
+									children: ["Prioridade: ", flow.priority]
+								}, void 0, true, {
+									fileName: _jsxFileName$4,
+									lineNumber: 218,
+									columnNumber: 21
+								}, this)
+							]
+						}, void 0, true, {
+							fileName: _jsxFileName$4,
+							lineNumber: 215,
+							columnNumber: 19
+						}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
+							className: "text-sm text-muted-foreground",
+							children: flow.description
+						}, void 0, false, {
+							fileName: _jsxFileName$4,
+							lineNumber: 220,
+							columnNumber: 19
+						}, this)] }, void 0, true, {
+							fileName: _jsxFileName$4,
+							lineNumber: 214,
+							columnNumber: 17
+						}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+							className: "flex items-center gap-2",
+							children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
+								variant: "outline",
+								size: "sm",
+								onClick: () => handleOpenEdit(flow),
+								children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Pencil, { className: "h-4 w-4" }, void 0, false, {
+									fileName: _jsxFileName$4,
+									lineNumber: 224,
+									columnNumber: 21
+								}, this)
+							}, void 0, false, {
+								fileName: _jsxFileName$4,
+								lineNumber: 223,
+								columnNumber: 19
+							}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
+								variant: "outline",
+								size: "sm",
+								className: "text-destructive",
+								onClick: () => handleDelete(flow.id),
+								children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Trash, { className: "h-4 w-4" }, void 0, false, {
+									fileName: _jsxFileName$4,
+									lineNumber: 227,
+									columnNumber: 21
+								}, this)
+							}, void 0, false, {
+								fileName: _jsxFileName$4,
+								lineNumber: 226,
+								columnNumber: 19
+							}, this)]
+						}, void 0, true, {
+							fileName: _jsxFileName$4,
+							lineNumber: 222,
+							columnNumber: 17
+						}, this)]
+					}, void 0, true, {
+						fileName: _jsxFileName$4,
+						lineNumber: 213,
+						columnNumber: 15
+					}, this)
+				}, flow.id, false, {
+					fileName: _jsxFileName$4,
+					lineNumber: 212,
+					columnNumber: 13
+				}, this))
+			}, void 0, false, {
+				fileName: _jsxFileName$4,
+				lineNumber: 210,
+				columnNumber: 9
+			}, this),
+			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Dialog, {
+				open: isModalOpen,
+				onOpenChange: setIsModalOpen,
+				children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(DialogContent, {
+					className: "sm:max-w-[700px] max-h-[90vh] overflow-y-auto",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(DialogHeader, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(DialogTitle, { children: editingFlow ? "Editar Fluxo" : "Novo Fluxo" }, void 0, false, {
+							fileName: _jsxFileName$4,
+							lineNumber: 239,
+							columnNumber: 13
+						}, this) }, void 0, false, {
+							fileName: _jsxFileName$4,
+							lineNumber: 238,
+							columnNumber: 11
+						}, this),
+						/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+							className: "grid gap-6 py-4",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+									className: "grid md:grid-cols-2 gap-4",
+									children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+										label: "Nome do Fluxo *",
+										children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Input, {
+											value: formData.name,
+											onChange: (e) => setFormData({
+												...formData,
+												name: e.target.value
+											}),
+											placeholder: "Ex: Agendamento Padel"
+										}, void 0, false, {
+											fileName: _jsxFileName$4,
+											lineNumber: 245,
+											columnNumber: 17
+										}, this)
+									}, void 0, false, {
+										fileName: _jsxFileName$4,
+										lineNumber: 244,
+										columnNumber: 15
+									}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+										label: "Prioridade",
+										children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Input, {
+											type: "number",
+											value: formData.priority,
+											onChange: (e) => setFormData({
+												...formData,
+												priority: parseInt(e.target.value) || 0
+											})
+										}, void 0, false, {
+											fileName: _jsxFileName$4,
+											lineNumber: 252,
+											columnNumber: 17
+										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
+											className: "text-xs text-muted-foreground mt-1",
+											children: "Maior número = avaliado primeiro."
+										}, void 0, false, {
+											fileName: _jsxFileName$4,
+											lineNumber: 257,
+											columnNumber: 17
+										}, this)]
+									}, void 0, true, {
+										fileName: _jsxFileName$4,
+										lineNumber: 251,
+										columnNumber: 15
+									}, this)]
+								}, void 0, true, {
+									fileName: _jsxFileName$4,
+									lineNumber: 243,
+									columnNumber: 13
+								}, this),
+								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+									label: "Descrição Interna",
+									children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Input, {
+										value: formData.description || "",
+										onChange: (e) => setFormData({
+											...formData,
+											description: e.target.value
+										}),
+										placeholder: "Ex: Utilizado para marcar quadras de padel."
+									}, void 0, false, {
+										fileName: _jsxFileName$4,
+										lineNumber: 262,
+										columnNumber: 15
+									}, this)
+								}, void 0, false, {
+									fileName: _jsxFileName$4,
+									lineNumber: 261,
+									columnNumber: 13
+								}, this),
+								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+									className: "border-t pt-4",
+									children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("h4", {
+										className: "font-medium mb-3",
+										children: "Gatilhos de Intenção"
+									}, void 0, false, {
+										fileName: _jsxFileName$4,
+										lineNumber: 270,
+										columnNumber: 15
+									}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+										className: "grid md:grid-cols-2 gap-4",
+										children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+											label: "Palavras que ativam este fluxo",
+											children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
+												value: parseJsonToLines(formData.triggerKeywords),
+												onChange: (e) => setFormData({
+													...formData,
+													triggerKeywords: parseLinesToJson(e.target.value)
+												}),
+												placeholder: "Ex:\nagendar\nmarcar quadra",
+												rows: 4
+											}, void 0, false, {
+												fileName: _jsxFileName$4,
+												lineNumber: 273,
+												columnNumber: 19
+											}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
+												className: "text-xs text-muted-foreground mt-1",
+												children: "Uma palavra ou frase curta por linha."
+											}, void 0, false, {
+												fileName: _jsxFileName$4,
+												lineNumber: 279,
+												columnNumber: 19
+											}, this)]
+										}, void 0, true, {
+											fileName: _jsxFileName$4,
+											lineNumber: 272,
+											columnNumber: 17
+										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+											label: "Quando usar este fluxo?",
+											children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
+												value: formData.triggerDescription || "",
+												onChange: (e) => setFormData({
+													...formData,
+													triggerDescription: e.target.value
+												}),
+												placeholder: "Ex: O cliente quer reservar um horário.",
+												rows: 4
+											}, void 0, false, {
+												fileName: _jsxFileName$4,
+												lineNumber: 282,
+												columnNumber: 19
+											}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
+												className: "text-xs text-muted-foreground mt-1",
+												children: "Usado pela IA caso as palavras-chave falhem."
+											}, void 0, false, {
+												fileName: _jsxFileName$4,
+												lineNumber: 288,
+												columnNumber: 19
+											}, this)]
+										}, void 0, true, {
+											fileName: _jsxFileName$4,
+											lineNumber: 281,
+											columnNumber: 17
+										}, this)]
+									}, void 0, true, {
+										fileName: _jsxFileName$4,
+										lineNumber: 271,
+										columnNumber: 15
+									}, this)]
+								}, void 0, true, {
+									fileName: _jsxFileName$4,
+									lineNumber: 269,
+									columnNumber: 13
+								}, this),
+								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+									className: "border-t pt-4",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("h4", {
+											className: "font-medium mb-3",
+											children: "Execução do Fluxo"
+										}, void 0, false, {
+											fileName: _jsxFileName$4,
+											lineNumber: 294,
+											columnNumber: 15
+										}, this),
+										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+											label: "Regras deste fluxo",
+											children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
+												value: formData.flowInstructions || "",
+												onChange: (e) => setFormData({
+													...formData,
+													flowInstructions: e.target.value
+												}),
+												placeholder: "Instruções adicionais que serão somadas ao prompt principal quando este fluxo for ativado.",
+												rows: 4
+											}, void 0, false, {
+												fileName: _jsxFileName$4,
+												lineNumber: 296,
+												columnNumber: 17
+											}, this)
+										}, void 0, false, {
+											fileName: _jsxFileName$4,
+											lineNumber: 295,
+											columnNumber: 15
+										}, this),
+										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+											className: "grid md:grid-cols-2 gap-4 mt-4",
+											children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+												label: "Ação Final",
+												children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Select, {
+													value: formData.finalAction || "respond",
+													onValueChange: (val) => setFormData({
+														...formData,
+														finalAction: val
+													}),
+													children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectTrigger, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectValue, { placeholder: "Selecione" }, void 0, false, {
+														fileName: _jsxFileName$4,
+														lineNumber: 311,
+														columnNumber: 23
+													}, this) }, void 0, false, {
+														fileName: _jsxFileName$4,
+														lineNumber: 310,
+														columnNumber: 21
+													}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectContent, { children: [
+														/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
+															value: "respond",
+															children: "A IA responde"
+														}, void 0, false, {
+															fileName: _jsxFileName$4,
+															lineNumber: 314,
+															columnNumber: 23
+														}, this),
+														/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
+															value: "fixed_message",
+															children: "Mensagem fixa"
+														}, void 0, false, {
+															fileName: _jsxFileName$4,
+															lineNumber: 315,
+															columnNumber: 23
+														}, this),
+														/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
+															value: "handoff",
+															children: "Encaminhar para humano"
+														}, void 0, false, {
+															fileName: _jsxFileName$4,
+															lineNumber: 316,
+															columnNumber: 23
+														}, this)
+													] }, void 0, true, {
+														fileName: _jsxFileName$4,
+														lineNumber: 313,
+														columnNumber: 21
+													}, this)]
+												}, void 0, true, {
+													fileName: _jsxFileName$4,
+													lineNumber: 306,
+													columnNumber: 19
+												}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
+													className: "text-xs text-muted-foreground mt-1",
+													children: [
+														formData.finalAction === "respond" && "Usa a IA normalmente com as regras e ferramentas permitidas.",
+														formData.finalAction === "fixed_message" && "Responde exatamente o texto configurado, sem chamar LLM.",
+														formData.finalAction === "handoff" && "Não deixa a IA tentar resolver sozinha."
+													]
+												}, void 0, true, {
+													fileName: _jsxFileName$4,
+													lineNumber: 319,
+													columnNumber: 19
+												}, this)]
+											}, void 0, true, {
+												fileName: _jsxFileName$4,
+												lineNumber: 305,
+												columnNumber: 17
+											}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+												label: "Ativo",
+												children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+													className: "flex items-center space-x-2 h-10",
+													children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Switch, {
+														checked: formData.active,
+														onCheckedChange: (c) => setFormData({
+															...formData,
+															active: c
+														})
+													}, void 0, false, {
+														fileName: _jsxFileName$4,
+														lineNumber: 327,
+														columnNumber: 21
+													}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
+														className: "text-sm",
+														children: "Fluxo ativado"
+													}, void 0, false, {
+														fileName: _jsxFileName$4,
+														lineNumber: 331,
+														columnNumber: 21
+													}, this)]
+												}, void 0, true, {
+													fileName: _jsxFileName$4,
+													lineNumber: 326,
+													columnNumber: 19
+												}, this)
+											}, void 0, false, {
+												fileName: _jsxFileName$4,
+												lineNumber: 325,
+												columnNumber: 17
+											}, this)]
+										}, void 0, true, {
+											fileName: _jsxFileName$4,
+											lineNumber: 304,
+											columnNumber: 15
+										}, this)
+									]
+								}, void 0, true, {
+									fileName: _jsxFileName$4,
+									lineNumber: 293,
+									columnNumber: 13
+								}, this),
+								formData.finalAction === "fixed_message" && /* @__PURE__ */ (void 0)(Field, {
+									label: "Mensagem Fixa",
+									children: /* @__PURE__ */ (void 0)(Textarea, {
+										value: formData.fixedMessage || "",
+										onChange: (e) => setFormData({
+											...formData,
+											fixedMessage: e.target.value
+										}),
+										placeholder: "Mensagem exata a ser enviada ao cliente",
+										rows: 2
+									}, void 0, false, {
+										fileName: _jsxFileName$4,
+										lineNumber: 339,
+										columnNumber: 17
+									}, this)
+								}, void 0, false, {
+									fileName: _jsxFileName$4,
+									lineNumber: 338,
+									columnNumber: 15
+								}, this),
+								formData.finalAction === "handoff" && /* @__PURE__ */ (void 0)(Field, {
+									label: "Time de Transbordo (ID Chatwoot)",
+									children: /* @__PURE__ */ (void 0)(Input, {
+										value: formData.handoffTeamId || "",
+										onChange: (e) => setFormData({
+											...formData,
+											handoffTeamId: e.target.value
+										}),
+										placeholder: "ID numérico do time no Chatwoot"
+									}, void 0, false, {
+										fileName: _jsxFileName$4,
+										lineNumber: 350,
+										columnNumber: 17
+									}, this)
+								}, void 0, false, {
+									fileName: _jsxFileName$4,
+									lineNumber: 349,
+									columnNumber: 15
+								}, this),
+								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+									className: "border-t pt-4",
+									children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("h4", {
+										className: "font-medium mb-3",
+										children: "Configurações Adicionais"
+									}, void 0, false, {
+										fileName: _jsxFileName$4,
+										lineNumber: 359,
+										columnNumber: 15
+									}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+										className: "grid md:grid-cols-2 gap-4",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+												label: "Permitir Auto Responder",
+												children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+													className: "flex items-center space-x-2 h-10",
+													children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Switch, {
+														checked: formData.autoRespond,
+														onCheckedChange: (c) => setFormData({
+															...formData,
+															autoRespond: c
+														})
+													}, void 0, false, {
+														fileName: _jsxFileName$4,
+														lineNumber: 363,
+														columnNumber: 21
+													}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
+														className: "text-sm",
+														children: "Se desativado, pulará a LLM"
+													}, void 0, false, {
+														fileName: _jsxFileName$4,
+														lineNumber: 367,
+														columnNumber: 21
+													}, this)]
+												}, void 0, true, {
+													fileName: _jsxFileName$4,
+													lineNumber: 362,
+													columnNumber: 19
+												}, this)
+											}, void 0, false, {
+												fileName: _jsxFileName$4,
+												lineNumber: 361,
+												columnNumber: 17
+											}, this),
+											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+												label: "Requer Humano",
+												children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+													className: "flex items-center space-x-2 h-10",
+													children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Switch, {
+														checked: formData.requiresHuman,
+														onCheckedChange: (c) => setFormData({
+															...formData,
+															requiresHuman: c
+														})
+													}, void 0, false, {
+														fileName: _jsxFileName$4,
+														lineNumber: 372,
+														columnNumber: 21
+													}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
+														className: "text-sm",
+														children: "Força bypass da LLM e transbordo"
+													}, void 0, false, {
+														fileName: _jsxFileName$4,
+														lineNumber: 376,
+														columnNumber: 21
+													}, this)]
+												}, void 0, true, {
+													fileName: _jsxFileName$4,
+													lineNumber: 371,
+													columnNumber: 19
+												}, this)
+											}, void 0, false, {
+												fileName: _jsxFileName$4,
+												lineNumber: 370,
+												columnNumber: 17
+											}, this),
+											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+												label: "Ferramentas Permitidas",
+												children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
+													value: parseJsonToLines(formData.allowedToolSlugs),
+													onChange: (e) => setFormData({
+														...formData,
+														allowedToolSlugs: parseLinesToJson(e.target.value)
+													}),
+													placeholder: "Ex:\ncalendar_checkAvailability",
+													rows: 2
+												}, void 0, false, {
+													fileName: _jsxFileName$4,
+													lineNumber: 380,
+													columnNumber: 19
+												}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
+													className: "text-xs text-muted-foreground mt-1",
+													children: "Uma ferramenta por linha. Vazio libera todas as globais."
+												}, void 0, false, {
+													fileName: _jsxFileName$4,
+													lineNumber: 386,
+													columnNumber: 19
+												}, this)]
+											}, void 0, true, {
+												fileName: _jsxFileName$4,
+												lineNumber: 379,
+												columnNumber: 17
+											}, this),
+											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+												label: "Escopo de Conhecimento (Tags)",
+												children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
+													value: parseJsonToLines(formData.knowledgeScope),
+													onChange: (e) => setFormData({
+														...formData,
+														knowledgeScope: parseLinesToJson(e.target.value)
+													}),
+													placeholder: "Ex:\nfinanceiro\npadel",
+													rows: 2
+												}, void 0, false, {
+													fileName: _jsxFileName$4,
+													lineNumber: 389,
+													columnNumber: 19
+												}, this)
+											}, void 0, false, {
+												fileName: _jsxFileName$4,
+												lineNumber: 388,
+												columnNumber: 17
+											}, this),
+											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+												label: "Labels do Chatwoot",
+												children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
+													value: parseJsonToLines(formData.chatwootLabels),
+													onChange: (e) => setFormData({
+														...formData,
+														chatwootLabels: parseLinesToJson(e.target.value)
+													}),
+													placeholder: "Ex:\nurgente\natendimento-financeiro",
+													rows: 2
+												}, void 0, false, {
+													fileName: _jsxFileName$4,
+													lineNumber: 397,
+													columnNumber: 19
+												}, this)
+											}, void 0, false, {
+												fileName: _jsxFileName$4,
+												lineNumber: 396,
+												columnNumber: 17
+											}, this)
+										]
+									}, void 0, true, {
+										fileName: _jsxFileName$4,
+										lineNumber: 360,
+										columnNumber: 15
+									}, this)]
+								}, void 0, true, {
+									fileName: _jsxFileName$4,
+									lineNumber: 358,
+									columnNumber: 13
+								}, this)
+							]
+						}, void 0, true, {
+							fileName: _jsxFileName$4,
+							lineNumber: 242,
+							columnNumber: 11
+						}, this),
+						/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+							className: "flex justify-end gap-2 pt-4 border-t",
+							children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
+								variant: "outline",
+								onClick: () => setIsModalOpen(false),
+								children: "Cancelar"
+							}, void 0, false, {
+								fileName: _jsxFileName$4,
+								lineNumber: 410,
+								columnNumber: 13
+							}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
+								onClick: handleSave,
+								disabled: saving,
+								children: [saving && /* @__PURE__ */ (void 0)(LoaderCircle, { className: "mr-2 h-4 w-4 animate-spin" }, void 0, false, {
+									fileName: _jsxFileName$4,
+									lineNumber: 412,
+									columnNumber: 26
+								}, this), "Salvar"]
+							}, void 0, true, {
+								fileName: _jsxFileName$4,
+								lineNumber: 411,
+								columnNumber: 13
+							}, this)]
+						}, void 0, true, {
+							fileName: _jsxFileName$4,
+							lineNumber: 409,
+							columnNumber: 11
+						}, this)
+					]
+				}, void 0, true, {
+					fileName: _jsxFileName$4,
+					lineNumber: 237,
+					columnNumber: 9
+				}, this)
+			}, void 0, false, {
+				fileName: _jsxFileName$4,
+				lineNumber: 236,
+				columnNumber: 7
+			}, this)
+		]
+	}, void 0, true, {
+		fileName: _jsxFileName$4,
+		lineNumber: 189,
+		columnNumber: 5
+	}, this);
+}
 var _jsxFileName$3 = "/Users/danilosimionato/Projetos/CuboIAStudio/src/components/ui/slider.tsx";
 var Slider = import_react.forwardRef(({ className, ...props }, ref) => /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Slider$1, {
 	ref,
@@ -132,6 +1403,7 @@ AccordionContent.displayName = Content2.displayName;
 var _jsxFileName = "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.agentes.novo.tsx?tsr-split=component";
 function NovoAgente() {
 	const search = Route.useSearch();
+	const behaviorTabRef = (0, import_react.useRef)(null);
 	const [company, setCompany] = (0, import_react.useState)(null);
 	const [assistants, setAssistants] = (0, import_react.useState)([]);
 	const [selectedAssistantId, setSelectedAssistantId] = (0, import_react.useState)(search.assistantId ?? "");
@@ -243,7 +1515,7 @@ function NovoAgente() {
 		securityInstructions
 	]);
 	const [initialFormData, setInitialFormData] = (0, import_react.useState)(currentFormData);
-	const isDirty = (0, import_react.useMemo)(() => JSON.stringify(currentFormData) !== JSON.stringify(initialFormData), [currentFormData, initialFormData]);
+	(0, import_react.useMemo)(() => JSON.stringify(currentFormData) !== JSON.stringify(initialFormData), [currentFormData, initialFormData]);
 	const loadKnowledge = async (assistantId) => {
 		if (!assistantId) {
 			setKnowledge([]);
@@ -545,6 +1817,7 @@ function NovoAgente() {
 					splitResponseStyle: updated.splitResponseStyle ?? "",
 					status
 				});
+				await behaviorTabRef.current?.saveBehavior(selectedAssistantId);
 				toast.success("Agente salvo com sucesso.");
 			} else {
 				const created = await backendAssistantsService.create({
@@ -616,6 +1889,7 @@ function NovoAgente() {
 					splitResponseStyle: created.splitResponseStyle ?? "",
 					status: created.status
 				});
+				await behaviorTabRef.current?.saveBehavior(created.id);
 				toast.success("Agente criado com sucesso.");
 			}
 			setIsReviewConfirmed(false);
@@ -742,14 +2016,6 @@ function NovoAgente() {
 		actions: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
 			className: "flex items-center gap-2",
 			children: [
-				isDirty && /* @__PURE__ */ (void 0)("span", {
-					className: "text-xs text-amber-500 font-medium mr-2",
-					children: "● Alterações não salvas"
-				}, void 0, false, {
-					fileName: _jsxFileName,
-					lineNumber: 648,
-					columnNumber: 25
-				}, this),
 				/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
 					variant: "outline",
 					asChild: true,
@@ -758,24 +2024,24 @@ function NovoAgente() {
 						to: "/agentes",
 						children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(ArrowLeft, { className: "h-4 w-4 mr-1" }, void 0, false, {
 							fileName: _jsxFileName,
-							lineNumber: 651,
+							lineNumber: 658,
 							columnNumber: 17
 						}, this), " Voltar"]
 					}, void 0, true, {
 						fileName: _jsxFileName,
-						lineNumber: 650,
+						lineNumber: 657,
 						columnNumber: 15
 					}, this)
 				}, void 0, false, {
 					fileName: _jsxFileName,
-					lineNumber: 649,
+					lineNumber: 656,
 					columnNumber: 13
 				}, this),
 				selectedAssistantId && /* @__PURE__ */ (void 0)("div", {
 					className: "flex items-center gap-2 mr-2",
 					children: [/* @__PURE__ */ (void 0)(StatusBadge, { status: isActive ? "ativo" : "pausado" }, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 655,
+						lineNumber: 662,
 						columnNumber: 17
 					}, this), /* @__PURE__ */ (void 0)(Button, {
 						variant: isActive ? "outline" : "destructive",
@@ -783,21 +2049,21 @@ function NovoAgente() {
 						size: "sm",
 						children: [isActive ? /* @__PURE__ */ (void 0)(Pause, { className: "h-4 w-4 mr-1" }, void 0, false, {
 							fileName: _jsxFileName,
-							lineNumber: 657,
+							lineNumber: 664,
 							columnNumber: 31
 						}, this) : /* @__PURE__ */ (void 0)(CirclePlay, { className: "h-4 w-4 mr-1" }, void 0, false, {
 							fileName: _jsxFileName,
-							lineNumber: 657,
+							lineNumber: 664,
 							columnNumber: 68
 						}, this), isActive ? "Inativar" : "Ativar"]
 					}, void 0, true, {
 						fileName: _jsxFileName,
-						lineNumber: 656,
+						lineNumber: 663,
 						columnNumber: 17
 					}, this)]
 				}, void 0, true, {
 					fileName: _jsxFileName,
-					lineNumber: 654,
+					lineNumber: 661,
 					columnNumber: 37
 				}, this),
 				/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
@@ -807,7 +2073,7 @@ function NovoAgente() {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Save, { className: "h-4 w-4 mr-1" }, void 0, false, {
 							fileName: _jsxFileName,
-							lineNumber: 662,
+							lineNumber: 669,
 							columnNumber: 15
 						}, this),
 						" ",
@@ -815,22 +2081,22 @@ function NovoAgente() {
 					]
 				}, void 0, true, {
 					fileName: _jsxFileName,
-					lineNumber: 661,
+					lineNumber: 668,
 					columnNumber: 13
 				}, this)
 			]
 		}, void 0, true, {
 			fileName: _jsxFileName,
-			lineNumber: 647,
+			lineNumber: 654,
 			columnNumber: 58
 		}, this)
 	}, void 0, false, {
 		fileName: _jsxFileName,
-		lineNumber: 647,
+		lineNumber: 654,
 		columnNumber: 7
 	}, this), loading ? /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(LoadingState, { label: "Carregando assistente real…" }, void 0, false, {
 		fileName: _jsxFileName,
-		lineNumber: 666,
+		lineNumber: 673,
 		columnNumber: 18
 	}, this) : error ? /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(ErrorState, {
 		title: "Não foi possível carregar o assistente",
@@ -838,7 +2104,7 @@ function NovoAgente() {
 		onRetry: () => window.location.reload()
 	}, void 0, false, {
 		fileName: _jsxFileName,
-		lineNumber: 666,
+		lineNumber: 673,
 		columnNumber: 81
 	}, this) : /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(import_jsx_dev_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Card, {
 		className: "mb-4",
@@ -854,49 +2120,49 @@ function NovoAgente() {
 					},
 					children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectTrigger, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectValue, { placeholder: "Novo assistente" }, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 678,
+						lineNumber: 685,
 						columnNumber: 21
 					}, this) }, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 677,
+						lineNumber: 684,
 						columnNumber: 19
 					}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectContent, { children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
 						value: "new",
 						children: "Novo assistente"
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 681,
+						lineNumber: 688,
 						columnNumber: 21
 					}, this), selectableAssistants.map((assistant) => /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
 						value: assistant.id,
 						children: assistant.name
 					}, assistant.id, false, {
 						fileName: _jsxFileName,
-						lineNumber: 682,
+						lineNumber: 689,
 						columnNumber: 60
 					}, this))] }, void 0, true, {
 						fileName: _jsxFileName,
-						lineNumber: 680,
+						lineNumber: 687,
 						columnNumber: 19
 					}, this)]
 				}, void 0, true, {
 					fileName: _jsxFileName,
-					lineNumber: 670,
+					lineNumber: 677,
 					columnNumber: 17
 				}, this)
 			}, void 0, false, {
 				fileName: _jsxFileName,
-				lineNumber: 669,
+				lineNumber: 676,
 				columnNumber: 15
 			}, this)
 		}, void 0, false, {
 			fileName: _jsxFileName,
-			lineNumber: 668,
+			lineNumber: 675,
 			columnNumber: 13
 		}, this)
 	}, void 0, false, {
 		fileName: _jsxFileName,
-		lineNumber: 667,
+		lineNumber: 674,
 		columnNumber: 11
 	}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Tabs, {
 		defaultValue: "info",
@@ -909,15 +2175,31 @@ function NovoAgente() {
 						children: "Informações"
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 693,
+						lineNumber: 700,
+						columnNumber: 15
+					}, this),
+					/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsTrigger, {
+						value: "comportamento",
+						children: "Comportamento"
+					}, void 0, false, {
+						fileName: _jsxFileName,
+						lineNumber: 701,
+						columnNumber: 15
+					}, this),
+					/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsTrigger, {
+						value: "fluxos",
+						children: "Fluxos"
+					}, void 0, false, {
+						fileName: _jsxFileName,
+						lineNumber: 702,
 						columnNumber: 15
 					}, this),
 					/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsTrigger, {
 						value: "prompt",
-						children: "Prompt"
+						children: "Regras Globais"
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 694,
+						lineNumber: 703,
 						columnNumber: 15
 					}, this),
 					/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsTrigger, {
@@ -925,7 +2207,7 @@ function NovoAgente() {
 						children: "Conhecimento"
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 695,
+						lineNumber: 704,
 						columnNumber: 15
 					}, this),
 					/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsTrigger, {
@@ -933,7 +2215,7 @@ function NovoAgente() {
 						children: "Ferramentas"
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 696,
+						lineNumber: 705,
 						columnNumber: 15
 					}, this),
 					/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsTrigger, {
@@ -941,7 +2223,7 @@ function NovoAgente() {
 						children: "Memória"
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 697,
+						lineNumber: 706,
 						columnNumber: 15
 					}, this),
 					/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsTrigger, {
@@ -949,7 +2231,7 @@ function NovoAgente() {
 						children: "Regras de Segurança"
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 698,
+						lineNumber: 707,
 						columnNumber: 15
 					}, this),
 					/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsTrigger, {
@@ -957,13 +2239,13 @@ function NovoAgente() {
 						children: "Publicação"
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 699,
+						lineNumber: 708,
 						columnNumber: 15
 					}, this)
 				]
 			}, void 0, true, {
 				fileName: _jsxFileName,
-				lineNumber: 692,
+				lineNumber: 699,
 				columnNumber: 13
 			}, this),
 			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsContent, {
@@ -980,12 +2262,12 @@ function NovoAgente() {
 									onChange: (e) => setName(e.target.value)
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 707,
+									lineNumber: 716,
 									columnNumber: 23
 								}, this)
 							}, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 706,
+								lineNumber: 715,
 								columnNumber: 21
 							}, this),
 							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
@@ -995,12 +2277,12 @@ function NovoAgente() {
 									disabled: true
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 710,
+									lineNumber: 719,
 									columnNumber: 23
 								}, this)
 							}, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 709,
+								lineNumber: 718,
 								columnNumber: 21
 							}, this),
 							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
@@ -1013,12 +2295,12 @@ function NovoAgente() {
 									placeholder: "Ex: Clube de Padel e Beach Tennis com restaurante, área kids e locação de quadras."
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 713,
+									lineNumber: 722,
 									columnNumber: 23
 								}, this)
 							}, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 712,
+								lineNumber: 721,
 								columnNumber: 21
 							}, this),
 							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -1031,7 +2313,7 @@ function NovoAgente() {
 											children: "Localização"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 717,
+											lineNumber: 726,
 											columnNumber: 25
 										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
 											variant: "outline",
@@ -1044,12 +2326,12 @@ function NovoAgente() {
 											children: "Testar localização"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 718,
+											lineNumber: 727,
 											columnNumber: 25
 										}, this)]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 716,
+										lineNumber: 725,
 										columnNumber: 23
 									}, this),
 									/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
@@ -1057,7 +2339,7 @@ function NovoAgente() {
 										children: "Use o link do Google Maps para que o agente possa enviar a localização quando o cliente perguntar onde fica a empresa."
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 728,
+										lineNumber: 737,
 										columnNumber: 23
 									}, this),
 									/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -1072,12 +2354,12 @@ function NovoAgente() {
 													placeholder: "Ex: Av. Paulista, 1000 - Bela Vista"
 												}, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 734,
+													lineNumber: 743,
 													columnNumber: 27
 												}, this)
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 733,
+												lineNumber: 742,
 												columnNumber: 25
 											}, this),
 											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
@@ -1089,12 +2371,12 @@ function NovoAgente() {
 													placeholder: "Ex: São Paulo, SP"
 												}, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 737,
+													lineNumber: 746,
 													columnNumber: 27
 												}, this)
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 736,
+												lineNumber: 745,
 												columnNumber: 25
 											}, this),
 											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
@@ -1106,12 +2388,12 @@ function NovoAgente() {
 													placeholder: "Ex: https://maps.app.goo.gl/..."
 												}, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 740,
+													lineNumber: 749,
 													columnNumber: 27
 												}, this)
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 739,
+												lineNumber: 748,
 												columnNumber: 25
 											}, this),
 											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
@@ -1122,12 +2404,12 @@ function NovoAgente() {
 													placeholder: "Ex: -23.561684"
 												}, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 743,
+													lineNumber: 752,
 													columnNumber: 27
 												}, this)
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 742,
+												lineNumber: 751,
 												columnNumber: 25
 											}, this),
 											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
@@ -1138,30 +2420,30 @@ function NovoAgente() {
 													placeholder: "Ex: -46.655981"
 												}, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 746,
+													lineNumber: 755,
 													columnNumber: 27
 												}, this)
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 745,
+												lineNumber: 754,
 												columnNumber: 25
 											}, this)
 										]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 732,
+										lineNumber: 741,
 										columnNumber: 23
 									}, this)
 								]
 							}, void 0, true, {
 								fileName: _jsxFileName,
-								lineNumber: 715,
+								lineNumber: 724,
 								columnNumber: 21
 							}, this)
 						]
 					}, void 0, true, {
 						fileName: _jsxFileName,
-						lineNumber: 705,
+						lineNumber: 714,
 						columnNumber: 19
 					}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
 						className: "pt-4 border-t space-y-4",
@@ -1171,7 +2453,7 @@ function NovoAgente() {
 								children: "Horário de atendimento"
 							}, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 753,
+								lineNumber: 762,
 								columnNumber: 21
 							}, this),
 							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -1184,19 +2466,19 @@ function NovoAgente() {
 										children: "IA atende 24 horas"
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 757,
+										lineNumber: 766,
 										columnNumber: 25
 									}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
 										className: "text-sm text-muted-foreground",
 										children: aiAlwaysAvailable ? "Quando ativado, o agente pode responder clientes mesmo fora do horário de atendimento. O horário abaixo serve como referência oficial da empresa." : "Quando desativado, fora do horário o agente poderá usar a mensagem de indisponibilidade configurada."
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 760,
+										lineNumber: 769,
 										columnNumber: 25
 									}, this)]
 								}, void 0, true, {
 									fileName: _jsxFileName,
-									lineNumber: 756,
+									lineNumber: 765,
 									columnNumber: 23
 								}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Switch, {
 									id: "ai-always-available",
@@ -1204,12 +2486,12 @@ function NovoAgente() {
 									onCheckedChange: setAiAlwaysAvailable
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 764,
+									lineNumber: 773,
 									columnNumber: 23
 								}, this)]
 							}, void 0, true, {
 								fileName: _jsxFileName,
-								lineNumber: 755,
+								lineNumber: 764,
 								columnNumber: 21
 							}, this),
 							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -1281,19 +2563,19 @@ function NovoAgente() {
 													children: day.short
 												}, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 818,
+													lineNumber: 827,
 													columnNumber: 31
 												}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Switch, {
 													checked: dayConfig.open,
 													onCheckedChange: (c) => updateDay("open", c)
 												}, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 819,
+													lineNumber: 828,
 													columnNumber: 31
 												}, this)]
 											}, void 0, true, {
 												fileName: _jsxFileName,
-												lineNumber: 817,
+												lineNumber: 826,
 												columnNumber: 29
 											}, this),
 											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -1301,7 +2583,7 @@ function NovoAgente() {
 												children: dayConfig.open ? "Aberto" : "Fechado"
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 821,
+												lineNumber: 830,
 												columnNumber: 29
 											}, this),
 											dayConfig.open && /* @__PURE__ */ (void 0)("div", {
@@ -1316,12 +2598,12 @@ function NovoAgente() {
 															onChange: (e) => updateDay("start", e.target.value)
 														}, void 0, false, {
 															fileName: _jsxFileName,
-															lineNumber: 824,
+															lineNumber: 833,
 															columnNumber: 35
 														}, this)
 													}, void 0, false, {
 														fileName: _jsxFileName,
-														lineNumber: 823,
+														lineNumber: 832,
 														columnNumber: 33
 													}, this),
 													/* @__PURE__ */ (void 0)("div", {
@@ -1331,12 +2613,12 @@ function NovoAgente() {
 															children: "até"
 														}, void 0, false, {
 															fileName: _jsxFileName,
-															lineNumber: 827,
+															lineNumber: 836,
 															columnNumber: 35
 														}, this)
 													}, void 0, false, {
 														fileName: _jsxFileName,
-														lineNumber: 826,
+														lineNumber: 835,
 														columnNumber: 33
 													}, this),
 													/* @__PURE__ */ (void 0)("div", {
@@ -1348,50 +2630,456 @@ function NovoAgente() {
 															onChange: (e) => updateDay("end", e.target.value)
 														}, void 0, false, {
 															fileName: _jsxFileName,
-															lineNumber: 830,
+															lineNumber: 839,
 															columnNumber: 35
 														}, this)
 													}, void 0, false, {
 														fileName: _jsxFileName,
-														lineNumber: 829,
+														lineNumber: 838,
 														columnNumber: 33
 													}, this)
 												]
 											}, void 0, true, {
 												fileName: _jsxFileName,
-												lineNumber: 822,
+												lineNumber: 831,
 												columnNumber: 48
 											}, this)
 										]
 									}, day.id, true, {
 										fileName: _jsxFileName,
-										lineNumber: 816,
+										lineNumber: 825,
 										columnNumber: 28
 									}, this);
 								})
 							}, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 767,
+								lineNumber: 776,
 								columnNumber: 21
 							}, this)
 						]
 					}, void 0, true, {
 						fileName: _jsxFileName,
-						lineNumber: 752,
+						lineNumber: 761,
 						columnNumber: 19
 					}, this)]
 				}, void 0, true, {
 					fileName: _jsxFileName,
-					lineNumber: 704,
+					lineNumber: 713,
 					columnNumber: 17
 				}, this) }, void 0, false, {
 					fileName: _jsxFileName,
-					lineNumber: 703,
+					lineNumber: 712,
 					columnNumber: 15
 				}, this)
 			}, void 0, false, {
 				fileName: _jsxFileName,
-				lineNumber: 702,
+				lineNumber: 711,
+				columnNumber: 13
+			}, this),
+			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsContent, {
+				value: "comportamento",
+				children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+					className: "space-y-6",
+					children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Card, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(CardContent, {
+						className: "p-6 space-y-6",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+								className: "grid md:grid-cols-2 gap-4",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+										label: "Modelo da IA",
+										children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Input, {
+											value: model,
+											onChange: (e) => setModel(e.target.value),
+											placeholder: "Opcional. Se vazio, usa o modelo padrão do backend."
+										}, void 0, false, {
+											fileName: _jsxFileName,
+											lineNumber: 857,
+											columnNumber: 25
+										}, this)
+									}, void 0, false, {
+										fileName: _jsxFileName,
+										lineNumber: 856,
+										columnNumber: 23
+									}, this),
+									/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+										label: "Criatividade da resposta (Temperatura)",
+										children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+											className: "space-y-3 pt-2",
+											children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Slider, {
+												value: [temperature ?? .2],
+												min: 0,
+												max: 1,
+												step: .1,
+												onValueChange: (vals) => setTemperature(vals[0])
+											}, void 0, false, {
+												fileName: _jsxFileName,
+												lineNumber: 861,
+												columnNumber: 27
+											}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+												className: "flex justify-between text-xs text-muted-foreground",
+												children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", { children: temperature ?? .2 }, void 0, false, {
+													fileName: _jsxFileName,
+													lineNumber: 863,
+													columnNumber: 29
+												}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", { children: getTemperatureDescription(temperature ?? .2) }, void 0, false, {
+													fileName: _jsxFileName,
+													lineNumber: 864,
+													columnNumber: 29
+												}, this)]
+											}, void 0, true, {
+												fileName: _jsxFileName,
+												lineNumber: 862,
+												columnNumber: 27
+											}, this)]
+										}, void 0, true, {
+											fileName: _jsxFileName,
+											lineNumber: 860,
+											columnNumber: 25
+										}, this)
+									}, void 0, false, {
+										fileName: _jsxFileName,
+										lineNumber: 859,
+										columnNumber: 23
+									}, this),
+									/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+										label: "Tom de voz",
+										children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Select, {
+											value: toneOfVoice || "Profissional",
+											onValueChange: (val) => setToneOfVoice(val),
+											children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectTrigger, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectValue, { placeholder: "Selecione o tom de voz" }, void 0, false, {
+												fileName: _jsxFileName,
+												lineNumber: 870,
+												columnNumber: 42
+											}, this) }, void 0, false, {
+												fileName: _jsxFileName,
+												lineNumber: 870,
+												columnNumber: 27
+											}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectContent, { children: [
+												/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
+													value: "Profissional",
+													children: "Profissional"
+												}, void 0, false, {
+													fileName: _jsxFileName,
+													lineNumber: 872,
+													columnNumber: 29
+												}, this),
+												/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
+													value: "Amigável",
+													children: "Amigável"
+												}, void 0, false, {
+													fileName: _jsxFileName,
+													lineNumber: 873,
+													columnNumber: 29
+												}, this),
+												/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
+													value: "Descontraído",
+													children: "Descontraído"
+												}, void 0, false, {
+													fileName: _jsxFileName,
+													lineNumber: 874,
+													columnNumber: 29
+												}, this),
+												/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
+													value: "Consultivo",
+													children: "Consultivo"
+												}, void 0, false, {
+													fileName: _jsxFileName,
+													lineNumber: 875,
+													columnNumber: 29
+												}, this),
+												/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
+													value: "Objetivo",
+													children: "Objetivo"
+												}, void 0, false, {
+													fileName: _jsxFileName,
+													lineNumber: 876,
+													columnNumber: 29
+												}, this),
+												/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
+													value: "Formal",
+													children: "Formal"
+												}, void 0, false, {
+													fileName: _jsxFileName,
+													lineNumber: 877,
+													columnNumber: 29
+												}, this),
+												/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
+													value: "Personalizado",
+													children: "Personalizado"
+												}, void 0, false, {
+													fileName: _jsxFileName,
+													lineNumber: 878,
+													columnNumber: 29
+												}, this)
+											] }, void 0, true, {
+												fileName: _jsxFileName,
+												lineNumber: 871,
+												columnNumber: 27
+											}, this)]
+										}, void 0, true, {
+											fileName: _jsxFileName,
+											lineNumber: 869,
+											columnNumber: 25
+										}, this)
+									}, void 0, false, {
+										fileName: _jsxFileName,
+										lineNumber: 868,
+										columnNumber: 23
+									}, this),
+									/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+										label: "Personalidade da IA",
+										children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Input, {
+											value: personality,
+											onChange: (e) => setPersonality(e.target.value),
+											placeholder: "Ex: Atendente simpática, objetiva, prestativa..."
+										}, void 0, false, {
+											fileName: _jsxFileName,
+											lineNumber: 883,
+											columnNumber: 25
+										}, this)
+									}, void 0, false, {
+										fileName: _jsxFileName,
+										lineNumber: 882,
+										columnNumber: 23
+									}, this)
+								]
+							}, void 0, true, {
+								fileName: _jsxFileName,
+								lineNumber: 855,
+								columnNumber: 21
+							}, this),
+							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+								className: "p-4 border rounded-lg bg-secondary/10",
+								children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+									className: "flex items-center justify-between mb-4",
+									children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", { children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Label, {
+										htmlFor: "message-buffer",
+										className: "text-base font-semibold cursor-pointer",
+										children: "Comportamento de mensagens"
+									}, void 0, false, {
+										fileName: _jsxFileName,
+										lineNumber: 891,
+										columnNumber: 27
+									}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
+										className: "text-sm text-muted-foreground",
+										children: "Aguardar mensagens antes de responder (evita que o agente responda várias vezes quando o cliente manda mensagens quebradas)."
+									}, void 0, false, {
+										fileName: _jsxFileName,
+										lineNumber: 894,
+										columnNumber: 27
+									}, this)] }, void 0, true, {
+										fileName: _jsxFileName,
+										lineNumber: 890,
+										columnNumber: 25
+									}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Switch, {
+										id: "message-buffer",
+										checked: messageBufferEnabled,
+										onCheckedChange: setMessageBufferEnabled
+									}, void 0, false, {
+										fileName: _jsxFileName,
+										lineNumber: 898,
+										columnNumber: 25
+									}, this)]
+								}, void 0, true, {
+									fileName: _jsxFileName,
+									lineNumber: 889,
+									columnNumber: 23
+								}, this), messageBufferEnabled && /* @__PURE__ */ (void 0)("div", {
+									className: "grid md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-secondary/20",
+									children: [/* @__PURE__ */ (void 0)(Field, {
+										label: `Tempo de espera: ${messageBufferSeconds} segundos`,
+										children: /* @__PURE__ */ (void 0)(Slider, {
+											value: [messageBufferSeconds],
+											min: 3,
+											max: 20,
+											step: 1,
+											onValueChange: (vals) => setMessageBufferSeconds(vals[0])
+										}, void 0, false, {
+											fileName: _jsxFileName,
+											lineNumber: 902,
+											columnNumber: 29
+										}, this)
+									}, void 0, false, {
+										fileName: _jsxFileName,
+										lineNumber: 901,
+										columnNumber: 27
+									}, this), /* @__PURE__ */ (void 0)(Field, {
+										label: "Estilo da resposta",
+										children: /* @__PURE__ */ (void 0)(Select, {
+											value: splitResponseStyle || "SINGLE",
+											onValueChange: (val) => setSplitResponseStyle(val),
+											children: [/* @__PURE__ */ (void 0)(SelectTrigger, { children: /* @__PURE__ */ (void 0)(SelectValue, { placeholder: "Selecione o estilo" }, void 0, false, {
+												fileName: _jsxFileName,
+												lineNumber: 906,
+												columnNumber: 47
+											}, this) }, void 0, false, {
+												fileName: _jsxFileName,
+												lineNumber: 906,
+												columnNumber: 32
+											}, this), /* @__PURE__ */ (void 0)(SelectContent, { children: [/* @__PURE__ */ (void 0)(SelectItem, {
+												value: "SINGLE",
+												children: "Mensagem Única"
+											}, void 0, false, {
+												fileName: _jsxFileName,
+												lineNumber: 908,
+												columnNumber: 34
+											}, this), /* @__PURE__ */ (void 0)(SelectItem, {
+												value: "NATURAL_BLOCKS",
+												children: "Blocos Naturais (Separados)"
+											}, void 0, false, {
+												fileName: _jsxFileName,
+												lineNumber: 909,
+												columnNumber: 34
+											}, this)] }, void 0, true, {
+												fileName: _jsxFileName,
+												lineNumber: 907,
+												columnNumber: 32
+											}, this)]
+										}, void 0, true, {
+											fileName: _jsxFileName,
+											lineNumber: 905,
+											columnNumber: 30
+										}, this)
+									}, void 0, false, {
+										fileName: _jsxFileName,
+										lineNumber: 904,
+										columnNumber: 27
+									}, this)]
+								}, void 0, true, {
+									fileName: _jsxFileName,
+									lineNumber: 900,
+									columnNumber: 48
+								}, this)]
+							}, void 0, true, {
+								fileName: _jsxFileName,
+								lineNumber: 888,
+								columnNumber: 21
+							}, this),
+							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
+								label: "Mensagem inicial",
+								helper: "Opcional. Ao criar uma conversa nova, essa mensagem aparece como a primeira resposta.",
+								children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
+									rows: 2,
+									value: initialMessage,
+									onChange: (e) => setInitialMessage(e.target.value),
+									placeholder: "Olá! Sou seu assistente. Como posso ajudar?"
+								}, void 0, false, {
+									fileName: _jsxFileName,
+									lineNumber: 917,
+									columnNumber: 23
+								}, this)
+							}, void 0, false, {
+								fileName: _jsxFileName,
+								lineNumber: 916,
+								columnNumber: 21
+							}, this),
+							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Accordion, {
+								type: "single",
+								collapsible: true,
+								className: "w-full",
+								children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionItem, {
+									value: "fallback-message",
+									className: "border rounded-lg px-4 py-1 bg-secondary/5",
+									children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionTrigger, {
+										className: "hover:no-underline py-3",
+										children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+											className: "flex flex-col text-left space-y-1",
+											children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
+												className: "font-semibold text-sm",
+												children: "Mensagem quando não souber responder"
+											}, void 0, false, {
+												fileName: _jsxFileName,
+												lineNumber: 924,
+												columnNumber: 29
+											}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
+												className: "text-xs text-muted-foreground font-normal",
+												children: noAnswerMessage ? noAnswerMessage.substring(0, 80) + (noAnswerMessage.length > 80 ? "..." : "") : "Resposta padrão quando a IA não encontra informação."
+											}, void 0, false, {
+												fileName: _jsxFileName,
+												lineNumber: 925,
+												columnNumber: 29
+											}, this)]
+										}, void 0, true, {
+											fileName: _jsxFileName,
+											lineNumber: 923,
+											columnNumber: 27
+										}, this)
+									}, void 0, false, {
+										fileName: _jsxFileName,
+										lineNumber: 922,
+										columnNumber: 25
+									}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionContent, {
+										className: "pt-2 pb-4",
+										children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
+											className: "text-xs text-muted-foreground mb-3",
+											children: "Mensagem usada quando o agente não tiver informação suficiente para responder."
+										}, void 0, false, {
+											fileName: _jsxFileName,
+											lineNumber: 931,
+											columnNumber: 27
+										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
+											rows: 3,
+											value: noAnswerMessage,
+											onChange: (e) => setNoAnswerMessage(e.target.value),
+											placeholder: "Infelizmente, não tenho essa informação..."
+										}, void 0, false, {
+											fileName: _jsxFileName,
+											lineNumber: 934,
+											columnNumber: 27
+										}, this)]
+									}, void 0, true, {
+										fileName: _jsxFileName,
+										lineNumber: 930,
+										columnNumber: 25
+									}, this)]
+								}, void 0, true, {
+									fileName: _jsxFileName,
+									lineNumber: 921,
+									columnNumber: 23
+								}, this)
+							}, void 0, false, {
+								fileName: _jsxFileName,
+								lineNumber: 920,
+								columnNumber: 21
+							}, this)
+						]
+					}, void 0, true, {
+						fileName: _jsxFileName,
+						lineNumber: 853,
+						columnNumber: 19
+					}, this) }, void 0, false, {
+						fileName: _jsxFileName,
+						lineNumber: 852,
+						columnNumber: 17
+					}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AssistantBehaviorTab, {
+						assistantId: selectedAssistantId,
+						ref: behaviorTabRef
+					}, void 0, false, {
+						fileName: _jsxFileName,
+						lineNumber: 941,
+						columnNumber: 17
+					}, this)]
+				}, void 0, true, {
+					fileName: _jsxFileName,
+					lineNumber: 851,
+					columnNumber: 15
+				}, this)
+			}, void 0, false, {
+				fileName: _jsxFileName,
+				lineNumber: 850,
+				columnNumber: 13
+			}, this),
+			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsContent, {
+				value: "fluxos",
+				children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AssistantFlowsTab, { assistantId: selectedAssistantId }, void 0, false, {
+					fileName: _jsxFileName,
+					lineNumber: 946,
+					columnNumber: 15
+				}, this)
+			}, void 0, false, {
+				fileName: _jsxFileName,
+				lineNumber: 945,
 				columnNumber: 13
 			}, this),
 			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsContent, {
@@ -1400,517 +3088,182 @@ function NovoAgente() {
 					className: "p-6 space-y-6",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
-							className: "grid md:grid-cols-2 gap-4",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
-									label: "Modelo da IA",
-									children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Input, {
-										value: model,
-										onChange: (e) => setModel(e.target.value),
-										placeholder: "Opcional. Se vazio, usa o modelo padrão do backend."
-									}, void 0, false, {
-										fileName: _jsxFileName,
-										lineNumber: 847,
-										columnNumber: 23
-									}, this)
-								}, void 0, false, {
+							className: "bg-primary/5 border border-primary/20 p-4 rounded-lg",
+							children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
+								className: "text-sm text-primary",
+								children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("strong", { children: "Dica:" }, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 846,
-									columnNumber: 21
-								}, this),
-								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
-									label: "Criatividade da resposta (Temperatura)",
-									children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
-										className: "space-y-3 pt-2",
-										children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Slider, {
-											value: [temperature ?? .2],
-											min: 0,
-											max: 1,
-											step: .1,
-											onValueChange: (vals) => setTemperature(vals[0])
-										}, void 0, false, {
-											fileName: _jsxFileName,
-											lineNumber: 851,
-											columnNumber: 25
-										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
-											className: "flex justify-between text-xs text-muted-foreground",
-											children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", { children: temperature ?? .2 }, void 0, false, {
-												fileName: _jsxFileName,
-												lineNumber: 853,
-												columnNumber: 27
-											}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", { children: getTemperatureDescription(temperature ?? .2) }, void 0, false, {
-												fileName: _jsxFileName,
-												lineNumber: 854,
-												columnNumber: 27
-											}, this)]
-										}, void 0, true, {
-											fileName: _jsxFileName,
-											lineNumber: 852,
-											columnNumber: 25
-										}, this)]
-									}, void 0, true, {
-										fileName: _jsxFileName,
-										lineNumber: 850,
-										columnNumber: 23
-									}, this)
-								}, void 0, false, {
-									fileName: _jsxFileName,
-									lineNumber: 849,
-									columnNumber: 21
-								}, this),
-								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
-									label: "Tom de voz",
-									children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Select, {
-										value: toneOfVoice || "Profissional",
-										onValueChange: (val) => setToneOfVoice(val),
-										children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectTrigger, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectValue, { placeholder: "Selecione o tom de voz" }, void 0, false, {
-											fileName: _jsxFileName,
-											lineNumber: 860,
-											columnNumber: 40
-										}, this) }, void 0, false, {
-											fileName: _jsxFileName,
-											lineNumber: 860,
-											columnNumber: 25
-										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectContent, { children: [
-											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
-												value: "Profissional",
-												children: "Profissional"
-											}, void 0, false, {
-												fileName: _jsxFileName,
-												lineNumber: 862,
-												columnNumber: 27
-											}, this),
-											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
-												value: "Amigável",
-												children: "Amigável"
-											}, void 0, false, {
-												fileName: _jsxFileName,
-												lineNumber: 863,
-												columnNumber: 27
-											}, this),
-											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
-												value: "Descontraído",
-												children: "Descontraído"
-											}, void 0, false, {
-												fileName: _jsxFileName,
-												lineNumber: 864,
-												columnNumber: 27
-											}, this),
-											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
-												value: "Consultivo",
-												children: "Consultivo"
-											}, void 0, false, {
-												fileName: _jsxFileName,
-												lineNumber: 865,
-												columnNumber: 27
-											}, this),
-											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
-												value: "Objetivo",
-												children: "Objetivo"
-											}, void 0, false, {
-												fileName: _jsxFileName,
-												lineNumber: 866,
-												columnNumber: 27
-											}, this),
-											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
-												value: "Formal",
-												children: "Formal"
-											}, void 0, false, {
-												fileName: _jsxFileName,
-												lineNumber: 867,
-												columnNumber: 27
-											}, this),
-											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
-												value: "Personalizado",
-												children: "Personalizado"
-											}, void 0, false, {
-												fileName: _jsxFileName,
-												lineNumber: 868,
-												columnNumber: 27
-											}, this)
-										] }, void 0, true, {
-											fileName: _jsxFileName,
-											lineNumber: 861,
-											columnNumber: 25
-										}, this)]
-									}, void 0, true, {
-										fileName: _jsxFileName,
-										lineNumber: 859,
-										columnNumber: 23
-									}, this)
-								}, void 0, false, {
-									fileName: _jsxFileName,
-									lineNumber: 858,
-									columnNumber: 21
-								}, this),
-								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
-									label: "Personalidade da IA",
-									children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Input, {
-										value: personality,
-										onChange: (e) => setPersonality(e.target.value),
-										placeholder: "Ex: Atendente simpática, objetiva, prestativa..."
-									}, void 0, false, {
-										fileName: _jsxFileName,
-										lineNumber: 873,
-										columnNumber: 23
-									}, this)
-								}, void 0, false, {
-									fileName: _jsxFileName,
-									lineNumber: 872,
-									columnNumber: 21
-								}, this)
-							]
-						}, void 0, true, {
-							fileName: _jsxFileName,
-							lineNumber: 845,
-							columnNumber: 19
-						}, this),
-						/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
-							className: "p-4 border rounded-lg bg-secondary/10",
-							children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
-								className: "flex items-center justify-between mb-4",
-								children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", { children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Label, {
-									htmlFor: "message-buffer",
-									className: "text-base font-semibold cursor-pointer",
-									children: "Comportamento de mensagens"
-								}, void 0, false, {
-									fileName: _jsxFileName,
-									lineNumber: 881,
-									columnNumber: 25
-								}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
-									className: "text-sm text-muted-foreground",
-									children: "Aguardar mensagens antes de responder (evita que o agente responda várias vezes quando o cliente manda mensagens quebradas)."
-								}, void 0, false, {
-									fileName: _jsxFileName,
-									lineNumber: 884,
-									columnNumber: 25
-								}, this)] }, void 0, true, {
-									fileName: _jsxFileName,
-									lineNumber: 880,
+									lineNumber: 954,
 									columnNumber: 23
-								}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Switch, {
-									id: "message-buffer",
-									checked: messageBufferEnabled,
-									onCheckedChange: setMessageBufferEnabled
-								}, void 0, false, {
-									fileName: _jsxFileName,
-									lineNumber: 888,
-									columnNumber: 23
-								}, this)]
+								}, this), " Use esta área apenas para regras que valem para todo o atendimento. Informações específicas da empresa devem ir na Base de Conhecimento. Regras por assunto devem ir em Fluxos."]
 							}, void 0, true, {
 								fileName: _jsxFileName,
-								lineNumber: 879,
-								columnNumber: 21
-							}, this), messageBufferEnabled && /* @__PURE__ */ (void 0)("div", {
-								className: "grid md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-secondary/20",
-								children: [/* @__PURE__ */ (void 0)(Field, {
-									label: `Tempo de espera: ${messageBufferSeconds} segundos`,
-									children: /* @__PURE__ */ (void 0)(Slider, {
-										value: [messageBufferSeconds],
-										min: 3,
-										max: 20,
-										step: 1,
-										onValueChange: (vals) => setMessageBufferSeconds(vals[0])
-									}, void 0, false, {
-										fileName: _jsxFileName,
-										lineNumber: 892,
-										columnNumber: 27
-									}, this)
-								}, void 0, false, {
-									fileName: _jsxFileName,
-									lineNumber: 891,
-									columnNumber: 25
-								}, this), /* @__PURE__ */ (void 0)(Field, {
-									label: "Estilo da resposta",
-									children: /* @__PURE__ */ (void 0)(Select, {
-										value: splitResponseStyle || "SINGLE",
-										onValueChange: (val) => setSplitResponseStyle(val),
-										children: [/* @__PURE__ */ (void 0)(SelectTrigger, { children: /* @__PURE__ */ (void 0)(SelectValue, { placeholder: "Selecione o estilo" }, void 0, false, {
-											fileName: _jsxFileName,
-											lineNumber: 896,
-											columnNumber: 45
-										}, this) }, void 0, false, {
-											fileName: _jsxFileName,
-											lineNumber: 896,
-											columnNumber: 30
-										}, this), /* @__PURE__ */ (void 0)(SelectContent, { children: [/* @__PURE__ */ (void 0)(SelectItem, {
-											value: "SINGLE",
-											children: "Mensagem Única"
-										}, void 0, false, {
-											fileName: _jsxFileName,
-											lineNumber: 898,
-											columnNumber: 32
-										}, this), /* @__PURE__ */ (void 0)(SelectItem, {
-											value: "NATURAL_BLOCKS",
-											children: "Blocos Naturais (Separados)"
-										}, void 0, false, {
-											fileName: _jsxFileName,
-											lineNumber: 899,
-											columnNumber: 32
-										}, this)] }, void 0, true, {
-											fileName: _jsxFileName,
-											lineNumber: 897,
-											columnNumber: 30
-										}, this)]
-									}, void 0, true, {
-										fileName: _jsxFileName,
-										lineNumber: 895,
-										columnNumber: 28
-									}, this)
-								}, void 0, false, {
-									fileName: _jsxFileName,
-									lineNumber: 894,
-									columnNumber: 25
-								}, this)]
-							}, void 0, true, {
-								fileName: _jsxFileName,
-								lineNumber: 890,
-								columnNumber: 46
-							}, this)]
-						}, void 0, true, {
-							fileName: _jsxFileName,
-							lineNumber: 878,
-							columnNumber: 19
-						}, this),
-						/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
-							label: "Mensagem inicial",
-							helper: "Opcional. Ao criar uma conversa nova, essa mensagem aparece como a primeira resposta.",
-							children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
-								rows: 2,
-								value: initialMessage,
-								onChange: (e) => setInitialMessage(e.target.value),
-								placeholder: "Olá! Sou seu assistente. Como posso ajudar?"
-							}, void 0, false, {
-								fileName: _jsxFileName,
-								lineNumber: 907,
+								lineNumber: 953,
 								columnNumber: 21
 							}, this)
 						}, void 0, false, {
 							fileName: _jsxFileName,
-							lineNumber: 906,
+							lineNumber: 952,
 							columnNumber: 19
 						}, this),
 						/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
 							label: "Instruções principais do agente",
 							helper: "Define a personalidade, função e regras primárias do agente.",
 							children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
-								rows: 5,
+								rows: 12,
 								value: instructions,
 								onChange: (e) => setInstructions(e.target.value),
 								placeholder: "Você é um atendente da Cubo.Chat..."
 							}, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 910,
+								lineNumber: 960,
 								columnNumber: 21
 							}, this)
 						}, void 0, false, {
 							fileName: _jsxFileName,
-							lineNumber: 909,
+							lineNumber: 959,
 							columnNumber: 19
 						}, this),
 						/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
 							className: "pt-6 border-t mt-6",
 							children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("h3", {
 								className: "text-lg font-semibold mb-4",
-								children: "Configurações Avançadas"
+								children: "Regras Avançadas"
 							}, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 915,
+								lineNumber: 965,
 								columnNumber: 21
 							}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Accordion, {
 								type: "single",
 								collapsible: true,
 								className: "w-full",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionItem, {
-										value: "avoid-phrases",
-										className: "border rounded-lg mb-3 px-4 py-1 bg-secondary/5",
-										children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionTrigger, {
-											className: "hover:no-underline py-3",
-											children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
-												className: "flex flex-col text-left space-y-1",
-												children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
-													className: "font-semibold text-sm",
-													children: "Frases a evitar"
-												}, void 0, false, {
-													fileName: _jsxFileName,
-													lineNumber: 922,
-													columnNumber: 29
-												}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
-													className: "text-xs text-muted-foreground font-normal",
-													children: avoidPhrases ? "Evita repetições configuradas." : "Evita repetições como 'é só me avisar'."
-												}, void 0, false, {
-													fileName: _jsxFileName,
-													lineNumber: 923,
-													columnNumber: 29
-												}, this)]
-											}, void 0, true, {
-												fileName: _jsxFileName,
-												lineNumber: 921,
-												columnNumber: 27
-											}, this)
-										}, void 0, false, {
-											fileName: _jsxFileName,
-											lineNumber: 920,
-											columnNumber: 25
-										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionContent, {
-											className: "pt-2 pb-4",
-											children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
-												className: "text-xs text-muted-foreground mb-3",
-												children: "Liste frases, vícios de linguagem ou encerramentos que o agente deve evitar repetir."
+								children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionItem, {
+									value: "avoid-phrases",
+									className: "border rounded-lg mb-3 px-4 py-1 bg-secondary/5",
+									children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionTrigger, {
+										className: "hover:no-underline py-3",
+										children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+											className: "flex flex-col text-left space-y-1",
+											children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
+												className: "font-semibold text-sm",
+												children: "Frases a evitar"
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 929,
-												columnNumber: 27
-											}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
-												rows: 3,
-												value: avoidPhrases,
-												onChange: (e) => setAvoidPhrases(e.target.value),
-												placeholder: "Ex: Evite repetir a mesma frase de encerramento em todas as respostas. Não finalize sempre com 'é só me avisar'. Varie naturalmente os encerramentos e só ofereça ajuda extra quando fizer sentido."
+												lineNumber: 972,
+												columnNumber: 29
+											}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
+												className: "text-xs text-muted-foreground font-normal",
+												children: avoidPhrases ? "Evita repetições configuradas." : "Evita repetições como 'é só me avisar'."
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 932,
-												columnNumber: 27
+												lineNumber: 973,
+												columnNumber: 29
 											}, this)]
 										}, void 0, true, {
 											fileName: _jsxFileName,
-											lineNumber: 928,
-											columnNumber: 25
+											lineNumber: 971,
+											columnNumber: 27
+										}, this)
+									}, void 0, false, {
+										fileName: _jsxFileName,
+										lineNumber: 970,
+										columnNumber: 25
+									}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionContent, {
+										className: "pt-2 pb-4",
+										children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
+											className: "text-xs text-muted-foreground mb-3",
+											children: "Liste frases, vícios de linguagem ou encerramentos que o agente deve evitar repetir."
+										}, void 0, false, {
+											fileName: _jsxFileName,
+											lineNumber: 979,
+											columnNumber: 27
+										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
+											rows: 3,
+											value: avoidPhrases,
+											onChange: (e) => setAvoidPhrases(e.target.value),
+											placeholder: "Ex: Evite repetir a mesma frase de encerramento em todas as respostas. Não finalize sempre com 'é só me avisar'. Varie naturalmente os encerramentos e só ofereça ajuda extra quando fizer sentido."
+										}, void 0, false, {
+											fileName: _jsxFileName,
+											lineNumber: 982,
+											columnNumber: 27
 										}, this)]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 919,
-										columnNumber: 23
-									}, this),
-									/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionItem, {
-										value: "fallback-message",
-										className: "border rounded-lg mb-3 px-4 py-1 bg-secondary/5",
-										children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionTrigger, {
-											className: "hover:no-underline py-3",
-											children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
-												className: "flex flex-col text-left space-y-1",
-												children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
-													className: "font-semibold text-sm",
-													children: "Mensagem quando não souber responder"
-												}, void 0, false, {
-													fileName: _jsxFileName,
-													lineNumber: 939,
-													columnNumber: 29
-												}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
-													className: "text-xs text-muted-foreground font-normal",
-													children: noAnswerMessage ? noAnswerMessage.substring(0, 80) + (noAnswerMessage.length > 80 ? "..." : "") : "Resposta padrão quando a IA não encontra informação."
-												}, void 0, false, {
-													fileName: _jsxFileName,
-													lineNumber: 940,
-													columnNumber: 29
-												}, this)]
-											}, void 0, true, {
-												fileName: _jsxFileName,
-												lineNumber: 938,
-												columnNumber: 27
-											}, this)
-										}, void 0, false, {
-											fileName: _jsxFileName,
-											lineNumber: 937,
-											columnNumber: 25
-										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionContent, {
-											className: "pt-2 pb-4",
-											children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
-												className: "text-xs text-muted-foreground mb-3",
-												children: "Mensagem usada quando o agente não tiver informação suficiente para responder."
+										lineNumber: 978,
+										columnNumber: 25
+									}, this)]
+								}, void 0, true, {
+									fileName: _jsxFileName,
+									lineNumber: 969,
+									columnNumber: 23
+								}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionItem, {
+									value: "guardrails",
+									className: "border rounded-lg px-4 py-1 bg-secondary/5",
+									children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionTrigger, {
+										className: "hover:no-underline py-3",
+										children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
+											className: "flex flex-col text-left space-y-1",
+											children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
+												className: "font-semibold text-sm",
+												children: "Guardrails básicos"
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 946,
-												columnNumber: 27
-											}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
-												rows: 3,
-												value: noAnswerMessage,
-												onChange: (e) => setNoAnswerMessage(e.target.value),
-												placeholder: "Infelizmente, não tenho essa informação..."
+												lineNumber: 989,
+												columnNumber: 29
+											}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
+												className: "text-xs text-muted-foreground font-normal",
+												children: "Limites obrigatórios incorporados ao comportamento do agente."
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 949,
-												columnNumber: 27
+												lineNumber: 990,
+												columnNumber: 29
 											}, this)]
 										}, void 0, true, {
 											fileName: _jsxFileName,
-											lineNumber: 945,
-											columnNumber: 25
-										}, this)]
-									}, void 0, true, {
+											lineNumber: 988,
+											columnNumber: 27
+										}, this)
+									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 936,
-										columnNumber: 23
-									}, this),
-									/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionItem, {
-										value: "guardrails",
-										className: "border rounded-lg px-4 py-1 bg-secondary/5",
-										children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionTrigger, {
-											className: "hover:no-underline py-3",
-											children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
-												className: "flex flex-col text-left space-y-1",
-												children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
-													className: "font-semibold text-sm",
-													children: "Guardrails básicos"
-												}, void 0, false, {
-													fileName: _jsxFileName,
-													lineNumber: 956,
-													columnNumber: 29
-												}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
-													className: "text-xs text-muted-foreground font-normal",
-													children: "Limites obrigatórios incorporados ao comportamento do agente."
-												}, void 0, false, {
-													fileName: _jsxFileName,
-													lineNumber: 957,
-													columnNumber: 29
-												}, this)]
-											}, void 0, true, {
-												fileName: _jsxFileName,
-												lineNumber: 955,
-												columnNumber: 27
-											}, this)
+										lineNumber: 987,
+										columnNumber: 25
+									}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionContent, {
+										className: "pt-2 pb-4",
+										children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
+											className: "text-xs text-muted-foreground mb-3",
+											children: "Defina limites obrigatórios, como não inventar informações, não expor dados internos e transferir para humano quando necessário."
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 954,
-											columnNumber: 25
-										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(AccordionContent, {
-											className: "pt-2 pb-4",
-											children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
-												className: "text-xs text-muted-foreground mb-3",
-												children: "Defina limites obrigatórios, como não inventar informações, não expor dados internos e transferir para humano quando necessário."
-											}, void 0, false, {
-												fileName: _jsxFileName,
-												lineNumber: 963,
-												columnNumber: 27
-											}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
-												rows: 4,
-												value: securityInstructions,
-												onChange: (e) => setSecurityInstructions(e.target.value),
-												placeholder: "Regras de segurança incorporadas ao prompt."
-											}, void 0, false, {
-												fileName: _jsxFileName,
-												lineNumber: 966,
-												columnNumber: 27
-											}, this)]
-										}, void 0, true, {
+											lineNumber: 996,
+											columnNumber: 27
+										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Textarea, {
+											rows: 4,
+											value: securityInstructions,
+											onChange: (e) => setSecurityInstructions(e.target.value),
+											placeholder: "Regras de segurança incorporadas ao prompt."
+										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 962,
-											columnNumber: 25
+											lineNumber: 999,
+											columnNumber: 27
 										}, this)]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 953,
-										columnNumber: 23
-									}, this)
-								]
+										lineNumber: 995,
+										columnNumber: 25
+									}, this)]
+								}, void 0, true, {
+									fileName: _jsxFileName,
+									lineNumber: 986,
+									columnNumber: 23
+								}, this)]
 							}, void 0, true, {
 								fileName: _jsxFileName,
-								lineNumber: 917,
+								lineNumber: 967,
 								columnNumber: 21
 							}, this)]
 						}, void 0, true, {
 							fileName: _jsxFileName,
-							lineNumber: 914,
+							lineNumber: 964,
 							columnNumber: 19
 						}, this),
 						/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -1924,7 +3277,7 @@ function NovoAgente() {
 										children: "Usar conhecimento preparado no atendimento real"
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 975,
+										lineNumber: 1008,
 										columnNumber: 23
 									}, this),
 									/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
@@ -1932,25 +3285,25 @@ function NovoAgente() {
 										children: "Busca respostas baseadas nos arquivos de conhecimento antes de responder ao cliente."
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 978,
+										lineNumber: 1011,
 										columnNumber: 23
 									}, this),
 									ragEnabled && knowledge.filter((k) => k.status === "ACTIVE" && k.processingStatus === "READY").length === 0 && /* @__PURE__ */ (void 0)("div", {
 										className: "text-amber-600 text-xs mt-2 flex items-center",
 										children: [/* @__PURE__ */ (void 0)(TriangleAlert, { className: "h-3 w-3 mr-1" }, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 982,
+											lineNumber: 1015,
 											columnNumber: 27
 										}, this), "Você não possui conhecimentos ATIVOS e PREPARADOS. O agente responderá normalmente sem contexto até que os arquivos estejam prontos."]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 981,
+										lineNumber: 1014,
 										columnNumber: 133
 									}, this)
 								]
 							}, void 0, true, {
 								fileName: _jsxFileName,
-								lineNumber: 974,
+								lineNumber: 1007,
 								columnNumber: 21
 							}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Switch, {
 								id: "use-rag-production",
@@ -1958,27 +3311,27 @@ function NovoAgente() {
 								onCheckedChange: setRagEnabled
 							}, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 986,
+								lineNumber: 1019,
 								columnNumber: 21
 							}, this)]
 						}, void 0, true, {
 							fileName: _jsxFileName,
-							lineNumber: 973,
+							lineNumber: 1006,
 							columnNumber: 19
 						}, this)
 					]
 				}, void 0, true, {
 					fileName: _jsxFileName,
-					lineNumber: 843,
+					lineNumber: 951,
 					columnNumber: 17
 				}, this) }, void 0, false, {
 					fileName: _jsxFileName,
-					lineNumber: 842,
+					lineNumber: 950,
 					columnNumber: 15
 				}, this)
 			}, void 0, false, {
 				fileName: _jsxFileName,
-				lineNumber: 841,
+				lineNumber: 949,
 				columnNumber: 13
 			}, this),
 			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsContent, {
@@ -1990,7 +3343,7 @@ function NovoAgente() {
 						children: "Conhecimentos do agente"
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 995,
+						lineNumber: 1028,
 						columnNumber: 19
 					}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Dialog, {
 						open: isAddingKnowledge,
@@ -2001,23 +3354,23 @@ function NovoAgente() {
 							disabled: !selectedAssistantId,
 							children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Plus, { className: "h-4 w-4 mr-2" }, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 998,
+								lineNumber: 1031,
 								columnNumber: 23
 							}, this), " Adicionar conhecimento"]
 						}, void 0, true, {
 							fileName: _jsxFileName,
-							lineNumber: 997,
+							lineNumber: 1030,
 							columnNumber: 21
 						}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(DialogContent, {
 							className: "max-w-xl",
 							children: [
 								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(DialogHeader, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(DialogTitle, { children: knowledgeFormId ? "Editar Conhecimento" : "Adicionar Conhecimento" }, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1002,
+									lineNumber: 1035,
 									columnNumber: 25
 								}, this) }, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1001,
+									lineNumber: 1034,
 									columnNumber: 23
 								}, this),
 								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -2030,12 +3383,12 @@ function NovoAgente() {
 												onChange: (e) => setKnowledgeFormTitle(e.target.value)
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 1006,
+												lineNumber: 1039,
 												columnNumber: 27
 											}, this)
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1005,
+											lineNumber: 1038,
 											columnNumber: 25
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
@@ -2045,11 +3398,11 @@ function NovoAgente() {
 												onValueChange: (val) => setKnowledgeFormType(val),
 												children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectTrigger, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectValue, {}, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 1010,
+													lineNumber: 1043,
 													columnNumber: 44
 												}, this) }, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 1010,
+													lineNumber: 1043,
 													columnNumber: 29
 												}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectContent, { children: [
 													/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
@@ -2057,7 +3410,7 @@ function NovoAgente() {
 														children: "Texto manual"
 													}, void 0, false, {
 														fileName: _jsxFileName,
-														lineNumber: 1012,
+														lineNumber: 1045,
 														columnNumber: 31
 													}, this),
 													/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
@@ -2065,7 +3418,7 @@ function NovoAgente() {
 														children: "URL (Site)"
 													}, void 0, false, {
 														fileName: _jsxFileName,
-														lineNumber: 1013,
+														lineNumber: 1046,
 														columnNumber: 31
 													}, this),
 													/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
@@ -2073,22 +3426,22 @@ function NovoAgente() {
 														children: "Conversa de exemplo"
 													}, void 0, false, {
 														fileName: _jsxFileName,
-														lineNumber: 1014,
+														lineNumber: 1047,
 														columnNumber: 31
 													}, this)
 												] }, void 0, true, {
 													fileName: _jsxFileName,
-													lineNumber: 1011,
+													lineNumber: 1044,
 													columnNumber: 29
 												}, this)]
 											}, void 0, true, {
 												fileName: _jsxFileName,
-												lineNumber: 1009,
+												lineNumber: 1042,
 												columnNumber: 27
 											}, this)
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1008,
+											lineNumber: 1041,
 											columnNumber: 25
 										}, this),
 										knowledgeFormType === "URL" && /* @__PURE__ */ (void 0)(Field, {
@@ -2099,12 +3452,12 @@ function NovoAgente() {
 												onChange: (e) => setKnowledgeFormUrl(e.target.value)
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 1019,
+												lineNumber: 1052,
 												columnNumber: 29
 											}, this)
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1018,
+											lineNumber: 1051,
 											columnNumber: 57
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
@@ -2115,12 +3468,12 @@ function NovoAgente() {
 												onChange: (e) => setKnowledgeFormContent(e.target.value)
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 1022,
+												lineNumber: 1055,
 												columnNumber: 27
 											}, this)
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1021,
+											lineNumber: 1054,
 											columnNumber: 25
 										}, this),
 										knowledgeFormId && /* @__PURE__ */ (void 0)("div", {
@@ -2131,19 +3484,19 @@ function NovoAgente() {
 												onCheckedChange: (c) => setKnowledgeFormStatus(c ? "ACTIVE" : "INACTIVE")
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 1025,
+												lineNumber: 1058,
 												columnNumber: 31
 											}, this), /* @__PURE__ */ (void 0)(Label, {
 												htmlFor: "knowledge-active",
 												children: "Este conhecimento está ativo e liberado para uso"
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 1026,
+												lineNumber: 1059,
 												columnNumber: 31
 											}, this)]
 										}, void 0, true, {
 											fileName: _jsxFileName,
-											lineNumber: 1024,
+											lineNumber: 1057,
 											columnNumber: 45
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
@@ -2151,13 +3504,13 @@ function NovoAgente() {
 											children: "Este conteúdo ficará salvo na base de conhecimento do agente. A preparação para a IA ler e analisar o texto será feita na próxima etapa."
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1028,
+											lineNumber: 1061,
 											columnNumber: 25
 										}, this)
 									]
 								}, void 0, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1004,
+									lineNumber: 1037,
 									columnNumber: 23
 								}, this),
 								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(DialogFooter, { children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
@@ -2166,7 +3519,7 @@ function NovoAgente() {
 									children: "Cancelar"
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1033,
+									lineNumber: 1066,
 									columnNumber: 26
 								}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
 									onClick: () => void handleSaveKnowledge(),
@@ -2174,27 +3527,27 @@ function NovoAgente() {
 									children: knowledgeSaving ? "Salvando..." : "Salvar"
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1034,
+									lineNumber: 1067,
 									columnNumber: 26
 								}, this)] }, void 0, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1032,
+									lineNumber: 1065,
 									columnNumber: 23
 								}, this)
 							]
 						}, void 0, true, {
 							fileName: _jsxFileName,
-							lineNumber: 1e3,
+							lineNumber: 1033,
 							columnNumber: 21
 						}, this)]
 					}, void 0, true, {
 						fileName: _jsxFileName,
-						lineNumber: 996,
+						lineNumber: 1029,
 						columnNumber: 19
 					}, this)]
 				}, void 0, true, {
 					fileName: _jsxFileName,
-					lineNumber: 994,
+					lineNumber: 1027,
 					columnNumber: 17
 				}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(CardContent, {
 					className: "p-6 pt-0 space-y-3",
@@ -2203,14 +3556,14 @@ function NovoAgente() {
 						description: "Salve o agente primeiro antes de adicionar conhecimentos."
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 1042,
+						lineNumber: 1075,
 						columnNumber: 43
 					}, this) : knowledge.length === 0 ? /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(EmptyState, {
 						title: "Sem conhecimento carregado",
 						description: "Adicione conhecimentos para que o agente tenha contexto sobre sua empresa."
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 1042,
+						lineNumber: 1075,
 						columnNumber: 182
 					}, this) : knowledge.map((item) => /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
 						className: "flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border rounded-lg",
@@ -2222,7 +3575,7 @@ function NovoAgente() {
 								children: item.title
 							}, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 1044,
+								lineNumber: 1077,
 								columnNumber: 27
 							}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
 								className: "flex items-center gap-2 mt-1",
@@ -2232,7 +3585,7 @@ function NovoAgente() {
 										children: item.metadata?.type === "URL" ? "URL" : item.metadata?.type === "CONVERSATION" ? "Conversa de Exemplo" : "Texto Manual"
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1046,
+										lineNumber: 1079,
 										columnNumber: 29
 									}, this),
 									/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
@@ -2240,7 +3593,7 @@ function NovoAgente() {
 										children: ["Atualizado em ", new Date(item.updatedAt).toLocaleDateString()]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 1049,
+										lineNumber: 1082,
 										columnNumber: 29
 									}, this),
 									item.processingStatus === "READY" && /* @__PURE__ */ (void 0)("span", {
@@ -2248,7 +3601,7 @@ function NovoAgente() {
 										children: "Pronto para IA"
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1052,
+										lineNumber: 1085,
 										columnNumber: 67
 									}, this),
 									item.processingStatus === "PROCESSING" && /* @__PURE__ */ (void 0)("span", {
@@ -2256,7 +3609,7 @@ function NovoAgente() {
 										children: "Processando..."
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1053,
+										lineNumber: 1086,
 										columnNumber: 72
 									}, this),
 									item.processingStatus === "ERROR" && /* @__PURE__ */ (void 0)("span", {
@@ -2265,7 +3618,7 @@ function NovoAgente() {
 										children: "Erro"
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1054,
+										lineNumber: 1087,
 										columnNumber: 67
 									}, this),
 									item.processingStatus === "DRAFT" && /* @__PURE__ */ (void 0)("span", {
@@ -2273,25 +3626,25 @@ function NovoAgente() {
 										children: "Pendente"
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1055,
+										lineNumber: 1088,
 										columnNumber: 67
 									}, this)
 								]
 							}, void 0, true, {
 								fileName: _jsxFileName,
-								lineNumber: 1045,
+								lineNumber: 1078,
 								columnNumber: 27
 							}, this)]
 						}, void 0, true, {
 							fileName: _jsxFileName,
-							lineNumber: 1043,
+							lineNumber: 1076,
 							columnNumber: 25
 						}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
 							className: "flex items-center gap-3",
 							children: [
 								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(StatusBadge, { status: item.status === "ACTIVE" ? "ativo" : "pausado" }, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1059,
+									lineNumber: 1092,
 									columnNumber: 27
 								}, this),
 								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
@@ -2303,7 +3656,7 @@ function NovoAgente() {
 									children: preparingKnowledgeId === item.id ? "Preparando..." : item.processingStatus === "ERROR" ? "Tentar Novamente" : item.processingStatus === "READY" ? "Atualizar preparação" : "Preparar conhecimento"
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1060,
+									lineNumber: 1093,
 									columnNumber: 27
 								}, this),
 								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
@@ -2313,18 +3666,18 @@ function NovoAgente() {
 									children: "Editar"
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1063,
+									lineNumber: 1096,
 									columnNumber: 27
 								}, this)
 							]
 						}, void 0, true, {
 							fileName: _jsxFileName,
-							lineNumber: 1058,
+							lineNumber: 1091,
 							columnNumber: 25
 						}, this)]
 					}, item.id, true, {
 						fileName: _jsxFileName,
-						lineNumber: 1042,
+						lineNumber: 1075,
 						columnNumber: 345
 					}, this)), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
 						className: "pt-4 border-t flex justify-end",
@@ -2335,31 +3688,31 @@ function NovoAgente() {
 								to: "/conhecimento",
 								children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Link2, { className: "h-4 w-4 mr-2" }, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1069,
+									lineNumber: 1102,
 									columnNumber: 25
 								}, this), " Gerenciar Base de Conhecimento"]
 							}, void 0, true, {
 								fileName: _jsxFileName,
-								lineNumber: 1068,
+								lineNumber: 1101,
 								columnNumber: 23
 							}, this)
 						}, void 0, false, {
 							fileName: _jsxFileName,
-							lineNumber: 1067,
+							lineNumber: 1100,
 							columnNumber: 21
 						}, this)
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 1066,
+						lineNumber: 1099,
 						columnNumber: 19
 					}, this)]
 				}, void 0, true, {
 					fileName: _jsxFileName,
-					lineNumber: 1041,
+					lineNumber: 1074,
 					columnNumber: 17
 				}, this)] }, void 0, true, {
 					fileName: _jsxFileName,
-					lineNumber: 993,
+					lineNumber: 1026,
 					columnNumber: 15
 				}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Card, {
 					className: "mt-4",
@@ -2368,18 +3721,18 @@ function NovoAgente() {
 						children: "Testar busca no conhecimento"
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 1079,
+						lineNumber: 1112,
 						columnNumber: 19
 					}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
 						className: "text-sm text-muted-foreground mt-1",
 						children: "Use este teste para ver se a IA encontra informações dentro dos conhecimentos preparados."
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 1080,
+						lineNumber: 1113,
 						columnNumber: 19
 					}, this)] }, void 0, true, {
 						fileName: _jsxFileName,
-						lineNumber: 1078,
+						lineNumber: 1111,
 						columnNumber: 17
 					}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(CardContent, {
 						className: "p-6 pt-0 space-y-4",
@@ -2387,19 +3740,19 @@ function NovoAgente() {
 							className: "flex items-center gap-2 text-amber-600 bg-amber-50 p-3 rounded-lg border border-amber-200",
 							children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TriangleAlert, { className: "h-4 w-4 shrink-0" }, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 1086,
+								lineNumber: 1119,
 								columnNumber: 23
 							}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
 								className: "text-sm font-medium",
 								children: "Você precisa ter pelo menos um conhecimento preparado (Pronto) para testar a busca."
 							}, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 1087,
+								lineNumber: 1120,
 								columnNumber: 23
 							}, this)]
 						}, void 0, true, {
 							fileName: _jsxFileName,
-							lineNumber: 1085,
+							lineNumber: 1118,
 							columnNumber: 48
 						}, this) : /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(import_jsx_dev_runtime.Fragment, { children: [
 							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -2411,7 +3764,7 @@ function NovoAgente() {
 									onKeyDown: (e) => e.key === "Enter" && handleSearchKnowledge()
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1090,
+									lineNumber: 1123,
 									columnNumber: 25
 								}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
 									onClick: () => void handleSearchKnowledge(),
@@ -2419,12 +3772,12 @@ function NovoAgente() {
 									children: isSearching ? "Buscando..." : "Buscar relevante"
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1091,
+									lineNumber: 1124,
 									columnNumber: 25
 								}, this)]
 							}, void 0, true, {
 								fileName: _jsxFileName,
-								lineNumber: 1089,
+								lineNumber: 1122,
 								columnNumber: 23
 							}, this),
 							searchError && /* @__PURE__ */ (void 0)("div", {
@@ -2432,7 +3785,7 @@ function NovoAgente() {
 								children: searchError
 							}, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 1096,
+								lineNumber: 1129,
 								columnNumber: 39
 							}, this),
 							searchResults && searchResults.length > 0 && /* @__PURE__ */ (void 0)("div", {
@@ -2442,7 +3795,7 @@ function NovoAgente() {
 									children: "Resultados encontrados:"
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1101,
+									lineNumber: 1134,
 									columnNumber: 27
 								}, this), searchResults.map((res, i) => /* @__PURE__ */ (void 0)("div", {
 									className: "p-3 border rounded-lg bg-muted/20 space-y-2",
@@ -2458,7 +3811,7 @@ function NovoAgente() {
 											]
 										}, void 0, true, {
 											fileName: _jsxFileName,
-											lineNumber: 1104,
+											lineNumber: 1137,
 											columnNumber: 33
 										}, this), /* @__PURE__ */ (void 0)("span", {
 											className: "text-xs px-2 py-0.5 bg-primary/10 text-primary rounded-md font-semibold",
@@ -2469,12 +3822,12 @@ function NovoAgente() {
 											]
 										}, void 0, true, {
 											fileName: _jsxFileName,
-											lineNumber: 1107,
+											lineNumber: 1140,
 											columnNumber: 33
 										}, this)]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 1103,
+										lineNumber: 1136,
 										columnNumber: 31
 									}, this), /* @__PURE__ */ (void 0)("div", {
 										className: "text-sm text-muted-foreground italic border-l-2 pl-2",
@@ -2485,37 +3838,37 @@ function NovoAgente() {
 										]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 1111,
+										lineNumber: 1144,
 										columnNumber: 31
 									}, this)]
 								}, res.chunkId, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1102,
+									lineNumber: 1135,
 									columnNumber: 58
 								}, this))]
 							}, void 0, true, {
 								fileName: _jsxFileName,
-								lineNumber: 1100,
+								lineNumber: 1133,
 								columnNumber: 69
 							}, this)
 						] }, void 0, true, {
 							fileName: _jsxFileName,
-							lineNumber: 1088,
+							lineNumber: 1121,
 							columnNumber: 30
 						}, this)
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 1084,
+						lineNumber: 1117,
 						columnNumber: 17
 					}, this)]
 				}, void 0, true, {
 					fileName: _jsxFileName,
-					lineNumber: 1077,
+					lineNumber: 1110,
 					columnNumber: 15
 				}, this)]
 			}, void 0, true, {
 				fileName: _jsxFileName,
-				lineNumber: 992,
+				lineNumber: 1025,
 				columnNumber: 13
 			}, this),
 			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsContent, {
@@ -2527,21 +3880,21 @@ function NovoAgente() {
 						description: "A demo atual foca em assistentes, conhecimento e runtime determinístico."
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 1124,
+						lineNumber: 1157,
 						columnNumber: 19
 					}, this)
 				}, void 0, false, {
 					fileName: _jsxFileName,
-					lineNumber: 1123,
+					lineNumber: 1156,
 					columnNumber: 17
 				}, this) }, void 0, false, {
 					fileName: _jsxFileName,
-					lineNumber: 1122,
+					lineNumber: 1155,
 					columnNumber: 15
 				}, this)
 			}, void 0, false, {
 				fileName: _jsxFileName,
-				lineNumber: 1121,
+				lineNumber: 1154,
 				columnNumber: 13
 			}, this),
 			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsContent, {
@@ -2553,21 +3906,21 @@ function NovoAgente() {
 						description: "A memória persiste apenas no runtime backend atual."
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 1132,
+						lineNumber: 1165,
 						columnNumber: 19
 					}, this)
 				}, void 0, false, {
 					fileName: _jsxFileName,
-					lineNumber: 1131,
+					lineNumber: 1164,
 					columnNumber: 17
 				}, this) }, void 0, false, {
 					fileName: _jsxFileName,
-					lineNumber: 1130,
+					lineNumber: 1163,
 					columnNumber: 15
 				}, this)
 			}, void 0, false, {
 				fileName: _jsxFileName,
-				lineNumber: 1129,
+				lineNumber: 1162,
 				columnNumber: 13
 			}, this),
 			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsContent, {
@@ -2579,18 +3932,18 @@ function NovoAgente() {
 						children: "Regras de Segurança e Gatilhos"
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 1141,
+						lineNumber: 1174,
 						columnNumber: 21
 					}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
 						className: "text-sm text-muted-foreground mt-1",
 						children: "Configure limites de comportamento (Guardrails) e ações automáticas (Gatilhos)."
 					}, void 0, false, {
 						fileName: _jsxFileName,
-						lineNumber: 1142,
+						lineNumber: 1175,
 						columnNumber: 21
 					}, this)] }, void 0, true, {
 						fileName: _jsxFileName,
-						lineNumber: 1140,
+						lineNumber: 1173,
 						columnNumber: 19
 					}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Dialog, {
 						open: isAddingSecurityRule,
@@ -2601,26 +3954,26 @@ function NovoAgente() {
 								size: "sm",
 								children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Plus, { className: "h-4 w-4 mr-2" }, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1146,
+									lineNumber: 1179,
 									columnNumber: 41
 								}, this), " Adicionar regra de segurança"]
 							}, void 0, true, {
 								fileName: _jsxFileName,
-								lineNumber: 1146,
+								lineNumber: 1179,
 								columnNumber: 23
 							}, this)
 						}, void 0, false, {
 							fileName: _jsxFileName,
-							lineNumber: 1145,
+							lineNumber: 1178,
 							columnNumber: 21
 						}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(DialogContent, { children: [
 							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(DialogHeader, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(DialogTitle, { children: "Nova Regra de Segurança" }, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 1150,
+								lineNumber: 1183,
 								columnNumber: 25
 							}, this) }, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 1149,
+								lineNumber: 1182,
 								columnNumber: 23
 							}, this),
 							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -2629,12 +3982,12 @@ function NovoAgente() {
 									label: "Nome da regra",
 									children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Input, { placeholder: "Ex: Não divulgar descontos" }, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1154,
+										lineNumber: 1187,
 										columnNumber: 27
 									}, this)
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1153,
+									lineNumber: 1186,
 									columnNumber: 25
 								}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Field, {
 									label: "Tipo da regra",
@@ -2642,11 +3995,11 @@ function NovoAgente() {
 										defaultValue: "bloquear",
 										children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectTrigger, { children: /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectValue, {}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1158,
+											lineNumber: 1191,
 											columnNumber: 44
 										}, this) }, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1158,
+											lineNumber: 1191,
 											columnNumber: 29
 										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectContent, { children: [
 											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
@@ -2654,7 +4007,7 @@ function NovoAgente() {
 												children: "Bloquear assunto"
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 1160,
+												lineNumber: 1193,
 												columnNumber: 31
 											}, this),
 											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
@@ -2662,7 +4015,7 @@ function NovoAgente() {
 												children: "Não inventar resposta"
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 1161,
+												lineNumber: 1194,
 												columnNumber: 31
 											}, this),
 											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(SelectItem, {
@@ -2670,27 +4023,27 @@ function NovoAgente() {
 												children: "Transferir para humano"
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 1162,
+												lineNumber: 1195,
 												columnNumber: 31
 											}, this)
 										] }, void 0, true, {
 											fileName: _jsxFileName,
-											lineNumber: 1159,
+											lineNumber: 1192,
 											columnNumber: 29
 										}, this)]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 1157,
+										lineNumber: 1190,
 										columnNumber: 27
 									}, this)
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1156,
+									lineNumber: 1189,
 									columnNumber: 25
 								}, this)]
 							}, void 0, true, {
 								fileName: _jsxFileName,
-								lineNumber: 1152,
+								lineNumber: 1185,
 								columnNumber: 23
 							}, this),
 							/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(DialogFooter, { children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
@@ -2699,33 +4052,33 @@ function NovoAgente() {
 								children: "Cancelar"
 							}, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 1168,
+								lineNumber: 1201,
 								columnNumber: 25
 							}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
 								onClick: () => setIsAddingSecurityRule(false),
 								children: "Salvar regra"
 							}, void 0, false, {
 								fileName: _jsxFileName,
-								lineNumber: 1169,
+								lineNumber: 1202,
 								columnNumber: 25
 							}, this)] }, void 0, true, {
 								fileName: _jsxFileName,
-								lineNumber: 1167,
+								lineNumber: 1200,
 								columnNumber: 23
 							}, this)
 						] }, void 0, true, {
 							fileName: _jsxFileName,
-							lineNumber: 1148,
+							lineNumber: 1181,
 							columnNumber: 21
 						}, this)]
 					}, void 0, true, {
 						fileName: _jsxFileName,
-						lineNumber: 1144,
+						lineNumber: 1177,
 						columnNumber: 19
 					}, this)]
 				}, void 0, true, {
 					fileName: _jsxFileName,
-					lineNumber: 1139,
+					lineNumber: 1172,
 					columnNumber: 17
 				}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(CardContent, {
 					className: "p-6 pt-0 space-y-6",
@@ -2736,12 +4089,12 @@ function NovoAgente() {
 								className: "text-sm font-semibold flex items-center gap-2",
 								children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TriangleAlert, { className: "h-4 w-4 text-amber-500" }, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1178,
+									lineNumber: 1211,
 									columnNumber: 23
 								}, this), "Guardrails (Limites e Restrições)"]
 							}, void 0, true, {
 								fileName: _jsxFileName,
-								lineNumber: 1177,
+								lineNumber: 1210,
 								columnNumber: 21
 							}, this), securityRules.filter((r) => r.type !== "transferir").map((rule) => /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
 								className: "flex flex-col sm:flex-row gap-4 p-4 border rounded-lg",
@@ -2754,24 +4107,24 @@ function NovoAgente() {
 											children: rule.type
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1185,
+											lineNumber: 1218,
 											columnNumber: 29
 										}, this)]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 1183,
+										lineNumber: 1216,
 										columnNumber: 27
 									}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
 										className: "text-sm text-muted-foreground mt-1",
 										children: rule.instruction
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1187,
+										lineNumber: 1220,
 										columnNumber: 27
 									}, this)]
 								}, void 0, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1182,
+									lineNumber: 1215,
 									columnNumber: 25
 								}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
 									className: "flex items-center gap-2",
@@ -2780,7 +4133,7 @@ function NovoAgente() {
 										children: rule.active ? "Ativa" : "Inativa"
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1190,
+										lineNumber: 1223,
 										columnNumber: 27
 									}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Checkbox, {
 										checked: rule.active,
@@ -2792,22 +4145,22 @@ function NovoAgente() {
 										}
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1191,
+										lineNumber: 1224,
 										columnNumber: 27
 									}, this)]
 								}, void 0, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1189,
+									lineNumber: 1222,
 									columnNumber: 25
 								}, this)]
 							}, rule.id, true, {
 								fileName: _jsxFileName,
-								lineNumber: 1181,
+								lineNumber: 1214,
 								columnNumber: 85
 							}, this))]
 						}, void 0, true, {
 							fileName: _jsxFileName,
-							lineNumber: 1176,
+							lineNumber: 1209,
 							columnNumber: 19
 						}, this),
 						/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -2818,7 +4171,7 @@ function NovoAgente() {
 									children: [
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Sparkles, { className: "h-4 w-4 text-blue-500" }, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1204,
+											lineNumber: 1237,
 											columnNumber: 23
 										}, this),
 										"Gatilhos (Ações Automáticas)",
@@ -2828,13 +4181,13 @@ function NovoAgente() {
 											children: "Em breve"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1206,
+											lineNumber: 1239,
 											columnNumber: 23
 										}, this)
 									]
 								}, void 0, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1203,
+									lineNumber: 1236,
 									columnNumber: 21
 								}, this),
 								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("p", {
@@ -2842,7 +4195,7 @@ function NovoAgente() {
 									children: "Defina comportamentos que disparam ações na plataforma, como agendar na agenda ou transferir o chat."
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1208,
+									lineNumber: 1241,
 									columnNumber: 21
 								}, this),
 								securityRules.filter((r) => r.type === "transferir").map((rule) => /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -2857,24 +4210,24 @@ function NovoAgente() {
 												children: rule.type
 											}, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 1213,
+												lineNumber: 1246,
 												columnNumber: 29
 											}, this)]
 										}, void 0, true, {
 											fileName: _jsxFileName,
-											lineNumber: 1211,
+											lineNumber: 1244,
 											columnNumber: 27
 										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
 											className: "text-sm text-muted-foreground mt-1",
 											children: rule.instruction
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1215,
+											lineNumber: 1248,
 											columnNumber: 27
 										}, this)]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 1210,
+										lineNumber: 1243,
 										columnNumber: 25
 									}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
 										className: "flex items-center gap-2",
@@ -2883,7 +4236,7 @@ function NovoAgente() {
 											children: rule.active ? "Ativa" : "Inativa"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1218,
+											lineNumber: 1251,
 											columnNumber: 27
 										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Checkbox, {
 											checked: rule.active,
@@ -2895,17 +4248,17 @@ function NovoAgente() {
 											}
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1219,
+											lineNumber: 1252,
 											columnNumber: 27
 										}, this)]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 1217,
+										lineNumber: 1250,
 										columnNumber: 25
 									}, this)]
 								}, rule.id, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1209,
+									lineNumber: 1242,
 									columnNumber: 85
 								}, this)),
 								securityRules.filter((r) => r.type === "transferir").length === 0 && /* @__PURE__ */ (void 0)("div", {
@@ -2913,13 +4266,13 @@ function NovoAgente() {
 									children: "Nenhum gatilho configurado. Use o botão acima para adicionar."
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1227,
+									lineNumber: 1260,
 									columnNumber: 89
 								}, this)
 							]
 						}, void 0, true, {
 							fileName: _jsxFileName,
-							lineNumber: 1202,
+							lineNumber: 1235,
 							columnNumber: 19
 						}, this),
 						/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -2930,7 +4283,7 @@ function NovoAgente() {
 									children: "Filtros Nativos do Sistema"
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1233,
+									lineNumber: 1266,
 									columnNumber: 21
 								}, this),
 								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(ToggleRow, {
@@ -2939,7 +4292,7 @@ function NovoAgente() {
 									defaultChecked: true
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1234,
+									lineNumber: 1267,
 									columnNumber: 21
 								}, this),
 								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(ToggleRow, {
@@ -2948,7 +4301,7 @@ function NovoAgente() {
 									defaultChecked: true
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1235,
+									lineNumber: 1268,
 									columnNumber: 21
 								}, this),
 								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(ToggleRow, {
@@ -2957,28 +4310,28 @@ function NovoAgente() {
 									defaultChecked: true
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1236,
+									lineNumber: 1269,
 									columnNumber: 21
 								}, this)
 							]
 						}, void 0, true, {
 							fileName: _jsxFileName,
-							lineNumber: 1232,
+							lineNumber: 1265,
 							columnNumber: 19
 						}, this)
 					]
 				}, void 0, true, {
 					fileName: _jsxFileName,
-					lineNumber: 1174,
+					lineNumber: 1207,
 					columnNumber: 17
 				}, this)] }, void 0, true, {
 					fileName: _jsxFileName,
-					lineNumber: 1138,
+					lineNumber: 1171,
 					columnNumber: 15
 				}, this)
 			}, void 0, false, {
 				fileName: _jsxFileName,
-				lineNumber: 1137,
+				lineNumber: 1170,
 				columnNumber: 13
 			}, this),
 			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(TabsContent, {
@@ -2992,11 +4345,11 @@ function NovoAgente() {
 							children: "Revisão Final"
 						}, void 0, false, {
 							fileName: _jsxFileName,
-							lineNumber: 1246,
+							lineNumber: 1279,
 							columnNumber: 21
 						}, this) }, void 0, false, {
 							fileName: _jsxFileName,
-							lineNumber: 1245,
+							lineNumber: 1278,
 							columnNumber: 19
 						}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(CardContent, {
 							className: "space-y-4",
@@ -3005,133 +4358,133 @@ function NovoAgente() {
 									className: "flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50",
 									children: [/* @__PURE__ */ (void 0)(TriangleAlert, { className: "h-4 w-4 shrink-0" }, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1250,
+										lineNumber: 1283,
 										columnNumber: 25
 									}, this), /* @__PURE__ */ (void 0)("span", {
 										className: "text-sm font-medium",
 										children: "O nome do agente é obrigatório."
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1251,
+										lineNumber: 1284,
 										columnNumber: 25
 									}, this)]
 								}, void 0, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1249,
+									lineNumber: 1282,
 									columnNumber: 38
 								}, this),
 								!instructions.trim() && /* @__PURE__ */ (void 0)("div", {
 									className: "flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50",
 									children: [/* @__PURE__ */ (void 0)(TriangleAlert, { className: "h-4 w-4 shrink-0" }, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1254,
+										lineNumber: 1287,
 										columnNumber: 25
 									}, this), /* @__PURE__ */ (void 0)("span", {
 										className: "text-sm font-medium",
 										children: "Você está usando o prompt padrão do sistema. Recomendamos personalizar as instruções."
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1255,
+										lineNumber: 1288,
 										columnNumber: 25
 									}, this)]
 								}, void 0, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1253,
+									lineNumber: 1286,
 									columnNumber: 46
 								}, this),
 								activeKnowledgeCount === 0 && /* @__PURE__ */ (void 0)("div", {
 									className: "flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50",
 									children: [/* @__PURE__ */ (void 0)(TriangleAlert, { className: "h-4 w-4 shrink-0" }, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1258,
+										lineNumber: 1291,
 										columnNumber: 25
 									}, this), /* @__PURE__ */ (void 0)("span", {
 										className: "text-sm font-medium",
 										children: "Nenhum conhecimento ativo foi adicionado. O agente responderá apenas com base no prompt."
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1259,
+										lineNumber: 1292,
 										columnNumber: 25
 									}, this)]
 								}, void 0, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1257,
+									lineNumber: 1290,
 									columnNumber: 52
 								}, this),
 								activeKnowledgeCount > 0 && readyKnowledgeCount === 0 && /* @__PURE__ */ (void 0)("div", {
 									className: "flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50",
 									children: [/* @__PURE__ */ (void 0)(TriangleAlert, { className: "h-4 w-4 shrink-0" }, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1262,
+										lineNumber: 1295,
 										columnNumber: 25
 									}, this), /* @__PURE__ */ (void 0)("span", {
 										className: "text-sm font-medium",
 										children: "O agente ainda não possui conhecimento preparado para IA. Ele responderá apenas com base no prompt."
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1263,
+										lineNumber: 1296,
 										columnNumber: 25
 									}, this)]
 								}, void 0, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1261,
+									lineNumber: 1294,
 									columnNumber: 79
 								}, this),
 								draftKnowledgeCount > 0 && readyKnowledgeCount > 0 && /* @__PURE__ */ (void 0)("div", {
 									className: "flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50",
 									children: [/* @__PURE__ */ (void 0)(TriangleAlert, { className: "h-4 w-4 shrink-0" }, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1266,
+										lineNumber: 1299,
 										columnNumber: 25
 									}, this), /* @__PURE__ */ (void 0)("span", {
 										className: "text-sm font-medium",
 										children: "Existem conhecimentos ativos que ainda não foram preparados para IA."
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1267,
+										lineNumber: 1300,
 										columnNumber: 25
 									}, this)]
 								}, void 0, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1265,
+									lineNumber: 1298,
 									columnNumber: 76
 								}, this),
 								errorKnowledgeCount > 0 && /* @__PURE__ */ (void 0)("div", {
 									className: "flex items-center gap-2 text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 p-3 rounded-lg border border-red-200 dark:border-red-900/50",
 									children: [/* @__PURE__ */ (void 0)(TriangleAlert, { className: "h-4 w-4 shrink-0" }, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1270,
+										lineNumber: 1303,
 										columnNumber: 25
 									}, this), /* @__PURE__ */ (void 0)("span", {
 										className: "text-sm font-medium",
 										children: "Alguns conhecimentos falharam na preparação. Revise antes de publicar."
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1271,
+										lineNumber: 1304,
 										columnNumber: 25
 									}, this)]
 								}, void 0, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1269,
+									lineNumber: 1302,
 									columnNumber: 49
 								}, this),
 								knowledge.filter((k) => k.status === "INACTIVE").length > 0 && /* @__PURE__ */ (void 0)("div", {
 									className: "flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50",
 									children: [/* @__PURE__ */ (void 0)(TriangleAlert, { className: "h-4 w-4 shrink-0" }, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1274,
+										lineNumber: 1307,
 										columnNumber: 25
 									}, this), /* @__PURE__ */ (void 0)("span", {
 										className: "text-sm font-medium",
 										children: "Você tem conhecimentos inativos que não serão utilizados pela IA."
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1275,
+										lineNumber: 1308,
 										columnNumber: 25
 									}, this)]
 								}, void 0, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1273,
+									lineNumber: 1306,
 									columnNumber: 83
 								}, this),
 								readyKnowledgeCount > 0 && /* @__PURE__ */ (void 0)("div", {
@@ -3141,12 +4494,12 @@ function NovoAgente() {
 										children: ragEnabled ? "Os conhecimentos preparados estão ATIVOS para o atendimento real! A IA usará esses documentos para responder." : "Os conhecimentos preparados podem ser testados na aba Preview. A integração real com a IA está DESATIVADA."
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1278,
+										lineNumber: 1311,
 										columnNumber: 25
 									}, this)
 								}, void 0, false, {
 									fileName: _jsxFileName,
-									lineNumber: 1277,
+									lineNumber: 1310,
 									columnNumber: 49
 								}, this),
 								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -3157,7 +4510,7 @@ function NovoAgente() {
 											value: company?.name ?? "Tenant atual"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1284,
+											lineNumber: 1317,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3165,7 +4518,7 @@ function NovoAgente() {
 											value: name || "Não definido"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1285,
+											lineNumber: 1318,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3173,7 +4526,7 @@ function NovoAgente() {
 											value: isActive ? "Ativo" : "Inativo"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1286,
+											lineNumber: 1319,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3181,7 +4534,7 @@ function NovoAgente() {
 											value: businessAddress || "Não definido"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1287,
+											lineNumber: 1320,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3189,7 +4542,7 @@ function NovoAgente() {
 											value: businessCityRegion || "Não definido"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1288,
+											lineNumber: 1321,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3198,7 +4551,7 @@ function NovoAgente() {
 												className: "flex items-center gap-2",
 												children: [/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", { children: "Sim" }, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 1290,
+													lineNumber: 1323,
 													columnNumber: 31
 												}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
 													variant: "link",
@@ -3209,17 +4562,17 @@ function NovoAgente() {
 													children: "Abrir localização"
 												}, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 1291,
+													lineNumber: 1324,
 													columnNumber: 31
 												}, this)]
 											}, void 0, true, {
 												fileName: _jsxFileName,
-												lineNumber: 1289,
+												lineNumber: 1322,
 												columnNumber: 83
 											}, this) : "Não"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1289,
+											lineNumber: 1322,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3227,7 +4580,7 @@ function NovoAgente() {
 											value: aiAlwaysAvailable ? "Atende 24h" : "Respeita horário da empresa"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1295,
+											lineNumber: 1328,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3235,7 +4588,7 @@ function NovoAgente() {
 											value: personality || "Não definida"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1296,
+											lineNumber: 1329,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3243,7 +4596,7 @@ function NovoAgente() {
 											value: toneOfVoice || "Não definido"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1297,
+											lineNumber: 1330,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3251,7 +4604,7 @@ function NovoAgente() {
 											value: model || "Padrão do sistema"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1298,
+											lineNumber: 1331,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3259,7 +4612,7 @@ function NovoAgente() {
 											value: `${temperature ?? .2} - ${getTemperatureDescription(temperature ?? .2)}`
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1299,
+											lineNumber: 1332,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3267,7 +4620,7 @@ function NovoAgente() {
 											value: messageBufferEnabled ? `${messageBufferSeconds}s de espera` : "Desativado (Responde na hora)"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1300,
+											lineNumber: 1333,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3275,7 +4628,7 @@ function NovoAgente() {
 											value: initialMessage.trim() ? "Configurada" : "Não configurada"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1301,
+											lineNumber: 1334,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3283,7 +4636,7 @@ function NovoAgente() {
 											value: instructions.trim() ? "Configurado" : "Padrão do sistema"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1302,
+											lineNumber: 1335,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3291,7 +4644,7 @@ function NovoAgente() {
 											value: "Configurada"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1303,
+											lineNumber: 1336,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3299,7 +4652,7 @@ function NovoAgente() {
 											value: `${activeKnowledgeCount} itens (${readyKnowledgeCount} preparados)`
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1304,
+											lineNumber: 1337,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3307,7 +4660,7 @@ function NovoAgente() {
 											value: ragEnabled ? "Ativado" : "Desativado"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1305,
+											lineNumber: 1338,
 											columnNumber: 23
 										}, this),
 										/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Summary, {
@@ -3315,13 +4668,13 @@ function NovoAgente() {
 											value: `${securityRules.filter((r) => r.active).length} ativas`
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1306,
+											lineNumber: 1339,
 											columnNumber: 23
 										}, this)
 									]
 								}, void 0, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1283,
+									lineNumber: 1316,
 									columnNumber: 21
 								}, this),
 								/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -3334,7 +4687,7 @@ function NovoAgente() {
 											onCheckedChange: (c) => setIsReviewConfirmed(!!c)
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1311,
+											lineNumber: 1344,
 											columnNumber: 25
 										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Label, {
 											htmlFor: "confirm-review",
@@ -3342,12 +4695,12 @@ function NovoAgente() {
 											children: "Confirmo que revisei as alterações e desejo salvar este agente."
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1312,
+											lineNumber: 1345,
 											columnNumber: 25
 										}, this)]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 1310,
+										lineNumber: 1343,
 										columnNumber: 23
 									}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
 										className: "w-full",
@@ -3356,7 +4709,7 @@ function NovoAgente() {
 										children: [
 											/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Save, { className: "h-4 w-4 mr-2" }, void 0, false, {
 												fileName: _jsxFileName,
-												lineNumber: 1318,
+												lineNumber: 1351,
 												columnNumber: 25
 											}, this),
 											" ",
@@ -3364,23 +4717,23 @@ function NovoAgente() {
 										]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 1317,
+										lineNumber: 1350,
 										columnNumber: 23
 									}, this)]
 								}, void 0, true, {
 									fileName: _jsxFileName,
-									lineNumber: 1309,
+									lineNumber: 1342,
 									columnNumber: 21
 								}, this)
 							]
 						}, void 0, true, {
 							fileName: _jsxFileName,
-							lineNumber: 1248,
+							lineNumber: 1281,
 							columnNumber: 19
 						}, this)]
 					}, void 0, true, {
 						fileName: _jsxFileName,
-						lineNumber: 1244,
+						lineNumber: 1277,
 						columnNumber: 17
 					}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Card, {
 						className: "md:col-span-1",
@@ -3389,11 +4742,11 @@ function NovoAgente() {
 							children: "Exemplo de Conversa (Simulação)"
 						}, void 0, false, {
 							fileName: _jsxFileName,
-							lineNumber: 1326,
+							lineNumber: 1359,
 							columnNumber: 21
 						}, this) }, void 0, false, {
 							fileName: _jsxFileName,
-							lineNumber: 1325,
+							lineNumber: 1358,
 							columnNumber: 19
 						}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(CardContent, {
 							className: "space-y-4 flex flex-col h-full",
@@ -3407,19 +4760,19 @@ function NovoAgente() {
 											children: "IA"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1331,
+											lineNumber: 1364,
 											columnNumber: 27
 										}, this), /* @__PURE__ */ (void 0)("div", {
 											className: "bg-primary/5 border rounded-lg p-3 text-sm flex-1",
 											children: initialMessage
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1334,
+											lineNumber: 1367,
 											columnNumber: 27
 										}, this)]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 1330,
+										lineNumber: 1363,
 										columnNumber: 49
 									}, this),
 									/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -3429,19 +4782,19 @@ function NovoAgente() {
 											children: "VC"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1340,
+											lineNumber: 1373,
 											columnNumber: 25
 										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
 											className: "bg-muted border rounded-lg p-3 text-sm",
 											children: previewQuestion
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1343,
+											lineNumber: 1376,
 											columnNumber: 25
 										}, this)]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 1339,
+										lineNumber: 1372,
 										columnNumber: 23
 									}, this),
 									previewLoading && /* @__PURE__ */ (void 0)("div", {
@@ -3451,14 +4804,14 @@ function NovoAgente() {
 											children: "IA"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1349,
+											lineNumber: 1382,
 											columnNumber: 27
 										}, this), /* @__PURE__ */ (void 0)("div", {
 											className: "bg-primary/5 border rounded-lg p-3 text-sm flex items-center gap-2",
 											children: [
 												/* @__PURE__ */ (void 0)("span", { className: "w-1.5 h-1.5 bg-primary/50 rounded-full animate-bounce" }, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 1353,
+													lineNumber: 1386,
 													columnNumber: 29
 												}, this),
 												/* @__PURE__ */ (void 0)("span", {
@@ -3466,7 +4819,7 @@ function NovoAgente() {
 													style: { animationDelay: "0.2s" }
 												}, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 1354,
+													lineNumber: 1387,
 													columnNumber: 29
 												}, this),
 												/* @__PURE__ */ (void 0)("span", {
@@ -3474,18 +4827,18 @@ function NovoAgente() {
 													style: { animationDelay: "0.4s" }
 												}, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 1357,
+													lineNumber: 1390,
 													columnNumber: 29
 												}, this)
 											]
 										}, void 0, true, {
 											fileName: _jsxFileName,
-											lineNumber: 1352,
+											lineNumber: 1385,
 											columnNumber: 27
 										}, this)]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 1348,
+										lineNumber: 1381,
 										columnNumber: 42
 									}, this),
 									previewResult && /* @__PURE__ */ (void 0)("div", {
@@ -3495,14 +4848,14 @@ function NovoAgente() {
 											children: "IA"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1364,
+											lineNumber: 1397,
 											columnNumber: 27
 										}, this), /* @__PURE__ */ (void 0)("div", {
 											className: "bg-primary/5 border rounded-lg p-3 text-sm flex-1 space-y-2",
 											children: [
 												/* @__PURE__ */ (void 0)("div", { children: previewResult.answer }, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 1368,
+													lineNumber: 1401,
 													columnNumber: 29
 												}, this),
 												previewResult.sources.length > 0 && /* @__PURE__ */ (void 0)("div", {
@@ -3512,19 +4865,19 @@ function NovoAgente() {
 														children: "Fontes manuais sugeridas:"
 													}, void 0, false, {
 														fileName: _jsxFileName,
-														lineNumber: 1370,
+														lineNumber: 1403,
 														columnNumber: 33
 													}, this), previewResult.sources.map((source) => /* @__PURE__ */ (void 0)("div", {
 														className: "truncate",
 														children: ["• ", source.title]
 													}, source.id, true, {
 														fileName: _jsxFileName,
-														lineNumber: 1371,
+														lineNumber: 1404,
 														columnNumber: 70
 													}, this))]
 												}, void 0, true, {
 													fileName: _jsxFileName,
-													lineNumber: 1369,
+													lineNumber: 1402,
 													columnNumber: 66
 												}, this),
 												previewResult.ragEnabled && /* @__PURE__ */ (void 0)("div", {
@@ -3533,12 +4886,12 @@ function NovoAgente() {
 														className: "font-medium text-blue-600 mb-1 flex items-center gap-1",
 														children: [/* @__PURE__ */ (void 0)(Sparkles, { className: "h-3 w-3" }, void 0, false, {
 															fileName: _jsxFileName,
-															lineNumber: 1377,
+															lineNumber: 1410,
 															columnNumber: 35
 														}, this), " Conhecimentos usados neste teste:"]
 													}, void 0, true, {
 														fileName: _jsxFileName,
-														lineNumber: 1376,
+														lineNumber: 1409,
 														columnNumber: 33
 													}, this), previewResult.usedKnowledge && previewResult.usedKnowledge.length > 0 ? /* @__PURE__ */ (void 0)("div", {
 														className: "space-y-2 mt-2",
@@ -3551,7 +4904,7 @@ function NovoAgente() {
 																	children: k.title
 																}, void 0, false, {
 																	fileName: _jsxFileName,
-																	lineNumber: 1382,
+																	lineNumber: 1415,
 																	columnNumber: 43
 																}, this), /* @__PURE__ */ (void 0)(Badge, {
 																	variant: "outline",
@@ -3563,12 +4916,12 @@ function NovoAgente() {
 																	]
 																}, void 0, true, {
 																	fileName: _jsxFileName,
-																	lineNumber: 1383,
+																	lineNumber: 1416,
 																	columnNumber: 43
 																}, this)]
 															}, void 0, true, {
 																fileName: _jsxFileName,
-																lineNumber: 1381,
+																lineNumber: 1414,
 																columnNumber: 41
 															}, this), /* @__PURE__ */ (void 0)("div", {
 																className: "text-muted-foreground line-clamp-3 leading-relaxed",
@@ -3579,53 +4932,53 @@ function NovoAgente() {
 																]
 															}, void 0, true, {
 																fileName: _jsxFileName,
-																lineNumber: 1387,
+																lineNumber: 1420,
 																columnNumber: 41
 															}, this)]
 														}, k.chunkId, true, {
 															fileName: _jsxFileName,
-															lineNumber: 1380,
+															lineNumber: 1413,
 															columnNumber: 75
 														}, this)), /* @__PURE__ */ (void 0)("div", {
 															className: "text-[10px] text-muted-foreground pt-1",
 															children: ["Total de blocos analisados: ", previewResult.totalChunksScanned]
 														}, void 0, true, {
 															fileName: _jsxFileName,
-															lineNumber: 1391,
+															lineNumber: 1424,
 															columnNumber: 37
 														}, this)]
 													}, void 0, true, {
 														fileName: _jsxFileName,
-														lineNumber: 1379,
+														lineNumber: 1412,
 														columnNumber: 106
 													}, this) : /* @__PURE__ */ (void 0)("div", {
 														className: "text-amber-600 bg-amber-50 p-2 rounded border border-amber-100 italic",
 														children: "Nenhum conhecimento relevante foi encontrado para esta pergunta."
 													}, void 0, false, {
 														fileName: _jsxFileName,
-														lineNumber: 1394,
+														lineNumber: 1427,
 														columnNumber: 44
 													}, this)]
 												}, void 0, true, {
 													fileName: _jsxFileName,
-													lineNumber: 1375,
+													lineNumber: 1408,
 													columnNumber: 58
 												}, this)
 											]
 										}, void 0, true, {
 											fileName: _jsxFileName,
-											lineNumber: 1367,
+											lineNumber: 1400,
 											columnNumber: 27
 										}, this)]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 1363,
+										lineNumber: 1396,
 										columnNumber: 41
 									}, this)
 								]
 							}, void 0, true, {
 								fileName: _jsxFileName,
-								lineNumber: 1329,
+								lineNumber: 1362,
 								columnNumber: 21
 							}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
 								className: "space-y-3",
@@ -3635,7 +4988,7 @@ function NovoAgente() {
 										children: "Faça uma pergunta para testar as respostas"
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1403,
+										lineNumber: 1436,
 										columnNumber: 23
 									}, this),
 									/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -3646,7 +4999,7 @@ function NovoAgente() {
 											onCheckedChange: setUsePreparedKnowledge
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1406,
+											lineNumber: 1439,
 											columnNumber: 25
 										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Label, {
 											htmlFor: "use-rag-preview",
@@ -3654,12 +5007,12 @@ function NovoAgente() {
 											children: "Usar conhecimento preparado neste teste"
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1407,
+											lineNumber: 1440,
 											columnNumber: 25
 										}, this)]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 1405,
+										lineNumber: 1438,
 										columnNumber: 23
 									}, this),
 									/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
@@ -3670,7 +5023,7 @@ function NovoAgente() {
 											onKeyDown: (e) => e.key === "Enter" && void handlePreview()
 										}, void 0, false, {
 											fileName: _jsxFileName,
-											lineNumber: 1413,
+											lineNumber: 1446,
 											columnNumber: 25
 										}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Button, {
 											onClick: () => void handlePreview(),
@@ -3679,7 +5032,7 @@ function NovoAgente() {
 											children: [
 												/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Sparkles, { className: "h-4 w-4 mr-2" }, void 0, false, {
 													fileName: _jsxFileName,
-													lineNumber: 1415,
+													lineNumber: 1448,
 													columnNumber: 27
 												}, this),
 												" ",
@@ -3687,12 +5040,12 @@ function NovoAgente() {
 											]
 										}, void 0, true, {
 											fileName: _jsxFileName,
-											lineNumber: 1414,
+											lineNumber: 1447,
 											columnNumber: 25
 										}, this)]
 									}, void 0, true, {
 										fileName: _jsxFileName,
-										lineNumber: 1412,
+										lineNumber: 1445,
 										columnNumber: 23
 									}, this),
 									!selectedAssistantId && /* @__PURE__ */ (void 0)("p", {
@@ -3700,75 +5053,47 @@ function NovoAgente() {
 										children: "Salve o agente primeiro para habilitar a simulação."
 									}, void 0, false, {
 										fileName: _jsxFileName,
-										lineNumber: 1418,
+										lineNumber: 1451,
 										columnNumber: 48
 									}, this)
 								]
 							}, void 0, true, {
 								fileName: _jsxFileName,
-								lineNumber: 1402,
+								lineNumber: 1435,
 								columnNumber: 21
 							}, this)]
 						}, void 0, true, {
 							fileName: _jsxFileName,
-							lineNumber: 1328,
+							lineNumber: 1361,
 							columnNumber: 19
 						}, this)]
 					}, void 0, true, {
 						fileName: _jsxFileName,
-						lineNumber: 1324,
+						lineNumber: 1357,
 						columnNumber: 17
 					}, this)]
 				}, void 0, true, {
 					fileName: _jsxFileName,
-					lineNumber: 1243,
+					lineNumber: 1276,
 					columnNumber: 15
 				}, this)
 			}, void 0, false, {
 				fileName: _jsxFileName,
-				lineNumber: 1242,
+				lineNumber: 1275,
 				columnNumber: 13
 			}, this)
 		]
 	}, void 0, true, {
 		fileName: _jsxFileName,
-		lineNumber: 691,
+		lineNumber: 698,
 		columnNumber: 11
 	}, this)] }, void 0, true, {
 		fileName: _jsxFileName,
-		lineNumber: 666,
+		lineNumber: 673,
 		columnNumber: 206
 	}, this)] }, void 0, true, {
 		fileName: _jsxFileName,
-		lineNumber: 646,
-		columnNumber: 10
-	}, this);
-}
-function Field({ label, children, helper, className = "" }) {
-	return /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
-		className: "space-y-1.5 " + className,
-		children: [
-			/* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)(Label, {
-				className: "text-xs font-medium",
-				children: label
-			}, void 0, false, {
-				fileName: _jsxFileName,
-				lineNumber: 1440,
-				columnNumber: 7
-			}, this),
-			children,
-			helper ? /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
-				className: "text-[11px] text-muted-foreground",
-				children: helper
-			}, void 0, false, {
-				fileName: _jsxFileName,
-				lineNumber: 1442,
-				columnNumber: 17
-			}, this) : null
-		]
-	}, void 0, true, {
-		fileName: _jsxFileName,
-		lineNumber: 1439,
+		lineNumber: 653,
 		columnNumber: 10
 	}, this);
 }
@@ -3780,30 +5105,30 @@ function ToggleRow({ label, desc, defaultChecked }) {
 			children: label
 		}, void 0, false, {
 			fileName: _jsxFileName,
-			lineNumber: 1456,
+			lineNumber: 1472,
 			columnNumber: 9
 		}, this), desc && /* @__PURE__ */ (void 0)("div", {
 			className: "text-xs text-muted-foreground",
 			children: desc
 		}, void 0, false, {
 			fileName: _jsxFileName,
-			lineNumber: 1457,
+			lineNumber: 1473,
 			columnNumber: 18
 		}, this)] }, void 0, true, {
 			fileName: _jsxFileName,
-			lineNumber: 1455,
+			lineNumber: 1471,
 			columnNumber: 7
 		}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("div", {
 			className: "h-8 w-8 rounded-full border grid place-items-center text-xs",
 			children: defaultChecked ? "✓" : "—"
 		}, void 0, false, {
 			fileName: _jsxFileName,
-			lineNumber: 1459,
+			lineNumber: 1475,
 			columnNumber: 7
 		}, this)]
 	}, void 0, true, {
 		fileName: _jsxFileName,
-		lineNumber: 1454,
+		lineNumber: 1470,
 		columnNumber: 10
 	}, this);
 }
@@ -3815,19 +5140,19 @@ function Summary({ label, value }) {
 			children: label
 		}, void 0, false, {
 			fileName: _jsxFileName,
-			lineNumber: 1472,
+			lineNumber: 1488,
 			columnNumber: 7
 		}, this), /* @__PURE__ */ (0, import_jsx_dev_runtime.jsxDEV)("span", {
 			className: "font-medium text-right",
 			children: value
 		}, void 0, false, {
 			fileName: _jsxFileName,
-			lineNumber: 1473,
+			lineNumber: 1489,
 			columnNumber: 7
 		}, this)]
 	}, void 0, true, {
 		fileName: _jsxFileName,
-		lineNumber: 1471,
+		lineNumber: 1487,
 		columnNumber: 10
 	}, this);
 }

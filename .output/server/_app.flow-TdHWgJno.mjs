@@ -3,7 +3,7 @@ import { a as ReactFlowProvider, c as useEdgesState, d as Position, i as MiniMap
 import { u as require_react } from "./_libs/@floating-ui/react-dom+[...].mjs";
 import { t as require_jsx_dev_runtime } from "./_libs/react.mjs";
 import { t as Button } from "./_ssr/button-COtkgzDj.mjs";
-import { K as Globe, N as Network, Rt as Braces, S as Save, Tt as ArrowLeft, Y as Flag, at as Clock, bt as Bot, k as Play, kt as Sparkles, n as Wrench, o as UserCheck, q as GitBranch, r as Webhook, rt as Copy, t as X, u as Trash2, xt as BookOpen, y as Send, yt as Brain } from "./_libs/lucide-react.mjs";
+import { A as Play, At as Sparkles, C as Save, Et as ArrowLeft, J as GitBranch, P as Network, St as BookOpen, X as Flag, b as Send, bt as Brain, d as Trash2, it as Copy, n as Wrench, o as UserCheck, ot as Clock, q as Globe, r as Webhook, t as X, xt as Bot, zt as Braces } from "./_libs/lucide-react.mjs";
 import { t as PageHeader } from "./_ssr/PageHeader-D4Y71euA.mjs";
 import { a as CardTitle, i as CardHeader, n as CardContent, t as Card } from "./_ssr/card-BW9s_OV3.mjs";
 import { t as Input } from "./_ssr/input-B8Ml971c.mjs";
@@ -12,8 +12,8 @@ import { t as Label } from "./_ssr/label-BZdmkwq8.mjs";
 import { t as Textarea } from "./_ssr/textarea-CULRsq90.mjs";
 import { t as Switch } from "./_ssr/switch-Cit-Q60v.mjs";
 import { t as toast } from "./_libs/sonner.mjs";
-import "./_ssr/router-DAVYl4-z.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/_app.flow-CmtZFusk.js
+import "./_ssr/router-Bfrb7U7C.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/_app.flow-TdHWgJno.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_dev_runtime = require_jsx_dev_runtime();
 var _jsxFileName = "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.flow.tsx?tsr-split=component";

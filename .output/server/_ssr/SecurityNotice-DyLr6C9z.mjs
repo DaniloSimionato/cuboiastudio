@@ -1,6 +1,6 @@
 import { t as require_jsx_dev_runtime } from "../_libs/react.mjs";
 import { t as cn } from "./utils-C_uf36nf.mjs";
-import { h as ShieldCheck } from "../_libs/lucide-react.mjs";
+import { g as ShieldCheck } from "../_libs/lucide-react.mjs";
 //#region node_modules/.nitro/vite/services/ssr/assets/SecurityNotice-DyLr6C9z.js
 var import_jsx_dev_runtime = require_jsx_dev_runtime();
 var _jsxFileName = "/Users/danilosimionato/Projetos/CuboIAStudio/src/components/security/SecurityNotice.tsx";

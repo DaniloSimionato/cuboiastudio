@@ -1,16 +1,20 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useRef, type ReactNode } from "react";
 import { ArrowLeft, Save, Pause, PlayCircle, Link2, Sparkles, AlertTriangle, Plus, Check } from "lucide-react";
 
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AiIntegrationTest } from "../components/assistant/AiIntegrationTest";
+import { AssistantBehaviorTab, type AssistantBehaviorTabRef } from "../components/assistant/AssistantBehaviorTab";
+import { AssistantFlowsTab } from "../components/assistant/AssistantFlowsTab";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Field } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import {
@@ -44,6 +48,7 @@ export const Route = createFileRoute("/_app/agentes/novo")({
 
 function NovoAgente() {
   const search = Route.useSearch();
+  const behaviorTabRef = useRef<AssistantBehaviorTabRef>(null);
 
   const [company, setCompany] = useState<CurrentCompanyResponse["company"] | null>(null);
   const [assistants, setAssistants] = useState<BackendAssistantListItem[]>([]);
@@ -435,6 +440,9 @@ function NovoAgente() {
           splitResponseStyle: updated.splitResponseStyle ?? "",
           status: status
         });
+
+        await behaviorTabRef.current?.saveBehavior(selectedAssistantId);
+
         toast.success("Agente salvo com sucesso.");
       } else {
         const created = await backendAssistantsService.create({
@@ -507,6 +515,9 @@ function NovoAgente() {
           splitResponseStyle: created.splitResponseStyle ?? "",
           status: created.status
         });
+
+        await behaviorTabRef.current?.saveBehavior(created.id);
+
         toast.success("Agente criado com sucesso.");
       }
       setIsReviewConfirmed(false);
@@ -665,9 +676,7 @@ function NovoAgente() {
         title="Criar / Editar Agente"
         actions={
           <div className="flex items-center gap-2">
-            {isDirty && (
-              <span className="text-xs text-amber-500 font-medium mr-2">● Alterações não salvas</span>
-            )}
+            
             <Button variant="outline" asChild size="sm">
               <Link to="/agentes">
                 <ArrowLeft className="h-4 w-4 mr-1" /> Voltar
@@ -735,7 +744,9 @@ function NovoAgente() {
           <Tabs defaultValue="info">
             <TabsList className="mb-4 flex-wrap h-auto">
               <TabsTrigger value="info">Informações</TabsTrigger>
-              <TabsTrigger value="prompt">Prompt</TabsTrigger>
+              <TabsTrigger value="comportamento">Comportamento</TabsTrigger>
+              <TabsTrigger value="fluxos">Fluxos</TabsTrigger>
+              <TabsTrigger value="prompt">Regras Globais</TabsTrigger>
               <TabsTrigger value="conhecimento">Conhecimento</TabsTrigger>
               <TabsTrigger value="ferramentas">Ferramentas</TabsTrigger>
               <TabsTrigger value="memoria">Memória</TabsTrigger>
@@ -907,114 +918,160 @@ function NovoAgente() {
               </Card>
             </TabsContent>
 
+            <TabsContent value="comportamento">
+              <div className="space-y-6">
+                <Card>
+                  <CardContent className="p-6 space-y-6">
+                    {/* Top section: AI settings */}
+                    <div className="grid md:grid-cols-2 gap-4">
+                      <Field label="Modelo da IA">
+                        <Input
+                          value={model}
+                          onChange={(e) => setModel(e.target.value)}
+                          placeholder="Opcional. Se vazio, usa o modelo padrão do backend."
+                        />
+                      </Field>
+                      <Field label="Criatividade da resposta (Temperatura)">
+                        <div className="space-y-3 pt-2">
+                          <Slider
+                            value={[temperature ?? 0.2]}
+                            min={0}
+                            max={1}
+                            step={0.1}
+                            onValueChange={(vals) => setTemperature(vals[0])}
+                          />
+                          <div className="flex justify-between text-xs text-muted-foreground">
+                            <span>{temperature ?? 0.2}</span>
+                            <span>{getTemperatureDescription(temperature ?? 0.2)}</span>
+                          </div>
+                        </div>
+                      </Field>
+                      <Field label="Tom de voz">
+                        <Select value={toneOfVoice || "Profissional"} onValueChange={(val) => setToneOfVoice(val)}>
+                          <SelectTrigger><SelectValue placeholder="Selecione o tom de voz" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Profissional">Profissional</SelectItem>
+                            <SelectItem value="Amigável">Amigável</SelectItem>
+                            <SelectItem value="Descontraído">Descontraído</SelectItem>
+                            <SelectItem value="Consultivo">Consultivo</SelectItem>
+                            <SelectItem value="Objetivo">Objetivo</SelectItem>
+                            <SelectItem value="Formal">Formal</SelectItem>
+                            <SelectItem value="Personalizado">Personalizado</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      <Field label="Personalidade da IA">
+                        <Input
+                          value={personality}
+                          onChange={(e) => setPersonality(e.target.value)}
+                          placeholder="Ex: Atendente simpática, objetiva, prestativa..."
+                        />
+                      </Field>
+                    </div>
+
+                    {/* Message Behavior */}
+                    <div className="p-4 border rounded-lg bg-secondary/10">
+                      <div className="flex items-center justify-between mb-4">
+                        <div>
+                          <Label htmlFor="message-buffer" className="text-base font-semibold cursor-pointer">
+                            Comportamento de mensagens
+                          </Label>
+                          <p className="text-sm text-muted-foreground">
+                            Aguardar mensagens antes de responder (evita que o agente responda várias vezes quando o cliente manda mensagens quebradas).
+                          </p>
+                        </div>
+                        <Switch
+                          id="message-buffer"
+                          checked={messageBufferEnabled}
+                          onCheckedChange={setMessageBufferEnabled}
+                        />
+                      </div>
+                      {messageBufferEnabled && (
+                        <div className="grid md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-secondary/20">
+                          <Field label={`Tempo de espera: ${messageBufferSeconds} segundos`}>
+                            <Slider
+                              value={[messageBufferSeconds]}
+                              min={3}
+                              max={20}
+                              step={1}
+                              onValueChange={(vals) => setMessageBufferSeconds(vals[0])}
+                            />
+                          </Field>
+                          <Field label="Estilo da resposta">
+                             <Select value={splitResponseStyle || "SINGLE"} onValueChange={(val) => setSplitResponseStyle(val)}>
+                               <SelectTrigger><SelectValue placeholder="Selecione o estilo" /></SelectTrigger>
+                               <SelectContent>
+                                 <SelectItem value="SINGLE">Mensagem Única</SelectItem>
+                                 <SelectItem value="NATURAL_BLOCKS">Blocos Naturais (Separados)</SelectItem>
+                               </SelectContent>
+                             </Select>
+                          </Field>
+                        </div>
+                      )}
+                    </div>
+
+                    <Field
+                      label="Mensagem inicial"
+                      helper="Opcional. Ao criar uma conversa nova, essa mensagem aparece como a primeira resposta."
+                    >
+                      <Textarea
+                        rows={2}
+                        value={initialMessage}
+                        onChange={(e) => setInitialMessage(e.target.value)}
+                        placeholder="Olá! Sou seu assistente. Como posso ajudar?"
+                      />
+                    </Field>
+
+                    <Accordion type="single" collapsible className="w-full">
+                      <AccordionItem value="fallback-message" className="border rounded-lg px-4 py-1 bg-secondary/5">
+                        <AccordionTrigger className="hover:no-underline py-3">
+                          <div className="flex flex-col text-left space-y-1">
+                            <span className="font-semibold text-sm">Mensagem quando não souber responder</span>
+                            <span className="text-xs text-muted-foreground font-normal">
+                              {noAnswerMessage ? noAnswerMessage.substring(0, 80) + (noAnswerMessage.length > 80 ? "..." : "") : "Resposta padrão quando a IA não encontra informação."}
+                            </span>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent className="pt-2 pb-4">
+                          <p className="text-xs text-muted-foreground mb-3">
+                            Mensagem usada quando o agente não tiver informação suficiente para responder.
+                          </p>
+                          <Textarea
+                            rows={3}
+                            value={noAnswerMessage}
+                            onChange={(e) => setNoAnswerMessage(e.target.value)}
+                            placeholder="Infelizmente, não tenho essa informação..."
+                          />
+                        </AccordionContent>
+                      </AccordionItem>
+                    </Accordion>
+                  </CardContent>
+                </Card>
+
+                <AssistantBehaviorTab assistantId={selectedAssistantId} ref={behaviorTabRef} />
+              </div>
+            </TabsContent>
+
+            <TabsContent value="fluxos">
+              <AssistantFlowsTab assistantId={selectedAssistantId} />
+            </TabsContent>
+
             <TabsContent value="prompt">
               <Card>
                 <CardContent className="p-6 space-y-6">
-                  {/* Top section: AI settings */}
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <Field label="Modelo da IA">
-                      <Input
-                        value={model}
-                        onChange={(e) => setModel(e.target.value)}
-                        placeholder="Opcional. Se vazio, usa o modelo padrão do backend."
-                      />
-                    </Field>
-                    <Field label="Criatividade da resposta (Temperatura)">
-                      <div className="space-y-3 pt-2">
-                        <Slider
-                          value={[temperature ?? 0.2]}
-                          min={0}
-                          max={1}
-                          step={0.1}
-                          onValueChange={(vals) => setTemperature(vals[0])}
-                        />
-                        <div className="flex justify-between text-xs text-muted-foreground">
-                          <span>{temperature ?? 0.2}</span>
-                          <span>{getTemperatureDescription(temperature ?? 0.2)}</span>
-                        </div>
-                      </div>
-                    </Field>
-                    <Field label="Tom de voz">
-                      <Select value={toneOfVoice || "Profissional"} onValueChange={(val) => setToneOfVoice(val)}>
-                        <SelectTrigger><SelectValue placeholder="Selecione o tom de voz" /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="Profissional">Profissional</SelectItem>
-                          <SelectItem value="Amigável">Amigável</SelectItem>
-                          <SelectItem value="Descontraído">Descontraído</SelectItem>
-                          <SelectItem value="Consultivo">Consultivo</SelectItem>
-                          <SelectItem value="Objetivo">Objetivo</SelectItem>
-                          <SelectItem value="Formal">Formal</SelectItem>
-                          <SelectItem value="Personalizado">Personalizado</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </Field>
-                    <Field label="Personalidade da IA">
-                      <Input
-                        value={personality}
-                        onChange={(e) => setPersonality(e.target.value)}
-                        placeholder="Ex: Atendente simpática, objetiva, prestativa..."
-                      />
-                    </Field>
+                  <div className="bg-primary/5 border border-primary/20 p-4 rounded-lg">
+                    <p className="text-sm text-primary">
+                      <strong>Dica:</strong> Use esta área apenas para regras que valem para todo o atendimento. 
+                      Informações específicas da empresa devem ir na Base de Conhecimento. Regras por assunto devem ir em Fluxos.
+                    </p>
                   </div>
 
-                  {/* Message Behavior */}
-                  <div className="p-4 border rounded-lg bg-secondary/10">
-                    <div className="flex items-center justify-between mb-4">
-                      <div>
-                        <Label htmlFor="message-buffer" className="text-base font-semibold cursor-pointer">
-                          Comportamento de mensagens
-                        </Label>
-                        <p className="text-sm text-muted-foreground">
-                          Aguardar mensagens antes de responder (evita que o agente responda várias vezes quando o cliente manda mensagens quebradas).
-                        </p>
-                      </div>
-                      <Switch
-                        id="message-buffer"
-                        checked={messageBufferEnabled}
-                        onCheckedChange={setMessageBufferEnabled}
-                      />
-                    </div>
-                    {messageBufferEnabled && (
-                      <div className="grid md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-secondary/20">
-                        <Field label={`Tempo de espera: ${messageBufferSeconds} segundos`}>
-                          <Slider
-                            value={[messageBufferSeconds]}
-                            min={3}
-                            max={20}
-                            step={1}
-                            onValueChange={(vals) => setMessageBufferSeconds(vals[0])}
-                          />
-                        </Field>
-                        <Field label="Estilo da resposta">
-                           <Select value={splitResponseStyle || "SINGLE"} onValueChange={(val) => setSplitResponseStyle(val)}>
-                             <SelectTrigger><SelectValue placeholder="Selecione o estilo" /></SelectTrigger>
-                             <SelectContent>
-                               <SelectItem value="SINGLE">Mensagem Única</SelectItem>
-                               <SelectItem value="NATURAL_BLOCKS">Blocos Naturais (Separados)</SelectItem>
-                             </SelectContent>
-                           </Select>
-                        </Field>
-                      </div>
-                    )}
-                  </div>
-
-                  <Field
-                    label="Mensagem inicial"
-                    helper="Opcional. Ao criar uma conversa nova, essa mensagem aparece como a primeira resposta."
-                  >
-                    <Textarea
-                      rows={2}
-                      value={initialMessage}
-                      onChange={(e) => setInitialMessage(e.target.value)}
-                      placeholder="Olá! Sou seu assistente. Como posso ajudar?"
-                    />
-                  </Field>
                   <Field
                     label="Instruções principais do agente"
                     helper="Define a personalidade, função e regras primárias do agente."
                   >
                     <Textarea
-                      rows={5}
+                      rows={12}
                       value={instructions}
                       onChange={(e) => setInstructions(e.target.value)}
                       placeholder="Você é um atendente da Cubo.Chat..."
@@ -1023,7 +1080,7 @@ function NovoAgente() {
 
                   {/* Advanced Settings Accordion */}
                   <div className="pt-6 border-t mt-6">
-                    <h3 className="text-lg font-semibold mb-4">Configurações Avançadas</h3>
+                    <h3 className="text-lg font-semibold mb-4">Regras Avançadas</h3>
                     
                     <Accordion type="single" collapsible className="w-full">
                       
@@ -1045,28 +1102,6 @@ function NovoAgente() {
                             value={avoidPhrases}
                             onChange={(e) => setAvoidPhrases(e.target.value)}
                             placeholder="Ex: Evite repetir a mesma frase de encerramento em todas as respostas. Não finalize sempre com 'é só me avisar'. Varie naturalmente os encerramentos e só ofereça ajuda extra quando fizer sentido."
-                          />
-                        </AccordionContent>
-                      </AccordionItem>
-
-                      <AccordionItem value="fallback-message" className="border rounded-lg mb-3 px-4 py-1 bg-secondary/5">
-                        <AccordionTrigger className="hover:no-underline py-3">
-                          <div className="flex flex-col text-left space-y-1">
-                            <span className="font-semibold text-sm">Mensagem quando não souber responder</span>
-                            <span className="text-xs text-muted-foreground font-normal">
-                              {noAnswerMessage ? noAnswerMessage.substring(0, 80) + (noAnswerMessage.length > 80 ? "..." : "") : "Resposta padrão quando a IA não encontra informação."}
-                            </span>
-                          </div>
-                        </AccordionTrigger>
-                        <AccordionContent className="pt-2 pb-4">
-                          <p className="text-xs text-muted-foreground mb-3">
-                            Mensagem usada quando o agente não tiver informação suficiente para responder.
-                          </p>
-                          <Textarea
-                            rows={3}
-                            value={noAnswerMessage}
-                            onChange={(e) => setNoAnswerMessage(e.target.value)}
-                            placeholder="Infelizmente, não tenho essa informação..."
                           />
                         </AccordionContent>
                       </AccordionItem>
@@ -1702,25 +1737,6 @@ function NovoAgente() {
   );
 }
 
-function Field({
-  label,
-  children,
-  helper,
-  className = "",
-}: {
-  label: string;
-  children: ReactNode;
-  helper?: string;
-  className?: string;
-}) {
-  return (
-    <div className={"space-y-1.5 " + className}>
-      <Label className="text-xs font-medium">{label}</Label>
-      {children}
-      {helper ? <div className="text-[11px] text-muted-foreground">{helper}</div> : null}
-    </div>
-  );
-}
 
 function ToggleRow({
   label,

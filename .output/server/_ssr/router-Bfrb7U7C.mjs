@@ -4,15 +4,15 @@ import { t as require_jsx_dev_runtime } from "../_libs/react.mjs";
 import { t as ThemeProvider } from "./theme-D_Il-GLd.mjs";
 import { t as AuthProvider } from "./auth-DBPceM1n.mjs";
 import { F as useRouter, c as HeadContent, d as createRouter, f as Outlet, g as Link, h as createRootRouteWithContext, m as createFileRoute, p as lazyRouteComponent, s as Scripts } from "../_libs/@tanstack/react-router+[...].mjs";
-import { t as Route$16 } from "../_app.agentes.novo-DTpEO37b.mjs";
+import { t as Route$16 } from "../_app.agentes.novo-2UjU33Cj.mjs";
 import { t as Route$17 } from "../_app.apps.google-calendar-BkYiMb-W.mjs";
 import { t as Route$18 } from "../_app.testes-C-ovVZsE.mjs";
 import { t as QueryClient } from "../_libs/tanstack__query-core.mjs";
 import { t as QueryClientProvider } from "../_libs/tanstack__react-query.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/router-DAVYl4-z.js
+//#region node_modules/.nitro/vite/services/ssr/assets/router-Bfrb7U7C.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_dev_runtime = require_jsx_dev_runtime();
-var styles_default = "/assets/styles-qzEOdyxD.css";
+var styles_default = "/assets/styles-DBecGcXq.css";
 function reportLovableError(error, context = {}) {
 	if (typeof window === "undefined") return;
 	window.__lovableEvents?.captureException?.(error, {
@@ -271,7 +271,7 @@ var Route$8 = createFileRoute("/_app/implantacao")({
 	head: () => ({ meta: [{ title: "Assistente de Implantação · Cubo AI Studio" }] }),
 	component: lazyRouteComponent($$splitComponentImporter$8, "component")
 });
-var $$splitComponentImporter$7 = () => import("../_app.flow-CmtZFusk.mjs");
+var $$splitComponentImporter$7 = () => import("../_app.flow-TdHWgJno.mjs");
 var Route$7 = createFileRoute("/_app/flow")({
 	head: () => ({ meta: [{ title: "Flow Builder · Cubo AI Studio" }] }),
 	component: lazyRouteComponent($$splitComponentImporter$7, "component")
@@ -291,7 +291,7 @@ var Route$4 = createFileRoute("/_app/conhecimento")({
 	head: () => ({ meta: [{ title: "Base de Conhecimento · Cubo AI Studio" }] }),
 	component: lazyRouteComponent($$splitComponentImporter$4, "component")
 });
-var $$splitComponentImporter$3 = () => import("../_app.configuracoes-BwLnlski.mjs");
+var $$splitComponentImporter$3 = () => import("../_app.configuracoes-BinjEQu4.mjs");
 var Route$3 = createFileRoute("/_app/configuracoes")({
 	head: () => ({ meta: [{ title: "Configurações · Cubo AI Studio" }] }),
 	component: lazyRouteComponent($$splitComponentImporter$3, "component")
