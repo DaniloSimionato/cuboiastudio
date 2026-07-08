@@ -79,7 +79,6 @@ test("CompaniesService cria empresa nova sem copiar assistentes quando demo não
   const txCalls = {
     assistantCreateCount: 0,
     membershipUpserts: 0,
-    userUpdates: 0,
     userRoleUpserts: 0,
   };
 
@@ -123,7 +122,6 @@ test("CompaniesService cria empresa nova sem copiar assistentes quando demo não
     },
     user: {
       update: async () => {
-        txCalls.userUpdates += 1;
         return {};
       },
     },
@@ -151,7 +149,6 @@ test("CompaniesService cria empresa nova sem copiar assistentes quando demo não
   assert.equal(created.id, "company-new");
   assert.equal(txCalls.membershipUpserts, 1);
   assert.equal(txCalls.userRoleUpserts, 1);
-  assert.equal(txCalls.userUpdates, 1);
   assert.equal(txCalls.assistantCreateCount, 0);
 });
 

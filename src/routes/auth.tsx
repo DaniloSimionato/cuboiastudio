@@ -31,7 +31,7 @@ function AuthPage() {
   const [rPass2, setRPass2] = useState("");
 
   useEffect(() => {
-    if (isAuthenticated) navigate({ to: "/" });
+    if (isAuthenticated) navigate({ to: "/portal" });
   }, [isAuthenticated, navigate]);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -41,7 +41,7 @@ function AuthPage() {
     const res = await login(lEmail.trim(), lPass);
     setLoading(false);
     if (!res.ok) setError(res.error ?? "Falha ao entrar.");
-    else navigate({ to: "/" });
+    else navigate({ to: "/portal" });
   };
 
   const handleRegister = async (e: React.FormEvent) => {
@@ -58,7 +58,7 @@ function AuthPage() {
     });
     setLoading(false);
     if (!res.ok) setError(res.error ?? "Falha ao criar conta.");
-    else navigate({ to: "/" });
+    else navigate({ to: "/portal" });
   };
 
   return (

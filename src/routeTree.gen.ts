@@ -9,9 +9,10 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as PortalRouteImport } from './routes/portal'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AppRouteImport } from './routes/_app'
-import { Route as AppIndexRouteImport } from './routes/_app.index'
+import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppVariaveisRouteImport } from './routes/_app.variaveis'
 import { Route as AppTestesRouteImport } from './routes/_app.testes'
 import { Route as AppMemoriaRouteImport } from './routes/_app.memoria'
@@ -19,6 +20,7 @@ import { Route as AppLogsRouteImport } from './routes/_app.logs'
 import { Route as AppImplantacaoRouteImport } from './routes/_app.implantacao'
 import { Route as AppFlowRouteImport } from './routes/_app.flow'
 import { Route as AppFerramentasRouteImport } from './routes/_app.ferramentas'
+import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
 import { Route as AppConsumoRouteImport } from './routes/_app.consumo'
 import { Route as AppConhecimentoRouteImport } from './routes/_app.conhecimento'
 import { Route as AppConfiguracoesRouteImport } from './routes/_app.configuracoes'
@@ -28,6 +30,11 @@ import { Route as AppAgentesIndexRouteImport } from './routes/_app.agentes.index
 import { Route as AppAppsGoogleCalendarRouteImport } from './routes/_app.apps.google-calendar'
 import { Route as AppAgentesNovoRouteImport } from './routes/_app.agentes.novo'
 
+const PortalRoute = PortalRouteImport.update({
+  id: '/portal',
+  path: '/portal',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
   path: '/auth',
@@ -37,10 +44,10 @@ const AppRoute = AppRouteImport.update({
   id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppIndexRoute = AppIndexRouteImport.update({
+const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => AppRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AppVariaveisRoute = AppVariaveisRouteImport.update({
   id: '/variaveis',
@@ -75,6 +82,11 @@ const AppFlowRoute = AppFlowRouteImport.update({
 const AppFerramentasRoute = AppFerramentasRouteImport.update({
   id: '/ferramentas',
   path: '/ferramentas',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDashboardRoute = AppDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
   getParentRoute: () => AppRoute,
 } as any)
 const AppConsumoRoute = AppConsumoRouteImport.update({
@@ -119,12 +131,14 @@ const AppAgentesNovoRoute = AppAgentesNovoRouteImport.update({
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof AppIndexRoute
+  '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/portal': typeof PortalRoute
   '/canais': typeof AppCanaisRoute
   '/configuracoes': typeof AppConfiguracoesRoute
   '/conhecimento': typeof AppConhecimentoRoute
   '/consumo': typeof AppConsumoRoute
+  '/dashboard': typeof AppDashboardRoute
   '/ferramentas': typeof AppFerramentasRoute
   '/flow': typeof AppFlowRoute
   '/implantacao': typeof AppImplantacaoRoute
@@ -138,11 +152,14 @@ export interface FileRoutesByFullPath {
   '/apps/': typeof AppAppsIndexRoute
 }
 export interface FileRoutesByTo {
+  '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/portal': typeof PortalRoute
   '/canais': typeof AppCanaisRoute
   '/configuracoes': typeof AppConfiguracoesRoute
   '/conhecimento': typeof AppConhecimentoRoute
   '/consumo': typeof AppConsumoRoute
+  '/dashboard': typeof AppDashboardRoute
   '/ferramentas': typeof AppFerramentasRoute
   '/flow': typeof AppFlowRoute
   '/implantacao': typeof AppImplantacaoRoute
@@ -150,7 +167,6 @@ export interface FileRoutesByTo {
   '/memoria': typeof AppMemoriaRoute
   '/testes': typeof AppTestesRoute
   '/variaveis': typeof AppVariaveisRoute
-  '/': typeof AppIndexRoute
   '/agentes/novo': typeof AppAgentesNovoRoute
   '/apps/google-calendar': typeof AppAppsGoogleCalendarRoute
   '/agentes': typeof AppAgentesIndexRoute
@@ -158,12 +174,15 @@ export interface FileRoutesByTo {
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
+  '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
   '/auth': typeof AuthRoute
+  '/portal': typeof PortalRoute
   '/_app/canais': typeof AppCanaisRoute
   '/_app/configuracoes': typeof AppConfiguracoesRoute
   '/_app/conhecimento': typeof AppConhecimentoRoute
   '/_app/consumo': typeof AppConsumoRoute
+  '/_app/dashboard': typeof AppDashboardRoute
   '/_app/ferramentas': typeof AppFerramentasRoute
   '/_app/flow': typeof AppFlowRoute
   '/_app/implantacao': typeof AppImplantacaoRoute
@@ -171,7 +190,6 @@ export interface FileRoutesById {
   '/_app/memoria': typeof AppMemoriaRoute
   '/_app/testes': typeof AppTestesRoute
   '/_app/variaveis': typeof AppVariaveisRoute
-  '/_app/': typeof AppIndexRoute
   '/_app/agentes/novo': typeof AppAgentesNovoRoute
   '/_app/apps/google-calendar': typeof AppAppsGoogleCalendarRoute
   '/_app/agentes/': typeof AppAgentesIndexRoute
@@ -182,10 +200,12 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/auth'
+    | '/portal'
     | '/canais'
     | '/configuracoes'
     | '/conhecimento'
     | '/consumo'
+    | '/dashboard'
     | '/ferramentas'
     | '/flow'
     | '/implantacao'
@@ -199,11 +219,14 @@ export interface FileRouteTypes {
     | '/apps/'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/'
     | '/auth'
+    | '/portal'
     | '/canais'
     | '/configuracoes'
     | '/conhecimento'
     | '/consumo'
+    | '/dashboard'
     | '/ferramentas'
     | '/flow'
     | '/implantacao'
@@ -211,19 +234,21 @@ export interface FileRouteTypes {
     | '/memoria'
     | '/testes'
     | '/variaveis'
-    | '/'
     | '/agentes/novo'
     | '/apps/google-calendar'
     | '/agentes'
     | '/apps'
   id:
     | '__root__'
+    | '/'
     | '/_app'
     | '/auth'
+    | '/portal'
     | '/_app/canais'
     | '/_app/configuracoes'
     | '/_app/conhecimento'
     | '/_app/consumo'
+    | '/_app/dashboard'
     | '/_app/ferramentas'
     | '/_app/flow'
     | '/_app/implantacao'
@@ -231,7 +256,6 @@ export interface FileRouteTypes {
     | '/_app/memoria'
     | '/_app/testes'
     | '/_app/variaveis'
-    | '/_app/'
     | '/_app/agentes/novo'
     | '/_app/apps/google-calendar'
     | '/_app/agentes/'
@@ -239,12 +263,21 @@ export interface FileRouteTypes {
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
+  IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
   AuthRoute: typeof AuthRoute
+  PortalRoute: typeof PortalRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/portal': {
+      id: '/portal'
+      path: '/portal'
+      fullPath: '/portal'
+      preLoaderRoute: typeof PortalRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/auth': {
       id: '/auth'
       path: '/auth'
@@ -259,12 +292,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app/': {
-      id: '/_app/'
+    '/': {
+      id: '/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof AppIndexRouteImport
-      parentRoute: typeof AppRoute
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_app/variaveis': {
       id: '/_app/variaveis'
@@ -313,6 +346,13 @@ declare module '@tanstack/react-router' {
       path: '/ferramentas'
       fullPath: '/ferramentas'
       preLoaderRoute: typeof AppFerramentasRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/dashboard': {
+      id: '/_app/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof AppDashboardRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/consumo': {
@@ -379,6 +419,7 @@ interface AppRouteChildren {
   AppConfiguracoesRoute: typeof AppConfiguracoesRoute
   AppConhecimentoRoute: typeof AppConhecimentoRoute
   AppConsumoRoute: typeof AppConsumoRoute
+  AppDashboardRoute: typeof AppDashboardRoute
   AppFerramentasRoute: typeof AppFerramentasRoute
   AppFlowRoute: typeof AppFlowRoute
   AppImplantacaoRoute: typeof AppImplantacaoRoute
@@ -386,7 +427,6 @@ interface AppRouteChildren {
   AppMemoriaRoute: typeof AppMemoriaRoute
   AppTestesRoute: typeof AppTestesRoute
   AppVariaveisRoute: typeof AppVariaveisRoute
-  AppIndexRoute: typeof AppIndexRoute
   AppAgentesNovoRoute: typeof AppAgentesNovoRoute
   AppAppsGoogleCalendarRoute: typeof AppAppsGoogleCalendarRoute
   AppAgentesIndexRoute: typeof AppAgentesIndexRoute
@@ -398,6 +438,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppConfiguracoesRoute: AppConfiguracoesRoute,
   AppConhecimentoRoute: AppConhecimentoRoute,
   AppConsumoRoute: AppConsumoRoute,
+  AppDashboardRoute: AppDashboardRoute,
   AppFerramentasRoute: AppFerramentasRoute,
   AppFlowRoute: AppFlowRoute,
   AppImplantacaoRoute: AppImplantacaoRoute,
@@ -405,7 +446,6 @@ const AppRouteChildren: AppRouteChildren = {
   AppMemoriaRoute: AppMemoriaRoute,
   AppTestesRoute: AppTestesRoute,
   AppVariaveisRoute: AppVariaveisRoute,
-  AppIndexRoute: AppIndexRoute,
   AppAgentesNovoRoute: AppAgentesNovoRoute,
   AppAppsGoogleCalendarRoute: AppAppsGoogleCalendarRoute,
   AppAgentesIndexRoute: AppAgentesIndexRoute,
@@ -415,8 +455,10 @@ const AppRouteChildren: AppRouteChildren = {
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
+  IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
   AuthRoute: AuthRoute,
+  PortalRoute: PortalRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

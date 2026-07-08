@@ -238,6 +238,66 @@ test("controller Chatwoot aceita header legado quando query string está ausente
   assert.equal(calls[0].webhookSecret, "legacy-secret");
 });
 
+test("ChatwootInboxConfigService permite remover o assistente vinculado ao enviar assistantId vazio", async () => {
+  const updatedPayloads = [];
+  const service = new ChatwootInboxConfigService(
+    {
+      chatwootInboxConfig: {
+        findFirst: async ({ where }) => ({
+          id: where.id ?? "cfg-1",
+          companyId: where.companyId,
+          assistantId: "assistant-1",
+          name: "Canal principal",
+          baseUrl: "https://chatwoot.example.com",
+          accountId: "account-1",
+          inboxId: "inbox-1",
+          apiAccessTokenEncrypted: null,
+          apiAccessTokenIv: null,
+          apiAccessTokenAuthTag: null,
+          webhookSecretEncrypted: null,
+          webhookSecretIv: null,
+          webhookSecretAuthTag: null,
+          isActive: true,
+          metadataJson: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          assistant: {
+            id: "assistant-1",
+            name: "Assistente 1",
+            status: "ACTIVE",
+          },
+        }),
+        updateMany: async ({ data }) => {
+          updatedPayloads.push(data);
+          return { count: 1 };
+        },
+      },
+      assistant: {
+        findFirst: async () => ({
+          id: "assistant-1",
+          companyId: "company-1",
+          status: "ACTIVE",
+          name: "Assistente 1",
+        }),
+      },
+    },
+    {
+      get: () => "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    },
+  );
+
+  await service.updateById("company-1", "cfg-1", {
+    name: "Canal principal",
+    baseUrl: "https://chatwoot.example.com",
+    accountId: "account-1",
+    inboxId: "inbox-1",
+    assistantId: "",
+    isActive: true,
+  });
+
+  assert.equal(updatedPayloads[0].assistantId, null);
+});
+
 test("normalizador Chatwoot resolve conversation.id", () => {
   const normalized = normalizeChatwootMessageCreatedPayload(createMessageCreatedPayload());
 
@@ -1962,6 +2022,49 @@ test("Chatwoot config de outro tenant retorna 404 em leitura, teste e exclusão"
     isActive: true,
   });
   assert.deepEqual(calls[2].args.where, { companyId: "company-1", id: "cfg-foreign" });
+});
+
+test("Chatwoot list retorna apenas canais da empresa solicitada", async () => {
+  const calls = [];
+  const prisma = {
+    assistant: {
+      findFirst: async () => null,
+    },
+    chatwootInboxConfig: {
+      findMany: async (args) => {
+        calls.push(args);
+        return [
+          createChatwootConfigRecord({
+            id: "cfg-company-1",
+            companyId: "company-1",
+            assistantId: null,
+            assistant: null,
+          }),
+        ];
+      },
+      findUnique: async () => null,
+      findFirst: async () => null,
+      deleteMany: async () => ({ count: 0 }),
+      upsert: async () => null,
+      update: async () => null,
+    },
+  };
+  const configService = {
+    get: (key) => {
+      if (key === "NODE_ENV") {
+        return "test";
+      }
+
+      return "";
+    },
+  };
+  const service = new ChatwootInboxConfigService(prisma, configService);
+
+  const result = await service.list("company-1");
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].companyId, "company-1");
+  assert.deepEqual(calls[0].where, { companyId: "company-1" });
 });
 
 test("Chatwoot inbox config rejeita assistantId de outro tenant", async () => {

@@ -29,7 +29,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, ErrorState, LoadingState } from "@/components/feedback/States";
 import { backendAssistantsService } from "@/services/backendAssistantsService";
-import type { BackendAssistantKnowledgeItem, BackendAssistantPreviewResponse, CurrentCompanyResponse, BackendAssistantListItem } from "@/types";
+import { chatwootSettingsService } from "@/services/chatwootSettingsService";
+import type {
+  BackendAssistantKnowledgeItem,
+  BackendAssistantPreviewResponse,
+  CurrentCompanyResponse,
+  BackendAssistantListItem,
+  ChatwootInboxConfigItem,
+} from "@/types";
 import { currentCompanyService } from "@/services/currentCompanyService";
 import { toast } from "sonner";
 import { filterOperationalAssistants, resolveOperationalAssistantId } from "@/lib/assistants";
@@ -52,6 +59,7 @@ function NovoAgente() {
 
   const [company, setCompany] = useState<CurrentCompanyResponse["company"] | null>(null);
   const [assistants, setAssistants] = useState<BackendAssistantListItem[]>([]);
+  const [publicationChannels, setPublicationChannels] = useState<ChatwootInboxConfigItem[]>([]);
   const [selectedAssistantId, setSelectedAssistantId] = useState<string>(search.assistantId ?? "");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -83,6 +91,7 @@ function NovoAgente() {
   const [previewQuestion, setPreviewQuestion] = useState("Qual é o horário de atendimento?");
   const [usePreparedKnowledge, setUsePreparedKnowledge] = useState(false);
   const [previewResult, setPreviewResult] = useState<BackendAssistantPreviewResponse | null>(null);
+  const [publicationSavingId, setPublicationSavingId] = useState<string | null>(null);
 
   const [noAnswerMessage, setNoAnswerMessage] = useState("");
   const [securityInstructions, setSecurityInstructions] = useState("");
@@ -116,6 +125,17 @@ function NovoAgente() {
     [selectableAssistants, selectedAssistantId],
   );
 
+  const publicationSummary = useMemo(
+    () =>
+      publicationChannels.map((channel) => ({
+        ...channel,
+        linkedToCurrentAssistant: channel.assistantId === selectedAssistantId,
+        linkedToOtherAssistant:
+          Boolean(channel.assistantId) && channel.assistantId !== selectedAssistantId,
+      })),
+    [publicationChannels, selectedAssistantId],
+  );
+
   const currentFormData = useMemo(() => ({
     name, description, businessAddress, businessCityRegion, googleMapsUrl,
     latitude, longitude, weeklySchedule,
@@ -145,6 +165,11 @@ function NovoAgente() {
     setKnowledge(items);
   };
 
+  const loadPublicationChannels = async () => {
+    const items = await chatwootSettingsService.list();
+    setPublicationChannels(items);
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -153,9 +178,10 @@ function NovoAgente() {
       setError(null);
 
       try {
-        const [companyResponse, assistantItems] = await Promise.all([
+        const [companyResponse, assistantItems, channelItems] = await Promise.all([
           currentCompanyService.get(),
           backendAssistantsService.list(),
+          chatwootSettingsService.list(),
         ]);
 
         if (cancelled) {
@@ -164,6 +190,7 @@ function NovoAgente() {
 
         setCompany(companyResponse.company);
         setAssistants(assistantItems);
+        setPublicationChannels(channelItems);
         const initialAssistantId = resolveOperationalAssistantId(
           assistantItems,
           search.assistantId,
@@ -219,6 +246,41 @@ function NovoAgente() {
       cancelled = true;
     };
   }, [search.assistantId]);
+
+  const publishAssistantOnChannel = async (
+    channel: ChatwootInboxConfigItem,
+    nextValue: boolean,
+  ) => {
+    if (!selectedAssistantId) {
+      toast.error("Salve o assistente antes de publicar em um canal.");
+      return;
+    }
+
+    setPublicationSavingId(channel.id);
+    try {
+      await chatwootSettingsService.update(channel.id, {
+        name: channel.name,
+        baseUrl: channel.baseUrl,
+        accountId: channel.accountId,
+        inboxId: channel.inboxId,
+        assistantId: nextValue ? selectedAssistantId : "",
+        isActive: channel.isActive,
+        ...(channel.metadataJson ? { metadataJson: channel.metadataJson } : {}),
+      });
+      await loadPublicationChannels();
+      toast.success(
+        nextValue
+          ? `Assistente publicado em ${channel.name}.`
+          : `Publicação removida de ${channel.name}.`,
+      );
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Não foi possível atualizar a publicação do canal.",
+      );
+    } finally {
+      setPublicationSavingId(null);
+    }
+  };
 
   useEffect(() => {
     if (!selectedAssistantId) {
@@ -1480,6 +1542,72 @@ function NovoAgente() {
 
             <TabsContent value="publicacao">
               <div className="grid md:grid-cols-2 gap-4">
+                <Card className="md:col-span-2">
+                  <CardHeader>
+                    <CardTitle className="text-base">Canais de Publicação</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {!selectedAssistantId ? (
+                      <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                        Salve o assistente primeiro para vinculá-lo a um ou mais canais da empresa.
+                      </div>
+                    ) : publicationSummary.length === 0 ? (
+                      <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                        Nenhum canal cadastrado para esta empresa. Cadastre uma inbox em{" "}
+                        <Link to="/canais" className="font-medium text-primary underline-offset-4 hover:underline">
+                          Canais
+                        </Link>{" "}
+                        e depois volte para publicar este assistente.
+                      </div>
+                    ) : (
+                      <div className="grid gap-3 lg:grid-cols-2">
+                        {publicationSummary.map((channel) => (
+                          <div key={channel.id} className="rounded-xl border p-4 space-y-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="font-medium truncate">{channel.name}</div>
+                                <div className="text-xs text-muted-foreground">
+                                  Chatwoot / WhatsApp · Account {channel.accountId} · Inbox {channel.inboxId}
+                                </div>
+                              </div>
+                              <StatusBadge status={channel.isActive ? "ativo" : "pausado"} />
+                            </div>
+
+                            <div className="flex items-center justify-between gap-4 rounded-lg bg-muted/30 px-3 py-3">
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium">
+                                  {channel.linkedToCurrentAssistant
+                                    ? "Publicado neste canal"
+                                    : channel.linkedToOtherAssistant
+                                      ? `Vinculado a ${channel.assistantName ?? "outro assistente"}`
+                                      : "Disponível para publicação"}
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  {channel.linkedToOtherAssistant
+                                    ? "Desvincule o assistente atual deste inbox antes de publicar aqui."
+                                    : channel.isActive
+                                      ? "Este assistente poderá responder este inbox quando estiver ativo."
+                                      : "Canal pausado: o vínculo fica salvo, mas o runtime não responde."}
+                                </div>
+                              </div>
+                              <Switch
+                                checked={channel.linkedToCurrentAssistant}
+                                disabled={
+                                  publicationSavingId === channel.id ||
+                                  (!channel.linkedToCurrentAssistant && channel.linkedToOtherAssistant)
+                                }
+                                onCheckedChange={(checked) =>
+                                  void publishAssistantOnChannel(channel, checked)
+                                }
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
                 <Card className="md:col-span-1">
                   <CardHeader>
                     <CardTitle className="text-base">Revisão Final</CardTitle>

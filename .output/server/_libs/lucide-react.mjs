@@ -320,6 +320,26 @@ var Sparkles = createLucideIcon("sparkles", [
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var TestTubeDiagonal = createLucideIcon("test-tube-diagonal", [
+	["path", {
+		d: "M21 7 6.82 21.18a2.83 2.83 0 0 1-3.99-.01a2.83 2.83 0 0 1 0-4L17 3",
+		key: "1ub6xw"
+	}],
+	["path", {
+		d: "m16 2 6 6",
+		key: "1gw87d"
+	}],
+	["path", {
+		d: "M12 16H4",
+		key: "1cjfip"
+	}]
+]);
+/**
+* @license lucide-react v0.575.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var TriangleAlert = createLucideIcon("triangle-alert", [
 	["path", {
 		d: "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3",
@@ -396,6 +416,19 @@ var ArrowRightLeft = createLucideIcon("arrow-right-left", [
 		key: "g4d7ey"
 	}]
 ]);
+/**
+* @license lucide-react v0.575.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
+var ArrowRight = createLucideIcon("arrow-right", [["path", {
+	d: "M5 12h14",
+	key: "1ays0h"
+}], ["path", {
+	d: "m12 5 7 7-7 7",
+	key: "xquz4c"
+}]]);
 /**
 * @license lucide-react v0.575.0 - ISC
 *
@@ -677,19 +710,6 @@ var ChevronsRight = createLucideIcon("chevrons-right", [["path", {
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
-var ChevronsUpDown = createLucideIcon("chevrons-up-down", [["path", {
-	d: "m7 15 5 5 5-5",
-	key: "1hf1tw"
-}], ["path", {
-	d: "m7 9 5-5 5 5",
-	key: "sgt6xg"
-}]]);
-/**
-* @license lucide-react v0.575.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
 var CircleOff = createLucideIcon("circle-off", [
 	["path", {
 		d: "m2 2 20 20",
@@ -844,16 +864,6 @@ var Eye = createLucideIcon("eye", [["path", {
 	cy: "12",
 	r: "3",
 	key: "1v7zrd"
-}]]);
-/**
-* @license lucide-react v0.575.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
-var Facebook = createLucideIcon("facebook", [["path", {
-	d: "M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z",
-	key: "1jg4f8"
 }]]);
 /**
 * @license lucide-react v0.575.0 - ISC
@@ -1056,50 +1066,6 @@ var Inbox = createLucideIcon("inbox", [["polyline", {
 }], ["path", {
 	d: "M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z",
 	key: "oot6mr"
-}]]);
-/**
-* @license lucide-react v0.575.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
-var Instagram = createLucideIcon("instagram", [
-	["rect", {
-		width: "20",
-		height: "20",
-		x: "2",
-		y: "2",
-		rx: "5",
-		ry: "5",
-		key: "2e1cvw"
-	}],
-	["path", {
-		d: "M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z",
-		key: "9exkf1"
-	}],
-	["line", {
-		x1: "17.5",
-		x2: "17.51",
-		y1: "6.5",
-		y2: "6.5",
-		key: "r4j83e"
-	}]
-]);
-/**
-* @license lucide-react v0.575.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
-var KeyRound = createLucideIcon("key-round", [["path", {
-	d: "M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z",
-	key: "1s6t7t"
-}], ["circle", {
-	cx: "16.5",
-	cy: "7.5",
-	r: ".5",
-	fill: "currentColor",
-	key: "w0ekpg"
 }]]);
 /**
 * @license lucide-react v0.575.0 - ISC
@@ -1639,6 +1605,16 @@ var ShieldCheck = createLucideIcon("shield-check", [["path", {
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var Shield = createLucideIcon("shield", [["path", {
+	d: "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+	key: "oel41y"
+}]]);
+/**
+* @license lucide-react v0.575.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var SmilePlus = createLucideIcon("smile-plus", [
 	["path", {
 		d: "M22 11v1a10 10 0 1 1-9-10",
@@ -1902,6 +1878,32 @@ var User = createLucideIcon("user", [["path", {
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var Users = createLucideIcon("users", [
+	["path", {
+		d: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2",
+		key: "1yyitq"
+	}],
+	["path", {
+		d: "M16 3.128a4 4 0 0 1 0 7.744",
+		key: "16gr8j"
+	}],
+	["path", {
+		d: "M22 21v-2a4 4 0 0 0-3-3.87",
+		key: "kshegd"
+	}],
+	["circle", {
+		cx: "9",
+		cy: "7",
+		r: "4",
+		key: "nufk8"
+	}]
+]);
+/**
+* @license lucide-react v0.575.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var Video = createLucideIcon("video", [["path", {
 	d: "m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5",
 	key: "ftymec"
@@ -1957,4 +1959,4 @@ var X = createLucideIcon("x", [["path", {
 	key: "d8bk6v"
 }]]);
 //#endregion
-export { FileText as $, Play as A, Sparkles as At, LogOut as B, Save as C, Blocks as Ct, Power as D, Activity as Dt, Radio as E, ArrowLeft as Et, Moon as F, CirclePlay as Ft, Inbox as G, LayoutDashboard as H, Mic as I, CircleCheck as It, GitBranch as J, Image as K, MessageSquare as L, CircleAlert as Lt, PencilLine as M, LoaderCircle as Mt, Pause as N, Layers as Nt, PowerOff as O, UserRound as Ot, Network as P, Funnel as Pt, FileUp as Q, MessageCircle as R, ChartColumn as Rt, ScrollText as S, BookOpen as St, RefreshCw as T, ArrowRightLeft as Tt, KeyRound as U, Link2 as V, Instagram as W, Flag as X, FolderOpen as Y, Film as Z, ShieldAlert as _, Check as _t, User as a, Coins as at, Send as b, Brain as bt, TrendingUp as c, Circle as ct, Trash2 as d, ChevronsRight as dt, Facebook as et, Timer as f, ChevronsLeft as ft, ShieldCheck as g, ChevronDown as gt, SmilePlus as h, ChevronLeft as ht, Video as i, Copy as it, Pencil as j, SlidersVertical as jt, Plus as k, TriangleAlert as kt, TrendingDown as l, CircleOff as lt, Store as m, ChevronRight as mt, Wrench as n, EyeOff as nt, UserCheck as o, Clock as ot, Sun as p, ChevronUp as pt, Globe as q, Webhook as r, DollarSign as rt, Upload as s, Clock3 as st, X as t, Eye as tt, Trash as u, ChevronsUpDown as ut, Settings as v, CalendarDays as vt, Rocket as w, ArrowUpRight as wt, Search as x, Bot as xt, Settings2 as y, Building2 as yt, MapPin as z, Braces as zt };
+export { FileText as $, PowerOff as A, Sparkles as At, MessageCircle as B, Search as C, ArrowRight as Ct, RefreshCw as D, UserRound as Dt, Rocket as E, Activity as Et, Pause as F, CirclePlay as Ft, Inbox as G, LogOut as H, Network as I, CircleCheck as It, GitBranch as J, Image as K, Moon as L, CircleAlert as Lt, Play as M, LoaderCircle as Mt, Pencil as N, Layers as Nt, Radio as O, TriangleAlert as Ot, PencilLine as P, Funnel as Pt, FileUp as Q, Mic as R, ChartColumn as Rt, Send as S, ArrowUpRight as St, Save as T, ArrowLeft as Tt, Link2 as U, MapPin as V, LayoutDashboard as W, Flag as X, FolderOpen as Y, Film as Z, Shield as _, Building2 as _t, Users as a, Clock as at, Settings as b, BookOpen as bt, Upload as c, CircleOff as ct, Trash as d, ChevronUp as dt, Eye as et, Trash2 as f, ChevronRight as ft, SmilePlus as g, CalendarDays as gt, Store as h, Check as ht, Video as i, Coins as it, Plus as j, SlidersVertical as jt, Power as k, TestTubeDiagonal as kt, TrendingUp as l, ChevronsRight as lt, Sun as m, ChevronDown as mt, Wrench as n, DollarSign as nt, User as o, Clock3 as ot, Timer as p, ChevronLeft as pt, Globe as q, Webhook as r, Copy as rt, UserCheck as s, Circle as st, X as t, EyeOff as tt, TrendingDown as u, ChevronsLeft as ut, ShieldCheck as v, Brain as vt, ScrollText as w, ArrowRightLeft as wt, Settings2 as x, Blocks as xt, ShieldAlert as y, Bot as yt, MessageSquare as z, Braces as zt };

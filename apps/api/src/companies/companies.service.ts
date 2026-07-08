@@ -114,12 +114,6 @@ export class CompaniesService {
       await this.ensureDefaultRoles(tx, company.id);
       await this.ensureMembership(tx, input.user.id, company.id);
       await this.assignAdminRole(tx, input.user.id, company.id);
-      await tx.user.update({
-        where: { id: input.user.id },
-        data: {
-          activeCompanyId: company.id,
-        },
-      });
 
       if (input.dto.createDemoAssistant) {
         await tx.assistant.create({

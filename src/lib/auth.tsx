@@ -17,6 +17,10 @@ export type AuthUser = {
   empresa?: string;
   avatar?: string;
   role: "admin" | "operator" | "viewer";
+  activeCompanyId?: string | null;
+  memberships?: string[];
+  roles?: string[];
+  permissions?: string[];
 };
 
 type StoredUser = AuthUser;
@@ -66,6 +70,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             nome: data.name || data.email.split("@")[0],
             email: data.email,
             role: data.roles?.includes("admin") ? "admin" : "operator",
+            activeCompanyId: data.activeCompanyId ?? null,
+            memberships: Array.isArray(data.memberships) ? data.memberships : [],
+            roles: Array.isArray(data.roles) ? data.roles : [],
+            permissions: Array.isArray(data.permissions) ? data.permissions : [],
           };
           setUser(authUser);
           sessionStorage.setItem(SESSION_KEY, JSON.stringify(authUser));

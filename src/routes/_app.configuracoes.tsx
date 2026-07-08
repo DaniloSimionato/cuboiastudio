@@ -802,15 +802,6 @@ function ConfigPage() {
           do tenant sem quebrar o modo determinístico.
         </SecurityNotice>
       )}
-
-      <CompanyAdministrationSection
-        currentCompanyId={company.id}
-        onCompanyChanged={() => {
-          void load();
-        }}
-      />
-
-      <ChatwootIntegrationSection companyName={company.name} />
     </div>
   );
 }

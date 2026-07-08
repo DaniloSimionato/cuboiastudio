@@ -675,7 +675,7 @@ export class ChatwootInboxConfigService {
     }
 
     const trimmed = trimNullableText(value);
-    return trimmed ?? fallback;
+    return trimmed;
   }
 
   private async ensureAssistantBelongsToCompany(

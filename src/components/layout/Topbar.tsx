@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { Plus, Moon, Sun, LogOut, User } from "lucide-react";
+import { Plus, Moon, Sun, LogOut, User, Building2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -48,6 +48,13 @@ export function Topbar() {
         <Link to="/agentes/novo">
           <Plus className="h-4 w-4" />
           Novo Agente
+        </Link>
+      </Button>
+
+      <Button asChild variant="outline" className="gap-2">
+        <Link to="/portal">
+          <Building2 className="h-4 w-4" />
+          Portal
         </Link>
       </Button>
 

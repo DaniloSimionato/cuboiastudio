@@ -1,5 +1,5 @@
 import { t as require_jsx_dev_runtime } from "./_libs/react.mjs";
-import { At as Sparkles, Dt as Activity, R as MessageCircle, at as Coins, f as Timer, l as TrendingDown, o as UserCheck, rt as DollarSign } from "./_libs/lucide-react.mjs";
+import { At as Sparkles, B as MessageCircle, Et as Activity, it as Coins, nt as DollarSign, p as Timer, s as UserCheck, u as TrendingDown } from "./_libs/lucide-react.mjs";
 import { t as PageHeader } from "./_ssr/PageHeader-D4Y71euA.mjs";
 import { a as CardTitle, i as CardHeader, n as CardContent, t as Card } from "./_ssr/card-BW9s_OV3.mjs";
 //#region node_modules/.nitro/vite/services/ssr/assets/_app.consumo-CU_Iluyd.js

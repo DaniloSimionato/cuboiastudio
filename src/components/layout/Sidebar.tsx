@@ -19,6 +19,7 @@ import {
   BarChart3,
   ChevronDown,
   Store,
+  Building2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSidebar } from "@/lib/sidebar-context";
@@ -36,7 +37,7 @@ import { companiesService, currentCompanyService } from "@/services";
 import type { CurrentCompanyResponse } from "@/types";
 
 const items = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/agentes", label: "Assistentes IA", icon: Bot },
   { to: "/conhecimento", label: "Base de Conhecimento", icon: BookOpen },
   { to: "/ferramentas", label: "Ferramentas", icon: Wrench },
@@ -178,6 +179,13 @@ export function Sidebar() {
                   <DropdownMenuItem disabled>{company?.name ?? "Backend indisponível"}</DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link to="/portal" className="flex items-center gap-2">
+                    <Building2 className="h-4 w-4" />
+                    Portal do Studio
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={handleRefresh}>
                   Atualizar tenant
                 </DropdownMenuItem>
@@ -188,7 +196,7 @@ export function Sidebar() {
 
         <nav className={cn("flex-1 overflow-y-auto py-3 space-y-0.5", collapsed ? "px-2" : "px-2")}>
           {items.map((it) => {
-            const active = it.to === "/" ? pathname === "/" : pathname.startsWith(it.to);
+            const active = pathname === it.to || pathname.startsWith(`${it.to}/`);
             const Icon = it.icon;
             const linkEl = (
               <Link
