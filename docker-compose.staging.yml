@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      - "5434:5432"
+      - "127.0.0.1:5434:5432"
     volumes:
       - postgres_staging_data:/var/lib/postgresql/data
     healthcheck:
@@ -20,7 +20,7 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "6380:6379"
+      - "127.0.0.1:6380:6379"
     volumes:
       - redis_staging_data:/data
     healthcheck:
@@ -51,7 +51,7 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
 
   frontend:
     image: node:22-alpine
@@ -68,8 +68,38 @@ services:
     depends_on:
       - api
     ports:
-      - "4173:4173"
+      - "127.0.0.1:4173:4173"
+
+  auth-proxy:
+    build:
+      context: ./infra/auth-proxy
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+      STAGING_PASSWORD: ${STAGING_PASSWORD}
+      AUTH_PROXY_SHARED_SECRET: ${AUTH_PROXY_SHARED_SECRET}
+      API_TARGET: http://api:3001
+      FRONTEND_TARGET: http://frontend:4173
+    depends_on:
+      - api
+      - frontend
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - auth-proxy
+      - api
 
 volumes:
   postgres_staging_data:
   redis_staging_data:
+  caddy_data:
+  caddy_config:

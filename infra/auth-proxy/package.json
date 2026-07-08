@@ -1,0 +1,14 @@
+{
+  "name": "cubo-auth-proxy",
+  "version": "1.0.0",
+  "description": "Proxy de autenticação e injeção de cabeçalhos de assinatura para o Cubo AI Studio Staging",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "express": "^4.21.2",
+    "http-proxy": "^1.18.1"
+  }
+}

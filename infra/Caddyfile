@@ -1,0 +1,7 @@
+studio-staging.cubo.chat {
+    reverse_proxy auth-proxy:8080
+}
+
+api-staging.cubo.chat {
+    reverse_proxy api:3001
+}
