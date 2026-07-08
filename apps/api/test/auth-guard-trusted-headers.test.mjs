@@ -112,3 +112,56 @@ test("AuthGuard rejeita headers sem assinatura válida em staging", async () => 
 
   await assert.rejects(() => guard.canActivate(createContext(request)), UnauthorizedException);
 });
+
+test("AuthGuard autentica usuário sem empresa no portal, sem conceder tenant", async () => {
+  const secret = "shared-secret";
+  const timestamp = new Date().toISOString();
+  const signature = buildTrustedAuthSignature({
+    userId: "user-without-company",
+    email: "global@example.com",
+    name: "Global User",
+    timestamp,
+    secret,
+  });
+  const guard = new AuthGuard(
+    {
+      withQueryTimeout: async (promise) => promise,
+      user: {
+        findFirst: async () => ({
+          id: "user-without-company",
+          companyId: null,
+          activeCompanyId: null,
+          email: "global@example.com",
+          name: "Global User",
+          status: "ACTIVE",
+          deletedAt: null,
+          company: null,
+          activeCompany: null,
+          memberships: [],
+          userRoles: [],
+        }),
+      },
+      rolePermission: { findMany: async () => [] },
+    },
+    {
+      get: (key) => {
+        if (key === "AUTH_TRUST_MODE") return "signed-headers";
+        if (key === "AUTH_PROXY_SHARED_SECRET") return secret;
+        if (key === "AUTH_PROXY_SIGNATURE_TTL_MS") return 300000;
+        return undefined;
+      },
+    },
+  );
+  const request = createRequest({
+    "x-auth-user-id": "user-without-company",
+    "x-auth-user-email": "global@example.com",
+    "x-auth-user-name": "Global User",
+    "x-auth-timestamp": timestamp,
+    "x-auth-signature": signature,
+  });
+
+  assert.equal(await guard.canActivate(createContext(request)), true);
+  assert.equal(request.user?.activeCompanyId, null);
+  assert.deepEqual(request.user?.memberships, []);
+  assert.equal(request.tenant?.companyId, "");
+});

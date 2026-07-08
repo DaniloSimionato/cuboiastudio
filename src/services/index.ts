@@ -3,6 +3,7 @@ export { aiProviderService } from "./aiProviderService";
 export { aiSettingsService } from "./aiSettingsService";
 export { appStoreService } from "./appStoreService";
 export { companiesService } from "./companiesService";
+export { studioUsersService } from "./studioUsersService";
 export { currentCompanyService } from "./currentCompanyService";
 export { backendAssistantsService } from "./backendAssistantsService";
 export { backendConversationsService } from "./backendConversationsService";

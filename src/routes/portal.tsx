@@ -6,18 +6,28 @@ import {
   Loader2,
   Pencil,
   Plus,
-  Shield,
+  ShieldCheck,
   Users,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
-import { companiesService } from "@/services";
-import type { BackendStatus, CreateCompanyPayload, CurrentCompany, UpdateCompanyPayload } from "@/types";
+import { accessCompany } from "@/lib/portalAccess";
+import { companiesService, studioUsersService } from "@/services";
+import type {
+  BackendStatus,
+  CreateCompanyPayload,
+  CurrentCompany,
+  SaveStudioUserPayload,
+  StudioCompanyRole,
+  StudioGlobalRole,
+  StudioUser,
+  UpdateCompanyPayload,
+} from "@/types";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -33,46 +43,74 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { Badge } from "@/components/ui/badge";
-import { StatusBadge } from "@/components/StatusBadge";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 export const Route = createFileRoute("/portal")({
   head: () => ({ meta: [{ title: "Portal do Studio · Cubo AI Studio" }] }),
   component: PortalPage,
 });
 
-type CompanyFormState = {
+type CompanyForm = {
   name: string;
   legalName: string;
   document: string;
   status: BackendStatus;
-  notes: string;
 };
 
-const DEFAULT_FORM: CompanyFormState = {
+type UserForm = {
+  name: string;
+  email: string;
+  temporaryPassword: string;
+  status: BackendStatus;
+  globalRole: StudioGlobalRole;
+  memberships: Record<string, StudioCompanyRole>;
+};
+
+const EMPTY_COMPANY: CompanyForm = {
   name: "",
   legalName: "",
   document: "",
   status: "ACTIVE",
-  notes: "",
+};
+
+const EMPTY_USER: UserForm = {
+  name: "",
+  email: "",
+  temporaryPassword: "",
+  status: "ACTIVE",
+  globalRole: "STUDIO_VIEWER",
+  memberships: {},
 };
 
 function PortalPage() {
-  const { isAuthenticated, loading, user } = useAuth();
+  const { isAuthenticated, loading, user, refreshUser } = useAuth();
   const navigate = useNavigate();
   const [companies, setCompanies] = useState<CurrentCompany[]>([]);
+  const [studioUsers, setStudioUsers] = useState<StudioUser[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [editingCompany, setEditingCompany] = useState<CurrentCompany | null>(null);
-  const [form, setForm] = useState<CompanyFormState>(DEFAULT_FORM);
+  const [usersLoading, setUsersLoading] = useState(false);
   const [enteringCompanyId, setEnteringCompanyId] = useState<string | null>(null);
+  const [companySheetOpen, setCompanySheetOpen] = useState(false);
+  const [userSheetOpen, setUserSheetOpen] = useState(false);
+  const [savingCompany, setSavingCompany] = useState(false);
+  const [savingUser, setSavingUser] = useState(false);
+  const [editingCompany, setEditingCompany] = useState<CurrentCompany | null>(null);
+  const [editingUser, setEditingUser] = useState<StudioUser | null>(null);
+  const [companyForm, setCompanyForm] = useState<CompanyForm>(EMPTY_COMPANY);
+  const [userForm, setUserForm] = useState<UserForm>(EMPTY_USER);
 
-  const canManageCompanies = useMemo(
-    () => Boolean(user?.permissions?.includes("companies:manage") || user?.role === "admin"),
-    [user?.permissions, user?.role],
-  );
+  const canManageCompanies = Boolean(user?.permissions?.includes("companies:manage"));
+  const canManageUsers = Boolean(user?.permissions?.includes("users:manage"));
+  const activeCompany = companies.find((company) => company.isActiveContext);
 
   useEffect(() => {
     if (!loading && !isAuthenticated) {
@@ -82,366 +120,513 @@ function PortalPage() {
 
   const loadCompanies = async () => {
     setPageLoading(true);
-    setError(null);
-
     try {
-      const items = await companiesService.list();
-      setCompanies(items);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Não foi possível carregar as empresas.");
+      setCompanies(await companiesService.list());
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível carregar as empresas.");
     } finally {
       setPageLoading(false);
+    }
+  };
+
+  const loadUsers = async () => {
+    if (!canManageUsers) return;
+    setUsersLoading(true);
+    try {
+      setStudioUsers(await studioUsersService.list());
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível carregar os usuários.");
+    } finally {
+      setUsersLoading(false);
     }
   };
 
   useEffect(() => {
     if (isAuthenticated) {
       void loadCompanies();
+      void loadUsers();
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, canManageUsers]);
 
-  const resetForm = () => {
-    setEditingCompany(null);
-    setForm(DEFAULT_FORM);
+  const openCompany = (company?: CurrentCompany) => {
+    setEditingCompany(company ?? null);
+    setCompanyForm(
+      company
+        ? {
+            name: company.name,
+            legalName: company.legalName ?? "",
+            document: company.document ?? "",
+            status: company.status,
+          }
+        : EMPTY_COMPANY,
+    );
+    setCompanySheetOpen(true);
   };
 
-  const openCreate = () => {
-    resetForm();
-    setSheetOpen(true);
-  };
-
-  const openEdit = (company: CurrentCompany) => {
-    setEditingCompany(company);
-    setForm({
-      name: company.name ?? "",
-      legalName: company.legalName ?? "",
-      document: company.document ?? "",
-      status: company.status,
-      notes: company.notes ?? "",
-    });
-    setSheetOpen(true);
-  };
-
-  const submit = async () => {
-    if (!form.name.trim()) {
+  const saveCompany = async () => {
+    if (!companyForm.name.trim()) {
       toast.error("Informe o nome da empresa.");
       return;
     }
 
-    setSaving(true);
+    setSavingCompany(true);
     try {
       const payload: CreateCompanyPayload & UpdateCompanyPayload = {
-        name: form.name.trim(),
-        legalName: form.legalName.trim() || null,
-        document: form.document.trim() || null,
-        status: form.status,
-        notes: form.notes.trim() || null,
+        name: companyForm.name.trim(),
+        legalName: companyForm.legalName.trim() || null,
+        document: companyForm.document.trim() || null,
+        status: companyForm.status,
       };
-
       if (editingCompany) {
         await companiesService.update(editingCompany.id, payload);
-        toast.success("Empresa atualizada no portal global.");
+        toast.success("Empresa atualizada.");
       } else {
         await companiesService.create(payload);
-        toast.success("Empresa criada vazia e pronta para configuração.");
+        toast.success("Empresa criada. Use “Acessar” quando quiser entrar no tenant.");
       }
-
-      setSheetOpen(false);
-      resetForm();
+      setCompanySheetOpen(false);
       await loadCompanies();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Não foi possível salvar a empresa.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível salvar a empresa.");
     } finally {
-      setSaving(false);
+      setSavingCompany(false);
     }
   };
 
   const enterCompany = async (company: CurrentCompany) => {
-    setEnteringCompanyId(company.id);
+    if (enteringCompanyId) return;
     try {
-      await companiesService.setActive(company.id);
-      await navigate({ to: "/dashboard" });
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Não foi possível definir a empresa ativa.",
-      );
+      await accessCompany({
+        companyId: company.id,
+        activeCompanyId: user?.activeCompanyId ?? null,
+        setActive: companiesService.setActive,
+        refreshUser,
+        navigate: () => navigate({ to: "/dashboard" }),
+        setLoadingCompanyId: setEnteringCompanyId,
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível acessar a empresa.");
+    }
+  };
+
+  const openUser = (studioUser?: StudioUser) => {
+    setEditingUser(studioUser ?? null);
+    setUserForm(
+      studioUser
+        ? {
+            name: studioUser.name,
+            email: studioUser.email,
+            temporaryPassword: "",
+            status: studioUser.status,
+            globalRole: studioUser.globalRole,
+            memberships: Object.fromEntries(
+              studioUser.memberships.map((membership) => [
+                membership.companyId,
+                membership.role,
+              ]),
+            ),
+          }
+        : EMPTY_USER,
+    );
+    setUserSheetOpen(true);
+  };
+
+  const saveUser = async () => {
+    if (!userForm.name.trim() || !userForm.email.trim()) {
+      toast.error("Informe nome e e-mail.");
+      return;
+    }
+    if (!editingUser && userForm.temporaryPassword.length < 8) {
+      toast.error("A senha temporária deve ter pelo menos 8 caracteres.");
+      return;
+    }
+
+    setSavingUser(true);
+    try {
+      const payload: SaveStudioUserPayload = {
+        name: userForm.name.trim(),
+        email: userForm.email.trim().toLowerCase(),
+        status: userForm.status,
+        globalRole: userForm.globalRole,
+        memberships: Object.entries(userForm.memberships).map(([companyId, role]) => ({
+          companyId,
+          role,
+        })),
+        ...(userForm.temporaryPassword
+          ? { temporaryPassword: userForm.temporaryPassword }
+          : {}),
+      };
+      if (editingUser) {
+        await studioUsersService.update(editingUser.id, payload);
+        toast.success("Usuário atualizado.");
+      } else {
+        await studioUsersService.create({
+          ...payload,
+          temporaryPassword: userForm.temporaryPassword,
+        });
+        toast.success("Usuário criado e pronto para acessar o Studio.");
+      }
+      setUserSheetOpen(false);
+      await loadUsers();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível salvar o usuário.");
     } finally {
-      setEnteringCompanyId(null);
+      setSavingUser(false);
     }
   };
 
   if (loading || !isAuthenticated) {
-    return (
-      <div className="min-h-screen grid place-items-center bg-background text-muted-foreground">
-        <Loader2 className="h-6 w-6 animate-spin" />
-      </div>
-    );
+    return <div className="grid min-h-screen place-items-center"><Loader2 className="h-5 w-5 animate-spin" /></div>;
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="mx-auto max-w-7xl px-6 py-8 space-y-6">
-        <section className="rounded-3xl border bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white overflow-hidden">
-          <div className="grid gap-6 px-6 py-8 lg:grid-cols-[minmax(0,1fr)_320px] lg:px-8">
-            <div className="space-y-4">
-              <Badge variant="secondary" className="bg-white/10 text-white hover:bg-white/10">
-                Portal global do Studio
-              </Badge>
-              <div className="space-y-2">
-                <h1 className="text-3xl font-semibold tracking-tight">Empresas e governanca do Cubo AI Studio</h1>
-                <p className="max-w-2xl text-sm text-slate-200/85">
-                  Crie novas empresas, escolha o tenant ativo para operar e mantenha a administracao
-                  global fora do contexto interno de cada cliente.
-                </p>
-              </div>
+    <main className="min-h-screen bg-slate-50/70">
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-sky-700">
+              <ShieldCheck className="h-4 w-4" />
+              Administração global
             </div>
-
-            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
-              <MetricCard label="Empresas acessiveis" value={String(companies.length)} icon={Building2} />
-              <MetricCard
-                label="Empresa ativa"
-                value={companies.find((item) => item.isActiveContext)?.name ?? "Nenhuma"}
-                icon={Shield}
-              />
-              <MetricCard label="Usuarios do Studio" value="Em breve" icon={Users} />
-            </div>
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-950">Portal do Studio</h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Gerencie empresas, usuários e acessos do Cubo AI Studio.
+            </p>
           </div>
+          {canManageCompanies && (
+            <Button onClick={() => openCompany()} className="shadow-sm">
+              <Plus className="h-4 w-4" />
+              Nova empresa
+            </Button>
+          )}
+        </header>
+
+        <section className="mb-6 grid gap-3 sm:grid-cols-3">
+          <Metric icon={Building2} label="Empresas" value={String(companies.length)} />
+          <Metric icon={Users} label="Usuários" value={canManageUsers ? String(studioUsers.length) : "Restrito"} />
+          <Metric icon={ShieldCheck} label="Empresa ativa" value={activeCompany?.name ?? "Nenhuma"} />
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <Card>
-            <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <div>
-                <CardTitle>Empresas</CardTitle>
-                <CardDescription>
-                  Lista global de tenants acessiveis para este usuario no Studio.
-                </CardDescription>
-              </div>
-              <Button onClick={openCreate} disabled={!canManageCompanies}>
-                <Plus className="h-4 w-4" />
-                Nova empresa
-              </Button>
-            </CardHeader>
-            <CardContent>
-              {pageLoading ? (
-                <div className="grid place-items-center py-16 text-muted-foreground">
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                </div>
-              ) : error ? (
-                <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
-                  {error}
-                </div>
-              ) : companies.length === 0 ? (
-                <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground">
-                  Nenhuma empresa acessivel encontrada.
-                </div>
-              ) : (
-                <div className="grid gap-4 md:grid-cols-2">
-                  {companies.map((company) => (
-                    <article key={company.id} className="rounded-2xl border p-5 space-y-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 space-y-1">
-                          <div className="flex items-center gap-2">
-                            <Building2 className="h-4 w-4 text-muted-foreground" />
-                            <h2 className="truncate font-medium">{company.name}</h2>
-                          </div>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {company.legalName || "Razao social nao informada"}
-                          </p>
-                        </div>
-                        <StatusBadge status={company.status === "ACTIVE" ? "ativo" : "pausado"} />
-                      </div>
+        <Tabs defaultValue="companies">
+          <TabsList className="mb-4 h-9 bg-slate-200/70 p-1">
+            <TabsTrigger value="companies" className="h-7 px-4 text-xs">Empresas</TabsTrigger>
+            <TabsTrigger value="users" className="h-7 px-4 text-xs">Usuários do Studio</TabsTrigger>
+          </TabsList>
 
-                      <dl className="grid gap-2 text-sm">
-                        <SummaryRow label="CNPJ" value={company.document || "Nao informado"} />
-                        <SummaryRow
-                          label="Criada em"
-                          value={formatDate(company.createdAt) || "Data indisponivel"}
-                        />
-                        <SummaryRow
-                          label="Status do contexto"
-                          value={company.isActiveContext ? "Empresa ativa" : "Pronta para acessar"}
-                        />
-                      </dl>
+          <TabsContent value="companies">
+            <Card className="overflow-hidden border-slate-200 shadow-sm">
+              <CardContent className="p-0">
+                {pageLoading ? (
+                  <LoadingRow />
+                ) : companies.length === 0 ? (
+                  <EmptyState
+                    title="Nenhuma empresa disponível"
+                    detail="Seu usuário ainda não possui vínculo com uma empresa."
+                  />
+                ) : (
+                  <Table>
+                    <TableHeader className="bg-slate-50">
+                      <TableRow>
+                        <TableHead className="pl-5">Empresa</TableHead>
+                        <TableHead>CNPJ</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Criada em</TableHead>
+                        <TableHead className="pr-5 text-right">Ações</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {companies.map((company) => (
+                        <TableRow key={company.id} className="h-16">
+                          <TableCell className="pl-5">
+                            <div className="font-medium text-slate-900">{company.name}</div>
+                            <div className="max-w-64 truncate text-xs text-slate-500">
+                              {company.legalName || "Razão social não informada"}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-slate-600">{company.document || "Não informado"}</TableCell>
+                          <TableCell><Status status={company.status} active={company.isActiveContext} /></TableCell>
+                          <TableCell className="text-slate-600">{formatDate(company.createdAt)}</TableCell>
+                          <TableCell className="pr-5">
+                            <div className="flex justify-end gap-2">
+                              {canManageCompanies && (
+                                <Button size="sm" variant="ghost" onClick={() => openCompany(company)}>
+                                  <Pencil className="h-3.5 w-3.5" />
+                                  Editar
+                                </Button>
+                              )}
+                              <Button
+                                size="sm"
+                                onClick={() => void enterCompany(company)}
+                                disabled={enteringCompanyId !== null}
+                              >
+                                {enteringCompanyId === company.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <ArrowRight className="h-3.5 w-3.5" />
+                                )}
+                                Acessar
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
 
-                      <div className="flex flex-wrap gap-2 pt-2">
-                        <Button
-                          size="sm"
-                          onClick={() => void enterCompany(company)}
-                          disabled={enteringCompanyId === company.id}
-                        >
-                          {enteringCompanyId === company.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <ArrowRight className="h-4 w-4" />
-                          )}
-                          Acessar empresa
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => openEdit(company)}
-                          disabled={!canManageCompanies}
-                        >
-                          <Pencil className="h-4 w-4" />
-                          Editar
-                        </Button>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Usuarios do Studio</CardTitle>
-              <CardDescription>
-                Estrutura global de usuarios e permissoes do Studio.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm text-muted-foreground">
-              <div className="rounded-2xl border border-dashed p-4">
-                Gestao de usuarios em breve.
-              </div>
-              <div className="rounded-2xl bg-muted/40 p-4">
-                O objetivo desta area e centralizar memberships, papeis globais e acessos a
-                multiplas empresas sem misturar isso com as configuracoes internas do tenant.
-              </div>
-            </CardContent>
-          </Card>
-        </section>
+          <TabsContent value="users">
+            <Card className="overflow-hidden border-slate-200 shadow-sm">
+              <CardContent className="p-0">
+                {!canManageUsers ? (
+                  <EmptyState title="Acesso restrito" detail="Somente administradores do Studio gerenciam usuários." />
+                ) : usersLoading ? (
+                  <LoadingRow />
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between border-b px-5 py-3">
+                      <div className="text-sm font-medium">Usuários cadastrados</div>
+                      <Button size="sm" onClick={() => openUser()}>
+                        <Plus className="h-3.5 w-3.5" />
+                        Novo usuário
+                      </Button>
+                    </div>
+                    {studioUsers.length === 0 ? (
+                      <EmptyState title="Nenhum usuário cadastrado" detail="Crie o primeiro acesso administrativo." />
+                    ) : (
+                      <Table>
+                        <TableHeader className="bg-slate-50">
+                          <TableRow>
+                            <TableHead className="pl-5">Usuário</TableHead>
+                            <TableHead>Papel global</TableHead>
+                            <TableHead>Empresas</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead className="pr-5 text-right">Ação</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {studioUsers.map((studioUser) => (
+                            <TableRow key={studioUser.id} className="h-16">
+                              <TableCell className="pl-5">
+                                <div className="font-medium">{studioUser.name}</div>
+                                <div className="text-xs text-slate-500">{studioUser.email}</div>
+                              </TableCell>
+                              <TableCell><Badge variant="secondary">{roleLabel(studioUser.globalRole)}</Badge></TableCell>
+                              <TableCell className="text-slate-600">{studioUser.memberships.length}</TableCell>
+                              <TableCell><Status status={studioUser.status} /></TableCell>
+                              <TableCell className="pr-5 text-right">
+                                <Button size="sm" variant="ghost" onClick={() => openUser(studioUser)}>
+                                  <Pencil className="h-3.5 w-3.5" />
+                                  Editar
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
       </div>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent className="sm:max-w-xl">
-          <SheetHeader>
-            <SheetTitle>{editingCompany ? "Editar empresa" : "Nova empresa"}</SheetTitle>
-            <SheetDescription>
-              {editingCompany
-                ? "Atualize os dados cadastrais da empresa no portal global."
-                : "Crie uma empresa vazia. O usuario atual continuara no portal e podera acessar o tenant quando quiser."}
-            </SheetDescription>
-          </SheetHeader>
+      <CompanySheet
+        open={companySheetOpen}
+        onOpenChange={setCompanySheetOpen}
+        editing={Boolean(editingCompany)}
+        form={companyForm}
+        setForm={setCompanyForm}
+        saving={savingCompany}
+        onSave={() => void saveCompany()}
+      />
+      <UserSheet
+        open={userSheetOpen}
+        onOpenChange={setUserSheetOpen}
+        editing={Boolean(editingUser)}
+        form={userForm}
+        setForm={setUserForm}
+        companies={companies}
+        saving={savingUser}
+        onSave={() => void saveUser()}
+      />
+    </main>
+  );
+}
 
-          <div className="mt-6 space-y-4">
-            <Field label="Nome fantasia">
-              <Input
-                value={form.name}
-                onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
-                placeholder="Drimo"
-              />
-            </Field>
-            <Field label="Razao social">
-              <Input
-                value={form.legalName}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, legalName: event.target.value }))
-                }
-                placeholder="Drimo Tecnologia LTDA"
-              />
-            </Field>
-            <Field label="CNPJ (opcional)">
-              <Input
-                value={form.document}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, document: event.target.value }))
-                }
-                placeholder="00.000.000/0001-00"
-              />
-            </Field>
-            <Field label="Status">
-              <Select
-                value={form.status}
-                onValueChange={(value: BackendStatus) =>
-                  setForm((current) => ({ ...current, status: value }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
+function CompanySheet(props: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  editing: boolean;
+  form: CompanyForm;
+  setForm: React.Dispatch<React.SetStateAction<CompanyForm>>;
+  saving: boolean;
+  onSave: () => void;
+}) {
+  const { form, setForm } = props;
+  return (
+    <Sheet open={props.open} onOpenChange={props.onOpenChange}>
+      <SheetContent className="sm:max-w-lg">
+        <SheetHeader>
+          <SheetTitle>{props.editing ? "Editar empresa" : "Nova empresa"}</SheetTitle>
+          <SheetDescription>Os exemplos abaixo são apenas placeholders e nunca são enviados.</SheetDescription>
+        </SheetHeader>
+        <div className="mt-6 space-y-4">
+          <Field label="Nome fantasia"><Input value={form.name} placeholder="Drimo" onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} /></Field>
+          <Field label="Razão social"><Input value={form.legalName} placeholder="Drimo Tecnologia LTDA" onChange={(event) => setForm((current) => ({ ...current, legalName: event.target.value }))} /></Field>
+          <Field label="CNPJ (opcional)"><Input value={form.document} placeholder="00.000.000/0001-00" onChange={(event) => setForm((current) => ({ ...current, document: event.target.value }))} /></Field>
+          <Field label="Status">
+            <Select value={form.status} onValueChange={(status: BackendStatus) => setForm((current) => ({ ...current, status }))}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value="ACTIVE">Ativa</SelectItem><SelectItem value="INACTIVE">Inativa</SelectItem></SelectContent>
+            </Select>
+          </Field>
+        </div>
+        <SheetFooter className="mt-6">
+          <Button variant="outline" onClick={() => props.onOpenChange(false)} disabled={props.saving}>Cancelar</Button>
+          <Button onClick={props.onSave} disabled={props.saving}>
+            {props.saving && <Loader2 className="h-4 w-4 animate-spin" />}
+            {props.editing ? "Salvar" : "Criar empresa"}
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function UserSheet(props: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  editing: boolean;
+  form: UserForm;
+  setForm: React.Dispatch<React.SetStateAction<UserForm>>;
+  companies: CurrentCompany[];
+  saving: boolean;
+  onSave: () => void;
+}) {
+  const { form, setForm } = props;
+  return (
+    <Sheet open={props.open} onOpenChange={props.onOpenChange}>
+      <SheetContent className="overflow-y-auto sm:max-w-xl">
+        <SheetHeader>
+          <SheetTitle>{props.editing ? "Editar usuário" : "Novo usuário"}</SheetTitle>
+          <SheetDescription>Defina a identidade, o papel global e as empresas acessíveis.</SheetDescription>
+        </SheetHeader>
+        <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          <Field label="Nome"><Input value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} /></Field>
+          <Field label="E-mail"><Input type="email" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} /></Field>
+          <Field label={props.editing ? "Nova senha (opcional)" : "Senha temporária"}>
+            <Input type="password" value={form.temporaryPassword} placeholder="Mínimo de 8 caracteres" onChange={(event) => setForm((current) => ({ ...current, temporaryPassword: event.target.value }))} />
+          </Field>
+          <Field label="Status">
+            <Select value={form.status} onValueChange={(status: BackendStatus) => setForm((current) => ({ ...current, status }))}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value="ACTIVE">Ativo</SelectItem><SelectItem value="INACTIVE">Inativo</SelectItem></SelectContent>
+            </Select>
+          </Field>
+          <div className="sm:col-span-2">
+            <Field label="Papel global">
+              <Select value={form.globalRole} onValueChange={(globalRole: StudioGlobalRole) => setForm((current) => ({ ...current, globalRole }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="ACTIVE">ACTIVE</SelectItem>
-                  <SelectItem value="INACTIVE">INACTIVE</SelectItem>
+                  <SelectItem value="STUDIO_ADMIN">Administrador</SelectItem>
+                  <SelectItem value="STUDIO_OPERATOR">Operador</SelectItem>
+                  <SelectItem value="STUDIO_VIEWER">Visualizador</SelectItem>
                 </SelectContent>
               </Select>
             </Field>
-            <Field label="Observacoes">
-              <Textarea
-                rows={4}
-                value={form.notes}
-                onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))}
-                placeholder="Contexto operacional, time responsavel ou observacoes internas do onboarding."
-              />
-            </Field>
           </div>
+        </div>
+        <div className="mt-6">
+          <Label>Acesso às empresas</Label>
+          <div className="mt-2 divide-y rounded-xl border">
+            {props.companies.map((company) => {
+              const selectedRole = form.memberships[company.id];
+              return (
+                <div key={company.id} className="flex items-center gap-3 p-3">
+                  <Switch
+                    checked={Boolean(selectedRole)}
+                    onCheckedChange={(checked) =>
+                      setForm((current) => {
+                        const memberships = { ...current.memberships };
+                        if (checked) memberships[company.id] = "VIEWER";
+                        else delete memberships[company.id];
+                        return { ...current, memberships };
+                      })
+                    }
+                  />
+                  <div className="min-w-0 flex-1 truncate text-sm font-medium">{company.name}</div>
+                  {selectedRole && (
+                    <Select
+                      value={selectedRole}
+                      onValueChange={(role: StudioCompanyRole) =>
+                        setForm((current) => ({
+                          ...current,
+                          memberships: { ...current.memberships, [company.id]: role },
+                        }))
+                      }
+                    >
+                      <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="OWNER">Owner</SelectItem>
+                        <SelectItem value="ADMIN">Admin</SelectItem>
+                        <SelectItem value="MEMBER">Membro</SelectItem>
+                        <SelectItem value="VIEWER">Viewer</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <SheetFooter className="mt-6">
+          <Button variant="outline" onClick={() => props.onOpenChange(false)} disabled={props.saving}>Cancelar</Button>
+          <Button onClick={props.onSave} disabled={props.saving}>
+            {props.saving && <Loader2 className="h-4 w-4 animate-spin" />}
+            {props.editing ? "Salvar usuário" : "Criar usuário"}
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  );
+}
 
-          <SheetFooter className="mt-6">
-            <Button variant="outline" onClick={() => setSheetOpen(false)}>
-              Cancelar
-            </Button>
-            <Button onClick={() => void submit()} disabled={saving}>
-              {saving ? "Salvando..." : editingCompany ? "Salvar alteracoes" : "Criar empresa"}
-            </Button>
-          </SheetFooter>
-        </SheetContent>
-      </Sheet>
+function Metric({ icon: Icon, label, value }: { icon: typeof Building2; label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <div className="grid h-9 w-9 place-items-center rounded-lg bg-sky-50 text-sky-700"><Icon className="h-4 w-4" /></div>
+      <div className="min-w-0"><div className="text-xs text-slate-500">{label}</div><div className="truncate text-sm font-semibold text-slate-900">{value}</div></div>
     </div>
   );
 }
 
-function MetricCard({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: typeof Building2;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.18em] text-slate-300">{label}</div>
-          <div className="mt-2 text-lg font-medium text-white">{value}</div>
-        </div>
-        <div className="grid h-10 w-10 place-items-center rounded-xl bg-white/10">
-          <Icon className="h-4 w-4 text-white" />
-        </div>
-      </div>
-    </div>
-  );
+function Status({ status, active }: { status: BackendStatus; active?: boolean }) {
+  return <Badge variant={status === "ACTIVE" ? "default" : "secondary"}>{active ? "Ativa agora" : status === "ACTIVE" ? "Ativa" : "Inativa"}</Badge>;
 }
 
-function SummaryRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="text-right font-medium">{value}</dd>
-    </div>
-  );
+function LoadingRow() {
+  return <div className="grid h-40 place-items-center text-slate-400"><Loader2 className="h-5 w-5 animate-spin" /></div>;
+}
+
+function EmptyState({ title, detail }: { title: string; detail: string }) {
+  return <div className="px-6 py-14 text-center"><div className="text-sm font-medium text-slate-800">{title}</div><div className="mt-1 text-xs text-slate-500">{detail}</div></div>;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
-      {children}
-    </div>
-  );
+  return <div className="space-y-1.5"><Label>{label}</Label>{children}</div>;
 }
 
 function formatDate(value?: string) {
-  if (!value) {
-    return "";
-  }
-
+  if (!value) return "—";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleDateString("pt-BR");
+}
 
-  return date.toLocaleDateString("pt-BR");
+function roleLabel(role: StudioGlobalRole) {
+  return role === "STUDIO_ADMIN" ? "Administrador" : role === "STUDIO_OPERATOR" ? "Operador" : "Visualizador";
 }

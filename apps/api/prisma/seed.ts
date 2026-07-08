@@ -263,6 +263,45 @@ async function ensureMembership(userId: string, companyId: string): Promise<Comp
   });
 }
 
+async function ensureStudioAdmin(userId: string, permissions: Permission[]): Promise<void> {
+  const role = await prisma.role.upsert({
+    where: { id: "role_studio_admin" },
+    update: { companyId: null, name: "studio_admin" },
+    create: {
+      id: "role_studio_admin",
+      companyId: null,
+      name: "studio_admin",
+      description: "Global Studio administrator",
+    },
+  });
+
+  for (const permissionKey of ["users:manage", "companies:manage"]) {
+    const permission = permissions.find((item) => item.key === permissionKey);
+    if (!permission) {
+      throw new Error(`Missing global permission during seed: ${permissionKey}`);
+    }
+    await prisma.rolePermission.upsert({
+      where: {
+        roleId_permissionId: {
+          roleId: role.id,
+          permissionId: permission.id,
+        },
+      },
+      update: {},
+      create: {
+        roleId: role.id,
+        permissionId: permission.id,
+      },
+    });
+  }
+
+  await prisma.userRole.upsert({
+    where: { userId_roleId: { userId, roleId: role.id } },
+    update: {},
+    create: { userId, roleId: role.id },
+  });
+}
+
 async function ensureAssistant(companyId: string): Promise<Assistant> {
   return prisma.assistant.upsert({
     where: {
@@ -412,6 +451,7 @@ async function main(): Promise<void> {
   await ensureRolePermissions(roles, permissions);
   const user = await ensureUser(company.id, roles);
   await ensureMembership(user.id, company.id);
+  await ensureStudioAdmin(user.id, permissions);
   await ensureAssistant(company.id);
   await ensureGoogleCalendarApp();
   await ensureComingSoonApps();

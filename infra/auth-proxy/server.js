@@ -10,12 +10,20 @@ app.use(express.json());
 app.use(cookieParser());
 
 const PORT = process.env.PORT || 8080;
-const STAGING_PASSWORD = process.env.STAGING_PASSWORD || "cubo-staging-2026";
 const AUTH_PROXY_SHARED_SECRET = process.env.AUTH_PROXY_SHARED_SECRET;
 const API_TARGET = process.env.API_TARGET || "http://api:3001";
 const FRONTEND_TARGET = process.env.FRONTEND_TARGET || "http://frontend:4173";
 
 // HTML for login page with high-end premium developer look
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 const loginPageHtml = (error = "") => `
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -218,7 +226,7 @@ const loginPageHtml = (error = "") => `
             <p class="subtitle">Ambiente de Homologação (Staging)</p>
         </div>
         
-        ${error ? `<div class="error-message">${error}</div>` : ""}
+        ${error ? `<div class="error-message">${escapeHtml(error)}</div>` : ""}
         
         <form method="POST" action="/staging/login">
             <div class="form-group">
@@ -226,11 +234,7 @@ const loginPageHtml = (error = "") => `
                 <input type="email" id="email" name="email" required placeholder="seu.nome@cubo.chat" autocomplete="email">
             </div>
             <div class="form-group">
-                <label for="name">Nome Completo</label>
-                <input type="text" id="name" name="name" required placeholder="Seu Nome" autocomplete="name">
-            </div>
-            <div class="form-group">
-                <label for="password">Senha de Staging</label>
+                <label for="password">Senha</label>
                 <input type="password" id="password" name="password" required placeholder="••••••••">
             </div>
             <button type="submit" class="btn-submit">Acessar Plataforma</button>
@@ -257,11 +261,33 @@ function getSession(req) {
   const sessionCookie = req.cookies.staging_session;
   if (!sessionCookie) return null;
   try {
-    const decoded = Buffer.from(sessionCookie, "base64").toString("utf8");
-    return JSON.parse(decoded);
+    const [payload, signature] = sessionCookie.split(".");
+    if (!payload || !signature || !AUTH_PROXY_SHARED_SECRET) return null;
+    const expected = crypto
+      .createHmac("sha256", AUTH_PROXY_SHARED_SECRET)
+      .update(payload)
+      .digest("base64url");
+    const expectedBuffer = Buffer.from(expected);
+    const signatureBuffer = Buffer.from(signature);
+    if (
+      expectedBuffer.length !== signatureBuffer.length ||
+      !crypto.timingSafeEqual(expectedBuffer, signatureBuffer)
+    ) {
+      return null;
+    }
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
   } catch (e) {
     return null;
   }
+}
+
+function createSessionCookie(session) {
+  const payload = Buffer.from(JSON.stringify(session)).toString("base64url");
+  const signature = crypto
+    .createHmac("sha256", AUTH_PROXY_SHARED_SECRET)
+    .update(payload)
+    .digest("base64url");
+  return `${payload}.${signature}`;
 }
 
 // Login endpoints
@@ -269,34 +295,45 @@ app.get("/staging/login", (req, res) => {
   res.send(loginPageHtml());
 });
 
-app.post("/staging/login", (req, res) => {
-  const { email, name, password } = req.body;
-  if (password !== STAGING_PASSWORD) {
-    return res.send(loginPageHtml("Senha de acesso staging inválida."));
-  }
-  if (!email || !name) {
-    return res.send(loginPageHtml("Por favor, preencha todos os campos."));
+app.post("/staging/login", async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).send(loginPageHtml("Informe e-mail e senha."));
   }
 
-  // Generate a deterministic but unique id for the user
-  const emailHash = crypto.createHash("md5").update(email.toLowerCase().trim()).digest("hex");
-  const userId = `stg-usr-${emailHash.slice(0, 12)}`;
+  try {
+    const response = await fetch(`${API_TARGET}/auth/studio-login`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-auth-proxy-secret": AUTH_PROXY_SHARED_SECRET,
+      },
+      body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+      signal: AbortSignal.timeout(10_000),
+    });
 
-  const session = {
-    userId,
-    email: email.toLowerCase().trim(),
-    name: name.trim(),
-  };
+    if (!response.ok) {
+      return res.status(401).send(loginPageHtml("E-mail ou senha inválidos, ou usuário inativo."));
+    }
 
-  const encoded = Buffer.from(JSON.stringify(session)).toString("base64");
-  res.cookie("staging_session", encoded, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-  });
+    const authenticatedUser = await response.json();
+    const encoded = createSessionCookie({
+      userId: authenticatedUser.id,
+      email: authenticatedUser.email,
+      name: authenticatedUser.name,
+    });
+    res.cookie("staging_session", encoded, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      maxAge: 12 * 60 * 60 * 1000,
+    });
 
-  res.redirect("/");
+    return res.redirect("/portal");
+  } catch (error) {
+    console.error("Studio login failed:", error instanceof Error ? error.message : error);
+    return res.status(502).send(loginPageHtml("Não foi possível validar o acesso agora."));
+  }
 });
 
 app.get("/staging/logout", (req, res) => {
@@ -350,6 +387,13 @@ app.use((req, res) => {
     // Rewrite path to remove /api (NestJS API is at root /)
     req.url = req.url.replace(/^\/api/, "") || "/";
 
+    delete req.headers["x-auth-user-id"];
+    delete req.headers["x-auth-user-email"];
+    delete req.headers["x-auth-user-name"];
+    delete req.headers["x-auth-timestamp"];
+    delete req.headers["x-auth-signature"];
+    delete req.headers["x-auth-proxy-secret"];
+
     // Inject and sign headers
     const timestamp = new Date().toISOString();
     const signature = buildSignature({
@@ -377,6 +421,9 @@ app.use((req, res) => {
 });
 
 app.listen(PORT, "0.0.0.0", () => {
+  if (!AUTH_PROXY_SHARED_SECRET) {
+    throw new Error("AUTH_PROXY_SHARED_SECRET is required.");
+  }
   console.log(`[auth-proxy] Listening on port ${PORT}`);
   console.log(`[auth-proxy] Forwarding API to ${API_TARGET}`);
   console.log(`[auth-proxy] Forwarding Frontend to ${FRONTEND_TARGET}`);

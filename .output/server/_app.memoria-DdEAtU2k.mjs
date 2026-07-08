@@ -4,7 +4,7 @@ import { t as require_jsx_dev_runtime } from "./_libs/react.mjs";
 import { t as cva } from "./_libs/class-variance-authority+clsx.mjs";
 import { t as cn } from "./_ssr/utils-C_uf36nf.mjs";
 import { t as Button } from "./_ssr/button-TeH4yfmP.mjs";
-import { N as Pencil, f as Trash2, y as ShieldAlert } from "./_libs/lucide-react.mjs";
+import { M as Pencil, f as Trash2, v as ShieldAlert } from "./_libs/lucide-react.mjs";
 import { t as PageHeader } from "./_ssr/PageHeader-D4Y71euA.mjs";
 import { t as Badge } from "./_ssr/badge-CXFhyJYg.mjs";
 import { t as Input } from "./_ssr/input-B8Ml971c.mjs";

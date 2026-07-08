@@ -62,8 +62,8 @@ model Company {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  users                         User[]              @relation("PrimaryCompanyUsers")
-  activeUsers                   User[]              @relation("ActiveCompanyUsers")
+  users                         User[]                         @relation("PrimaryCompanyUsers")
+  activeUsers                   User[]                         @relation("ActiveCompanyUsers")
   memberships                   CompanyMembership[]
   aiSettings                    CompanyAiSettings?
   chatwootInboxConfigs          ChatwootInboxConfig[]
@@ -251,17 +251,18 @@ model ChatwootInboxConfig {
 }
 
 model User {
-  id        String    @id @default(cuid())
-  companyId String
+  id              String    @id @default(cuid())
+  companyId       String?
   activeCompanyId String?
-  name      String
-  email     String    @unique
-  status    Status    @default(ACTIVE)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  name            String
+  email           String    @unique
+  passwordHash    String?
+  status          Status    @default(ACTIVE)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
 
-  company                Company                 @relation("PrimaryCompanyUsers", fields: [companyId], references: [id], onDelete: Restrict)
+  company                Company?                @relation("PrimaryCompanyUsers", fields: [companyId], references: [id], onDelete: SetNull)
   activeCompany          Company?                @relation("ActiveCompanyUsers", fields: [activeCompanyId], references: [id], onDelete: SetNull)
   memberships            CompanyMembership[]
   userRoles              UserRole[]
@@ -353,37 +354,37 @@ model UserRole {
 }
 
 model Assistant {
-  id                String   @id @default(cuid())
-  companyId         String
-  name              String
-  description       String?
-  businessAddress     String?
-  businessCityRegion  String?
-  weeklySchedule      Json?
-  aiAlwaysAvailable   Boolean  @default(true)
-  initialMessage    String?
-  instructions      String?
-  personality       String?
-  toneOfVoice       String?
-  avoidPhrases      String?
-  googleMapsUrl     String?
-  latitude          Float?
-  longitude         Float?
-  
+  id                 String  @id @default(cuid())
+  companyId          String
+  name               String
+  description        String?
+  businessAddress    String?
+  businessCityRegion String?
+  weeklySchedule     Json?
+  aiAlwaysAvailable  Boolean @default(true)
+  initialMessage     String?
+  instructions       String?
+  personality        String?
+  toneOfVoice        String?
+  avoidPhrases       String?
+  googleMapsUrl      String?
+  latitude           Float?
+  longitude          Float?
+
   model             String?
   temperature       Float?
   fallbackMessage   String?
   safetyInstruction String?
-  ragEnabled        Boolean  @default(false)
-  
+  ragEnabled        Boolean @default(false)
+
   messageBufferEnabled Boolean @default(true)
   messageBufferSeconds Int     @default(6)
   splitResponseEnabled Boolean @default(false)
   splitResponseStyle   String?
-  
-  status            Status   @default(ACTIVE)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+
+  status    Status   @default(ACTIVE)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   company                       Company                        @relation(fields: [companyId], references: [id], onDelete: Restrict)
   knowledgeItems                AssistantKnowledge[]
@@ -403,22 +404,22 @@ model Assistant {
 }
 
 model AssistantKnowledge {
-  id          String   @id @default(cuid())
-  assistantId String
-  companyId   String
-  title       String
-  content     String
-  status          Status   @default(ACTIVE)
-  processingStatus String  @default("DRAFT")
-  chunkCount      Int      @default(0)
-  processedAt     DateTime?
-  processingError String?
-  metadata        Json?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id               String    @id @default(cuid())
+  assistantId      String
+  companyId        String
+  title            String
+  content          String
+  status           Status    @default(ACTIVE)
+  processingStatus String    @default("DRAFT")
+  chunkCount       Int       @default(0)
+  processedAt      DateTime?
+  processingError  String?
+  metadata         Json?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  assistant Assistant @relation(fields: [assistantId], references: [id], onDelete: Restrict)
-  company   Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  assistant Assistant                 @relation(fields: [assistantId], references: [id], onDelete: Restrict)
+  company   Company                   @relation(fields: [companyId], references: [id], onDelete: Restrict)
   chunks    AssistantKnowledgeChunk[]
 
   @@index([companyId])
@@ -526,7 +527,7 @@ model AssistantPreviewLog {
 }
 
 model AssistantRuntimeLog {
-  id                     String   @id @default(cuid())
+  id                     String  @id @default(cuid())
   companyId              String
   assistantId            String?
   conversationId         String?
@@ -537,7 +538,7 @@ model AssistantRuntimeLog {
   provider               String?
   model                  String?
   configurationSource    String?
-  fallback               Boolean  @default(false)
+  fallback               Boolean @default(false)
   fallbackReason         String?
   outcome                String?
   durationMs             Int?
@@ -548,21 +549,21 @@ model AssistantRuntimeLog {
   knowledgeCount         Int?
   historyMessagesUsed    Int?
   historyLimit           Int?
-  initialMessageIncluded Boolean  @default(false)
-  instructionsIncluded   Boolean  @default(false)
-  
-  detectedIntent         String?
-  selectedFlowId         String?
-  selectedFlowName       String?
-  intentConfidence       Float?
-  toolsUsed              String?
-  handoffTriggered       Boolean  @default(false)
-  handoffTeam            String?
-  blockedByRule          Boolean  @default(false)
-  blockReason            String?
-  metadata               Json?
-  
-  createdAt              DateTime @default(now())
+  initialMessageIncluded Boolean @default(false)
+  instructionsIncluded   Boolean @default(false)
+
+  detectedIntent   String?
+  selectedFlowId   String?
+  selectedFlowName String?
+  intentConfidence Float?
+  toolsUsed        String?
+  handoffTriggered Boolean @default(false)
+  handoffTeam      String?
+  blockedByRule    Boolean @default(false)
+  blockReason      String?
+  metadata         Json?
+
+  createdAt DateTime @default(now())
 
   company   Company    @relation(fields: [companyId], references: [id], onDelete: Restrict)
   assistant Assistant? @relation(fields: [assistantId], references: [id], onDelete: SetNull)
@@ -711,22 +712,22 @@ model ReservableResourceAttribute {
 }
 
 model AssistantBehavior {
-  id                    String   @id @default(cuid())
-  assistantId           String   @unique
-  attendantName         String?              // "Giovanna"
-  showAttendantName     Boolean  @default(true)
-  role                  String?              // "Secretária virtual"
-  howItActs             String?              // "Atende clientes, tira dúvidas..."
-  personality           String?              // "Educada, simpática..."
-  toneOfVoice           String?              // "Profissional"
-  responseStyle         String?  @default("whatsapp") // whatsapp, formal, concise
-  emojiUsage            String?  @default("low")      // none, low, moderate
-  greetingMessage       String?              // Saudação para primeiro contato
-  noInventInfo          Boolean  @default(true)
-  unknownBehavior       String?  @default("fallback") // fallback, handoff, search_base
-  maxBlockLength        Int?     @default(300)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id                String   @id @default(cuid())
+  assistantId       String   @unique
+  attendantName     String? // "Giovanna"
+  showAttendantName Boolean  @default(true)
+  role              String? // "Secretária virtual"
+  howItActs         String? // "Atende clientes, tira dúvidas..."
+  personality       String? // "Educada, simpática..."
+  toneOfVoice       String? // "Profissional"
+  responseStyle     String?  @default("whatsapp") // whatsapp, formal, concise
+  emojiUsage        String?  @default("low") // none, low, moderate
+  greetingMessage   String? // Saudação para primeiro contato
+  noInventInfo      Boolean  @default(true)
+  unknownBehavior   String?  @default("fallback") // fallback, handoff, search_base
+  maxBlockLength    Int?     @default(300)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   assistant Assistant @relation(fields: [assistantId], references: [id], onDelete: Cascade)
 
@@ -735,28 +736,28 @@ model AssistantBehavior {
 }
 
 model AssistantFlow {
-  id                    String   @id @default(cuid())
-  assistantId           String
-  name                  String               // "Agendamento Padel"
-  description           String?
-  priority              Int      @default(0)
-  triggerKeywords       String?              // JSON array de keywords
-  triggerDescription    String?              // Descrição semântica para o roteador
-  triggerExamples       String?              // Exemplos de mensagens do cliente
-  flowInstructions      String?              // Prompt específico do fluxo
-  allowedToolSlugs      String?              // JSON array: ["calendar_check", "calendar_create"]
-  knowledgeScope        String?              // JSON array de knowledgeIds ou tags
-  toolContext           Json?                // Defaults/escopo estruturado por ferramenta
-  finalAction           String?  @default("respond") // respond, handoff, fixed_message
-  fixedMessage          String?              // Mensagem fixa se finalAction=fixed_message
-  handoffTeamId         String?              // ID do time no Chatwoot
-  handoffTeamName       String?              // Nome do time (para display)
-  chatwootLabels        String?              // JSON array de labels a aplicar
-  autoRespond           Boolean  @default(true)
-  requiresHuman         Boolean  @default(false)
-  active                Boolean  @default(true)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  assistantId        String
+  name               String // "Agendamento Padel"
+  description        String?
+  priority           Int      @default(0)
+  triggerKeywords    String? // JSON array de keywords
+  triggerDescription String? // Descrição semântica para o roteador
+  triggerExamples    String? // Exemplos de mensagens do cliente
+  flowInstructions   String? // Prompt específico do fluxo
+  allowedToolSlugs   String? // JSON array: ["calendar_check", "calendar_create"]
+  knowledgeScope     String? // JSON array de knowledgeIds ou tags
+  toolContext        Json? // Defaults/escopo estruturado por ferramenta
+  finalAction        String?  @default("respond") // respond, handoff, fixed_message
+  fixedMessage       String? // Mensagem fixa se finalAction=fixed_message
+  handoffTeamId      String? // ID do time no Chatwoot
+  handoffTeamName    String? // Nome do time (para display)
+  chatwootLabels     String? // JSON array de labels a aplicar
+  autoRespond        Boolean  @default(true)
+  requiresHuman      Boolean  @default(false)
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   assistant Assistant @relation(fields: [assistantId], references: [id], onDelete: Cascade)
 

@@ -33,7 +33,8 @@
     "db:check": "npm --prefix apps/api run db:check",
     "icons:export": "node scripts/export-app-icons.mjs",
     "smoke:staging": "node scripts/smoke-staging.mjs",
-    "db:cleanup:smoke": "npm --prefix apps/api run cleanup:smoke"
+    "db:cleanup:smoke": "npm --prefix apps/api run cleanup:smoke",
+    "test:portal": "node --experimental-strip-types --test src/lib/portalAccess.test.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

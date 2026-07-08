@@ -119,18 +119,30 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
 
   let res: Response;
 
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), 15_000);
+  init.signal?.addEventListener("abort", () => controller.abort(), { once: true });
+
   try {
     res = await fetch(requestUrl, {
       credentials: "include",
       headers,
       ...restInit,
+      signal: controller.signal,
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
       throw err;
     }
 
-    throw new ApiError(0, buildNetworkErrorMessage(requestUrl));
+    throw new ApiError(
+      0,
+      err instanceof DOMException && err.name === "AbortError"
+        ? "A solicitação demorou demais. Tente novamente."
+        : buildNetworkErrorMessage(requestUrl),
+    );
+  } finally {
+    globalThis.clearTimeout(timeout);
   }
 
   if (!res.ok) {

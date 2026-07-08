@@ -20,6 +20,7 @@ import { HealthModule } from "./health/health.module";
 import { CompaniesModule } from "./companies/companies.module";
 import { WebhooksModule } from "./webhooks/webhooks.module";
 import { validateEnvironment } from "./config/env";
+import { StudioUsersModule } from "./studio-users/studio-users.module";
 
 @Module({
   imports: [
@@ -69,6 +70,7 @@ import { validateEnvironment } from "./config/env";
     PromptCompilerModule,
     IntentRouterModule,
     CompaniesModule,
+    StudioUsersModule,
     DiagnosticsModule,
     HealthModule,
     WebhooksModule,

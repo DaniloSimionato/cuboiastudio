@@ -1,13 +1,4 @@
 /* eslint-disable react-refresh/only-export-components */
-/**
- * Mock authentication context.
- * IMPORTANT: This is frontend-only scaffolding for prototyping.
- * Real authentication MUST be implemented by the backend with secure sessions.
- *
- * Security rule:
- * - never persist passwords, API keys, tokens, or secrets in the frontend
- * - only keep non-sensitive session metadata here while the backend is not ready
- */
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
 export type AuthUser = {
@@ -17,133 +8,75 @@ export type AuthUser = {
   empresa?: string;
   avatar?: string;
   role: "admin" | "operator" | "viewer";
-  activeCompanyId?: string | null;
+  activeCompanyId: string | null;
   memberships?: string[];
   roles?: string[];
   permissions?: string[];
 };
 
-type StoredUser = AuthUser;
-
 type AuthCtx = {
   user: AuthUser | null;
   isAuthenticated: boolean;
   loading: boolean;
-  login: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
-  register: (data: {
-    nome: string;
-    email: string;
-    empresa?: string;
-    password: string;
-  }) => Promise<{ ok: boolean; error?: string }>;
+  refreshUser: () => Promise<AuthUser | null>;
   logout: () => void;
 };
 
 const Ctx = createContext<AuthCtx | null>(null);
-const USERS_KEY = "cubo-ai-mock-users";
 const SESSION_KEY = "cubo-ai-session";
 
-function readUsers(): StoredUser[] {
-  try {
-    return JSON.parse(localStorage.getItem(USERS_KEY) || "[]");
-  } catch (error) {
-    void error;
-    return [];
-  }
-}
-function writeUsers(u: StoredUser[]) {
-  localStorage.setItem(USERS_KEY, JSON.stringify(u));
+function mapAuthUser(data: Record<string, unknown>): AuthUser {
+  const roles = Array.isArray(data.roles) ? data.roles.filter((item): item is string => typeof item === "string") : [];
+  return {
+    id: String(data.id),
+    nome: typeof data.name === "string" ? data.name : String(data.email).split("@")[0],
+    email: String(data.email),
+    role: roles.includes("studio_admin") ? "admin" : roles.includes("studio_viewer") ? "viewer" : "operator",
+    activeCompanyId: typeof data.activeCompanyId === "string" ? data.activeCompanyId : null,
+    memberships: Array.isArray(data.memberships)
+      ? data.memberships.filter((item): item is string => typeof item === "string")
+      : [],
+    roles,
+    permissions: Array.isArray(data.permissions)
+      ? data.permissions.filter((item): item is string => typeof item === "string")
+      : [],
+  };
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const res = await fetch("/api/auth/me");
-        if (res.ok) {
-          const data = await res.json();
-          const authUser: AuthUser = {
-            id: data.id,
-            nome: data.name || data.email.split("@")[0],
-            email: data.email,
-            role: data.roles?.includes("admin") ? "admin" : "operator",
-            activeCompanyId: data.activeCompanyId ?? null,
-            memberships: Array.isArray(data.memberships) ? data.memberships : [],
-            roles: Array.isArray(data.roles) ? data.roles : [],
-            permissions: Array.isArray(data.permissions) ? data.permissions : [],
-          };
-          setUser(authUser);
-          sessionStorage.setItem(SESSION_KEY, JSON.stringify(authUser));
-          setLoading(false);
-          return;
-        }
-      } catch (err) {
-        console.warn("Failed to fetch /api/auth/me, falling back to local session:", err);
+  const refreshUser = async (): Promise<AuthUser | null> => {
+    try {
+      const res = await fetch("/api/auth/me", { credentials: "include" });
+      if (!res.ok) {
+        setUser(null);
+        sessionStorage.removeItem(SESSION_KEY);
+        return null;
       }
-
-      try {
-        const raw = sessionStorage.getItem(SESSION_KEY);
-        if (raw) setUser(JSON.parse(raw));
-      } catch (error) {
-        void error;
-      }
-      setLoading(false);
-    };
-
-    void checkAuth();
-  }, []);
-
-  const login: AuthCtx["login"] = async (email, password) => {
-    if (!email.trim()) return { ok: false, error: "Informe um email válido." };
-    if (!password.trim()) return { ok: false, error: "Informe uma senha." };
-
-    const users = readUsers();
-    const found = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
-    const safe: AuthUser = found ?? {
-      id: `mock-${email.toLowerCase()}`,
-      nome: email.split("@")[0] || "Operador",
-      email,
-      role: "operator",
-    };
-
-    setUser(safe);
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify(safe));
-    return { ok: true };
-  };
-
-  const register: AuthCtx["register"] = async ({ nome, email, empresa, password }) => {
-    if (!nome.trim()) return { ok: false, error: "Informe seu nome." };
-    if (!email.trim()) return { ok: false, error: "Informe um email válido." };
-    if (!password.trim()) return { ok: false, error: "Informe uma senha." };
-
-    const users = readUsers();
-    if (users.some((u) => u.email.toLowerCase() === email.toLowerCase())) {
-      return { ok: false, error: "Já existe um usuário com este email." };
+      const authUser = mapAuthUser((await res.json()) as Record<string, unknown>);
+      setUser(authUser);
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(authUser));
+      return authUser;
+    } catch {
+      setUser(null);
+      return null;
     }
-    const newUser: StoredUser = {
-      id: crypto.randomUUID(),
-      nome,
-      email,
-      empresa,
-      role: "admin",
-    };
-    users.push(newUser);
-    writeUsers(users);
-    setUser(newUser);
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify(newUser));
-    return { ok: true };
   };
+
+  useEffect(() => {
+    void refreshUser().finally(() => setLoading(false));
+  }, []);
 
   const logout = () => {
     setUser(null);
     sessionStorage.removeItem(SESSION_KEY);
+    window.location.assign("/staging/logout");
   };
 
   return (
-    <Ctx.Provider value={{ user, isAuthenticated: !!user, loading, login, register, logout }}>
+    <Ctx.Provider value={{ user, isAuthenticated: !!user, loading, refreshUser, logout }}>
       {children}
     </Ctx.Provider>
   );

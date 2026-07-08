@@ -161,23 +161,18 @@ export class AuthGuard implements CanActivate {
 
     const resolvedUser: AuthenticatedUser = {
       id: persistedUser.id,
-      companyId: activeCompanyId,
+      companyId: activeCompanyId ?? "",
       primaryCompanyId: persistedUser.companyId,
       activeCompanyId,
       email: persistedUser.email,
       name: persistedUser.name,
-      memberships: Array.from(
-        new Set([
-          persistedUser.companyId,
-          ...persistedUser.memberships.map((item) => item.companyId),
-        ]),
-      ),
+      memberships: Array.from(new Set(persistedUser.memberships.map((item) => item.companyId))),
       roles: Array.from(new Set(roles)),
       permissions: Array.from(new Set(rolePermissions.map((item) => item.permission.key))),
     };
 
     request.user = resolvedUser;
-    request.tenant = { companyId: activeCompanyId };
+    request.tenant = { companyId: activeCompanyId ?? "" };
     request.isAuthenticated = true;
 
     this.logger.debug(
@@ -371,7 +366,7 @@ export class AuthGuard implements CanActivate {
   private resolveActiveCompanyId(
     persistedUser: NonNullable<PersistedUserRecord>,
     companyOverrideId: string,
-  ): string {
+  ): string | null {
     const activeMembershipCompanyIds = persistedUser.memberships
       .filter(
         (membership) =>
@@ -381,7 +376,7 @@ export class AuthGuard implements CanActivate {
 
     const fallbackCandidates = [
       persistedUser.activeCompanyId,
-      persistedUser.company.status === Status.ACTIVE && persistedUser.company.deletedAt === null
+      persistedUser.company?.status === Status.ACTIVE && persistedUser.company.deletedAt === null
         ? persistedUser.companyId
         : null,
       ...activeMembershipCompanyIds,
@@ -389,15 +384,15 @@ export class AuthGuard implements CanActivate {
 
     const accessibleCompanyIds = new Set<string>([
       ...activeMembershipCompanyIds,
-      ...(persistedUser.company.status === Status.ACTIVE && persistedUser.company.deletedAt === null
+      ...(persistedUser.company?.status === Status.ACTIVE && persistedUser.company.deletedAt === null
         ? [persistedUser.companyId]
         : []),
-    ]);
+    ].filter((value): value is string => Boolean(value)));
 
     const desiredCompanyId = companyOverrideId || fallbackCandidates[0] || "";
 
     if (!desiredCompanyId) {
-      throw new UnauthorizedException("The authenticated user does not have an active company.");
+      return null;
     }
 
     if (!accessibleCompanyIds.has(desiredCompanyId)) {

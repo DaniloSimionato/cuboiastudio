@@ -22,7 +22,8 @@
     "cleanup:smoke": "node scripts/cleanup-staging-smoke-data.mjs",
     "test:apps": "npm run build && node --test test/app-store.test.mjs test/assistant-calendar-tools.test.mjs",
     "test:attachments": "npm run build && node --test test/attachment-pipeline.test.mjs",
-    "test:chatwoot": "npm run build && node --test test/chatwoot-webhook-and-runtime.test.mjs"
+    "test:chatwoot": "npm run build && node --test test/chatwoot-webhook-and-runtime.test.mjs",
+    "test:studio-users": "npm run build && node --test test/studio-users-auth.test.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",

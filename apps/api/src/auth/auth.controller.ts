@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Headers, HttpCode, Post, UseGuards } from "@nestjs/common";
 import {
   ApiHeader,
   ApiOkResponse,
@@ -10,10 +10,28 @@ import { UnauthorizedException } from "@nestjs/common";
 import { AuthGuard } from "./auth.guard";
 import { CurrentUser } from "./current-user.decorator";
 import type { AuthenticatedUser } from "./auth.types";
+import { AuthService } from "./auth.service";
+import { StudioLoginDto } from "./dto/studio-login.dto";
 
 @ApiTags("auth")
 @Controller("auth")
 export class AuthController {
+  constructor(private readonly authService: AuthService) {}
+
+  @Post("studio-login")
+  @HttpCode(200)
+  @ApiOperation({ summary: "Authenticate a Studio user for the trusted auth proxy" })
+  authenticateStudioUser(
+    @Body() dto: StudioLoginDto,
+    @Headers("x-auth-proxy-secret") proxySecret = "",
+  ): Promise<{ id: string; email: string; name: string }> {
+    return this.authService.authenticateStudioUser({
+      email: dto.email,
+      password: dto.password,
+      proxySecret,
+    });
+  }
+
   @Get("me")
   @UseGuards(AuthGuard)
   @ApiOperation({ summary: "Return the current authenticated user context" })

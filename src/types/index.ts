@@ -66,6 +66,40 @@ export interface UpdateCompanyPayload {
   notes?: string | null;
 }
 
+export type StudioGlobalRole = "STUDIO_ADMIN" | "STUDIO_OPERATOR" | "STUDIO_VIEWER";
+export type StudioCompanyRole = "OWNER" | "ADMIN" | "MEMBER" | "VIEWER";
+
+export interface StudioUserMembership {
+  companyId: string;
+  companyName: string;
+  status: BackendStatus;
+  role: StudioCompanyRole;
+}
+
+export interface StudioUser {
+  id: string;
+  name: string;
+  email: string;
+  status: BackendStatus;
+  globalRole: StudioGlobalRole;
+  createdAt: string;
+  updatedAt: string;
+  memberships: StudioUserMembership[];
+}
+
+export interface StudioUsersResponse {
+  items: StudioUser[];
+}
+
+export interface SaveStudioUserPayload {
+  name: string;
+  email: string;
+  temporaryPassword?: string;
+  status: BackendStatus;
+  globalRole: StudioGlobalRole;
+  memberships: Array<{ companyId: string; role: StudioCompanyRole }>;
+}
+
 export interface AppCatalogItem {
   id: string;
   slug: string;

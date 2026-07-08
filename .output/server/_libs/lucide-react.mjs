@@ -152,34 +152,6 @@ var ChartColumn = createLucideIcon("chart-column", [
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
-var CircleAlert = createLucideIcon("circle-alert", [
-	["circle", {
-		cx: "12",
-		cy: "12",
-		r: "10",
-		key: "1mglay"
-	}],
-	["line", {
-		x1: "12",
-		x2: "12",
-		y1: "8",
-		y2: "12",
-		key: "1pkeuh"
-	}],
-	["line", {
-		x1: "12",
-		x2: "12.01",
-		y1: "16",
-		y2: "16",
-		key: "4dfq90"
-	}]
-]);
-/**
-* @license lucide-react v0.575.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
 var CircleCheck = createLucideIcon("circle-check", [["circle", {
 	cx: "12",
 	cy: "12",
@@ -1136,6 +1108,32 @@ var Link2 = createLucideIcon("link-2", [
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var LockKeyhole = createLucideIcon("lock-keyhole", [
+	["circle", {
+		cx: "12",
+		cy: "16",
+		r: "1",
+		key: "1au0dj"
+	}],
+	["rect", {
+		x: "3",
+		y: "10",
+		width: "18",
+		height: "12",
+		rx: "2",
+		key: "6s8ecr"
+	}],
+	["path", {
+		d: "M7 10V7a5 5 0 0 1 10 0v3",
+		key: "1pqi11"
+	}]
+]);
+/**
+* @license lucide-react v0.575.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var LogOut = createLucideIcon("log-out", [
 	["path", {
 		d: "m16 17 5-5-5-5",
@@ -1605,16 +1603,6 @@ var ShieldCheck = createLucideIcon("shield-check", [["path", {
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
-var Shield = createLucideIcon("shield", [["path", {
-	d: "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
-	key: "oel41y"
-}]]);
-/**
-* @license lucide-react v0.575.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
 var SmilePlus = createLucideIcon("smile-plus", [
 	["path", {
 		d: "M22 11v1a10 10 0 1 1-9-10",
@@ -1959,4 +1947,4 @@ var X = createLucideIcon("x", [["path", {
 	key: "d8bk6v"
 }]]);
 //#endregion
-export { FileText as $, PowerOff as A, Sparkles as At, MessageCircle as B, Search as C, ArrowRight as Ct, RefreshCw as D, UserRound as Dt, Rocket as E, Activity as Et, Pause as F, CirclePlay as Ft, Inbox as G, LogOut as H, Network as I, CircleCheck as It, GitBranch as J, Image as K, Moon as L, CircleAlert as Lt, Play as M, LoaderCircle as Mt, Pencil as N, Layers as Nt, Radio as O, TriangleAlert as Ot, PencilLine as P, Funnel as Pt, FileUp as Q, Mic as R, ChartColumn as Rt, Send as S, ArrowUpRight as St, Save as T, ArrowLeft as Tt, Link2 as U, MapPin as V, LayoutDashboard as W, Flag as X, FolderOpen as Y, Film as Z, Shield as _, Building2 as _t, Users as a, Clock as at, Settings as b, BookOpen as bt, Upload as c, CircleOff as ct, Trash as d, ChevronUp as dt, Eye as et, Trash2 as f, ChevronRight as ft, SmilePlus as g, CalendarDays as gt, Store as h, Check as ht, Video as i, Coins as it, Plus as j, SlidersVertical as jt, Power as k, TestTubeDiagonal as kt, TrendingUp as l, ChevronsRight as lt, Sun as m, ChevronDown as mt, Wrench as n, DollarSign as nt, User as o, Clock3 as ot, Timer as p, ChevronLeft as pt, Globe as q, Webhook as r, Copy as rt, UserCheck as s, Circle as st, X as t, EyeOff as tt, TrendingDown as u, ChevronsLeft as ut, ShieldCheck as v, Brain as vt, ScrollText as w, ArrowRightLeft as wt, Settings2 as x, Blocks as xt, ShieldAlert as y, Bot as yt, MessageSquare as z, Braces as zt };
+export { FileText as $, Plus as A, Sparkles as At, MapPin as B, ScrollText as C, ArrowRight as Ct, Radio as D, UserRound as Dt, RefreshCw as E, Activity as Et, Network as F, CirclePlay as Ft, Inbox as G, LockKeyhole as H, Moon as I, CircleCheck as It, GitBranch as J, Image as K, Mic as L, ChartColumn as Lt, Pencil as M, LoaderCircle as Mt, PencilLine as N, Layers as Nt, Power as O, TriangleAlert as Ot, Pause as P, Funnel as Pt, FileUp as Q, MessageSquare as R, Braces as Rt, Search as S, ArrowUpRight as St, Rocket as T, ArrowLeft as Tt, Link2 as U, LogOut as V, LayoutDashboard as W, Flag as X, FolderOpen as Y, Film as Z, ShieldCheck as _, Building2 as _t, Users as a, Clock as at, Settings2 as b, BookOpen as bt, Upload as c, CircleOff as ct, Trash as d, ChevronUp as dt, Eye as et, Trash2 as f, ChevronRight as ft, SmilePlus as g, CalendarDays as gt, Store as h, Check as ht, Video as i, Coins as it, Play as j, SlidersVertical as jt, PowerOff as k, TestTubeDiagonal as kt, TrendingUp as l, ChevronsRight as lt, Sun as m, ChevronDown as mt, Wrench as n, DollarSign as nt, User as o, Clock3 as ot, Timer as p, ChevronLeft as pt, Globe as q, Webhook as r, Copy as rt, UserCheck as s, Circle as st, X as t, EyeOff as tt, TrendingDown as u, ChevronsLeft as ut, ShieldAlert as v, Brain as vt, Save as w, ArrowRightLeft as wt, Send as x, Blocks as xt, Settings as y, Bot as yt, MessageCircle as z };
