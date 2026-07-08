@@ -12,4 +12,14 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  vite: {
+    preview: {
+      host: "0.0.0.0",
+      allowedHosts: [
+        "studio-stage.cubochat.com.br",
+        "localhost",
+        "127.0.0.1"
+      ]
+    }
+  }
 });
