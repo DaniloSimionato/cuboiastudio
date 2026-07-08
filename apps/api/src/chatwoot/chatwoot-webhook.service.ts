@@ -1,4 +1,10 @@
-import { BadRequestException, ForbiddenException, HttpException, Injectable, Logger } from "@nestjs/common";
+import {
+  BadRequestException,
+  ForbiddenException,
+  HttpException,
+  Injectable,
+  Logger,
+} from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { timingSafeEqual } from "node:crypto";
 import { AssistantConversationsService } from "../assistant-conversations/assistant-conversations.service";
@@ -39,16 +45,18 @@ export class ChatwootWebhookService {
     private readonly assistantConversationsService: AssistantConversationsService,
   ) {}
 
-  private readonly conversationBuffer = new Map<string, {
-    version: number;
-    timeoutId: NodeJS.Timeout;
-    items: {
-      dto: any;
-      attachments: InboundAttachmentRecord[];
-      messageId: string | null;
-    }[];
-  }>();
-
+  private readonly conversationBuffer = new Map<
+    string,
+    {
+      version: number;
+      timeoutId: NodeJS.Timeout;
+      items: {
+        dto: any;
+        attachments: InboundAttachmentRecord[];
+        messageId: string | null;
+      }[];
+    }
+  >();
 
   async processMessageCreated(input: {
     assistantId?: string | null;
@@ -68,7 +76,23 @@ export class ChatwootWebhookService {
       `Chatwoot webhook received${traceLabel}: event=${normalized.eventName ?? "unknown"} account=${normalized.accountId ?? "unknown"} inbox=${normalized.externalInboxId ?? "unknown"}`,
     );
 
-    const config = await this.resolveConfigOrIgnore(normalized, input.webhookSecret ?? null, traceLabel);
+    const preConfigIgnoreReason = this.resolveIgnoreReason(normalized, true, {
+      allowUnknownAiActive: true,
+    });
+    if (preConfigIgnoreReason) {
+      this.logger.log(`Chatwoot webhook ignored${traceLabel}: ${preConfigIgnoreReason}`);
+      return this.ignore(preConfigIgnoreReason);
+    }
+
+    if (!normalized.externalConversationId) {
+      throw new BadRequestException("Payload do CuboChat sem identificador de conversa.");
+    }
+
+    const config = await this.resolveConfigOrIgnore(
+      normalized,
+      input.webhookSecret ?? null,
+      traceLabel,
+    );
     if (!config) {
       return this.ignore("Nenhuma configuração ativa encontrada para o inbox.");
     }
@@ -77,7 +101,11 @@ export class ChatwootWebhookService {
     let finalAiActive = normalized.aiActive;
     if (finalAiActive === null) {
       this.logger.log(`Chatwoot webhook aiActive is null${traceLabel}, fetching from API...`);
-      finalAiActive = await this.fetchConversationAiActiveStatus(config, normalized.externalConversationId, traceLabel);
+      finalAiActive = await this.fetchConversationAiActiveStatus(
+        config,
+        normalized.externalConversationId,
+        traceLabel,
+      );
       this.logger.log(`Chatwoot webhook aiActive from API${traceLabel}: ${finalAiActive}`);
     }
 
@@ -87,12 +115,11 @@ export class ChatwootWebhookService {
       return this.ignore(ignoreReason);
     }
 
-    if (!normalized.externalConversationId) {
-      throw new BadRequestException("Payload do CuboChat sem identificador de conversa.");
-    }
-
-
-    const assistantId = await this.resolveAssistantIdOrIgnore(config, input.assistantId ?? null, traceLabel);
+    const assistantId = await this.resolveAssistantIdOrIgnore(
+      config,
+      input.assistantId ?? null,
+      traceLabel,
+    );
     if (!assistantId) {
       return this.ignore("Nenhum assistente ativo foi vinculado a esta inbox.");
     }
@@ -117,27 +144,31 @@ export class ChatwootWebhookService {
       const user = {
         id: `system_chatwoot_${config.companyId}`,
         companyId: config.companyId,
+        primaryCompanyId: config.companyId,
+        activeCompanyId: config.companyId,
         email: "system-chatwoot@cubo.local",
         name: "System Chatwoot",
+        memberships: [config.companyId],
         roles: [],
         permissions: [],
       };
 
-      const conversation = await this.assistantConversationsService.ensureConversationFromInboundMessage({
-        assistantId,
-        createdByUserId: null,
-        sourceProvider: "chatwoot",
-        externalAccountId: normalized.accountId ?? config.accountId,
-        externalConversationId: normalized.externalConversationId,
-        externalContactId: normalized.externalContactId,
-        externalChannelId: normalized.externalChannelId,
-        externalInboxId: normalized.externalInboxId,
-        externalSenderIdentifier: normalized.senderIdentifier,
-        externalSenderPhone: normalized.senderPhoneNumber,
-        title: normalized.conversationTitle ?? null,
-        tenant,
-        user,
-      });
+      const conversation =
+        await this.assistantConversationsService.ensureConversationFromInboundMessage({
+          assistantId,
+          createdByUserId: null,
+          sourceProvider: "chatwoot",
+          externalAccountId: normalized.accountId ?? config.accountId,
+          externalConversationId: normalized.externalConversationId,
+          externalContactId: normalized.externalContactId,
+          externalChannelId: normalized.externalChannelId,
+          externalInboxId: normalized.externalInboxId,
+          externalSenderIdentifier: normalized.senderIdentifier,
+          externalSenderPhone: normalized.senderPhoneNumber,
+          title: normalized.conversationTitle ?? null,
+          tenant,
+          user,
+        });
 
       const preparedAttachments = await this.downloadAndPersistAttachments({
         conversationId: conversation.id,
@@ -148,9 +179,9 @@ export class ChatwootWebhookService {
         traceLabel,
       });
 
-      const assistantSettings = await this.prisma.assistant.findUnique({
-        where: { id: assistantId },
-        select: { messageBufferEnabled: true, messageBufferSeconds: true }
+      const assistantSettings = await this.prisma.assistant.findFirst({
+        where: { id: assistantId, companyId: config.companyId },
+        select: { messageBufferEnabled: true, messageBufferSeconds: true },
       });
 
       if (assistantSettings?.messageBufferEnabled && assistantSettings.messageBufferSeconds > 0) {
@@ -198,7 +229,9 @@ export class ChatwootWebhookService {
         this.logger.warn(
           `Chatwoot webhook rejected${traceLabel}: foreign key constraint while processing inbound message. company=${config.companyId} assistant=${assistantId} account=${normalized.accountId ?? "unknown"} inbox=${normalized.externalInboxId ?? "unknown"} conversation=${normalized.externalConversationId}`,
         );
-        throw new BadRequestException("Não foi possível processar o webhook do CuboChat com os dados recebidos.");
+        throw new BadRequestException(
+          "Não foi possível processar o webhook do CuboChat com os dados recebidos.",
+        );
       }
 
       throw error;
@@ -217,10 +250,10 @@ export class ChatwootWebhookService {
     tenant: any;
   }): Promise<ChatwootWebhookProcessResult> {
     const { conversationId, bufferSeconds } = input;
-    
+
     let buffer = this.conversationBuffer.get(conversationId);
     let jobSkippedBecauseNewerExists = false;
-    
+
     if (buffer) {
       clearTimeout(buffer.timeoutId);
       jobSkippedBecauseNewerExists = true;
@@ -238,45 +271,46 @@ export class ChatwootWebhookService {
 
     const bufferedMessageCount = buffer.items.length;
     const scheduledVersion = buffer.version;
-    
+
     this.logger.log(
       `Chatwoot message buffered${input.traceLabel}: conversation=${conversationId} ` +
-      `bufferVersion=${scheduledVersion} bufferedMessageCount=${bufferedMessageCount} ` +
-      `skippedOldTimer=${jobSkippedBecauseNewerExists} receivedMessageId=${input.normalized.messageId ?? "unknown"}`
+        `bufferVersion=${scheduledVersion} bufferedMessageCount=${bufferedMessageCount} ` +
+        `skippedOldTimer=${jobSkippedBecauseNewerExists} receivedMessageId=${input.normalized.messageId ?? "unknown"}`,
     );
 
     buffer.timeoutId = setTimeout(async () => {
       const currentBuffer = this.conversationBuffer.get(conversationId);
       if (!currentBuffer || currentBuffer.version !== scheduledVersion) {
         this.logger.log(
-          `Chatwoot timer aborted for conversation=${conversationId} (scheduledVersion=${scheduledVersion}, currentVersion=${currentBuffer?.version ?? "deleted"})`
+          `Chatwoot timer aborted for conversation=${conversationId} (scheduledVersion=${scheduledVersion}, currentVersion=${currentBuffer?.version ?? "deleted"})`,
         );
         return;
       }
-      
+
       // Remove from map to start a fresh buffer for future messages
       this.conversationBuffer.delete(conversationId);
-      
+
       const itemsToProcess = currentBuffer.items;
       if (itemsToProcess.length === 0) return;
 
       // Combine DTOs
       const combinedMessage = itemsToProcess
-        .map(i => i.dto.message)
-        .filter(m => m && typeof m === 'string' && m.trim().length > 0)
+        .map((i) => i.dto.message)
+        .filter((m) => m && typeof m === "string" && m.trim().length > 0)
         .join("\n");
-      
-      const textPreview = combinedMessage.length > 120 ? combinedMessage.substring(0, 120) + "..." : combinedMessage;
+
+      const textPreview =
+        combinedMessage.length > 120 ? combinedMessage.substring(0, 120) + "..." : combinedMessage;
       this.logger.log(
-        `Chatwoot flushing buffer for conversation=${conversationId}: processedMessageCount=${itemsToProcess.length}, preview="${textPreview}"`
+        `Chatwoot flushing buffer for conversation=${conversationId}: processedMessageCount=${itemsToProcess.length}, preview="${textPreview}"`,
       );
-      
-      const combinedAttachments = itemsToProcess.flatMap(i => i.attachments);
-      
+
+      const combinedAttachments = itemsToProcess.flatMap((i) => i.attachments);
+
       const combinedDto = {
         ...itemsToProcess[0].dto, // Use base fields from the first message
         message: combinedMessage,
-        attachments: itemsToProcess.flatMap(i => i.dto.attachments || [])
+        attachments: itemsToProcess.flatMap((i) => i.dto.attachments || []),
       };
 
       try {
@@ -289,7 +323,9 @@ export class ChatwootWebhookService {
           preparedAttachments: combinedAttachments,
         });
       } catch (err) {
-        this.logger.error(`Error processing buffered messages for conversation=${conversationId}: ${err}`);
+        this.logger.error(
+          `Error processing buffered messages for conversation=${conversationId}: ${err}`,
+        );
       }
     }, bufferSeconds * 1000);
 
@@ -353,7 +389,9 @@ export class ChatwootWebhookService {
     traceLabel: string,
   ): Promise<ResolvedChatwootInboxConfig | null> {
     if (!normalized.accountId || !normalized.externalInboxId) {
-      this.logger.warn(`Chatwoot webhook ignored${traceLabel}: missing account or inbox identifiers.`);
+      this.logger.warn(
+        `Chatwoot webhook ignored${traceLabel}: missing account or inbox identifiers.`,
+      );
       return null;
     }
 
@@ -384,25 +422,26 @@ export class ChatwootWebhookService {
     return config;
   }
 
-  private resolveIgnoreReason(normalized: NormalizedChatwootMessage, finalAiActive: boolean | null): string | null {
+  private resolveIgnoreReason(
+    normalized: NormalizedChatwootMessage,
+    finalAiActive: boolean | null,
+    options?: {
+      allowUnknownAiActive?: boolean;
+    },
+  ): string | null {
     const eventName = normalized.eventName?.trim().toLowerCase() ?? "";
     if (eventName && eventName !== "message_created") {
       return "event=non_message_created";
-    }
-
-    if (finalAiActive === false) {
-      return "AI_INACTIVE";
-    }
-
-    if (finalAiActive === null) {
-      return "AI_ACTIVE_UNKNOWN";
     }
 
     if (normalized.isPrivate) {
       return "PRIVATE_MESSAGE";
     }
 
-    const messageType = normalized.messageType?.trim().toLowerCase() ?? normalized.dto.messageType?.trim().toLowerCase() ?? "";
+    const messageType =
+      normalized.messageType?.trim().toLowerCase() ??
+      normalized.dto.messageType?.trim().toLowerCase() ??
+      "";
     if (messageType === "outgoing") {
       return "AUTOMATED_OUTGOING_MESSAGE";
     }
@@ -412,8 +451,21 @@ export class ChatwootWebhookService {
     }
 
     const senderType = normalized.senderType?.trim().toLowerCase() ?? "";
-    if (senderType === "agent_bot" || senderType === "bot" || senderType === "assistant" || senderType === "agent") {
+    if (
+      senderType === "agent_bot" ||
+      senderType === "bot" ||
+      senderType === "assistant" ||
+      senderType === "agent"
+    ) {
       return `sender_type=${senderType}`;
+    }
+
+    if (finalAiActive === false) {
+      return "AI_INACTIVE";
+    }
+
+    if (finalAiActive === null && options?.allowUnknownAiActive !== true) {
+      return null;
     }
 
     return null;
@@ -537,7 +589,9 @@ export class ChatwootWebhookService {
           ...placeholder,
           processingStatus: "failed",
           processingError:
-            error instanceof Error ? error.message.slice(0, 500) : "Falha ao baixar anexo do Chatwoot.",
+            error instanceof Error
+              ? error.message.slice(0, 500)
+              : "Falha ao baixar anexo do Chatwoot.",
           interpretedSummary: "Anexo do Chatwoot não pôde ser baixado nesta tentativa.",
           metadataJson: {
             kind: "download-failed",
@@ -589,11 +643,18 @@ export class ChatwootWebhookService {
   }
 
   private buildTraceLabel(requestId: string | null, correlationId: string | null): string {
-    const parts = [requestId ? `requestId=${requestId}` : null, correlationId ? `correlationId=${correlationId}` : null].filter(Boolean);
+    const parts = [
+      requestId ? `requestId=${requestId}` : null,
+      correlationId ? `correlationId=${correlationId}` : null,
+    ].filter(Boolean);
     return parts.length > 0 ? ` [${parts.join(" ")}]` : "";
   }
 
-  private async fetchConversationAiActiveStatus(config: ResolvedChatwootInboxConfig, conversationId: string | null, traceLabel: string): Promise<boolean | null> {
+  private async fetchConversationAiActiveStatus(
+    config: ResolvedChatwootInboxConfig,
+    conversationId: string | null,
+    traceLabel: string,
+  ): Promise<boolean | null> {
     if (!conversationId || !config.baseUrl || !config.apiAccessToken) return null;
 
     const accountIdentifier = config.accountId;
@@ -608,11 +669,13 @@ export class ChatwootWebhookService {
       });
 
       if (!response.ok) {
-        this.logger.warn(`Failed to fetch conversation status from Chatwoot API${traceLabel}: ${response.status} ${response.statusText}`);
+        this.logger.warn(
+          `Failed to fetch conversation status from Chatwoot API${traceLabel}: ${response.status} ${response.statusText}`,
+        );
         return null;
       }
 
-      const json = await response.json() as any;
+      const json = (await response.json()) as any;
       const customAttributes = json?.custom_attributes || {};
       const additionalAttributes = json?.additional_attributes || {};
       const meta = json?.meta || {};
@@ -630,7 +693,9 @@ export class ChatwootWebhookService {
 
       return null;
     } catch (err) {
-      this.logger.warn(`Failed to fetch conversation status from Chatwoot API${traceLabel}: ${err}`);
+      this.logger.warn(
+        `Failed to fetch conversation status from Chatwoot API${traceLabel}: ${err}`,
+      );
       return null;
     }
   }

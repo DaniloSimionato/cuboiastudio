@@ -11,10 +11,7 @@ import { PrismaService } from "../database/prisma.service";
 import { buildDeterministicAssistantResponse } from "./assistant-runtime";
 import { AiService } from "../ai/ai.service";
 import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
-import {
-  toAssistantRuntimeSources,
-  type AssistantRuntimeSource,
-} from "./assistant-runtime";
+import { toAssistantRuntimeSources, type AssistantRuntimeSource } from "./assistant-runtime";
 import { type CreateAssistantDto } from "./dto/create-assistant.dto";
 import { type PreviewAssistantDto } from "./dto/preview-assistant.dto";
 import { type RunAssistantDto } from "./dto/run-assistant.dto";
@@ -462,7 +459,7 @@ export class AssistantsService {
     const hasDescription = hasField("description");
     const hasBusinessAddress = hasField("businessAddress");
     const hasBusinessCityRegion = hasField("businessCityRegion");
-     const hasWeeklySchedule = hasField("weeklySchedule");
+    const hasWeeklySchedule = hasField("weeklySchedule");
     const hasAiAlwaysAvailable = hasField("aiAlwaysAvailable");
     const hasInitialMessage = hasField("initialMessage");
     const hasInstructions = hasField("instructions");
@@ -524,15 +521,18 @@ export class AssistantsService {
       throw new NotFoundException("Assistant not found.");
     }
 
-    const updatedAssistant = await this.prisma.assistant.update({
+    await this.prisma.assistant.updateMany({
       where: {
         id: input.id,
+        companyId: input.tenant.companyId,
       },
       data: {
         ...(hasName ? { name: input.dto.name } : {}),
         ...(hasDescription ? { description: input.dto.description ?? null } : {}),
         ...(hasBusinessAddress ? { businessAddress: input.dto.businessAddress ?? null } : {}),
-        ...(hasBusinessCityRegion ? { businessCityRegion: input.dto.businessCityRegion ?? null } : {}),
+        ...(hasBusinessCityRegion
+          ? { businessCityRegion: input.dto.businessCityRegion ?? null }
+          : {}),
         ...(hasGoogleMapsUrl ? { googleMapsUrl: input.dto.googleMapsUrl ?? null } : {}),
         ...(hasLatitude ? { latitude: input.dto.latitude ?? null } : {}),
         ...(hasLongitude ? { longitude: input.dto.longitude ?? null } : {}),
@@ -548,13 +548,32 @@ export class AssistantsService {
         ...(hasFallbackMessage ? { fallbackMessage: input.dto.fallbackMessage ?? null } : {}),
         ...(hasSafetyInstruction ? { safetyInstruction: input.dto.safetyInstruction ?? null } : {}),
         ...(hasRagEnabled ? { ragEnabled: input.dto.ragEnabled ?? false } : {}),
-        ...(hasMessageBufferEnabled ? { messageBufferEnabled: input.dto.messageBufferEnabled ?? true } : {}),
-        ...(hasMessageBufferSeconds ? { messageBufferSeconds: input.dto.messageBufferSeconds ?? 6 } : {}),
-        ...(hasSplitResponseEnabled ? { splitResponseEnabled: input.dto.splitResponseEnabled ?? false } : {}),
-        ...(hasSplitResponseStyle ? { splitResponseStyle: input.dto.splitResponseStyle ?? null } : {}),
+        ...(hasMessageBufferEnabled
+          ? { messageBufferEnabled: input.dto.messageBufferEnabled ?? true }
+          : {}),
+        ...(hasMessageBufferSeconds
+          ? { messageBufferSeconds: input.dto.messageBufferSeconds ?? 6 }
+          : {}),
+        ...(hasSplitResponseEnabled
+          ? { splitResponseEnabled: input.dto.splitResponseEnabled ?? false }
+          : {}),
+        ...(hasSplitResponseStyle
+          ? { splitResponseStyle: input.dto.splitResponseStyle ?? null }
+          : {}),
+      },
+    });
+
+    const updatedAssistant = await this.prisma.assistant.findFirst({
+      where: {
+        id: input.id,
+        companyId: input.tenant.companyId,
       },
       select: assistantSafeSelect,
     });
+
+    if (!updatedAssistant) {
+      throw new NotFoundException("Assistant not found.");
+    }
 
     return toAssistantResponse(updatedAssistant);
   }
@@ -583,15 +602,27 @@ export class AssistantsService {
       throw new NotFoundException("Assistant not found.");
     }
 
-    const updatedAssistant = await this.prisma.assistant.update({
+    await this.prisma.assistant.updateMany({
       where: {
         id: input.id,
+        companyId: input.tenant.companyId,
       },
       data: {
         status: input.dto.status,
       },
+    });
+
+    const updatedAssistant = await this.prisma.assistant.findFirst({
+      where: {
+        id: input.id,
+        companyId: input.tenant.companyId,
+      },
       select: assistantSafeSelect,
     });
+
+    if (!updatedAssistant) {
+      throw new NotFoundException("Assistant not found.");
+    }
 
     return toAssistantResponse(updatedAssistant);
   }
@@ -624,9 +655,14 @@ export class AssistantsService {
       let contextBlock = "";
       let answer = "";
       const usedKnowledge: any[] = [];
-      
+
       if (ragSearch.results.length > 0) {
-        contextBlock = `\n\nConhecimentos relevantes encontrados:\n` + ragSearch.results.map((r, i) => `[${i + 1}] Título: ${r.knowledgeTitle}\nTrecho: ${r.contentPreview}`).join("\n\n") + `\n\nUse essas informações apenas quando forem relevantes para responder. Se a resposta não estiver nos conhecimentos, não invente.`;
+        contextBlock =
+          `\n\nConhecimentos relevantes encontrados:\n` +
+          ragSearch.results
+            .map((r, i) => `[${i + 1}] Título: ${r.knowledgeTitle}\nTrecho: ${r.contentPreview}`)
+            .join("\n\n") +
+          `\n\nUse essas informações apenas quando forem relevantes para responder. Se a resposta não estiver nos conhecimentos, não invente.`;
         usedKnowledge.push(...ragSearch.results);
       } else {
         contextBlock = `\n\n(Nenhum conhecimento relevante encontrado na base para esta pergunta.)`;
@@ -634,7 +670,9 @@ export class AssistantsService {
 
       // 4. Chamar LLM Real (apenas se Provider configurado)
       try {
-        const isProviderConfigured = await this.aiService.isProviderConfigured(input.tenant.companyId);
+        const isProviderConfigured = await this.aiService.isProviderConfigured(
+          input.tenant.companyId,
+        );
         if (!isProviderConfigured) {
           answer = "ERRO: Provedor de IA não configurado para realizar o teste de RAG.";
         } else {
@@ -645,8 +683,8 @@ export class AssistantsService {
             temperature: assistant.temperature || 0.2,
             messages: [
               { role: "system", content: sysPrompt },
-              { role: "user", content: input.dto.question }
-            ]
+              { role: "user", content: input.dto.question },
+            ],
           });
           answer = completion.answer;
         }
@@ -673,7 +711,7 @@ export class AssistantsService {
         mode: "ai-preview-rag",
         usedKnowledge,
         ragEnabled: true,
-        totalChunksScanned: ragSearch.totalChunksScanned
+        totalChunksScanned: ragSearch.totalChunksScanned,
       };
     }
 

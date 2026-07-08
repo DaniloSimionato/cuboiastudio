@@ -52,7 +52,10 @@ export class GoogleCalendarClientService {
     private readonly fetchImpl: FetchLike = fetch,
   ) {}
 
-  async listCalendars(companyId: string, installationId?: string): Promise<GoogleCalendarListResponseSafe> {
+  async listCalendars(
+    companyId: string,
+    installationId?: string,
+  ): Promise<GoogleCalendarListResponseSafe> {
     const credential = await this.oauthService.getAuthorizedCredential(companyId, installationId);
     const calendars = await this.fetchCalendarList(credential.accessToken);
     const resources = await this.prisma.googleCalendarResource.findMany({
@@ -98,7 +101,9 @@ export class GoogleCalendarClientService {
     }
 
     if (!this.hasWritableAccess(calendar.accessRole)) {
-      throw new BadRequestException("Connected Google account does not have write access to this calendar.");
+      throw new BadRequestException(
+        "Connected Google account does not have write access to this calendar.",
+      );
     }
 
     const existing = await this.prisma.googleCalendarResource.findFirst({
@@ -134,11 +139,31 @@ export class GoogleCalendarClientService {
     };
 
     const resource = existing
-      ? await this.prisma.googleCalendarResource.update({
-          where: { id: existing.id },
-          data,
-          select: googleCalendarResourceSafeSelect,
-        })
+      ? await (async () => {
+          await this.prisma.googleCalendarResource.updateMany({
+            where: {
+              id: existing.id,
+              companyId: input.companyId,
+              installationId: credential.installationId,
+            },
+            data,
+          });
+
+          const updated = await this.prisma.googleCalendarResource.findFirst({
+            where: {
+              id: existing.id,
+              companyId: input.companyId,
+              installationId: credential.installationId,
+            },
+            select: googleCalendarResourceSafeSelect,
+          });
+
+          if (!updated) {
+            throw new BadRequestException("Google calendar resource not found after update.");
+          }
+
+          return updated;
+        })()
       : await this.prisma.googleCalendarResource.create({
           data: {
             companyId: input.companyId,
@@ -178,12 +203,15 @@ export class GoogleCalendarClientService {
     const payload = (await response.json().catch(() => ({}))) as GoogleCalendarListResponse;
 
     if (!response.ok || payload.error) {
-      throw new BadRequestException(this.oauthService.sanitizeGoogleError(payload.error ?? payload));
+      throw new BadRequestException(
+        this.oauthService.sanitizeGoogleError(payload.error ?? payload),
+      );
     }
 
     return (payload.items ?? [])
-      .filter((item): item is Required<Pick<GoogleCalendarListEntry, "id">> & GoogleCalendarListEntry =>
-        typeof item.id === "string" && item.id.trim().length > 0,
+      .filter(
+        (item): item is Required<Pick<GoogleCalendarListEntry, "id">> & GoogleCalendarListEntry =>
+          typeof item.id === "string" && item.id.trim().length > 0,
       )
       .map((item) => ({
         id: item.id,

@@ -19,7 +19,6 @@ const API_BASE = import.meta.env.DEV
 const DEV_AUTH_HEADERS = import.meta.env.DEV
   ? {
       "x-dev-user-id": "user_demo_cubo_ai_studio",
-      "x-dev-company-id": "company_demo_cubo_ai_studio",
       "x-dev-user-email": "demo@cubo.chat",
     }
   : {};
@@ -101,7 +100,8 @@ function isProviderError(value: unknown): value is ApiProviderError {
 }
 
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers ?? {});
+  const { headers: initHeaders, ...restInit } = init;
+  const headers = new Headers(initHeaders ?? {});
 
   for (const [key, value] of Object.entries(DEV_AUTH_HEADERS)) {
     if (!headers.has(key)) {
@@ -123,7 +123,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     res = await fetch(requestUrl, {
       credentials: "include",
       headers,
-      ...init,
+      ...restInit,
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {

@@ -124,7 +124,10 @@ export class AssistantRuntimeLogsService {
       take: this.resolveLimit(input.query.limit),
     });
 
-    const conversationMap = await this.buildConversationMetadataMap(items.map((item) => item.conversationId));
+    const conversationMap = await this.buildConversationMetadataMap(
+      input.tenant.companyId,
+      items.map((item) => item.conversationId),
+    );
 
     return {
       items: items.map((item) => toListItem(item, conversationMap.get(item.conversationId ?? "") ?? null)),
@@ -150,11 +153,16 @@ export class AssistantRuntimeLogsService {
       throw new NotFoundException("AI runtime log not found.");
     }
 
-    const conversationMap = await this.buildConversationMetadataMap([item.conversationId]);
+    const conversationMap = await this.buildConversationMetadataMap(input.tenant.companyId, [
+      item.conversationId,
+    ]);
     return toDetail(item, conversationMap.get(item.conversationId ?? "") ?? null);
   }
 
-  private async buildConversationMetadataMap(conversationIds: Array<string | null>): Promise<
+  private async buildConversationMetadataMap(
+    companyId: string,
+    conversationIds: Array<string | null>,
+  ): Promise<
     Map<
       string,
       {
@@ -170,6 +178,7 @@ export class AssistantRuntimeLogsService {
 
     const conversations = await this.prisma.assistantConversation.findMany({
       where: {
+        companyId,
         id: { in: uniqueConversationIds },
       },
       select: {

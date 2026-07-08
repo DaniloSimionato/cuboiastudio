@@ -6,12 +6,7 @@ import {
   Logger,
   NotFoundException,
 } from "@nestjs/common";
-import {
-  ConversationChannelType,
-  ConversationSource,
-  Prisma,
-  Status,
-} from "@prisma/client";
+import { ConversationChannelType, ConversationSource, Prisma, Status } from "@prisma/client";
 import type { AiResolvedRuntimeConfig } from "../ai/ai.types";
 import { AiService } from "../ai/ai.service";
 import { AttachmentInterpreterService } from "../attachments/attachment-interpreter.service";
@@ -39,6 +34,14 @@ import { CalendarToolsService } from "../apps/calendar-tools.service";
 import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
 import { PromptCompilerService } from "../prompt-compiler/prompt-compiler.service";
 import { IntentRouterService } from "../intent-router/intent-router.service";
+import {
+  filterResourcesByCalendarToolScope,
+  hasCalendarToolScope,
+  matchesCalendarToolScope,
+  normalizeAssistantFlowToolContext,
+  type CalendarToolScope,
+  type ScopedCalendarResource,
+} from "../apps/google-calendar/google-calendar-tool-scope";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -105,6 +108,12 @@ export type AssistantConversationRuntime = {
     llmSkipped?: boolean | null;
     handoffPending?: boolean | null;
     autoRespond?: boolean | null;
+    calendarScopeApplied?: boolean | null;
+    calendarScope?: CalendarToolScope | null;
+    toolArgsOverridden?: boolean | null;
+    resourceScopeApplied?: boolean | null;
+    blockedByToolScope?: boolean | null;
+    blockReason?: string | null;
   };
   logId?: string;
   reason?:
@@ -216,6 +225,40 @@ const assistantConversationKnowledgeSelect = {
   content: true,
 } satisfies Prisma.AssistantKnowledgeSelect;
 
+const calendarScopeResourceSelect = {
+  id: true,
+  calendarId: true,
+  sportType: true,
+  resourceType: true,
+  isCovered: true,
+  categoryRef: {
+    select: {
+      name: true,
+      slug: true,
+    },
+  },
+  resourceTypeRef: {
+    select: {
+      name: true,
+      slug: true,
+    },
+  },
+  attributeRef: {
+    select: {
+      name: true,
+      slug: true,
+    },
+  },
+} satisfies Prisma.GoogleCalendarResourceSelect;
+
+const calendarScopeBookingSelect = {
+  id: true,
+  resourceId: true,
+  resource: {
+    select: calendarScopeResourceSelect,
+  },
+} satisfies Prisma.GoogleCalendarBookingSelect;
+
 const MAX_RUNTIME_HISTORY_MESSAGES = 10;
 const MAX_RUNTIME_LOG_PROVIDER_ERROR_MESSAGE_LENGTH = 500;
 const DEFAULT_MANUAL_TEST_TITLE_PREFIX = "Teste manual";
@@ -225,6 +268,24 @@ type RuntimeLogProviderErrorFields = {
   providerErrorType?: string;
   providerErrorCode?: string;
   providerErrorMessage?: string;
+};
+
+type PreparedToolExecution = {
+  args: Record<string, any>;
+  metadata: {
+    calendarScopeApplied: boolean;
+    calendarScope: CalendarToolScope | null;
+    toolArgsOverridden: boolean;
+    resourceScopeApplied: boolean;
+    blockedByToolScope: boolean;
+    blockReason?: string;
+  };
+};
+
+type ScopedBookingRecord = {
+  id: string;
+  resourceId: string;
+  resource: ScopedCalendarResource;
 };
 
 function toConversationItem(
@@ -269,7 +330,9 @@ function toConversationMessageItem(
     ...(message.source !== null ? { source: message.source } : {}),
     ...(message.messageType !== null ? { messageType: message.messageType } : {}),
     ...(message.externalMessageId !== null ? { externalMessageId: message.externalMessageId } : {}),
-    ...(message.attachments !== null ? { attachments: message.attachments as InboundAttachmentRecord[] } : {}),
+    ...(message.attachments !== null
+      ? { attachments: message.attachments as InboundAttachmentRecord[] }
+      : {}),
     ...(message.sources !== null ? { sources: toAssistantRuntimeSources(message.sources) } : {}),
     ...(message.mode !== null ? { mode: message.mode } : {}),
     createdAt: message.createdAt,
@@ -285,10 +348,10 @@ export class AssistantConversationsService {
     private readonly aiService: AiService,
     private readonly attachmentInterpreterService: AttachmentInterpreterService,
     private readonly chatwootInboxConfigService: ChatwootInboxConfigService,
-    private readonly calendarToolsService: CalendarToolsService,
-    private readonly assistantKnowledgeRetrievalService: AssistantKnowledgeRetrievalService,
-    private readonly promptCompilerService: PromptCompilerService,
-    private readonly intentRouterService: IntentRouterService,
+    private readonly calendarToolsService?: CalendarToolsService,
+    private readonly assistantKnowledgeRetrievalService?: AssistantKnowledgeRetrievalService,
+    private readonly promptCompilerService?: PromptCompilerService,
+    private readonly intentRouterService?: IntentRouterService,
   ) {}
 
   private assertTenantContext(input: { user: AuthenticatedUser; tenant: RequestTenant }): void {
@@ -473,8 +536,11 @@ export class AssistantConversationsService {
             ({
               id: input.createdByUserId ?? "system",
               companyId: input.tenant.companyId,
+              primaryCompanyId: input.tenant.companyId,
+              activeCompanyId: input.tenant.companyId,
               email: "system@cubo.local",
               name: "System",
+              memberships: [input.tenant.companyId],
               roles: [],
               permissions: [],
             } as AuthenticatedUser),
@@ -548,8 +614,11 @@ export class AssistantConversationsService {
     const user = {
       id: `system_${input.sourceProvider}_${assistant.id}`,
       companyId: assistant.companyId,
+      primaryCompanyId: assistant.companyId,
+      activeCompanyId: assistant.companyId,
       email: `system-${input.sourceProvider}@cubo.local`,
       name: `System ${input.sourceProvider}`,
+      memberships: [assistant.companyId],
       roles: [],
       permissions: [],
     } satisfies AuthenticatedUser;
@@ -613,7 +682,7 @@ export class AssistantConversationsService {
       assistant.temperature >= 0 &&
       assistant.temperature <= 2
     ) {
-        return assistant.temperature;
+      return assistant.temperature;
     }
 
     return 0.2;
@@ -877,9 +946,7 @@ export class AssistantConversationsService {
 
     const outboundUrl = `${baseUrl.replace(/\/$/, "")}/api/v1/accounts/${encodeURIComponent(
       accountIdentifier,
-    )}/conversations/${encodeURIComponent(
-      conversationIdentifier,
-    )}/messages`;
+    )}/conversations/${encodeURIComponent(conversationIdentifier)}/messages`;
     const outboundBody = {
       content: input.content,
       message_type: "outgoing",
@@ -899,7 +966,7 @@ export class AssistantConversationsService {
         `Chatwoot outbound started: company=${input.conversation.companyId} outboundUrl=${outboundUrl} account=${accountIdentifier} externalConversation=${conversationIdentifier} inbox=${inboxIdentifier || "unknown"} assistantMessageId=${input.assistantMessageId} messageType=${outboundBody.message_type} senderType=${outboundBody.sender_type} private=${outboundBody.private} contentLength=${input.content.length}`,
       );
       this.logger.log(
-        `Chatwoot outbound payload (secure): ${JSON.stringify({ ...outboundBody, content: "[REDACTED]" })}`
+        `Chatwoot outbound payload (secure): ${JSON.stringify({ ...outboundBody, content: "[REDACTED]" })}`,
       );
 
       const response = await fetch(outboundUrl, {
@@ -941,7 +1008,7 @@ export class AssistantConversationsService {
     aiActive: boolean;
     reason?: string;
   }): Promise<void> {
-    const conversation = await this.prisma.assistantConversation.findUnique({
+    const conversation = await this.prisma.assistantConversation.findFirst({
       where: { id: input.conversationId },
     });
     if (!conversation || conversation.source !== "CHATWOOT") {
@@ -970,7 +1037,7 @@ export class AssistantConversationsService {
     const apiUrl = `${baseUrl.replace(/\/$/, "")}/api/v1/accounts/${encodeURIComponent(
       accountIdentifier,
     )}/conversations/${encodeURIComponent(conversationIdentifier)}`;
-    
+
     const body = {
       ai_active: input.aiActive,
     };
@@ -999,8 +1066,8 @@ export class AssistantConversationsService {
         );
       } else {
         // Also update local DB tracking
-        await this.prisma.assistantConversation.update({
-          where: { id: conversation.id },
+        await this.prisma.assistantConversation.updateMany({
+          where: { id: conversation.id, companyId: conversation.companyId },
           data: {
             aiActive: input.aiActive,
             ...(input.aiActive
@@ -1233,7 +1300,8 @@ export class AssistantConversationsService {
         ? this.resolveConversationChannelType({
             source: ConversationSource.CHATWOOT,
             sourceProvider: source,
-            externalChannelId: input.dto.externalChannelId ?? conversation.externalChannelId ?? null,
+            externalChannelId:
+              input.dto.externalChannelId ?? conversation.externalChannelId ?? null,
             externalInboxId: input.dto.externalInboxId ?? conversation.externalInboxId ?? null,
             externalSenderIdentifier: input.dto.externalSenderIdentifier ?? null,
             externalSenderPhone: input.dto.externalSenderPhone ?? null,
@@ -1397,7 +1465,7 @@ export class AssistantConversationsService {
     let ragContextBlock = "";
     let ragLogData: any = null;
 
-    if (assistant.ragEnabled) {
+    if (assistant.ragEnabled && this.assistantKnowledgeRetrievalService) {
       const searchResult = await this.assistantKnowledgeRetrievalService.searchRelevantKnowledge({
         tenant: input.tenant,
         assistantId: input.assistantId,
@@ -1422,13 +1490,16 @@ export class AssistantConversationsService {
         searchResult.results.forEach((res, i) => {
           block += `[${i + 1}] Título: ${res.knowledgeTitle}\nTrecho: ${res.contentPreview}\n`;
         });
-        block += "\nUse os conhecimentos acima apenas se forem relevantes para responder. Se a resposta não estiver nos conhecimentos nem nas instruções do agente, não invente.";
+        block +=
+          "\nUse os conhecimentos acima apenas se forem relevantes para responder. Se a resposta não estiver nos conhecimentos nem nas instruções do agente, não invente.";
         ragContextBlock = block;
       } else {
         ragContextBlock = "(Nenhum conhecimento relevante encontrado na base para esta pergunta.)";
       }
 
-      this.logger.log(`[RAG Runtime] Assistant ${input.assistantId} | Scanned: ${ragLogData.totalChunksScanned} | Found: ${ragLogData.usedKnowledge.length}`);
+      this.logger.log(
+        `[RAG Runtime] Assistant ${input.assistantId} | Scanned: ${ragLogData.totalChunksScanned} | Found: ${ragLogData.usedKnowledge.length}`,
+      );
     } else {
       knowledgeItems = await this.prisma.assistantKnowledge.findMany({
         where: {
@@ -1443,7 +1514,12 @@ export class AssistantConversationsService {
     }
 
     let instructionsWithLocation = assistant.instructions || "";
-    if (assistant.businessAddress || assistant.businessCityRegion || assistant.googleMapsUrl || (assistant.latitude !== null && assistant.longitude !== null)) {
+    if (
+      assistant.businessAddress ||
+      assistant.businessCityRegion ||
+      assistant.googleMapsUrl ||
+      (assistant.latitude !== null && assistant.longitude !== null)
+    ) {
       let googleMapsUrl = assistant.googleMapsUrl;
       if (assistant.latitude !== null && assistant.longitude !== null) {
         googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${assistant.latitude},${assistant.longitude}`;
@@ -1454,10 +1530,14 @@ export class AssistantConversationsService {
         assistant.businessAddress ? `Endereço: ${assistant.businessAddress}` : null,
         assistant.businessCityRegion ? `Cidade/Região: ${assistant.businessCityRegion}` : null,
         googleMapsUrl ? `Google Maps: ${googleMapsUrl}` : null,
-        "Se o cliente perguntar onde fica, endereço ou localização, responda com essas informações e envie o link do Google Maps."
-      ].filter(Boolean).join("\n");
-      
-      instructionsWithLocation = [instructionsWithLocation, locationPrompt].filter(Boolean).join("\n\n---\n\n");
+        "Se o cliente perguntar onde fica, endereço ou localização, responda com essas informações e envie o link do Google Maps.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      instructionsWithLocation = [instructionsWithLocation, locationPrompt]
+        .filter(Boolean)
+        .join("\n\n---\n\n");
     }
 
     const effectiveInstructions = assistant.ragEnabled
@@ -1477,7 +1557,10 @@ export class AssistantConversationsService {
 
     const conversationHistory = [...recentMessages].reverse();
     const priorHistory = conversationHistory.slice(0, -1).map((message) => {
-      const payload = message.externalPayload && typeof message.externalPayload === "object" ? (message.externalPayload as any) : {};
+      const payload =
+        message.externalPayload && typeof message.externalPayload === "object"
+          ? (message.externalPayload as any)
+          : {};
       return {
         role: message.role as "user" | "assistant" | "tool",
         content: message.content,
@@ -1525,7 +1608,8 @@ export class AssistantConversationsService {
       reason: "ai-runtime-disabled",
     };
 
-    const isDebugLogsEnabled = process.env.CALENDAR_DEBUG_LOGS === "true" || process.env.NODE_ENV === "development";
+    const isDebugLogsEnabled =
+      process.env.CALENDAR_DEBUG_LOGS === "true" || process.env.NODE_ENV === "development";
 
     if (isDebugLogsEnabled) {
       // DIAGNOSTIC: runtime gate check
@@ -1571,35 +1655,54 @@ export class AssistantConversationsService {
         };
       } else {
         try {
-          const calendarToolsActive = await this.areGoogleCalendarToolsAvailable(input.tenant.companyId);
-          const contactPhone = await this.resolveContactPhone(conversation.id, input.tenant.companyId, input.dto);
+          const calendarToolsActive = await this.areGoogleCalendarToolsAvailable(
+            input.tenant.companyId,
+          );
+          const contactPhone = await this.resolveContactPhone(
+            conversation.id,
+            input.tenant.companyId,
+            input.dto,
+          );
 
           // 1. Intent Routing
-          const routeResult = await this.intentRouterService.route({
-            companyId: input.tenant.companyId,
-            assistantId: input.assistantId,
-            message: interpretedMessage,
-            flows: assistant.flows,
-            model: resolvedModel.model,
-            temperature,
-          });
+          const routeResult = this.intentRouterService
+            ? await this.intentRouterService.route({
+                companyId: input.tenant.companyId,
+                assistantId: input.assistantId,
+                message: interpretedMessage,
+                flows: assistant.flows ?? [],
+                model: resolvedModel.model,
+                temperature,
+              })
+            : {
+                flowId: null,
+                flowName: null,
+                confidence: 0,
+                reason: "Intent router unavailable",
+              };
 
-          const selectedFlow = routeResult.flowId 
-            ? assistant.flows.find(f => f.id === routeResult.flowId) 
+          const selectedFlow = routeResult.flowId
+            ? (assistant.flows ?? []).find((f) => f.id === routeResult.flowId)
             : null;
+          const flowToolContext = this.resolveFlowToolContext(selectedFlow ?? null);
+          const calendarScope = flowToolContext?.calendar ?? null;
 
           let tools = calendarToolsActive ? this.getGoogleCalendarToolsDefinitions() : undefined;
 
           // Filtro de ferramentas (Phase 1.5)
           if (selectedFlow) {
             const finalAction = selectedFlow.finalAction || "respond";
-            if (finalAction === "fixed_message" || finalAction === "handoff" || selectedFlow.autoRespond === false) {
+            if (
+              finalAction === "fixed_message" ||
+              finalAction === "handoff" ||
+              selectedFlow.autoRespond === false
+            ) {
               tools = undefined; // Nenhuma ferramenta se for bypass
             } else if (selectedFlow.allowedToolSlugs) {
               try {
                 const allowedSlugs = JSON.parse(selectedFlow.allowedToolSlugs);
                 if (Array.isArray(allowedSlugs) && allowedSlugs.length > 0) {
-                  tools = tools?.filter(t => allowedSlugs.includes(t.function.name));
+                  tools = tools?.filter((t) => allowedSlugs.includes(t.function.name));
                 } else if (Array.isArray(allowedSlugs) && allowedSlugs.length === 0) {
                   tools = undefined;
                 }
@@ -1610,11 +1713,9 @@ export class AssistantConversationsService {
           }
 
           const resourcesContext = calendarToolsActive
-            ? await this.getCalendarResourcesContext(input.tenant.companyId)
+            ? await this.getCalendarResourcesContext(input.tenant.companyId, calendarScope)
             : "";
-          const serverTime = calendarToolsActive
-            ? new Date().toISOString()
-            : null;
+          const serverTime = calendarToolsActive ? new Date().toISOString() : null;
 
           // Update context metadata for logs
           Object.assign(contextMetadata, {
@@ -1622,6 +1723,12 @@ export class AssistantConversationsService {
             selectedFlowId: routeResult.flowId,
             selectedFlowName: routeResult.flowName,
             intentConfidence: routeResult.confidence,
+            calendarScopeApplied: hasCalendarToolScope(calendarScope),
+            calendarScope: calendarScope,
+            toolArgsOverridden: false,
+            resourceScopeApplied: hasCalendarToolScope(calendarScope),
+            blockedByToolScope: false,
+            blockReason: null,
           });
 
           let toolCallsResolved = false;
@@ -1644,7 +1751,12 @@ export class AssistantConversationsService {
               // Skip LLM
               toolCallsResolved = true;
             } else if (finalAction === "handoff" || selectedFlow.requiresHuman || !autoRespond) {
-              Object.assign(contextMetadata, { finalAction, llmSkipped: true, handoffPending: true, autoRespond });
+              Object.assign(contextMetadata, {
+                finalAction,
+                llmSkipped: true,
+                handoffPending: true,
+                autoRespond,
+              });
               // We don't implement real chatwoot handoff yet, but we skip LLM.
               // If we shouldn't respond at all, we could throw or return early, but sendMessage expects an answer.
               // So we provide an internal fallback answer.
@@ -1664,20 +1776,41 @@ export class AssistantConversationsService {
           let promptMessages: any[] = [];
           if (!toolCallsResolved) {
             // 2. Build Prompt using PromptCompiler
-            promptMessages = this.promptCompilerService.compile({
-              assistant,
-              behavior: assistant.behavior,
-              flow: selectedFlow,
-              knowledgeItems,
-              historyMessages: priorHistory,
-              currentMessage: interpretedMessage,
-              calendarContext: calendarToolsActive ? {
-                conversationId: conversation.id,
-                contactPhone,
-                resourcesContext,
-                serverTime,
-              } : null,
-            });
+            promptMessages = this.promptCompilerService
+              ? this.promptCompilerService.compile({
+                  assistant,
+                  behavior: assistant.behavior,
+                  flow: selectedFlow,
+                  knowledgeItems,
+                  historyMessages: priorHistory,
+                  currentMessage: interpretedMessage,
+                  calendarContext: calendarToolsActive
+                    ? {
+                        conversationId: conversation.id,
+                        contactPhone,
+                        resourcesContext,
+                        serverTime,
+                      }
+                    : null,
+                })
+              : buildConversationPromptMessages({
+                  assistantName: assistant.name,
+                  assistantDescription: assistant.description ?? null,
+                  initialMessage: assistant.initialMessage ?? null,
+                  instructions: assistant.instructions ?? null,
+                  avoidPhrases: assistant.avoidPhrases ?? null,
+                  knowledgeItems,
+                  historyMessages: priorHistory,
+                  currentMessage: interpretedMessage,
+                  calendarContext: calendarToolsActive
+                    ? {
+                        conversationId: conversation.id,
+                        contactPhone,
+                        resourcesContext,
+                        serverTime,
+                      }
+                    : null,
+                });
           }
 
           if (isDebugLogsEnabled && !toolCallsResolved) {
@@ -1689,9 +1822,24 @@ export class AssistantConversationsService {
             console.log("Assistant CompanyId:", input.tenant.companyId);
             console.log("CalendarToolsActive:", calendarToolsActive);
             console.log("Tools count:", tools?.length || 0);
-            console.log("Has calendar_checkAvailability:", tools?.some(t => t.function.name === "calendar_checkAvailability") || false);
-            console.log("ResourcesContext populated:", !!resourcesContext, "| Length:", resourcesContext?.length || 0);
-            console.log("Prompt Messages Calendar Context:", promptMessages.some(m => typeof m.content === 'string' && m.content.includes("Instruções do Sistema de Reservas")));
+            console.log(
+              "Has calendar_checkAvailability:",
+              tools?.some((t) => t.function.name === "calendar_checkAvailability") || false,
+            );
+            console.log(
+              "ResourcesContext populated:",
+              !!resourcesContext,
+              "| Length:",
+              resourcesContext?.length || 0,
+            );
+            console.log(
+              "Prompt Messages Calendar Context:",
+              promptMessages.some(
+                (m) =>
+                  typeof m.content === "string" &&
+                  m.content.includes("Instruções do Sistema de Reservas"),
+              ),
+            );
             console.log("=== TEMPORARY DIAGNOSTIC LOGS: END ===\n");
           }
 
@@ -1729,30 +1877,79 @@ export class AssistantConversationsService {
               });
 
               for (const toolCall of completion.toolCalls) {
-                const toolName = toolCall.function.name;
+                const toolName = this.normalizeCalendarToolName(toolCall.function.name);
                 const toolArgs = JSON.parse(toolCall.function.arguments);
                 let resultString = "";
 
                 try {
-                  const isMutating = ["calendar_createBooking", "calendar_rescheduleBooking", "calendar_cancelBooking"].includes(toolName);
-                  if (isMutating) {
-                    await this.logToolAction(input.tenant.companyId, "confirmation_required", { toolName, args: toolArgs });
+                  const preparedTool = await this.prepareToolExecution({
+                    companyId: input.tenant.companyId,
+                    selectedFlow: selectedFlow ?? null,
+                    toolName,
+                    args: toolArgs,
+                  });
+                  const effectiveToolArgs = preparedTool.args;
+                  Object.assign(contextMetadata, preparedTool.metadata);
 
-                    const isConfirmed = /(sim|pode|confirmo|confirmar|isso\s+mesmo|ok|fechado|perfeito|pode\s+reservar|pode\s+cancelar|pode\s+remarcar)/i.test(interpretedMessage);
+                  const isMutating = [
+                    "calendar_createBooking",
+                    "calendar_rescheduleBooking",
+                    "calendar_cancelBooking",
+                  ].includes(toolName);
+                  if (isMutating) {
+                    await this.logToolAction(input.tenant.companyId, "confirmation_required", {
+                      toolName,
+                      args: effectiveToolArgs,
+                      ...preparedTool.metadata,
+                    });
+
+                    const isConfirmed =
+                      /(sim|pode|confirmo|confirmar|isso\s+mesmo|ok|fechado|perfeito|pode\s+reservar|pode\s+cancelar|pode\s+remarcar)/i.test(
+                        interpretedMessage,
+                      );
                     if (!isConfirmed) {
-                      await this.logToolAction(input.tenant.companyId, "confirmation_missing", { toolName, args: toolArgs });
+                      await this.logToolAction(input.tenant.companyId, "confirmation_missing", {
+                        toolName,
+                        args: effectiveToolArgs,
+                        ...preparedTool.metadata,
+                      });
                       resultString = JSON.stringify({
-                        error: "Confirmação pendente. Você deve apresentar os detalhes da ação (resumo claro) e pedir confirmação explícita ao usuário (ex: 'Confirmando: ..., posso confirmar?') antes de prosseguir."
+                        error:
+                          "Confirmação pendente. Você deve apresentar os detalhes da ação (resumo claro) e pedir confirmação explícita ao usuário (ex: 'Confirmando: ..., posso confirmar?') antes de prosseguir.",
                       });
                     } else {
-                      await this.logToolAction(input.tenant.companyId, "confirmation_received", { toolName, args: toolArgs });
-                      resultString = await this.executeTool(input.tenant.companyId, toolName, toolArgs);
+                      await this.logToolAction(input.tenant.companyId, "confirmation_received", {
+                        toolName,
+                        args: effectiveToolArgs,
+                        ...preparedTool.metadata,
+                      });
+                      resultString = await this.executeTool(
+                        input.tenant.companyId,
+                        toolName,
+                        effectiveToolArgs,
+                        preparedTool.metadata,
+                      );
                     }
                   } else {
-                    resultString = await this.executeTool(input.tenant.companyId, toolName, toolArgs);
+                    resultString = await this.executeTool(
+                      input.tenant.companyId,
+                      toolName,
+                      effectiveToolArgs,
+                      preparedTool.metadata,
+                    );
                   }
                 } catch (err) {
-                  const errMsg = err instanceof Error ? err.message : "Erro desconhecido na chamada da ferramenta.";
+                  const errMsg =
+                    err instanceof Error
+                      ? err.message
+                      : "Erro desconhecido na chamada da ferramenta.";
+                  if (errMsg.includes("outside selected flow calendar scope")) {
+                    Object.assign(contextMetadata, {
+                      blockedByToolScope: true,
+                      blockReason: errMsg,
+                      resourceScopeApplied: true,
+                    });
+                  }
                   resultString = JSON.stringify({ error: errMsg });
                 }
 
@@ -1883,6 +2080,12 @@ export class AssistantConversationsService {
             llmSkipped: runtime.context.llmSkipped,
             handoffPending: runtime.context.handoffPending,
             autoRespond: runtime.context.autoRespond,
+            calendarScopeApplied: runtime.context.calendarScopeApplied,
+            calendarScope: runtime.context.calendarScope,
+            toolArgsOverridden: runtime.context.toolArgsOverridden,
+            resourceScopeApplied: runtime.context.resourceScopeApplied,
+            blockedByToolScope: runtime.context.blockedByToolScope,
+            blockReason: runtime.context.blockReason,
           }),
         },
         select: {
@@ -1968,7 +2171,7 @@ export class AssistantConversationsService {
   private async resolveContactPhone(
     conversationId: string,
     companyId: string,
-    dto: SendAssistantConversationMessageDto
+    dto: SendAssistantConversationMessageDto,
   ): Promise<string> {
     if (dto.externalSenderPhone?.trim()) {
       return dto.externalSenderPhone.trim();
@@ -1977,7 +2180,14 @@ export class AssistantConversationsService {
       return dto.contact.phone.trim();
     }
 
-    const lastUserMsg = await this.prisma.assistantConversationMessage.findFirst({
+    const findFirstMessage = this.prisma.assistantConversationMessage.findFirst?.bind(
+      this.prisma.assistantConversationMessage,
+    );
+    if (!findFirstMessage) {
+      return "";
+    }
+
+    const lastUserMsg = await findFirstMessage({
       where: {
         conversationId,
         companyId,
@@ -1996,6 +2206,10 @@ export class AssistantConversationsService {
   }
 
   private async areGoogleCalendarToolsAvailable(companyId: string): Promise<boolean> {
+    if (!this.calendarToolsService) {
+      return false;
+    }
+
     try {
       const app = await this.prisma.app.findUnique({
         where: { slug: "google_calendar" },
@@ -2041,155 +2255,357 @@ export class AssistantConversationsService {
         type: "function",
         function: {
           name: "calendar_checkAvailability",
-          description: "Consulta horários disponíveis (slots livres) em recursos ou serviços conectados ao Google Agenda para uma data e intervalo de horas.",
+          description:
+            "Consulta horários disponíveis (slots livres) em recursos ou serviços conectados ao Google Agenda para uma data e intervalo de horas.",
           parameters: {
             type: "object",
             properties: {
               date: {
                 type: "string",
-                description: "A data no formato YYYY-MM-DD (ex: 2026-07-04)"
+                description: "A data no formato YYYY-MM-DD (ex: 2026-07-04)",
               },
               timeFrom: {
                 type: "string",
-                description: "O horário de início no formato HH:MM (ex: 08:00)"
+                description: "O horário de início no formato HH:MM (ex: 08:00)",
               },
               timeTo: {
                 type: "string",
-                description: "O horário de fim no formato HH:MM (ex: 18:00)"
+                description: "O horário de fim no formato HH:MM (ex: 18:00)",
               },
               category: {
                 type: "string",
-                description: "Opcional. Categoria, modalidade ou serviço do recurso (ex: Beach Tennis, Padel, Consulta Médica, Reunião Comercial)"
+                description:
+                  "Opcional. Categoria, modalidade ou serviço do recurso (ex: Beach Tennis, Padel, Consulta Médica, Reunião Comercial)",
+              },
+              sportType: {
+                type: "string",
+                description:
+                  "Opcional. Modalidade principal do recurso quando aplicável (ex: Padel, Beach Tennis).",
               },
               resourceType: {
                 type: "string",
-                description: "Opcional. Tipo do recurso (ex: Quadra, Sala, Consultório, Profissional)"
+                description:
+                  "Opcional. Tipo do recurso (ex: Quadra, Sala, Consultório, Profissional)",
               },
               attribute: {
                 type: "string",
-                description: "Opcional. Característica ou atributo específico do recurso (ex: Coberta, Aberta, Com Ar, VIP)"
+                description:
+                  "Opcional. Característica ou atributo específico do recurso (ex: Coberta, Aberta, Com Ar, VIP)",
               },
               durationMinutes: {
                 type: "integer",
-                description: "Opcional. Duração do agendamento em minutos. Padrão é 60."
-              }
+                description: "Opcional. Duração do agendamento em minutos. Padrão é 60.",
+              },
             },
-            required: ["date", "timeFrom", "timeTo"]
-          }
-        }
+            required: ["date", "timeFrom", "timeTo"],
+          },
+        },
       },
       {
         type: "function",
         function: {
           name: "calendar_createBooking",
-          description: "Cria um novo agendamento/reserva localmente e no Google Agenda. ATENÇÃO: Esta ação exige confirmação explícita prévia do cliente (como 'sim', 'confirmo', 'pode reservar') contendo um resumo claro dos detalhes antes de ser executada.",
+          description:
+            "Cria um novo agendamento/reserva localmente e no Google Agenda. ATENÇÃO: Esta ação exige confirmação explícita prévia do cliente (como 'sim', 'confirmo', 'pode reservar') contendo um resumo claro dos detalhes antes de ser executada.",
           parameters: {
             type: "object",
             properties: {
               resourceId: {
                 type: "string",
-                description: "O ID do recurso/serviço a ser reservado"
+                description: "O ID do recurso/serviço a ser reservado",
               },
               contactName: {
                 type: "string",
-                description: "Nome do contato para o agendamento"
+                description: "Nome do contato para o agendamento",
               },
               contactPhone: {
                 type: "string",
-                description: "Telefone do contato para o agendamento"
+                description: "Telefone do contato para o agendamento",
               },
               startAt: {
                 type: "string",
-                description: "Data e hora de início no formato ISO 8601 (ex: 2026-07-04T13:00:00.000Z)"
+                description:
+                  "Data e hora de início no formato ISO 8601 (ex: 2026-07-04T13:00:00.000Z)",
               },
               endAt: {
                 type: "string",
-                description: "Data e hora de fim no formato ISO 8601 (ex: 2026-07-04T14:00:00.000Z)"
+                description:
+                  "Data e hora de fim no formato ISO 8601 (ex: 2026-07-04T14:00:00.000Z)",
               },
               notes: {
                 type: "string",
-                description: "Opcional. Observações ou notas adicionais para o agendamento"
-              }
+                description: "Opcional. Observações ou notas adicionais para o agendamento",
+              },
             },
-            required: ["resourceId", "contactName", "contactPhone", "startAt", "endAt"]
-          }
-        }
+            required: ["resourceId", "contactName", "contactPhone", "startAt", "endAt"],
+          },
+        },
       },
       {
         type: "function",
         function: {
           name: "calendar_getBookingsByContact",
-          description: "Lista agendamentos/reservas futuras ativas de um cliente baseado no número de telefone do contato.",
+          description:
+            "Lista agendamentos/reservas futuras ativas de um cliente baseado no número de telefone do contato.",
           parameters: {
             type: "object",
             properties: {
               contactPhone: {
                 type: "string",
-                description: "O número de telefone do contato (ex: 67999999999)"
-              }
+                description: "O número de telefone do contato (ex: 67999999999)",
+              },
             },
-            required: ["contactPhone"]
-          }
-        }
+            required: ["contactPhone"],
+          },
+        },
       },
       {
         type: "function",
         function: {
           name: "calendar_rescheduleBooking",
-          description: "Remarca um agendamento/reserva para uma nova data, horário e opcionalmente um novo recurso. ATENÇÃO: Esta ação exige confirmação explícita prévia do cliente contendo um resumo claro antes de ser executada.",
+          description:
+            "Remarca um agendamento/reserva para uma nova data, horário e opcionalmente um novo recurso. ATENÇÃO: Esta ação exige confirmação explícita prévia do cliente contendo um resumo claro antes de ser executada.",
           parameters: {
             type: "object",
             properties: {
               bookingId: {
                 type: "string",
-                description: "O ID do agendamento existente a ser remarcado"
+                description: "O ID do agendamento existente a ser remarcado",
               },
               newStartAt: {
                 type: "string",
-                description: "Nova data e hora de início no formato ISO 8601 (ex: 2026-07-04T15:00:00.000Z)"
+                description:
+                  "Nova data e hora de início no formato ISO 8601 (ex: 2026-07-04T15:00:00.000Z)",
               },
               newEndAt: {
                 type: "string",
-                description: "Nova data e hora de fim no formato ISO 8601 (ex: 2026-07-04T16:00:00.000Z)"
+                description:
+                  "Nova data e hora de fim no formato ISO 8601 (ex: 2026-07-04T16:00:00.000Z)",
               },
               newResourceId: {
                 type: "string",
-                description: "Opcional. Novo ID do recurso se estiver mudando de recurso/serviço"
+                description: "Opcional. Novo ID do recurso se estiver mudando de recurso/serviço",
               },
               reason: {
                 type: "string",
-                description: "Opcional. Motivo da remarcação"
-              }
+                description: "Opcional. Motivo da remarcação",
+              },
             },
-            required: ["bookingId", "newStartAt", "newEndAt"]
-          }
-        }
+            required: ["bookingId", "newStartAt", "newEndAt"],
+          },
+        },
       },
       {
         type: "function",
         function: {
           name: "calendar_cancelBooking",
-          description: "Cancela um agendamento/reserva existente e a remove do Google Agenda. ATENÇÃO: Esta ação exige confirmação explícita prévia do cliente contendo um resumo claro antes de ser executada.",
+          description:
+            "Cancela um agendamento/reserva existente e a remove do Google Agenda. ATENÇÃO: Esta ação exige confirmação explícita prévia do cliente contendo um resumo claro antes de ser executada.",
           parameters: {
             type: "object",
             properties: {
               bookingId: {
                 type: "string",
-                description: "O ID do agendamento a ser cancelado"
+                description: "O ID do agendamento a ser cancelado",
               },
               reason: {
                 type: "string",
-                description: "Opcional. Motivo do cancelamento"
-              }
+                description: "Opcional. Motivo do cancelamento",
+              },
             },
-            required: ["bookingId"]
-          }
-        }
-      }
+            required: ["bookingId"],
+          },
+        },
+      },
     ];
   }
 
-  private async getCalendarResourcesContext(companyId: string): Promise<string> {
+  private normalizeCalendarToolName(toolName: string): string {
+    const normalized = toolName.trim();
+
+    switch (normalized) {
+      case "calendar.checkAvailability":
+        return "calendar_checkAvailability";
+      case "calendar.createBooking":
+        return "calendar_createBooking";
+      case "calendar.getBookingsByContact":
+        return "calendar_getBookingsByContact";
+      case "calendar.rescheduleBooking":
+        return "calendar_rescheduleBooking";
+      case "calendar.cancelBooking":
+        return "calendar_cancelBooking";
+      default:
+        return normalized;
+    }
+  }
+
+  private resolveFlowToolContext(
+    selectedFlow: AssistantConversationRuntimeAssistantRecord["flows"][number] | null,
+  ) {
+    return normalizeAssistantFlowToolContext(selectedFlow?.toolContext ?? null);
+  }
+
+  private async prepareToolExecution(input: {
+    companyId: string;
+    selectedFlow: AssistantConversationRuntimeAssistantRecord["flows"][number] | null;
+    toolName: string;
+    args: Record<string, any>;
+  }): Promise<PreparedToolExecution> {
+    const flowToolContext = this.resolveFlowToolContext(input.selectedFlow);
+    const calendarScope = flowToolContext?.calendar ?? null;
+    const metadata: PreparedToolExecution["metadata"] = {
+      calendarScopeApplied: hasCalendarToolScope(calendarScope),
+      calendarScope,
+      toolArgsOverridden: false,
+      resourceScopeApplied: hasCalendarToolScope(calendarScope),
+      blockedByToolScope: false,
+    };
+
+    if (!hasCalendarToolScope(calendarScope)) {
+      return { args: input.args, metadata };
+    }
+
+    if (input.toolName === "calendar_checkAvailability") {
+      const scopedArgs = {
+        ...input.args,
+        ...(calendarScope.category ? { category: calendarScope.category } : {}),
+        ...(calendarScope.sportType ? { sportType: calendarScope.sportType } : {}),
+        ...(calendarScope.resourceType ? { resourceType: calendarScope.resourceType } : {}),
+        ...(calendarScope.attribute ? { attribute: calendarScope.attribute } : {}),
+        ...(calendarScope.durationMinutes
+          ? { durationMinutes: calendarScope.durationMinutes }
+          : {}),
+        ...(calendarScope.isCovered !== null && calendarScope.isCovered !== undefined
+          ? { isCovered: calendarScope.isCovered }
+          : {}),
+      };
+
+      metadata.toolArgsOverridden = JSON.stringify(input.args) !== JSON.stringify(scopedArgs);
+
+      return {
+        args: scopedArgs,
+        metadata,
+      };
+    }
+
+    if (
+      input.toolName === "calendar_createBooking" ||
+      input.toolName === "calendar_rescheduleBooking" ||
+      input.toolName === "calendar_cancelBooking"
+    ) {
+      await this.assertToolCallWithinCalendarScope({
+        companyId: input.companyId,
+        toolName: input.toolName,
+        args: input.args,
+        calendarScope,
+        selectedFlow: input.selectedFlow,
+      });
+    }
+
+    return { args: input.args, metadata };
+  }
+
+  private async assertToolCallWithinCalendarScope(input: {
+    companyId: string;
+    toolName: string;
+    args: Record<string, any>;
+    calendarScope: CalendarToolScope;
+    selectedFlow: AssistantConversationRuntimeAssistantRecord["flows"][number] | null;
+  }): Promise<void> {
+    const failScope = async (blockReason: string) => {
+      await this.logToolAction(
+        input.companyId,
+        "tool_call_blocked_by_scope",
+        {
+          toolName: input.toolName,
+          args: input.args,
+          blockedByToolScope: true,
+          blockReason,
+          calendarScope: input.calendarScope,
+          selectedFlowId: input.selectedFlow?.id ?? null,
+          selectedFlowName: input.selectedFlow?.name ?? null,
+        },
+        "ERROR",
+      );
+
+      throw new BadRequestException(blockReason);
+    };
+
+    if (input.toolName === "calendar_createBooking") {
+      const resource = await this.findResourceForScope(
+        input.companyId,
+        String(input.args.resourceId ?? ""),
+      );
+      if (!resource || !matchesCalendarToolScope(resource, input.calendarScope)) {
+        await failScope("Resource outside selected flow calendar scope");
+      }
+      return;
+    }
+
+    if (input.toolName === "calendar_rescheduleBooking") {
+      const booking = await this.findBookingForScope(
+        input.companyId,
+        String(input.args.bookingId ?? ""),
+      );
+      if (!booking || !matchesCalendarToolScope(booking.resource, input.calendarScope)) {
+        await failScope("Booking resource outside selected flow calendar scope");
+        return;
+      }
+
+      const targetResourceId = input.args.newResourceId ?? booking.resourceId;
+      const resource = await this.findResourceForScope(input.companyId, String(targetResourceId));
+      if (!resource || !matchesCalendarToolScope(resource, input.calendarScope)) {
+        await failScope("Resource outside selected flow calendar scope");
+      }
+      return;
+    }
+
+    if (input.toolName === "calendar_cancelBooking") {
+      const booking = await this.findBookingForScope(
+        input.companyId,
+        String(input.args.bookingId ?? ""),
+      );
+      if (!booking || !matchesCalendarToolScope(booking.resource, input.calendarScope)) {
+        await failScope("Booking resource outside selected flow calendar scope");
+      }
+    }
+  }
+
+  private async findResourceForScope(companyId: string, resourceId: string) {
+    if (!resourceId) {
+      return null;
+    }
+
+    return this.prisma.googleCalendarResource.findFirst({
+      where: {
+        id: resourceId,
+        companyId,
+      },
+      select: calendarScopeResourceSelect,
+    });
+  }
+
+  private async findBookingForScope(
+    companyId: string,
+    bookingId: string,
+  ): Promise<ScopedBookingRecord | null> {
+    if (!bookingId) {
+      return null;
+    }
+
+    return this.prisma.googleCalendarBooking.findFirst({
+      where: {
+        id: bookingId,
+        companyId,
+      },
+      select: calendarScopeBookingSelect,
+    });
+  }
+
+  private async getCalendarResourcesContext(
+    companyId: string,
+    calendarScope?: CalendarToolScope | null,
+  ): Promise<string> {
     try {
       const app = await this.prisma.app.findUnique({
         where: { slug: "google_calendar" },
@@ -2207,7 +2623,7 @@ export class AssistantConversationsService {
       });
       if (!installation) return "";
 
-      const resources = await this.prisma.googleCalendarResource.findMany({
+      const allResources = await this.prisma.googleCalendarResource.findMany({
         where: {
           companyId,
           installationId: installation.id,
@@ -2220,6 +2636,7 @@ export class AssistantConversationsService {
         },
         orderBy: { name: "asc" },
       });
+      const resources = filterResourcesByCalendarToolScope(allResources, calendarScope);
 
       if (resources.length === 0) return "";
 
@@ -2227,9 +2644,11 @@ export class AssistantConversationsService {
       for (const r of resources) {
         const typeStr = r.resourceTypeRef?.name || r.resourceType || "—";
         const catStr = r.categoryRef?.name || r.sportType || "—";
-        const attrStr = r.attributeRef?.name || (r.isCovered ? "Coberta" : r.isCovered === false ? "Aberta" : "—");
+        const attrStr =
+          r.attributeRef?.name ||
+          (r.isCovered ? "Coberta" : r.isCovered === false ? "Aberta" : "—");
         lines.push(
-          `- "${r.name}" (ID: ${r.id}) — Tipo: ${typeStr} | Categoria: ${catStr} | Característica: ${attrStr} | Fuso horário: ${r.timezone} | Duração padrão: ${r.defaultDurationMinutes} min`
+          `- "${r.name}" (ID: ${r.id}) — Tipo: ${typeStr} | Categoria: ${catStr} | Característica: ${attrStr} | Fuso horário: ${r.timezone} | Duração padrão: ${r.defaultDurationMinutes} min`,
         );
       }
       return lines.join("\n");
@@ -2239,9 +2658,22 @@ export class AssistantConversationsService {
     }
   }
 
-  private async executeTool(companyId: string, toolName: string, args: any): Promise<string> {
+  private async executeTool(
+    companyId: string,
+    toolName: string,
+    args: any,
+    metadata: Record<string, any> = {},
+  ): Promise<string> {
+    if (!this.calendarToolsService) {
+      throw new Error("Calendar tools service unavailable.");
+    }
+
     const startedAt = Date.now();
-    await this.logToolAction(companyId, "tool_call_requested", { toolName, arguments: args });
+    await this.logToolAction(companyId, "tool_call_requested", {
+      toolName,
+      arguments: args,
+      ...metadata,
+    });
 
     try {
       let result: any;
@@ -2276,11 +2708,20 @@ export class AssistantConversationsService {
         throw new Error(`Tool not found: ${toolName}`);
       }
 
-      await this.logToolAction(companyId, "tool_call_completed", { toolName, durationMs: Date.now() - startedAt });
+      await this.logToolAction(companyId, "tool_call_completed", {
+        toolName,
+        durationMs: Date.now() - startedAt,
+        ...metadata,
+      });
       return JSON.stringify(result);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : "Erro na chamada do Google Agenda.";
-      await this.logToolAction(companyId, "tool_call_failed", { toolName, error: errMsg }, "ERROR");
+      await this.logToolAction(
+        companyId,
+        "tool_call_failed",
+        { toolName, error: errMsg, ...metadata },
+        "ERROR",
+      );
       throw err;
     }
   }
@@ -2312,7 +2753,7 @@ export class AssistantConversationsService {
     companyId: string,
     action: string,
     metadata: any,
-    status: "SUCCESS" | "ERROR" = "SUCCESS"
+    status: "SUCCESS" | "ERROR" = "SUCCESS",
   ): Promise<void> {
     try {
       const app = await this.prisma.app.findFirst({
@@ -2353,7 +2794,7 @@ export class AssistantConversationsService {
     reason?: string;
     tenant: RequestTenant;
   }): Promise<void> {
-    const conversation = await this.prisma.assistantConversation.findUnique({
+    const conversation = await this.prisma.assistantConversation.findFirst({
       where: { id: input.conversationId, companyId: input.tenant.companyId },
       include: {
         assistant: true,
@@ -2374,10 +2815,10 @@ export class AssistantConversationsService {
     // 2. Se runAi for verdadeiro, fazemos o fetch do histórico do Chatwoot e rodamos a AI
     if (input.runAi) {
       const messages = await this.fetchExternalConversationMessages(conversation.id);
-      
+
       // Monta as promptMessages
       const promptMessages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [];
-      
+
       for (const msg of messages) {
         if (msg.message_type === 0 || msg.message_type === "incoming") {
           promptMessages.push({ role: "user", content: msg.content });
@@ -2400,9 +2841,11 @@ export class AssistantConversationsService {
       // Runtime engine will validate and throw/fallback correctly if provider is missing.
 
       // Chama a IA redirecionando para sendMessage com o histórico incluído em uma mensagem de usuário
-      const messagesText = promptMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join("\n");
+      const messagesText = promptMessages
+        .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
+        .join("\n");
       const hiddenMessage = `[AVISO DE SISTEMA]\nO atendimento estava com um humano e acabou de ser devolvido para você.\nHistórico recente da conversa com o humano:\n${messagesText}\n\nPor favor, analise e continue o atendimento a partir daqui de forma natural (não mencione que você é uma IA retomando, apenas continue o fluxo).`;
-      
+
       const resumeDto: SendAssistantConversationMessageDto = {
         message: hiddenMessage,
         source: "chatwoot",
@@ -2413,7 +2856,17 @@ export class AssistantConversationsService {
 
       // Nós podemos apenas chamar this.sendMessage(...)
       // que vai salvar no banco local, rodar as rules, e enviar resposta ao Chatwoot.
-      const mockUser: any = { id: "system", email: "system@localhost", roles: [], companyId: input.tenant.companyId, name: "System", permissions: [] };
+      const mockUser: any = {
+        id: "system",
+        email: "system@localhost",
+        roles: [],
+        companyId: input.tenant.companyId,
+        primaryCompanyId: input.tenant.companyId,
+        activeCompanyId: input.tenant.companyId,
+        memberships: [input.tenant.companyId],
+        name: "System",
+        permissions: [],
+      };
       await this.sendMessage({
         assistantId: input.assistantId,
         conversationId: input.conversationId,
@@ -2425,7 +2878,7 @@ export class AssistantConversationsService {
   }
 
   private async fetchExternalConversationMessages(conversationId: string): Promise<any[]> {
-    const conversation = await this.prisma.assistantConversation.findUnique({
+    const conversation = await this.prisma.assistantConversation.findFirst({
       where: { id: conversationId },
     });
     if (!conversation || conversation.source !== "CHATWOOT") return [];
@@ -2456,16 +2909,18 @@ export class AssistantConversationsService {
         },
       });
       if (!response.ok) return [];
-      const json = await response.json() as any;
+      const json = (await response.json()) as any;
       const payloadMessages = json?.payload ?? [];
-      
+
       // Ordena por data (crescente)
       payloadMessages.sort((a: any, b: any) => a.created_at - b.created_at);
-      
+
       // Retorna as últimas 20 mensagens
       return payloadMessages.slice(-20);
     } catch (err) {
-      this.logger.warn(`Failed to fetch Chatwoot messages for conversation ${conversationId}: ${err}`);
+      this.logger.warn(
+        `Failed to fetch Chatwoot messages for conversation ${conversationId}: ${err}`,
+      );
       return [];
     }
   }

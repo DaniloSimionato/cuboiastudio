@@ -3,8 +3,11 @@ import type { Request } from "express";
 export interface AuthenticatedUser {
   id: string;
   companyId: string;
+  primaryCompanyId: string;
+  activeCompanyId: string;
   email: string;
   name: string;
+  memberships: string[];
   roles: string[];
   permissions: string[];
 }

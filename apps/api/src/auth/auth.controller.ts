@@ -16,7 +16,7 @@ import type { AuthenticatedUser } from "./auth.types";
 export class AuthController {
   @Get("me")
   @UseGuards(AuthGuard)
-  @ApiOperation({ summary: "Return the current development auth context" })
+  @ApiOperation({ summary: "Return the current authenticated user context" })
   @ApiHeader({
     name: "x-dev-user-id",
     required: true,
@@ -47,6 +47,32 @@ export class AuthController {
     required: false,
     description: "DEV ONLY. Optional comma-separated permissions for local testing.",
   })
+  @ApiHeader({
+    name: "x-auth-user-id",
+    required: false,
+    description: "STAGING/PRODUCTION. User id injected by the trusted auth proxy.",
+  })
+  @ApiHeader({
+    name: "x-auth-user-email",
+    required: false,
+    description: "STAGING/PRODUCTION. User email injected by the trusted auth proxy.",
+  })
+  @ApiHeader({
+    name: "x-auth-user-name",
+    required: false,
+    description: "STAGING/PRODUCTION. User display name injected by the trusted auth proxy.",
+  })
+  @ApiHeader({
+    name: "x-auth-timestamp",
+    required: false,
+    description: "STAGING/PRODUCTION. ISO timestamp signed by the trusted auth proxy.",
+  })
+  @ApiHeader({
+    name: "x-auth-signature",
+    required: false,
+    description:
+      "STAGING/PRODUCTION. HMAC signature proving the auth headers were injected by the trusted proxy.",
+  })
   @ApiOkResponse({
     schema: {
       type: "object",
@@ -69,7 +95,7 @@ export class AuthController {
   })
   @ApiUnauthorizedResponse({
     description:
-      "Returned when development auth headers are missing or when mock auth is used in production.",
+      "Returned when development auth headers are missing locally, or when trusted proxy headers are missing/invalid in staging and production.",
   })
   getMe(@CurrentUser() user: AuthenticatedUser | undefined): AuthenticatedUser {
     if (!user) {

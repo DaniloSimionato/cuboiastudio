@@ -1,5 +1,77 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { IsBoolean, IsInt, IsOptional, IsString, Min } from "class-validator";
+import { Type } from "class-transformer";
+import {
+  IsArray,
+  IsBoolean,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  ValidateNested,
+} from "class-validator";
+
+export class AssistantFlowCalendarToolContextDto {
+  @ApiPropertyOptional({ example: "Padel" })
+  @IsOptional()
+  @IsString()
+  category?: string | null;
+
+  @ApiPropertyOptional({ example: "Padel" })
+  @IsOptional()
+  @IsString()
+  sportType?: string | null;
+
+  @ApiPropertyOptional({ example: "quadra" })
+  @IsOptional()
+  @IsString()
+  resourceType?: string | null;
+
+  @ApiPropertyOptional({ example: "coberta" })
+  @IsOptional()
+  @IsString()
+  attribute?: string | null;
+
+  @ApiPropertyOptional({ example: 60 })
+  @IsOptional()
+  @IsInt()
+  @Min(5)
+  @Max(480)
+  durationMinutes?: number | null;
+
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  isCovered?: boolean | null;
+
+  @ApiPropertyOptional({ example: ["resource_123"] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  resourceIds?: string[] | null;
+
+  @ApiPropertyOptional({ example: ["agenda@group.calendar.google.com"] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  calendarIds?: string[] | null;
+}
+
+export class AssistantFlowToolContextDto {
+  @ApiPropertyOptional({
+    type: AssistantFlowCalendarToolContextDto,
+    example: {
+      category: "Padel",
+      sportType: "Padel",
+      resourceType: "quadra",
+      durationMinutes: 60,
+    },
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => AssistantFlowCalendarToolContextDto)
+  calendar?: AssistantFlowCalendarToolContextDto | null;
+}
 
 export class CreateAssistantFlowDto {
   @ApiPropertyOptional({ example: "Agendamento" })
@@ -46,6 +118,12 @@ export class CreateAssistantFlowDto {
   @IsString()
   @IsOptional()
   knowledgeScope?: string | null;
+
+  @ApiPropertyOptional({ type: AssistantFlowToolContextDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => AssistantFlowToolContextDto)
+  toolContext?: AssistantFlowToolContextDto | null;
 
   @ApiPropertyOptional({ example: "respond" })
   @IsString()

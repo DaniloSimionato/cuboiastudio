@@ -140,7 +140,10 @@ export class ChatwootInboxConfigService {
     return this.toSafeConfig(config);
   }
 
-  async upsert(companyId: string, dto: UpsertChatwootInboxConfigDto): Promise<SafeChatwootInboxConfig> {
+  async upsert(
+    companyId: string,
+    dto: UpsertChatwootInboxConfigDto,
+  ): Promise<SafeChatwootInboxConfig> {
     const existing = await this.prisma.chatwootInboxConfig.findUnique({
       where: {
         companyId_accountId_inboxId: {
@@ -154,12 +157,21 @@ export class ChatwootInboxConfigService {
 
     const apiAccessToken = await this.resolveEncryptedSecret(dto.apiAccessToken);
     const webhookSecret = await this.resolveEncryptedSecret(dto.webhookSecret);
-    const metadataJson = this.resolveMetadataJsonInput(dto.metadataJson, existing?.metadataJson ?? null);
+    const metadataJson = this.resolveMetadataJsonInput(
+      dto.metadataJson,
+      existing?.metadataJson ?? null,
+    );
     const baseUrl = this.resolveRequiredTextInput(dto.baseUrl, "Chatwoot baseUrl is required.");
     const name = this.resolveRequiredTextInput(dto.name, "Chatwoot inbox name is required.");
-    const accountId = this.resolveRequiredTextInput(dto.accountId, "Chatwoot accountId is required.");
+    const accountId = this.resolveRequiredTextInput(
+      dto.accountId,
+      "Chatwoot accountId is required.",
+    );
     const inboxId = this.resolveRequiredTextInput(dto.inboxId, "Chatwoot inboxId is required.");
-    const assistantId = this.resolveAssistantIdForWrite(dto.assistantId, existing?.assistantId ?? null);
+    const assistantId = this.resolveAssistantIdForWrite(
+      dto.assistantId,
+      existing?.assistantId ?? null,
+    );
 
     if (dto.assistantId !== undefined && assistantId) {
       await this.ensureAssistantBelongsToCompany(companyId, assistantId);
@@ -225,33 +237,67 @@ export class ChatwootInboxConfigService {
 
     const apiAccessToken = await this.resolveEncryptedSecret(dto.apiAccessToken);
     const webhookSecret = await this.resolveEncryptedSecret(dto.webhookSecret);
-    const metadataJson = this.resolveMetadataJsonInput(dto.metadataJson, existing.metadataJson ?? null);
+    const metadataJson = this.resolveMetadataJsonInput(
+      dto.metadataJson,
+      existing.metadataJson ?? null,
+    );
     const baseUrl = this.resolveRequiredTextInput(dto.baseUrl, "Chatwoot baseUrl is required.");
     const name = this.resolveRequiredTextInput(dto.name, "Chatwoot inbox name is required.");
-    const accountId = this.resolveRequiredTextInput(dto.accountId, "Chatwoot accountId is required.");
+    const accountId = this.resolveRequiredTextInput(
+      dto.accountId,
+      "Chatwoot accountId is required.",
+    );
     const inboxId = this.resolveRequiredTextInput(dto.inboxId, "Chatwoot inboxId is required.");
-    const assistantId = this.resolveAssistantIdForWrite(dto.assistantId, existing.assistantId ?? null);
+    const assistantId = this.resolveAssistantIdForWrite(
+      dto.assistantId,
+      existing.assistantId ?? null,
+    );
 
     if (dto.assistantId !== undefined && assistantId) {
       await this.ensureAssistantBelongsToCompany(companyId, assistantId);
     }
 
     try {
-      const record = await this.prisma.chatwootInboxConfig.update({
-        where: { id },
-        data: {
-          name,
-          baseUrl,
-          assistantId,
-          accountId,
-          inboxId,
-          isActive: dto.isActive ?? existing.isActive,
-          metadataJson,
-          ...this.buildApiAccessTokenWriteFields(apiAccessToken, existing),
-          ...this.buildWebhookSecretWriteFields(webhookSecret, existing),
-        },
+      if (typeof this.prisma.chatwootInboxConfig.updateMany === "function") {
+        await this.prisma.chatwootInboxConfig.updateMany({
+          where: { id, companyId },
+          data: {
+            name,
+            baseUrl,
+            assistantId,
+            accountId,
+            inboxId,
+            isActive: dto.isActive ?? existing.isActive,
+            metadataJson,
+            ...this.buildApiAccessTokenWriteFields(apiAccessToken, existing),
+            ...this.buildWebhookSecretWriteFields(webhookSecret, existing),
+          },
+        });
+      } else {
+        await this.prisma.chatwootInboxConfig.update({
+          where: { id },
+          data: {
+            name,
+            baseUrl,
+            assistantId,
+            accountId,
+            inboxId,
+            isActive: dto.isActive ?? existing.isActive,
+            metadataJson,
+            ...this.buildApiAccessTokenWriteFields(apiAccessToken, existing),
+            ...this.buildWebhookSecretWriteFields(webhookSecret, existing),
+          },
+        });
+      }
+
+      const record = await this.prisma.chatwootInboxConfig.findFirst({
+        where: { id, companyId },
         select: chatwootInboxConfigSelect,
       });
+
+      if (!record) {
+        throw new NotFoundException("Chatwoot inbox config not found.");
+      }
 
       return this.toSafeConfig(record);
     } catch (error) {
@@ -272,10 +318,7 @@ export class ChatwootInboxConfigService {
     }
   }
 
-  async testConnectionById(
-    companyId: string,
-    id: string,
-  ): Promise<ChatwootInboxConfigTestResult> {
+  async testConnectionById(companyId: string, id: string): Promise<ChatwootInboxConfigTestResult> {
     const record = await this.prisma.chatwootInboxConfig.findFirst({
       where: { companyId, id, isActive: true },
       select: chatwootInboxConfigSelect,
@@ -451,8 +494,16 @@ export class ChatwootInboxConfigService {
   private toResolvedConfig(record: ChatwootInboxConfigRecord): ResolvedChatwootInboxConfig {
     return {
       ...this.toSafeConfig(record),
-      apiAccessToken: this.decryptSecret(record.apiAccessTokenEncrypted, record.apiAccessTokenIv, record.apiAccessTokenAuthTag),
-      webhookSecret: this.decryptSecret(record.webhookSecretEncrypted, record.webhookSecretIv, record.webhookSecretAuthTag),
+      apiAccessToken: this.decryptSecret(
+        record.apiAccessTokenEncrypted,
+        record.apiAccessTokenIv,
+        record.apiAccessTokenAuthTag,
+      ),
+      webhookSecret: this.decryptSecret(
+        record.webhookSecretEncrypted,
+        record.webhookSecretIv,
+        record.webhookSecretAuthTag,
+      ),
     };
   }
 
@@ -615,7 +666,10 @@ export class ChatwootInboxConfigService {
     return trimmed;
   }
 
-  private resolveAssistantIdForWrite(value: string | undefined, fallback: string | null): string | null {
+  private resolveAssistantIdForWrite(
+    value: string | undefined,
+    fallback: string | null,
+  ): string | null {
     if (value === undefined) {
       return fallback;
     }
@@ -624,7 +678,10 @@ export class ChatwootInboxConfigService {
     return trimmed ?? fallback;
   }
 
-  private async ensureAssistantBelongsToCompany(companyId: string, assistantId: string): Promise<void> {
+  private async ensureAssistantBelongsToCompany(
+    companyId: string,
+    assistantId: string,
+  ): Promise<void> {
     const assistant = await this.prisma.assistant.findFirst({
       where: {
         companyId,

@@ -6,21 +6,51 @@ A camada de autenticação e autorização do Cubo AI Studio existe para prepara
 
 Nesta fase, não existe login real.
 
-## Diferença entre auth de desenvolvimento e produção
+## Diferença entre auth de desenvolvimento e staging/produção
 
 ### Desenvolvimento
 
 Em ambiente de desenvolvimento, o backend aceita headers de teste para simular um usuário autenticado sem usar senha, token falso ou qualquer segredo.
 
-### Produção
+### Staging e produção
 
-Em produção, o mock de autenticação é bloqueado.
+Fora do ambiente local, os headers de desenvolvimento não devem ser usados.
 
-Isso significa que nenhuma requisição deve depender dos headers de desenvolvimento para funcionar fora do ambiente local.
+O backend agora só aceita identidade autenticada do usuário por headers confiáveis assinados pelo proxy/gateway:
+
+- `x-auth-user-id`
+- `x-auth-user-email`
+- `x-auth-user-name` opcional
+- `x-auth-timestamp`
+- `x-auth-signature`
+
+Esses headers representam o usuário autenticado real no ambiente e a empresa ativa deixa de depender de header manual.
+
+## Fluxo seguro de staging
+
+Em `staging/production`, o backend exige:
+
+- `AUTH_TRUST_MODE=signed-headers`
+- `AUTH_PROXY_SHARED_SECRET`
+- `AUTH_PROXY_SIGNATURE_TTL_MS` opcional
+
+O proxy confiável deve:
+
+1. autenticar o usuário fora da aplicação
+2. injetar `x-auth-user-id`, `x-auth-user-email`, `x-auth-user-name`
+3. gerar `x-auth-timestamp`
+4. assinar o payload `userId + email + name + timestamp` com HMAC SHA-256
+5. enviar o resultado em `x-auth-signature`
+
+O `AuthGuard` valida essa assinatura antes de aceitar a requisição.
+
+Se a assinatura estiver ausente, vencida ou inválida, a API responde `401 Unauthorized`.
+
+Isso evita confiar cegamente em headers enviados direto pelo navegador.
 
 ## Headers de desenvolvimento
 
-Os headers abaixo são aceitos apenas quando `NODE_ENV !== "production"`:
+Os headers abaixo são aceitos apenas quando `NODE_ENV` é `development` ou `test`:
 
 - `x-dev-user-id`
 - `x-dev-company-id`
@@ -40,8 +70,11 @@ O contexto autenticado segue a estrutura abaixo:
 
 - `id`
 - `companyId`
+- `primaryCompanyId`
+- `activeCompanyId`
 - `email`
 - `name`
+- `memberships`
 - `roles`
 - `permissions`
 
@@ -65,6 +98,8 @@ O fluxo é:
 2. o `AuthGuard` tenta carregar o usuário no banco usando `x-dev-user-id` e `x-dev-company-id`
 3. se o usuário existir, as roles e permissões vêm do banco
 4. se a busca falhar em ambiente não-produção, o backend continua com fallback dos headers de desenvolvimento
+
+Em staging/produção, o mesmo `AuthGuard` só continua depois de validar a assinatura dos headers `x-auth-*`.
 
 Isso permite testar permissões reais sem implementar login.
 
@@ -158,13 +193,44 @@ As conversas iniciais do runtime usam as permissões existentes de Assistentes:
 
 Isso mantém o controle de tenant e RBAC igual ao restante do módulo de Assistants enquanto o runtime determinístico ainda está em fase inicial.
 
-## Tenant e companyId
+## Tenant, membership e companyId
 
 O `companyId` representa a empresa ativa da requisição.
 
 Ele é disponibilizado por meio do decorator `@Tenant()` e também fica anexado ao contexto autenticado.
 
-Isso prepara o backend para multiempresa desde as primeiras rotas protegidas.
+Agora o backend também suporta:
+
+- `company_memberships` para o mesmo usuário pertencer a várias empresas
+- `activeCompanyId` persistido no usuário
+- troca de empresa ativa via `POST /companies/active`
+
+Isso prepara o backend para multiempresa real em staging e produção sem depender de `x-dev-company-id`.
+
+## Bootstrap do primeiro admin em staging
+
+Para staging compartilhado, não use seed demo como mecanismo principal de acesso.
+
+Use o script abaixo para criar ou atualizar o primeiro admin:
+
+```bash
+npm --prefix apps/api run staging:bootstrap-admin -- \
+  --email=admin@empresa-teste.com \
+  --name="Admin Staging" \
+  --company-name="Empresa Teste" \
+  --legal-name="Empresa Teste LTDA"
+```
+
+Esse script:
+
+- cria a empresa se ela ainda não existir
+- cria/atualiza o usuário
+- cria membership ativa
+- cria roles padrão por empresa
+- associa a role admin
+- define `activeCompanyId`
+
+Depois disso, o proxy autenticado deve enviar o mesmo `userId`/`email` para a API.
 
 ## Como validar RBAC localmente
 

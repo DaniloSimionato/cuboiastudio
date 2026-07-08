@@ -159,7 +159,10 @@ function createMockPrisma() {
     appInstallation: {
       findMany: async ({ where }) =>
         state.installations
-          .filter((installation) => !where || !where.companyId || installation.companyId === where.companyId)
+          .filter(
+            (installation) =>
+              !where || !where.companyId || installation.companyId === where.companyId,
+          )
           .map(shapeInstallation),
       findUnique: async ({ where }) => {
         const input = where.companyId_appId;
@@ -218,7 +221,7 @@ function createMockPrisma() {
         state.credentials.find(
           (credential) =>
             (!where.companyId || credential.companyId === where.companyId) &&
-            (!where.installationId || 
+            (!where.installationId ||
               (typeof where.installationId === "object" && where.installationId.in
                 ? where.installationId.in.includes(credential.installationId)
                 : credential.installationId === where.installationId)) &&
@@ -335,12 +338,17 @@ function createMockPrisma() {
     },
     assistant: {
       findFirst: async ({ where }) => {
-        return state.assistants.find((a) => a.id === where.id && a.companyId === where.companyId) ?? null;
+        return (
+          state.assistants.find((a) => a.id === where.id && a.companyId === where.companyId) ?? null
+        );
       },
     },
     assistantConversation: {
       findFirst: async ({ where }) => {
-        return state.conversations.find((c) => c.id === where.id && c.companyId === where.companyId) ?? null;
+        return (
+          state.conversations.find((c) => c.id === where.id && c.companyId === where.companyId) ??
+          null
+        );
       },
       update: async ({ where, data }) => {
         const conversation = state.conversations.find((c) => c.id === where.id);
@@ -368,7 +376,8 @@ function createMockPrisma() {
       findFirst: async ({ where }) => {
         let items = state.messages;
         if (where) {
-          if (where.conversationId) items = items.filter((m) => m.conversationId === where.conversationId);
+          if (where.conversationId)
+            items = items.filter((m) => m.conversationId === where.conversationId);
           if (where.companyId) items = items.filter((m) => m.companyId === where.companyId);
           if (where.role) items = items.filter((m) => m.role === where.role);
         }
@@ -377,7 +386,8 @@ function createMockPrisma() {
       findMany: async ({ where }) => {
         let items = state.messages;
         if (where) {
-          if (where.conversationId) items = items.filter((m) => m.conversationId === where.conversationId);
+          if (where.conversationId)
+            items = items.filter((m) => m.conversationId === where.conversationId);
           if (where.companyId) items = items.filter((m) => m.companyId === where.companyId);
         }
         return items;
@@ -446,6 +456,68 @@ function createDummyInterpreter() {
   };
 }
 
+function createDummyKnowledgeRetrieval() {
+  return {
+    searchRelevantKnowledge: async () => ({
+      totalChunksScanned: 0,
+      warning: null,
+      results: [],
+    }),
+  };
+}
+
+function createDummyPromptCompiler() {
+  return {
+    compile: ({ assistant, historyMessages, currentMessage, knowledgeItems, calendarContext }) => {
+      const messages = [
+        {
+          role: "system",
+          content: assistant.instructions ?? "Responda objetivamente.",
+        },
+      ];
+
+      if (calendarContext) {
+        messages.push({
+          role: "system",
+          content: `Contexto de calendario\n${calendarContext.resourcesContext ?? ""}`.trim(),
+        });
+      }
+
+      for (const item of knowledgeItems ?? []) {
+        messages.push({
+          role: "system",
+          content: `${item.title}: ${item.content}`,
+        });
+      }
+
+      for (const message of historyMessages ?? []) {
+        messages.push({
+          role: message.role,
+          content: message.content,
+        });
+      }
+
+      messages.push({
+        role: "user",
+        content: currentMessage,
+      });
+
+      return messages;
+    },
+  };
+}
+
+function createDummyIntentRouter() {
+  return {
+    route: async () => ({
+      flowId: null,
+      flowName: null,
+      confidence: 0,
+      reason: "No flows available",
+    }),
+  };
+}
+
 async function setupTestEnv(stateInput = null) {
   const { prisma, state } = createMockPrisma();
   if (stateInput) {
@@ -454,6 +526,9 @@ async function setupTestEnv(stateInput = null) {
   const aiService = createMockAiService();
   const interpreter = createDummyInterpreter();
   const chatwootInbox = {};
+  const knowledgeRetrieval = createDummyKnowledgeRetrieval();
+  const promptCompiler = createDummyPromptCompiler();
+  const intentRouter = createDummyIntentRouter();
 
   const oauth = new GoogleCalendarOAuthService(prisma, createConfig(), globalThis.fetch);
   const availability = new GoogleCalendarAvailabilityService(prisma, oauth, globalThis.fetch);
@@ -466,6 +541,9 @@ async function setupTestEnv(stateInput = null) {
     interpreter,
     chatwootInbox,
     calendarTools,
+    knowledgeRetrieval,
+    promptCompiler,
+    intentRouter,
   );
 
   return { prisma, state, service, oauth, calendarTools };
@@ -520,89 +598,119 @@ async function enableGoogleCalendar(prisma, state, companyId = "company-1") {
 }
 
 test("Assistant Calendar Tools Integration Suite", async (t) => {
-  await t.test("runtime não disponibiliza tools quando Google Agenda não está instalado", async () => {
-    const { service } = await setupTestEnv();
+  await t.test(
+    "runtime não disponibiliza tools quando Google Agenda não está instalado",
+    async () => {
+      const { service } = await setupTestEnv();
 
-    let receivedTools = null;
-    fetchMockHandler = async (url, init) => {
-      if (url.includes("chat/completions")) {
-        const payload = JSON.parse(init.body);
-        receivedTools = payload.tools;
-        return createJsonResponse({
-          choices: [{ message: { content: "Olá!" } }],
-        });
-      }
-    };
+      let receivedTools = null;
+      fetchMockHandler = async (url, init) => {
+        if (url.includes("chat/completions")) {
+          const payload = JSON.parse(init.body);
+          receivedTools = payload.tools;
+          return createJsonResponse({
+            choices: [{ message: { content: "Olá!" } }],
+          });
+        }
+      };
 
-    await service.sendMessage({
-      assistantId: "assistant-1",
-      conversationId: "conversation-1",
-      dto: { message: "Oi, tudo bem?" },
-      user: { companyId: "company-1", id: "user-1", email: "a@a.com", name: "User", roles: [], permissions: ["assistants:write"] },
-      tenant: { companyId: "company-1" },
-    });
+      await service.sendMessage({
+        assistantId: "assistant-1",
+        conversationId: "conversation-1",
+        dto: { message: "Oi, tudo bem?" },
+        user: {
+          companyId: "company-1",
+          id: "user-1",
+          email: "a@a.com",
+          name: "User",
+          roles: [],
+          permissions: ["assistants:write"],
+        },
+        tenant: { companyId: "company-1" },
+      });
 
-    assert.equal(receivedTools, undefined);
-  });
+      assert.equal(receivedTools, undefined);
+    },
+  );
 
-  await t.test("runtime não disponibiliza tools quando Google Agenda está desconectado", async () => {
-    const { prisma, service } = await setupTestEnv();
+  await t.test(
+    "runtime não disponibiliza tools quando Google Agenda está desconectado",
+    async () => {
+      const { prisma, service } = await setupTestEnv();
 
-    await prisma.appInstallation.upsert({
-      where: { companyId_appId: { companyId: "company-1", appId: "app-google-calendar" } },
-      update: {},
-      create: { companyId: "company-1", appId: "app-google-calendar", status: "INACTIVE" },
-    });
+      await prisma.appInstallation.upsert({
+        where: { companyId_appId: { companyId: "company-1", appId: "app-google-calendar" } },
+        update: {},
+        create: { companyId: "company-1", appId: "app-google-calendar", status: "INACTIVE" },
+      });
 
-    let receivedTools = null;
-    fetchMockHandler = async (url, init) => {
-      if (url.includes("chat/completions")) {
-        const payload = JSON.parse(init.body);
-        receivedTools = payload.tools;
-        return createJsonResponse({
-          choices: [{ message: { content: "Olá!" } }],
-        });
-      }
-    };
+      let receivedTools = null;
+      fetchMockHandler = async (url, init) => {
+        if (url.includes("chat/completions")) {
+          const payload = JSON.parse(init.body);
+          receivedTools = payload.tools;
+          return createJsonResponse({
+            choices: [{ message: { content: "Olá!" } }],
+          });
+        }
+      };
 
-    await service.sendMessage({
-      assistantId: "assistant-1",
-      conversationId: "conversation-1",
-      dto: { message: "Oi, tudo bem?" },
-      user: { companyId: "company-1", id: "user-1", email: "a@a.com", name: "User", roles: [], permissions: ["assistants:write"] },
-      tenant: { companyId: "company-1" },
-    });
+      await service.sendMessage({
+        assistantId: "assistant-1",
+        conversationId: "conversation-1",
+        dto: { message: "Oi, tudo bem?" },
+        user: {
+          companyId: "company-1",
+          id: "user-1",
+          email: "a@a.com",
+          name: "User",
+          roles: [],
+          permissions: ["assistants:write"],
+        },
+        tenant: { companyId: "company-1" },
+      });
 
-    assert.equal(receivedTools, undefined);
-  });
+      assert.equal(receivedTools, undefined);
+    },
+  );
 
-  await t.test("runtime disponibiliza tools quando app/credencial/recurso estão ativos", async () => {
-    const { prisma, state, service } = await setupTestEnv();
-    await enableGoogleCalendar(prisma, state);
+  await t.test(
+    "runtime disponibiliza tools quando app/credencial/recurso estão ativos",
+    async () => {
+      const { prisma, state, service } = await setupTestEnv();
+      await enableGoogleCalendar(prisma, state);
 
-    let receivedTools = null;
-    fetchMockHandler = async (url, init) => {
-      if (url.includes("chat/completions")) {
-        const payload = JSON.parse(init.body);
-        receivedTools = payload.tools;
-        return createJsonResponse({
-          choices: [{ message: { content: "Claro, posso ajudar!" } }],
-        });
-      }
-    };
+      let receivedTools = null;
+      fetchMockHandler = async (url, init) => {
+        if (url.includes("chat/completions")) {
+          const payload = JSON.parse(init.body);
+          receivedTools = payload.tools;
+          return createJsonResponse({
+            choices: [{ message: { content: "Claro, posso ajudar!" } }],
+          });
+        }
+      };
 
-    await service.sendMessage({
-      assistantId: "assistant-1",
-      conversationId: "conversation-1",
-      dto: { message: "Oi, tudo bem?" },
-      user: { companyId: "company-1", id: "user-1", email: "a@a.com", name: "User", roles: [], permissions: ["assistants:write"] },
-      tenant: { companyId: "company-1" },
-    });
+      await service.sendMessage({
+        assistantId: "assistant-1",
+        conversationId: "conversation-1",
+        dto: { message: "Oi, tudo bem?" },
+        user: {
+          companyId: "company-1",
+          id: "user-1",
+          email: "a@a.com",
+          name: "User",
+          roles: [],
+          permissions: ["assistants:write"],
+        },
+        tenant: { companyId: "company-1" },
+      });
 
-    assert.ok(receivedTools);
-    assert.equal(receivedTools.length, 5);
-    assert.equal(receivedTools[0].function.name, "calendar.checkAvailability");
-  });
+      assert.ok(receivedTools);
+      assert.equal(receivedTools.length, 5);
+      assert.equal(receivedTools[0].function.name, "calendar_checkAvailability");
+    },
+  );
 
   await t.test("IA consegue consultar disponibilidade sem confirmação", async () => {
     const { prisma, state, service } = await setupTestEnv();
@@ -623,7 +731,7 @@ test("Assistant Calendar Tools Integration Suite", async (t) => {
                       id: "call-avail-1",
                       type: "function",
                       function: {
-                        name: "calendar.checkAvailability",
+                        name: "calendar_checkAvailability",
                         arguments: JSON.stringify({
                           date: "2026-07-04",
                           timeFrom: "09:00",
@@ -656,18 +764,25 @@ test("Assistant Calendar Tools Integration Suite", async (t) => {
       assistantId: "assistant-1",
       conversationId: "conversation-1",
       dto: { message: "Quais horários amanhã de manhã?" },
-      user: { companyId: "company-1", id: "user-1", email: "a@a.com", name: "User", roles: [], permissions: ["assistants:write"] },
+      user: {
+        companyId: "company-1",
+        id: "user-1",
+        email: "a@a.com",
+        name: "User",
+        roles: [],
+        permissions: ["assistants:write"],
+      },
       tenant: { companyId: "company-1" },
     });
 
     assert.equal(res.assistantMessage.content, "Tem o horário das 09h livre na Quadra 1!");
     assert.equal(completionCount, 2);
 
-     const requestLog = state.logs.find((l) => l.action === "tool_call_requested");
-     const completeLog = state.logs.find((l) => l.action === "tool_call_completed");
+    const requestLog = state.logs.find((l) => l.action === "tool_call_requested");
+    const completeLog = state.logs.find((l) => l.action === "tool_call_completed");
     assert.ok(requestLog);
     assert.ok(completeLog);
-    assert.equal(requestLog.metadata.toolName, "calendar.checkAvailability");
+    assert.equal(requestLog.metadata.toolName, "calendar_checkAvailability");
   });
 
   await t.test("IA não cria reserva sem confirmação explícita", async () => {
@@ -689,7 +804,7 @@ test("Assistant Calendar Tools Integration Suite", async (t) => {
                       id: "call-book-1",
                       type: "function",
                       function: {
-                        name: "calendar.createBooking",
+                        name: "calendar_createBooking",
                         arguments: JSON.stringify({
                           resourceId: "resource-1",
                           contactName: "João",
@@ -707,7 +822,13 @@ test("Assistant Calendar Tools Integration Suite", async (t) => {
         }
 
         return createJsonResponse({
-          choices: [{ message: { content: "Você confirma a reserva da Quadra 1 amanhã às 13:00 em nome de João?" } }],
+          choices: [
+            {
+              message: {
+                content: "Você confirma a reserva da Quadra 1 amanhã às 13:00 em nome de João?",
+              },
+            },
+          ],
         });
       }
     };
@@ -716,11 +837,21 @@ test("Assistant Calendar Tools Integration Suite", async (t) => {
       assistantId: "assistant-1",
       conversationId: "conversation-1",
       dto: { message: "Quero agendar uma quadra amanhã às 13h no nome de João" },
-      user: { companyId: "company-1", id: "user-1", email: "a@a.com", name: "User", roles: [], permissions: ["assistants:write"] },
+      user: {
+        companyId: "company-1",
+        id: "user-1",
+        email: "a@a.com",
+        name: "User",
+        roles: [],
+        permissions: ["assistants:write"],
+      },
       tenant: { companyId: "company-1" },
     });
 
-    assert.equal(res.assistantMessage.content, "Você confirma a reserva da Quadra 1 amanhã às 13:00 em nome de João?");
+    assert.equal(
+      res.assistantMessage.content,
+      "Você confirma a reserva da Quadra 1 amanhã às 13:00 em nome de João?",
+    );
     assert.equal(completionCount, 2);
 
     const missingLog = state.logs.find((l) => l.action === "confirmation_missing");
@@ -746,7 +877,7 @@ test("Assistant Calendar Tools Integration Suite", async (t) => {
                       id: "call-book-2",
                       type: "function",
                       function: {
-                        name: "calendar.createBooking",
+                        name: "calendar_createBooking",
                         arguments: JSON.stringify({
                           resourceId: resource.id,
                           contactName: "João",
@@ -781,7 +912,14 @@ test("Assistant Calendar Tools Integration Suite", async (t) => {
       assistantId: "assistant-1",
       conversationId: "conversation-1",
       dto: { message: "Sim, pode confirmar" },
-      user: { companyId: "company-1", id: "user-1", email: "a@a.com", name: "User", roles: [], permissions: ["assistants:write"] },
+      user: {
+        companyId: "company-1",
+        id: "user-1",
+        email: "a@a.com",
+        name: "User",
+        roles: [],
+        permissions: ["assistants:write"],
+      },
       tenant: { companyId: "company-1" },
     });
 
@@ -813,7 +951,7 @@ test("Assistant Calendar Tools Integration Suite", async (t) => {
                       id: "call-resched-1",
                       type: "function",
                       function: {
-                        name: "calendar.rescheduleBooking",
+                        name: "calendar_rescheduleBooking",
                         arguments: JSON.stringify({
                           bookingId: "booking-1",
                           newStartAt: "2026-07-04T15:00:00.000Z",
@@ -837,11 +975,21 @@ test("Assistant Calendar Tools Integration Suite", async (t) => {
       assistantId: "assistant-1",
       conversationId: "conversation-1",
       dto: { message: "Remarque para depois, por favor" },
-      user: { companyId: "company-1", id: "user-1", email: "a@a.com", name: "User", roles: [], permissions: ["assistants:write"] },
+      user: {
+        companyId: "company-1",
+        id: "user-1",
+        email: "a@a.com",
+        name: "User",
+        roles: [],
+        permissions: ["assistants:write"],
+      },
       tenant: { companyId: "company-1" },
     });
 
-    const missingLog = state.logs.find((l) => l.action === "confirmation_missing" && l.metadata.toolName === "calendar.rescheduleBooking");
+    const missingLog = state.logs.find(
+      (l) =>
+        l.action === "confirmation_missing" && l.metadata.toolName === "calendar_rescheduleBooking",
+    );
     assert.ok(missingLog);
   });
 
@@ -864,7 +1012,7 @@ test("Assistant Calendar Tools Integration Suite", async (t) => {
                       id: "call-cancel-1",
                       type: "function",
                       function: {
-                        name: "calendar.cancelBooking",
+                        name: "calendar_cancelBooking",
                         arguments: JSON.stringify({
                           bookingId: "booking-1",
                         }),
@@ -886,11 +1034,21 @@ test("Assistant Calendar Tools Integration Suite", async (t) => {
       assistantId: "assistant-1",
       conversationId: "conversation-1",
       dto: { message: "Cancele meu horário de amanhã" },
-      user: { companyId: "company-1", id: "user-1", email: "a@a.com", name: "User", roles: [], permissions: ["assistants:write"] },
+      user: {
+        companyId: "company-1",
+        id: "user-1",
+        email: "a@a.com",
+        name: "User",
+        roles: [],
+        permissions: ["assistants:write"],
+      },
       tenant: { companyId: "company-1" },
     });
 
-    const missingLog = state.logs.find((l) => l.action === "confirmation_missing" && l.metadata.toolName === "calendar.cancelBooking");
+    const missingLog = state.logs.find(
+      (l) =>
+        l.action === "confirmation_missing" && l.metadata.toolName === "calendar_cancelBooking",
+    );
     assert.ok(missingLog);
   });
 
@@ -913,7 +1071,7 @@ test("Assistant Calendar Tools Integration Suite", async (t) => {
                       id: "call-avail-fail",
                       type: "function",
                       function: {
-                        name: "calendar.checkAvailability",
+                        name: "calendar_checkAvailability",
                         arguments: JSON.stringify({
                           date: "invalid-date",
                           timeFrom: "09:00",
@@ -941,14 +1099,24 @@ test("Assistant Calendar Tools Integration Suite", async (t) => {
       assistantId: "assistant-1",
       conversationId: "conversation-1",
       dto: { message: "Verifique disponibilidade por favor" },
-      user: { companyId: "company-1", id: "user-1", email: "a@a.com", name: "User", roles: [], permissions: ["assistants:write"] },
+      user: {
+        companyId: "company-1",
+        id: "user-1",
+        email: "a@a.com",
+        name: "User",
+        roles: [],
+        permissions: ["assistants:write"],
+      },
       tenant: { companyId: "company-1" },
     });
 
     const failedLog = state.logs.find((l) => l.action === "tool_call_failed");
     assert.ok(failedLog);
     assert.equal(failedLog.status, "ERROR");
-    assert.doesNotMatch(JSON.stringify(failedLog.metadata), /google-access-token|google-refresh-token/);
+    assert.doesNotMatch(
+      JSON.stringify(failedLog.metadata),
+      /google-access-token|google-refresh-token/,
+    );
   });
 
   await t.test("logs de tool não têm tokens e metadados estão limpos", async () => {
@@ -967,7 +1135,7 @@ test("Assistant Calendar Tools Integration Suite", async (t) => {
                     id: "call-avail-log",
                     type: "function",
                     function: {
-                      name: "calendar.checkAvailability",
+                      name: "calendar_checkAvailability",
                       arguments: JSON.stringify({
                         date: "2026-07-04",
                         timeFrom: "09:00",
@@ -991,7 +1159,14 @@ test("Assistant Calendar Tools Integration Suite", async (t) => {
       assistantId: "assistant-1",
       conversationId: "conversation-1",
       dto: { message: "Disponibilidade" },
-      user: { companyId: "company-1", id: "user-1", email: "a@a.com", name: "User", roles: [], permissions: ["assistants:write"] },
+      user: {
+        companyId: "company-1",
+        id: "user-1",
+        email: "a@a.com",
+        name: "User",
+        roles: [],
+        permissions: ["assistants:write"],
+      },
       tenant: { companyId: "company-1" },
     });
 

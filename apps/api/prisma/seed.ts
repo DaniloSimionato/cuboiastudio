@@ -5,11 +5,16 @@ import {
   PrismaClient,
   Status,
   type Assistant,
+  type CompanyMembership,
   type Company,
   type Permission,
   type Role,
   type User,
 } from "@prisma/client";
+import {
+  DEFAULT_COMPANY_ROLE_PERMISSION_MAP,
+  RBAC_PERMISSIONS,
+} from "../src/auth/rbac.defaults";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const candidateEnvFiles = [
@@ -84,57 +89,6 @@ const DEMO_IDS = {
   },
 } as const;
 
-const PERMISSIONS = [
-  "assistants:read",
-  "assistants:write",
-  "knowledge:read",
-  "knowledge:write",
-  "tools:read",
-  "tools:write",
-  "channels:read",
-  "channels:write",
-  "logs:read",
-  "usage:read",
-  "settings:read",
-  "settings:write",
-] as const;
-
-const ROLE_PERMISSION_MAP: Record<string, readonly string[]> = {
-  admin: PERMISSIONS,
-  implantation: [
-    "assistants:read",
-    "assistants:write",
-    "knowledge:read",
-    "knowledge:write",
-    "tools:read",
-    "tools:write",
-    "channels:read",
-    "channels:write",
-    "logs:read",
-    "usage:read",
-    "settings:read",
-    "settings:write",
-  ],
-  support: [
-    "assistants:read",
-    "knowledge:read",
-    "tools:read",
-    "channels:read",
-    "logs:read",
-    "usage:read",
-    "settings:read",
-  ],
-  viewer: [
-    "assistants:read",
-    "knowledge:read",
-    "tools:read",
-    "channels:read",
-    "logs:read",
-    "usage:read",
-    "settings:read",
-  ],
-};
-
 type SeedRoleKey = keyof typeof DEMO_IDS.roles;
 
 async function ensureCompany(): Promise<Company> {
@@ -166,7 +120,7 @@ async function ensureCompany(): Promise<Company> {
 async function ensurePermissions(): Promise<Permission[]> {
   const records: Permission[] = [];
 
-  for (const key of PERMISSIONS) {
+  for (const key of RBAC_PERMISSIONS) {
     const record = await prisma.permission.upsert({
       where: { key },
       update: {
@@ -217,7 +171,7 @@ async function ensureRolePermissions(
 ): Promise<void> {
   const permissionByKey = new Map(permissions.map((permission) => [permission.key, permission]));
 
-  for (const [roleKey, permissionKeys] of Object.entries(ROLE_PERMISSION_MAP)) {
+  for (const [roleKey, permissionKeys] of Object.entries(DEFAULT_COMPANY_ROLE_PERMISSION_MAP)) {
     const role = roles[roleKey as SeedRoleKey];
 
     for (const permissionKey of permissionKeys) {
@@ -253,6 +207,7 @@ async function ensureUser(companyId: string, roles: Record<SeedRoleKey, Role>): 
 
   const userData = {
     companyId,
+    activeCompanyId: companyId,
     name: "Demo Admin",
     email: "demo@cubo.chat",
     status: Status.ACTIVE,
@@ -287,6 +242,25 @@ async function ensureUser(companyId: string, roles: Record<SeedRoleKey, Role>): 
   });
 
   return user;
+}
+
+async function ensureMembership(userId: string, companyId: string): Promise<CompanyMembership> {
+  return prisma.companyMembership.upsert({
+    where: {
+      userId_companyId: {
+        userId,
+        companyId,
+      },
+    },
+    update: {
+      status: Status.ACTIVE,
+    },
+    create: {
+      userId,
+      companyId,
+      status: Status.ACTIVE,
+    },
+  });
 }
 
 async function ensureAssistant(companyId: string): Promise<Assistant> {
@@ -436,7 +410,8 @@ async function main(): Promise<void> {
   const permissions = await ensurePermissions();
   const roles = await ensureRoles(company.id);
   await ensureRolePermissions(roles, permissions);
-  await ensureUser(company.id, roles);
+  const user = await ensureUser(company.id, roles);
+  await ensureMembership(user.id, company.id);
   await ensureAssistant(company.id);
   await ensureGoogleCalendarApp();
   await ensureComingSoonApps();

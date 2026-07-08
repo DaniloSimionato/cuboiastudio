@@ -7,6 +7,10 @@ import { AppModule, PinoLogger } from "./app.module";
 import { APP_NAME, APP_VERSION, DEFAULT_CORS_ORIGIN, DEFAULT_PORT } from "./app.constants";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 
+function isLockedDownEnvironment(nodeEnv: string | undefined): boolean {
+  return nodeEnv === "staging" || nodeEnv === "production";
+}
+
 function createCorsOriginResolver(rawOrigin: string | undefined) {
   const configuredOrigins = rawOrigin
     ? rawOrigin
@@ -19,7 +23,7 @@ function createCorsOriginResolver(rawOrigin: string | undefined) {
   const loopbackOriginPattern = /^http:\/\/127\.0\.0\.1:\d+$/;
 
   const isAllowedOrigin = (origin: string) => {
-    if (process.env.NODE_ENV === "production") {
+    if (isLockedDownEnvironment(process.env.NODE_ENV)) {
       const allowedOrigins =
         configuredOrigins.length > 0 ? configuredOrigins : [DEFAULT_CORS_ORIGIN];
       return allowedOrigins.includes(origin);
@@ -81,7 +85,7 @@ function resolveEffectiveCorsOrigin(rawOrigin: string | undefined): string {
       .join(",");
   }
 
-  if (process.env.NODE_ENV === "production") {
+  if (isLockedDownEnvironment(process.env.NODE_ENV)) {
     return DEFAULT_CORS_ORIGIN;
   }
 
@@ -142,6 +146,11 @@ async function bootstrap(): Promise<void> {
     allowedHeaders: [
       "content-type",
       "authorization",
+      "x-auth-user-id",
+      "x-auth-user-email",
+      "x-auth-user-name",
+      "x-auth-timestamp",
+      "x-auth-signature",
       "x-dev-user-id",
       "x-dev-company-id",
       "x-dev-user-email",
@@ -188,7 +197,11 @@ bootstrap().catch((error: unknown) => {
   const formattedError = formatBootstrapError(error, port);
   console.error(formattedError.message);
 
-  if (process.env.NODE_ENV !== "production" && error instanceof Error && error !== formattedError) {
+  if (
+    !isLockedDownEnvironment(process.env.NODE_ENV) &&
+    error instanceof Error &&
+    error !== formattedError
+  ) {
     console.error(error);
   }
 

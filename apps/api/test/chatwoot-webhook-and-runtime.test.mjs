@@ -105,71 +105,77 @@ function createWebhookDeps(overrides = {}) {
   const chatwootAttachmentDownloaderService = {
     downloadAttachment: async (input) => {
       calls.downloader.push(input);
-      return overrides.downloadResult ?? {
-        buffer: Buffer.from("arquivo"),
-        mimeType: input.attachment.mimeType,
-        fileName: input.attachment.fileName,
-        sizeBytes: 7,
-        sourceUrl: "https://chatwoot.example.com/rails/active_storage/blobs/1",
-        thumbUrl: null,
-        metadataJson: { kind: "downloaded" },
-      };
+      return (
+        overrides.downloadResult ?? {
+          buffer: Buffer.from("arquivo"),
+          mimeType: input.attachment.mimeType,
+          fileName: input.attachment.fileName,
+          sizeBytes: 7,
+          sourceUrl: "https://chatwoot.example.com/rails/active_storage/blobs/1",
+          thumbUrl: null,
+          metadataJson: { kind: "downloaded" },
+        }
+      );
     },
   };
 
   const assistantConversationsService = {
     ensureConversationFromInboundMessage: async (input) => {
       calls.ensureConversation.push(input);
-      return overrides.conversation ?? {
-        id: "internal-conversation-1",
-        companyId: "company-1",
-        title: "Conversa WhatsApp",
-        sourceProvider: "chatwoot",
-        externalConversationId: "conversation-1",
-        externalAccountId: "account-1",
-        externalContactId: "contact-1",
-        externalChannelId: "inbox-1",
-        externalInboxId: "inbox-1",
-        pausedByHuman: false,
-        lastMessageAt: new Date(),
-        status: "ACTIVE",
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
+      return (
+        overrides.conversation ?? {
+          id: "internal-conversation-1",
+          companyId: "company-1",
+          title: "Conversa WhatsApp",
+          sourceProvider: "chatwoot",
+          externalConversationId: "conversation-1",
+          externalAccountId: "account-1",
+          externalContactId: "contact-1",
+          externalChannelId: "inbox-1",
+          externalInboxId: "inbox-1",
+          pausedByHuman: false,
+          lastMessageAt: new Date(),
+          status: "ACTIVE",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }
+      );
     },
     sendMessage: async (input) => {
       calls.sendMessage.push(input);
-      return overrides.sendMessageResult ?? {
-        conversationId: input.conversationId,
-        userMessage: {
-          id: "user-msg",
-          role: "user",
-          content: "Olá",
-          createdAt: new Date(),
-        },
-        assistantMessage: {
-          id: "assistant-msg",
-          role: "assistant",
-          content: "Tudo certo",
-          createdAt: new Date(),
-        },
-        runtime: {
-          mode: "deterministic-runtime",
-          assistant: { id: "assistant-1", name: "Assistente" },
-          temperature: 0,
-          temperatureSource: "default",
-          configurationSource: "tenant-settings",
-          fallback: true,
-          outcome: "fallback",
-          summary: "ok",
-          context: {
-            historyMessagesUsed: 0,
-            historyLimit: 10,
-            initialMessageIncluded: false,
-            instructionsIncluded: false,
+      return (
+        overrides.sendMessageResult ?? {
+          conversationId: input.conversationId,
+          userMessage: {
+            id: "user-msg",
+            role: "user",
+            content: "Olá",
+            createdAt: new Date(),
           },
-        },
-      };
+          assistantMessage: {
+            id: "assistant-msg",
+            role: "assistant",
+            content: "Tudo certo",
+            createdAt: new Date(),
+          },
+          runtime: {
+            mode: "deterministic-runtime",
+            assistant: { id: "assistant-1", name: "Assistente" },
+            temperature: 0,
+            temperatureSource: "default",
+            configurationSource: "tenant-settings",
+            fallback: true,
+            outcome: "fallback",
+            summary: "ok",
+            context: {
+              historyMessagesUsed: 0,
+              historyLimit: 10,
+              initialMessageIncluded: false,
+              instructionsIncluded: false,
+            },
+          },
+        }
+      );
     },
   };
 
@@ -180,7 +186,14 @@ function createWebhookDeps(overrides = {}) {
     assistantConversationsService,
   );
 
-  return { service, calls, prisma, chatwootInboxConfigService, chatwootAttachmentDownloaderService, assistantConversationsService };
+  return {
+    service,
+    calls,
+    prisma,
+    chatwootInboxConfigService,
+    chatwootAttachmentDownloaderService,
+    assistantConversationsService,
+  };
 }
 
 test("controller Chatwoot prioriza secret da query string", async () => {
@@ -423,28 +436,37 @@ function createAssistantServiceDeps(overrides = {}) {
     },
     generateChatCompletion: async () => {
       calls.runtimeResolved.push("generateChatCompletion");
-      return overrides.completion ?? {
-        provider: "openai-compatible",
-        model: "gpt-4o-mini",
-        answer: "Resposta final",
-        durationMs: 42,
-      };
+      return (
+        overrides.completion ?? {
+          provider: "openai-compatible",
+          model: "gpt-4o-mini",
+          answer: "Resposta final",
+          durationMs: 42,
+        }
+      );
     },
   };
 
   const attachmentInterpreterService = {
-    processAttachment: async () => overrides.processedAttachment ?? {
-      processingStatus: "completed",
-      extractedText: null,
-      interpretedSummary: null,
-      transcript: null,
-      processingError: null,
-      metadataJson: null,
-    },
+    processAttachment: async () =>
+      overrides.processedAttachment ?? {
+        processingStatus: "completed",
+        extractedText: null,
+        interpretedSummary: null,
+        transcript: null,
+        processingError: null,
+        metadataJson: null,
+      },
     buildRuntimeInputText: ({ rawText, attachments }) => {
       const text = typeof rawText === "string" ? rawText.trim() : "";
       const attachmentText = attachments
-        .map((attachment) => attachment.transcript ?? attachment.extractedText ?? attachment.interpretedSummary ?? "")
+        .map(
+          (attachment) =>
+            attachment.transcript ??
+            attachment.extractedText ??
+            attachment.interpretedSummary ??
+            "",
+        )
         .filter(Boolean)
         .join(" ");
 
@@ -455,10 +477,46 @@ function createAssistantServiceDeps(overrides = {}) {
   const chatwootInboxConfigService = {
     resolveActiveForConversation: async (input) => {
       calls.chatwootFetches.push(input);
-      return overrides.outboundConfig ?? {
-        baseUrl: "https://chatwoot.example.com",
-      };
+      return (
+        overrides.outboundConfig ?? {
+          baseUrl: "https://chatwoot.example.com",
+        }
+      );
     },
+  };
+
+  const knowledgeRetrievalService = {
+    searchRelevantKnowledge: async () => ({
+      totalChunksScanned: 0,
+      warning: null,
+      results: [],
+    }),
+  };
+
+  const promptCompilerService = {
+    compile: ({ assistant, historyMessages, currentMessage }) => [
+      {
+        role: "system",
+        content: assistant.instructions ?? "Responda objetivamente.",
+      },
+      ...(historyMessages ?? []).map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+      {
+        role: "user",
+        content: currentMessage,
+      },
+    ],
+  };
+
+  const intentRouterService = {
+    route: async () => ({
+      flowId: null,
+      flowName: null,
+      confidence: 0,
+      reason: "No flows available",
+    }),
   };
 
   const service = new AssistantConversationsService(
@@ -466,9 +524,20 @@ function createAssistantServiceDeps(overrides = {}) {
     aiService,
     attachmentInterpreterService,
     chatwootInboxConfigService,
+    undefined,
+    knowledgeRetrievalService,
+    promptCompilerService,
+    intentRouterService,
   );
 
-  return { service, calls, prisma, aiService, attachmentInterpreterService, chatwootInboxConfigService };
+  return {
+    service,
+    calls,
+    prisma,
+    aiService,
+    attachmentInterpreterService,
+    chatwootInboxConfigService,
+  };
 }
 
 function createChatwootInboxConfigServiceDeps(overrides = {}) {
@@ -493,30 +562,30 @@ function createChatwootInboxConfigServiceDeps(overrides = {}) {
         const data = input.create ?? input.update;
 
         return {
-        id: "cfg-1",
-        companyId: data.companyId,
-        assistantId: data.assistantId ?? null,
-        assistant: data.assistantId
-          ? {
-              id: data.assistantId,
-              name: assistantRecord.name,
-              status: assistantRecord.status,
-            }
-          : null,
-        name: data.name,
-        baseUrl: data.baseUrl,
-        accountId: data.accountId,
-        inboxId: data.inboxId,
-        apiAccessTokenEncrypted: null,
-        apiAccessTokenIv: null,
-        apiAccessTokenAuthTag: null,
-        webhookSecretEncrypted: null,
-        webhookSecretIv: null,
-        webhookSecretAuthTag: null,
-        isActive: data.isActive ?? true,
-        metadataJson: data.metadataJson ?? null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
+          id: "cfg-1",
+          companyId: data.companyId,
+          assistantId: data.assistantId ?? null,
+          assistant: data.assistantId
+            ? {
+                id: data.assistantId,
+                name: assistantRecord.name,
+                status: assistantRecord.status,
+              }
+            : null,
+          name: data.name,
+          baseUrl: data.baseUrl,
+          accountId: data.accountId,
+          inboxId: data.inboxId,
+          apiAccessTokenEncrypted: null,
+          apiAccessTokenIv: null,
+          apiAccessTokenAuthTag: null,
+          webhookSecretEncrypted: null,
+          webhookSecretIv: null,
+          webhookSecretAuthTag: null,
+          isActive: data.isActive ?? true,
+          metadataJson: data.metadataJson ?? null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
         };
       },
       findFirst: async () => overrides.existingConfig ?? null,
@@ -556,7 +625,10 @@ function createChatwootInboxConfigServiceDeps(overrides = {}) {
       }
 
       if (key === "APP_ENCRYPTION_KEY") {
-        return overrides.encryptionKey ?? "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        return (
+          overrides.encryptionKey ??
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
       }
 
       return null;
@@ -840,7 +912,9 @@ test("testConnection alerta quando não há assistente vinculado", async () => {
     assert.equal(result.ok, true);
     assert.equal(result.details?.assistantConfigured, false);
     assert.equal(
-      result.details?.webhookUrlTemplate.endsWith("/webhooks/chatwoot?secret=SEU_SECRET_CONFIGURADO"),
+      result.details?.webhookUrlTemplate.endsWith(
+        "/webhooks/chatwoot?secret=SEU_SECRET_CONFIGURADO",
+      ),
       true,
     );
   } finally {
@@ -1366,7 +1440,10 @@ test("falha no download marca anexo como failed e mantém fallback honesto", asy
 
   assert.equal(calls.sendMessage.length, 1);
   assert.equal(calls.sendMessage[0].preparedAttachments?.[0]?.processingStatus, "failed");
-  assert.match(calls.sendMessage[0].preparedAttachments?.[0]?.processingError ?? "", /download indisponível/);
+  assert.match(
+    calls.sendMessage[0].preparedAttachments?.[0]?.processingError ?? "",
+    /download indisponível/,
+  );
 });
 
 test("mensagem outgoing é ignorada para evitar loop", async () => {
@@ -1535,6 +1612,13 @@ test("sendMessage chama outbound somente depois do runtime", async () => {
       content: "Resposta final",
       message_type: "outgoing",
       private: false,
+      sender_type: "Captain::Assistant",
+      content_attributes: {
+        automation_rule_id: "cubo_ai_studio",
+        source: "cubo_ai_studio",
+        assistant_id: "assistant-1",
+        internal_conversation_id: "conversation-1",
+      },
     });
     assert.equal(fetchCalls[0].init.headers.api_access_token, "user-api-token");
     assert.equal(fetchCalls[0].init.headers.Authorization, undefined);
@@ -1868,15 +1952,15 @@ test("Chatwoot config de outro tenant retorna 404 em leitura, teste e exclusão"
   const service = new ChatwootInboxConfigService(prisma, configService);
 
   await assert.rejects(() => service.findById("company-1", "cfg-foreign"), /not found/i);
-  await assert.rejects(
-    () =>
-      service.testConnectionById("company-1", "cfg-foreign"),
-    /not found/i,
-  );
+  await assert.rejects(() => service.testConnectionById("company-1", "cfg-foreign"), /not found/i);
   await assert.rejects(() => service.delete("company-1", "cfg-foreign"), /not found/i);
 
   assert.deepEqual(calls[0].args.where, { companyId: "company-1", id: "cfg-foreign" });
-  assert.deepEqual(calls[1].args.where, { companyId: "company-1", id: "cfg-foreign", isActive: true });
+  assert.deepEqual(calls[1].args.where, {
+    companyId: "company-1",
+    id: "cfg-foreign",
+    isActive: true,
+  });
   assert.deepEqual(calls[2].args.where, { companyId: "company-1", id: "cfg-foreign" });
 });
 

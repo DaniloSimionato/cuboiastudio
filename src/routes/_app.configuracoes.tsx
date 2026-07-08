@@ -2,12 +2,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  Building2,
   Check,
   CheckCircle2,
   ChevronsUpDown,
   Copy,
   KeyRound,
   Link2,
+  Pencil,
   Power,
   PowerOff,
   Plus,
@@ -63,6 +65,7 @@ import {
   aiSettingsService,
   backendAssistantsService,
   chatwootSettingsService,
+  companiesService,
   currentCompanyService,
 } from "@/services";
 import { ApiError } from "@/services/apiClient";
@@ -70,10 +73,14 @@ import type {
   AiSettings,
   AiSettingsOptions,
   BackendAssistantListItem,
+  BackendStatus,
   ChatwootInboxConfigItem,
   ChatwootInboxConfigTestResponse,
+  CurrentCompany,
   CurrentCompanyResponse,
+  CreateCompanyPayload,
   UpsertChatwootInboxConfigPayload,
+  UpdateCompanyPayload,
 } from "@/types";
 
 export const Route = createFileRoute("/_app/configuracoes")({
@@ -123,6 +130,24 @@ const DEFAULT_CHATWOOT_FORM_STATE: ChatwootFormState = {
   webhookSecret: "",
   isActive: true,
   metadataJsonText: "",
+};
+
+type CompanyAdminFormState = {
+  name: string;
+  legalName: string;
+  document: string;
+  status: "ACTIVE" | "INACTIVE";
+  notes: string;
+  createDemoAssistant: boolean;
+};
+
+const DEFAULT_COMPANY_ADMIN_FORM_STATE: CompanyAdminFormState = {
+  name: "",
+  legalName: "",
+  document: "",
+  status: "ACTIVE",
+  notes: "",
+  createDemoAssistant: false,
 };
 
 const CHATWOOT_WEBHOOK_SECRET_PLACEHOLDER = "SEU_SECRET_CONFIGURADO";
@@ -273,6 +298,34 @@ function mapSettingsToForm(
     model: settings.model ?? provider?.models[0] ?? "",
     apiKey: "",
     requestTimeoutMs: String(settings.requestTimeoutMs ?? 30000),
+  };
+}
+
+function mapCompanyToAdminForm(company?: CurrentCompany | null): CompanyAdminFormState {
+  if (!company) {
+    return DEFAULT_COMPANY_ADMIN_FORM_STATE;
+  }
+
+  return {
+    name: company.name ?? "",
+    legalName: company.legalName ?? "",
+    document: company.document ?? "",
+    status: company.status,
+    notes: company.notes ?? "",
+    createDemoAssistant: false,
+  };
+}
+
+function normalizeCompanyPayload(
+  form: CompanyAdminFormState,
+): CreateCompanyPayload & UpdateCompanyPayload {
+  return {
+    name: form.name.trim(),
+    legalName: form.legalName.trim() || null,
+    document: form.document.trim() || null,
+    status: form.status,
+    notes: form.notes.trim() || null,
+    createDemoAssistant: form.createDemoAssistant,
   };
 }
 
@@ -750,8 +803,263 @@ function ConfigPage() {
         </SecurityNotice>
       )}
 
+      <CompanyAdministrationSection
+        currentCompanyId={company.id}
+        onCompanyChanged={() => {
+          void load();
+        }}
+      />
+
       <ChatwootIntegrationSection companyName={company.name} />
     </div>
+  );
+}
+
+function CompanyAdministrationSection({
+  currentCompanyId,
+  onCompanyChanged,
+}: {
+  currentCompanyId: string;
+  onCompanyChanged: () => void;
+}) {
+  const [companies, setCompanies] = useState<CurrentCompany[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editingCompany, setEditingCompany] = useState<CurrentCompany | null>(null);
+  const [form, setForm] = useState<CompanyAdminFormState>(DEFAULT_COMPANY_ADMIN_FORM_STATE);
+
+  const loadCompanies = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await companiesService.list();
+      setCompanies(response);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível carregar as empresas.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadCompanies();
+  }, []);
+
+  const openCreate = () => {
+    setEditingCompany(null);
+    setForm(DEFAULT_COMPANY_ADMIN_FORM_STATE);
+    setSheetOpen(true);
+  };
+
+  const openEdit = (company: CurrentCompany) => {
+    setEditingCompany(company);
+    setForm(mapCompanyToAdminForm(company));
+    setSheetOpen(true);
+  };
+
+  const handleSubmit = async () => {
+    if (!form.name.trim()) {
+      toast.error("Informe o nome da empresa.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const payload = normalizeCompanyPayload(form);
+      if (editingCompany) {
+        await companiesService.update(editingCompany.id, payload);
+        toast.success("Empresa atualizada.");
+      } else {
+        await companiesService.create(payload);
+        toast.success("Empresa criada com tenant isolado e pronta para setup.");
+      }
+
+      setSheetOpen(false);
+      await loadCompanies();
+      onCompanyChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Não foi possível salvar a empresa.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <CardTitle className="text-lg">Administração de empresas</CardTitle>
+          <CardDescription>
+            Cadastre clientes no mesmo staging sem misturar dados. Cada empresa começa vazia e
+            isolada, pronta para configurar assistentes, conhecimento, Chatwoot e apps depois.
+          </CardDescription>
+        </div>
+        <Button onClick={openCreate}>
+          <Plus className="h-4 w-4" /> Nova empresa
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {loading ? <LoadingState label="Carregando empresas…" /> : null}
+        {!loading && error ? (
+          <ErrorState title="Não foi possível carregar as empresas" description={error} onRetry={loadCompanies} />
+        ) : null}
+        {!loading && !error && companies.length === 0 ? (
+          <EmptyState
+            title="Nenhuma empresa cadastrada"
+            description="Crie a primeira empresa para iniciar um tenant limpo e começar o setup real."
+          />
+        ) : null}
+        {!loading && !error && companies.length > 0 ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            {companies.map((item) => (
+              <div key={item.id} className="rounded-xl border p-4 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Building2 className="h-4 w-4 text-muted-foreground" />
+                      <p className="font-medium truncate">{item.name}</p>
+                    </div>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {item.legalName ?? "Razão social não informada"}
+                    </p>
+                  </div>
+                  <StatusBadge status={item.status === "ACTIVE" ? "ativo" : "pausado"} />
+                </div>
+                <div className="space-y-1 text-sm">
+                  <SummaryRow label="CNPJ" value={item.document || "Não informado"} />
+                  <SummaryRow label="Observações" value={item.notes || "Sem observações"} />
+                  <SummaryRow
+                    label="Contexto"
+                    value={item.id === currentCompanyId ? "Empresa ativa" : "Disponível para trocar"}
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={() => openEdit(item)}>
+                    <Pencil className="h-4 w-4" /> Editar
+                  </Button>
+                  {item.id !== currentCompanyId ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        void companiesService
+                          .setActive(item.id)
+                          .then(() => {
+                            toast.success(`Empresa ativa alterada para ${item.name}.`);
+                            window.location.reload();
+                          })
+                          .catch((err) => {
+                            toast.error(
+                              err instanceof Error
+                                ? err.message
+                                : "Não foi possível trocar a empresa ativa.",
+                            );
+                          });
+                      }}
+                    >
+                      Entrar na empresa
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </CardContent>
+
+      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+        <SheetContent className="sm:max-w-xl">
+          <SheetHeader>
+            <SheetTitle>{editingCompany ? "Editar empresa" : "Nova empresa"}</SheetTitle>
+            <SheetDescription>
+              {editingCompany
+                ? "Atualize nome, status e observações da empresa."
+                : "Crie um tenant novo do zero. Nenhum dado de outra empresa será copiado."}
+            </SheetDescription>
+          </SheetHeader>
+          <div className="mt-6 space-y-4">
+            <Field label="Nome fantasia">
+              <Input
+                value={form.name}
+                onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                placeholder="Cubo Saúde"
+              />
+            </Field>
+            <Field label="Razão social">
+              <Input
+                value={form.legalName}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, legalName: event.target.value }))
+                }
+                placeholder="Cubo Saúde LTDA"
+              />
+            </Field>
+            <Field label="CNPJ (opcional)">
+              <Input
+                value={form.document}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, document: event.target.value }))
+                }
+                placeholder="12.345.678/0001-99"
+              />
+            </Field>
+            <Field label="Status">
+              <Select
+                value={form.status}
+                onValueChange={(value: "ACTIVE" | "INACTIVE") =>
+                  setForm((current) => ({ ...current, status: value }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ACTIVE">ACTIVE</SelectItem>
+                  <SelectItem value="INACTIVE">INACTIVE</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Observações">
+              <Textarea
+                rows={5}
+                value={form.notes}
+                onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))}
+                placeholder="Notas de onboarding, time responsável, restrições do ambiente..."
+              />
+            </Field>
+            {!editingCompany ? (
+              <Field label="Assistente demo opcional">
+                <div className="flex items-center justify-between rounded-lg border px-3 py-2">
+                  <div>
+                    <div className="text-sm font-medium">Criar assistente demo explicitamente</div>
+                    <div className="text-xs text-muted-foreground">
+                      Desligado por padrão para manter o tenant inicial vazio.
+                    </div>
+                  </div>
+                  <Switch
+                    checked={form.createDemoAssistant}
+                    onCheckedChange={(checked) =>
+                      setForm((current) => ({ ...current, createDemoAssistant: checked }))
+                    }
+                  />
+                </div>
+              </Field>
+            ) : null}
+          </div>
+          <SheetFooter className="mt-6">
+            <Button variant="outline" onClick={() => setSheetOpen(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleSubmit} disabled={saving}>
+              {saving ? "Salvando..." : editingCompany ? "Salvar alterações" : "Criar empresa"}
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+    </Card>
   );
 }
 

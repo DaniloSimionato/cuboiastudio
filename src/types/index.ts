@@ -25,8 +25,13 @@ export type BackendConversationChannelType =
 export interface CurrentCompany {
   id: string;
   name: string;
+  legalName: string | null;
   document: string | null;
+  notes: string | null;
   status: BackendStatus;
+  isActiveContext?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface CurrentUserIdentity {
@@ -38,6 +43,27 @@ export interface CurrentUserIdentity {
 export interface CurrentCompanyResponse {
   company: CurrentCompany;
   user: CurrentUserIdentity;
+}
+
+export interface CompanyListResponse {
+  items: CurrentCompany[];
+}
+
+export interface CreateCompanyPayload {
+  name: string;
+  legalName?: string | null;
+  document?: string | null;
+  status?: BackendStatus;
+  notes?: string | null;
+  createDemoAssistant?: boolean;
+}
+
+export interface UpdateCompanyPayload {
+  name?: string;
+  legalName?: string | null;
+  document?: string | null;
+  status?: BackendStatus;
+  notes?: string | null;
 }
 
 export interface AppCatalogItem {

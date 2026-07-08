@@ -1,3 +1,18 @@
+export interface AssistantFlowCalendarToolContext {
+  category?: string | null;
+  sportType?: string | null;
+  resourceType?: string | null;
+  attribute?: string | null;
+  durationMinutes?: number | null;
+  isCovered?: boolean | null;
+  resourceIds?: string[] | null;
+  calendarIds?: string[] | null;
+}
+
+export interface AssistantFlowToolContext {
+  calendar?: AssistantFlowCalendarToolContext | null;
+}
+
 export interface AssistantFlow {
   id: string;
   assistantId: string;
@@ -10,6 +25,7 @@ export interface AssistantFlow {
   flowInstructions: string | null;
   allowedToolSlugs: string | null;
   knowledgeScope: string | null;
+  toolContext: AssistantFlowToolContext | null;
   finalAction: string | null;
   fixedMessage: string | null;
   handoffTeamId: string | null;
@@ -22,5 +38,8 @@ export interface AssistantFlow {
   updatedAt: string;
 }
 
-export type CreateAssistantFlowDto = Omit<AssistantFlow, "id" | "assistantId" | "createdAt" | "updatedAt">;
+export type CreateAssistantFlowDto = Omit<
+  AssistantFlow,
+  "id" | "assistantId" | "createdAt" | "updatedAt"
+>;
 export type UpdateAssistantFlowDto = Partial<CreateAssistantFlowDto>;

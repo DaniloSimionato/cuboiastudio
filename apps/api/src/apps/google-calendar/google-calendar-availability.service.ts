@@ -17,6 +17,12 @@ import {
   overlapRanges,
   zonedDateTimeToDate,
 } from "./google-calendar-tools.util";
+import {
+  filterResourcesByCalendarToolScope,
+  matchesCalendarToolScope,
+  normalizeCalendarToolScope,
+  type CalendarToolScope,
+} from "./google-calendar-tool-scope";
 
 const GOOGLE_FREEBUSY_URL = "https://www.googleapis.com/calendar/v3/freeBusy";
 const GOOGLE_CALENDAR_SLUG = "google_calendar";
@@ -110,7 +116,9 @@ export class GoogleCalendarAvailabilityService {
     if (installations.length === 0) {
       throw new BadRequestException("Install Google Agenda before configuring resources.");
     }
-    const activeInstallations = installations.filter(i => i.status === AppInstallationStatus.ACTIVE);
+    const activeInstallations = installations.filter(
+      (i) => i.status === AppInstallationStatus.ACTIVE,
+    );
     if (activeInstallations.length === 0) {
       throw new BadRequestException("Google Agenda installation is not active.");
     }
@@ -118,7 +126,7 @@ export class GoogleCalendarAvailabilityService {
     const credential = await this.prisma.appCredential.findFirst({
       where: {
         companyId: input.companyId,
-        installationId: { in: activeInstallations.map(i => i.id) },
+        installationId: { in: activeInstallations.map((i) => i.id) },
         provider: "google",
         status: Status.ACTIVE,
       },
@@ -167,22 +175,27 @@ export class GoogleCalendarAvailabilityService {
     }
 
     const googleBusyByCalendarId = new Map<string, BusyBlock[]>();
-    const freeBusyPromises = Array.from(resourcesByInstId.entries()).map(async ([instId, instResources]) => {
-      try {
-        const credential = await this.oauthService.getAuthorizedCredential(input.companyId, instId);
-        const freeBusy = await this.fetchFreeBusy({
-          accessToken: credential.accessToken,
-          calendarIds: instResources.map((r) => r.calendarId),
-          timeMin: searchStart,
-          timeMax: searchEnd,
-        });
-        for (const [calId, blocks] of freeBusy.entries()) {
-          googleBusyByCalendarId.set(calId, blocks);
+    const freeBusyPromises = Array.from(resourcesByInstId.entries()).map(
+      async ([instId, instResources]) => {
+        try {
+          const credential = await this.oauthService.getAuthorizedCredential(
+            input.companyId,
+            instId,
+          );
+          const freeBusy = await this.fetchFreeBusy({
+            accessToken: credential.accessToken,
+            calendarIds: instResources.map((r) => r.calendarId),
+            timeMin: searchStart,
+            timeMax: searchEnd,
+          });
+          for (const [calId, blocks] of freeBusy.entries()) {
+            googleBusyByCalendarId.set(calId, blocks);
+          }
+        } catch (err) {
+          console.error(`Failed to fetch FreeBusy for installation ${instId}:`, err);
         }
-      } catch (err) {
-        console.error(`Failed to fetch FreeBusy for installation ${instId}:`, err);
-      }
-    });
+      },
+    );
 
     const [_, localBusyByResourceId] = await Promise.all([
       Promise.all(freeBusyPromises),
@@ -248,7 +261,10 @@ export class GoogleCalendarAvailabilityService {
       throw new BadRequestException("Calendar resource not found or inactive.");
     }
 
-    const credential = await this.oauthService.getAuthorizedCredential(input.companyId, resource.installationId);
+    const credential = await this.oauthService.getAuthorizedCredential(
+      input.companyId,
+      resource.installationId,
+    );
 
     const now = new Date();
     if (input.startAt.getTime() < now.getTime() + minutesToMs(resource.minAdvanceMinutes)) {
@@ -300,66 +316,15 @@ export class GoogleCalendarAvailabilityService {
       orderBy: [{ name: "asc" }],
     });
 
-    return resources.filter((resource) => {
-      let sportMatches = true;
-      const expectedSport = input.dto.category || input.dto.sportType;
-      if (expectedSport) {
-        const actualOld = resource.sportType;
-        const actualCatName = resource.categoryRef?.name ?? "";
-        const actualCatSlug = resource.categoryRef?.slug ?? "";
-        
-        sportMatches = 
-          matchesFlexibleType(actualOld, expectedSport) ||
-          matchesFlexibleType(actualCatName, expectedSport) ||
-          matchesFlexibleType(actualCatSlug, expectedSport);
-      }
-
-      let resourceMatches = true;
-      if (input.dto.resourceType) {
-        const expected = input.dto.resourceType;
-        const actualOld = resource.resourceType;
-        const actualTypeName = resource.resourceTypeRef?.name ?? "";
-        const actualTypeSlug = resource.resourceTypeRef?.slug ?? "";
-        
-        resourceMatches = 
-          matchesFlexibleType(actualOld, expected) ||
-          matchesFlexibleType(actualTypeName, expected) ||
-          matchesFlexibleType(actualTypeSlug, expected);
-      }
-
-      let attributeMatches = true;
-      if (input.dto.attribute) {
-        const expected = input.dto.attribute.toLowerCase();
-        const actualAttrName = resource.attributeRef?.name?.toLowerCase() ?? "";
-        const actualAttrSlug = resource.attributeRef?.slug?.toLowerCase() ?? "";
-        
-        if (expected === "coberta" || expected === "coberto") {
-          attributeMatches = resource.isCovered === true || actualAttrName.includes("coberta") || actualAttrSlug.includes("coberta");
-        } else if (expected === "aberta" || expected === "aberto") {
-          attributeMatches = resource.isCovered === false || actualAttrName.includes("aberta") || actualAttrSlug.includes("aberta");
-        } else {
-          attributeMatches = actualAttrName.includes(expected) || actualAttrSlug.includes(expected);
-        }
-      }
-
-      let coverageMatches = true;
-      if (input.dto.isCovered !== null && input.dto.isCovered !== undefined) {
-        const expected = input.dto.isCovered;
-        let actualOld = resource.isCovered;
-        if (resource.attributeRef) {
-          const slug = resource.attributeRef.slug.toLowerCase();
-          const name = resource.attributeRef.name.toLowerCase();
-          if (slug === "coberta" || name === "coberta") {
-            actualOld = true;
-          } else if (slug === "aberta" || name === "aberta") {
-            actualOld = false;
-          }
-        }
-        coverageMatches = actualOld === expected;
-      }
-
-      return sportMatches && resourceMatches && coverageMatches && attributeMatches;
+    const scope = normalizeCalendarToolScope({
+      category: input.dto.category,
+      sportType: input.dto.sportType,
+      resourceType: input.dto.resourceType,
+      attribute: input.dto.attribute,
+      isCovered: input.dto.isCovered,
     });
+
+    return filterResourcesByCalendarToolScope(resources, scope);
   }
 
   private buildSearchWindows(input: {
@@ -425,7 +390,9 @@ export class GoogleCalendarAvailabilityService {
     const payload = (await response.json().catch(() => ({}))) as FreeBusyResponse;
 
     if (!response.ok || payload.error) {
-      throw new BadRequestException(this.oauthService.sanitizeGoogleError(payload.error ?? payload));
+      throw new BadRequestException(
+        this.oauthService.sanitizeGoogleError(payload.error ?? payload),
+      );
     }
 
     const busyByCalendarId = new Map<string, BusyBlock[]>();
@@ -480,7 +447,13 @@ export class GoogleCalendarAvailabilityService {
 
   private buildOptions(input: {
     resources: ResourceRecord[];
-    windows: Array<{ resourceId: string; start: Date; end: Date; timezone: string; dayOffset: number }>;
+    windows: Array<{
+      resourceId: string;
+      start: Date;
+      end: Date;
+      timezone: string;
+      dayOffset: number;
+    }>;
     googleBusyByCalendarId: Map<string, BusyBlock[]>;
     localBusyByResourceId: Map<string, BusyBlock[]>;
     durationMinutes: number;
@@ -490,7 +463,9 @@ export class GoogleCalendarAvailabilityService {
     const resourceById = new Map(input.resources.map((resource) => [resource.id, resource]));
     const options: CalendarAvailabilityOption[] = [];
 
-    for (const window of input.windows.sort((a, b) => a.dayOffset - b.dayOffset || a.start.getTime() - b.start.getTime())) {
+    for (const window of input.windows.sort(
+      (a, b) => a.dayOffset - b.dayOffset || a.start.getTime() - b.start.getTime(),
+    )) {
       const resource = resourceById.get(window.resourceId);
       if (!resource) continue;
 
@@ -614,25 +589,9 @@ function addDays(date: string, days: number): string {
   return parsed.toISOString().slice(0, 10);
 }
 
-function normalizeType(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
-}
-
-function matchesFlexibleType(actual: string, expected: string): boolean {
-  const normalizedActual = normalizeType(actual);
-  const normalizedExpected = normalizeType(expected);
-  const aliases: Record<string, string[]> = {
-    beach: ["beach", "beachtennis"],
-    beachtennis: ["beach", "beachtennis"],
-    court: ["court", "quadra"],
-    quadra: ["court", "quadra"],
-  };
-  const accepted = aliases[normalizedExpected] ?? [normalizedExpected];
-
-  return accepted.some(
-    (value) => normalizedActual === value || normalizedActual.includes(value) || value.includes(normalizedActual),
-  );
+export function resourceMatchesCalendarScope(
+  resource: ResourceRecord,
+  scope: CalendarToolScope | null | undefined,
+): boolean {
+  return matchesCalendarToolScope(resource, scope);
 }

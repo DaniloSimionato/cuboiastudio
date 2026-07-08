@@ -31,7 +31,8 @@
     "db:seed": "npm --prefix apps/api run prisma:seed",
     "db:reset:dev": "npm --prefix apps/api exec prisma migrate reset --schema prisma/schema.prisma --force",
     "db:check": "npm --prefix apps/api run db:check",
-    "icons:export": "node scripts/export-app-icons.mjs"
+    "icons:export": "node scripts/export-app-icons.mjs",
+    "smoke:staging": "node scripts/smoke-staging.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

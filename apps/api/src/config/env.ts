@@ -26,9 +26,12 @@ const booleanEnv = z.preprocess((value) => {
 }, z.boolean());
 
 export const environmentSchema = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  NODE_ENV: z.enum(["development", "test", "staging", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().optional(),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).optional(),
+  AUTH_TRUST_MODE: z.enum(["off", "signed-headers"]).default("off"),
+  AUTH_PROXY_SHARED_SECRET: optionalText,
+  AUTH_PROXY_SIGNATURE_TTL_MS: z.coerce.number().int().positive().optional().default(300_000),
   AI_RUNTIME_ENABLED: booleanEnv.default(false),
   AI_PROVIDER: z.string().trim().optional().default("openai-compatible"),
   AI_BASE_URL: optionalText,
@@ -47,11 +50,36 @@ export const environmentSchema = z.object({
   CHATWOOT_URL: optionalText,
   CHATWOOT_TOKEN: optionalText,
   CHATWOOT_ALLOW_INSECURE_WEBHOOKS: booleanEnv.default(false),
-  CHATWOOT_ATTACHMENT_DOWNLOAD_TIMEOUT_MS: z.coerce.number().int().positive().optional().default(15_000),
-  CHATWOOT_ATTACHMENT_MAX_IMAGE_BYTES: z.coerce.number().int().positive().optional().default(10 * 1024 * 1024),
-  CHATWOOT_ATTACHMENT_MAX_AUDIO_BYTES: z.coerce.number().int().positive().optional().default(20 * 1024 * 1024),
-  CHATWOOT_ATTACHMENT_MAX_VIDEO_BYTES: z.coerce.number().int().positive().optional().default(20 * 1024 * 1024),
-  CHATWOOT_ATTACHMENT_MAX_DOCUMENT_BYTES: z.coerce.number().int().positive().optional().default(15 * 1024 * 1024),
+  CHATWOOT_ATTACHMENT_DOWNLOAD_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .default(15_000),
+  CHATWOOT_ATTACHMENT_MAX_IMAGE_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .default(10 * 1024 * 1024),
+  CHATWOOT_ATTACHMENT_MAX_AUDIO_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .default(20 * 1024 * 1024),
+  CHATWOOT_ATTACHMENT_MAX_VIDEO_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .default(20 * 1024 * 1024),
+  CHATWOOT_ATTACHMENT_MAX_DOCUMENT_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .default(15 * 1024 * 1024),
   CORS_ORIGIN: z.string().trim().optional(),
 });
 

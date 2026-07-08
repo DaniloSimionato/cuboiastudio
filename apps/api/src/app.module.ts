@@ -40,7 +40,14 @@ import { validateEnvironment } from "./config/env";
             (req.headers["x-correlation-id"] as string | undefined)?.trim() ||
             randomUUID(),
           redact: {
-            paths: ["req.headers.authorization", "req.headers.cookie"],
+            paths: [
+              "req.headers.authorization",
+              "req.headers.cookie",
+              "req.headers.x-auth-signature",
+              "req.headers.x-dev-user-id",
+              "req.headers.x-dev-user-email",
+              "req.headers.x-dev-company-id",
+            ],
             remove: true,
           },
           customProps: () => ({

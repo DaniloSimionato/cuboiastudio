@@ -32,7 +32,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { currentCompanyService } from "@/services";
+import { companiesService, currentCompanyService } from "@/services";
 import type { CurrentCompanyResponse } from "@/types";
 
 const items = [
@@ -56,20 +56,23 @@ export function Sidebar() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const { collapsed, toggle } = useSidebar();
   const [company, setCompany] = useState<CurrentCompanyResponse["company"] | null>(null);
+  const [companies, setCompanies] = useState<CurrentCompanyResponse["company"][]>([]);
+  const [switchingCompanyId, setSwitchingCompanyId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    currentCompanyService
-      .get()
-      .then((response) => {
+    Promise.all([currentCompanyService.get(), companiesService.list()])
+      .then(([currentResponse, companiesResponse]) => {
         if (!cancelled) {
-          setCompany(response.company);
+          setCompany(currentResponse.company);
+          setCompanies(companiesResponse);
         }
       })
       .catch(() => {
         if (!cancelled) {
           setCompany(null);
+          setCompanies([]);
         }
       });
 
@@ -77,6 +80,28 @@ export function Sidebar() {
       cancelled = true;
     };
   }, []);
+
+  const handleRefresh = () => {
+    void Promise.all([currentCompanyService.get(), companiesService.list()]).then(
+      ([currentResponse, companiesResponse]) => {
+        setCompany(currentResponse.company);
+        setCompanies(companiesResponse);
+      },
+    );
+  };
+
+  const handleSwitchCompany = (companyId: string) => {
+    setSwitchingCompanyId(companyId);
+    void companiesService
+      .setActive(companyId)
+      .then((response) => {
+        setCompany(response.company);
+        window.location.reload();
+      })
+      .finally(() => {
+        setSwitchingCompanyId(null);
+      });
+  };
 
   return (
     <TooltipProvider delayDuration={100}>
@@ -136,19 +161,24 @@ export function Sidebar() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-64">
-                <DropdownMenuLabel>Tenant atual</DropdownMenuLabel>
+                <DropdownMenuLabel>Empresas acessíveis</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem disabled>
-                  {company?.name ?? "Backend indisponível"}
-                </DropdownMenuItem>
+                {companies.length > 0 ? (
+                  companies.map((item) => (
+                    <DropdownMenuItem
+                      key={item.id}
+                      disabled={switchingCompanyId === item.id}
+                      onClick={() => handleSwitchCompany(item.id)}
+                    >
+                      {item.name}
+                      {item.id === company?.id ? " · ativa" : ""}
+                    </DropdownMenuItem>
+                  ))
+                ) : (
+                  <DropdownMenuItem disabled>{company?.name ?? "Backend indisponível"}</DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => {
-                    void currentCompanyService
-                      .get()
-                      .then((response) => setCompany(response.company));
-                  }}
-                >
+                <DropdownMenuItem onClick={handleRefresh}>
                   Atualizar tenant
                 </DropdownMenuItem>
               </DropdownMenuContent>

@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cubo_ai_studio
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_staging_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cubo_ai_studio"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_staging_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    image: node:22-alpine
+    restart: unless-stopped
+    working_dir: /workspace/apps/api
+    env_file:
+      - ./.env.staging
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/cubo_ai_studio?schema=public
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - ./:/workspace
+    command: >
+      sh -lc "npm ci &&
+      npx prisma generate --schema prisma/schema.prisma &&
+      npm run build &&
+      node dist/main.js"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+
+  frontend:
+    image: node:22-alpine
+    restart: unless-stopped
+    working_dir: /workspace
+    env_file:
+      - ./.env.staging
+    volumes:
+      - ./:/workspace
+    command: >
+      sh -lc "npm ci &&
+      npm run build &&
+      npx vite preview --host 0.0.0.0 --port 4173"
+    depends_on:
+      - api
+    ports:
+      - "4173:4173"
+
+volumes:
+  postgres_staging_data:
+  redis_staging_data:

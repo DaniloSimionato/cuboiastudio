@@ -2,6 +2,7 @@ export * from "./apiClient";
 export { aiProviderService } from "./aiProviderService";
 export { aiSettingsService } from "./aiSettingsService";
 export { appStoreService } from "./appStoreService";
+export { companiesService } from "./companiesService";
 export { currentCompanyService } from "./currentCompanyService";
 export { backendAssistantsService } from "./backendAssistantsService";
 export { backendConversationsService } from "./backendConversationsService";

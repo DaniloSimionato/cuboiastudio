@@ -18,6 +18,7 @@
     "prisma:seed": "node --experimental-strip-types prisma/seed.ts",
     "db:check": "node scripts/validate-db.mjs",
     "db:seed": "npm run prisma:seed",
+    "staging:bootstrap-admin": "node scripts/bootstrap-staging-admin.js",
     "test:apps": "npm run build && node --test test/app-store.test.mjs test/assistant-calendar-tools.test.mjs",
     "test:attachments": "npm run build && node --test test/attachment-pipeline.test.mjs",
     "test:chatwoot": "npm run build && node --test test/chatwoot-webhook-and-runtime.test.mjs"

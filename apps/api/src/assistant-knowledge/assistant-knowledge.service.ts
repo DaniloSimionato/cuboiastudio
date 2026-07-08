@@ -179,9 +179,11 @@ export class AssistantKnowledgeService {
       throw new NotFoundException("Knowledge item not found.");
     }
 
-    const updatedKnowledge = await this.prisma.assistantKnowledge.update({
+    await this.prisma.assistantKnowledge.updateMany({
       where: {
         id: input.knowledgeId,
+        assistantId: input.assistantId,
+        companyId: input.tenant.companyId,
       },
       data: {
         ...(hasTitle ? { title: input.dto.title } : {}),
@@ -189,8 +191,20 @@ export class AssistantKnowledgeService {
         ...(hasStatus ? { status: input.dto.status } : {}),
         ...(hasMetadata ? { metadata: input.dto.metadata } : {}),
       },
+    });
+
+    const updatedKnowledge = await this.prisma.assistantKnowledge.findFirst({
+      where: {
+        id: input.knowledgeId,
+        assistantId: input.assistantId,
+        companyId: input.tenant.companyId,
+      },
       select: assistantKnowledgeSafeSelect,
     });
+
+    if (!updatedKnowledge) {
+      throw new NotFoundException("Knowledge item not found.");
+    }
 
     return toAssistantKnowledgeItem(updatedKnowledge);
   }
@@ -219,15 +233,29 @@ export class AssistantKnowledgeService {
       throw new NotFoundException("Knowledge item not found.");
     }
 
-    const deletedKnowledge = await this.prisma.assistantKnowledge.update({
+    await this.prisma.assistantKnowledge.updateMany({
       where: {
         id: input.knowledgeId,
+        assistantId: input.assistantId,
+        companyId: input.tenant.companyId,
       },
       data: {
         status: Status.INACTIVE,
       },
+    });
+
+    const deletedKnowledge = await this.prisma.assistantKnowledge.findFirst({
+      where: {
+        id: input.knowledgeId,
+        assistantId: input.assistantId,
+        companyId: input.tenant.companyId,
+      },
       select: assistantKnowledgeSafeSelect,
     });
+
+    if (!deletedKnowledge) {
+      throw new NotFoundException("Knowledge item not found.");
+    }
 
     return toAssistantKnowledgeItem(deletedKnowledge);
   }
@@ -263,7 +291,7 @@ export class AssistantKnowledgeService {
       if (i < 0) i = 0;
     }
 
-    return chunks.filter(c => c.length > 0);
+    return chunks.filter((c) => c.length > 0);
   }
 
   async prepare(input: {
@@ -313,7 +341,7 @@ export class AssistantKnowledgeService {
       // We process sequentially to respect rate limits gently. In a real heavy system we'd batch this.
       for (let i = 0; i < textChunks.length; i++) {
         const textChunk = textChunks[i];
-        
+
         const embeddingResult = await this.aiService.generateEmbedding({
           companyId: input.tenant.companyId,
           text: textChunk,
@@ -366,10 +394,10 @@ export class AssistantKnowledgeService {
       });
 
       return toAssistantKnowledgeItem(updatedKnowledge);
-
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error during AI preparation";
-      
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error during AI preparation";
+
       const failedKnowledge = await this.prisma.assistantKnowledge.update({
         where: { id: input.knowledgeId },
         data: {

@@ -1,6 +1,8 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from "@nestjs/common";
 import { ApiOperation, ApiTags } from "@nestjs/swagger";
 import { AuthGuard } from "../auth/auth.guard";
+import { RequirePermissions } from "../auth/permissions.decorator";
+import { PermissionsGuard } from "../auth/permissions.guard";
 import { Tenant } from "../auth/tenant.decorator";
 import type { RequestTenant } from "../auth/auth.types";
 import { AssistantFlowsService } from "./assistant-flows.service";
@@ -8,12 +10,13 @@ import { CreateAssistantFlowDto } from "./dto/create-assistant-flow.dto";
 import { UpdateAssistantFlowDto } from "./dto/update-assistant-flow.dto";
 
 @ApiTags("assistants")
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, PermissionsGuard)
 @Controller("assistants/:assistantId/flows")
 export class AssistantFlowsController {
   constructor(private readonly assistantFlowsService: AssistantFlowsService) {}
 
   @Get()
+  @RequirePermissions("assistants:read")
   @ApiOperation({ summary: "List assistant flows" })
   async findAll(
     @Tenant() tenant: RequestTenant,
@@ -23,6 +26,7 @@ export class AssistantFlowsController {
   }
 
   @Get(":flowId")
+  @RequirePermissions("assistants:read")
   @ApiOperation({ summary: "Get assistant flow" })
   async findOne(
     @Tenant() tenant: RequestTenant,
@@ -33,6 +37,7 @@ export class AssistantFlowsController {
   }
 
   @Post()
+  @RequirePermissions("assistants:write")
   @ApiOperation({ summary: "Create assistant flow" })
   async create(
     @Tenant() tenant: RequestTenant,
@@ -43,6 +48,7 @@ export class AssistantFlowsController {
   }
 
   @Put(":flowId")
+  @RequirePermissions("assistants:write")
   @ApiOperation({ summary: "Update assistant flow" })
   async update(
     @Tenant() tenant: RequestTenant,
@@ -54,6 +60,7 @@ export class AssistantFlowsController {
   }
 
   @Delete(":flowId")
+  @RequirePermissions("assistants:write")
   @ApiOperation({ summary: "Delete assistant flow" })
   async delete(
     @Tenant() tenant: RequestTenant,

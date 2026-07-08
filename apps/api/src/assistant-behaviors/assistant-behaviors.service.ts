@@ -7,7 +7,7 @@ export class AssistantBehaviorsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async findByAssistantId(companyId: string, assistantId: string) {
-    const assistant = await this.prisma.assistant.findUnique({
+    const assistant = await this.prisma.assistant.findFirst({
       where: {
         id: assistantId,
         companyId,
@@ -25,7 +25,7 @@ export class AssistantBehaviorsService {
   }
 
   async upsert(companyId: string, assistantId: string, dto: UpsertAssistantBehaviorDto) {
-    const assistant = await this.prisma.assistant.findUnique({
+    const assistant = await this.prisma.assistant.findFirst({
       where: {
         id: assistantId,
         companyId,
