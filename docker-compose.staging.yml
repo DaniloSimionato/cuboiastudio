@@ -41,7 +41,7 @@ services:
     volumes:
       - ./:/workspace
     command: >
-      sh -lc "npm ci --include=dev &&
+      sh -lc "npm install &&
       npx prisma generate --schema prisma/schema.prisma &&
       npm run build &&
       node dist/main.js"
@@ -62,7 +62,7 @@ services:
     volumes:
       - ./:/workspace
     command: >
-      sh -lc "npm ci --include=dev &&
+      sh -lc "npm install &&
       npm run build &&
       npx vite preview --host 0.0.0.0 --port 4173"
     depends_on:
