@@ -56,13 +56,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem(SESSION_KEY);
-      if (raw) setUser(JSON.parse(raw));
-    } catch (error) {
-      void error;
-    }
-    setLoading(false);
+    const checkAuth = async () => {
+      try {
+        const res = await fetch("/api/auth/me");
+        if (res.ok) {
+          const data = await res.json();
+          const authUser: AuthUser = {
+            id: data.id,
+            nome: data.name || data.email.split("@")[0],
+            email: data.email,
+            role: data.roles?.includes("admin") ? "admin" : "operator",
+          };
+          setUser(authUser);
+          sessionStorage.setItem(SESSION_KEY, JSON.stringify(authUser));
+          setLoading(false);
+          return;
+        }
+      } catch (err) {
+        console.warn("Failed to fetch /api/auth/me, falling back to local session:", err);
+      }
+
+      try {
+        const raw = sessionStorage.getItem(SESSION_KEY);
+        if (raw) setUser(JSON.parse(raw));
+      } catch (error) {
+        void error;
+      }
+      setLoading(false);
+    };
+
+    void checkAuth();
   }, []);
 
   const login: AuthCtx["login"] = async (email, password) => {

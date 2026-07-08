@@ -96,29 +96,39 @@ function MemoriaPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {memorias.map((m) => (
-                <TableRow key={m.id}>
-                  <TableCell className="font-medium">{m.contato}</TableCell>
-                  <TableCell className="font-mono text-xs">{m.telefone}</TableCell>
-                  <TableCell>{clienteNome(m.clienteId)}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline">{m.tipo}</Badge>
-                  </TableCell>
-                  <TableCell className="max-w-[300px] truncate">{m.info}</TableCell>
-                  <TableCell className="text-muted-foreground text-xs">{m.criadoEm}</TableCell>
-                  <TableCell className="text-muted-foreground text-xs">{m.expiraEm}</TableCell>
-                  <TableCell>
-                    <div className="flex gap-1 justify-end">
-                      <Button size="sm" variant="ghost">
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button size="sm" variant="ghost" className="text-rose-600">
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
+              {memorias.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
+                    <Brain className="h-8 w-8 mx-auto mb-2 opacity-50 text-primary animate-pulse" />
+                    <p className="font-semibold text-sm">Nenhuma memória cadastrada</p>
+                    <p className="text-xs">As memórias dos contatos aparecerão aqui automaticamente.</p>
                   </TableCell>
                 </TableRow>
-              ))}
+              ) : (
+                memorias.map((m) => (
+                  <TableRow key={m.id}>
+                    <TableCell className="font-medium">{m.contato}</TableCell>
+                    <TableCell className="font-mono text-xs">{m.telefone}</TableCell>
+                    <TableCell>{clienteNome(m.clienteId)}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{m.tipo}</Badge>
+                    </TableCell>
+                    <TableCell className="max-w-[300px] truncate">{m.info}</TableCell>
+                    <TableCell className="text-muted-foreground text-xs">{m.criadoEm}</TableCell>
+                    <TableCell className="text-muted-foreground text-xs">{m.expiraEm}</TableCell>
+                    <TableCell>
+                      <div className="flex gap-1 justify-end">
+                        <Button size="sm" variant="ghost">
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button size="sm" variant="ghost" className="text-rose-600">
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
             </TableBody>
           </Table>
         </CardContent>

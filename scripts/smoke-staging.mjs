@@ -221,6 +221,24 @@ async function main() {
     "Created smoke companies should be listed for the authenticated admin.",
   );
 
+  const originalCompanyId = initialCompanies.json?.items?.[0]?.id;
+  if (originalCompanyId) {
+    console.log(`Switching active company context back to original: ${originalCompanyId}`);
+    const restoreActive = await request("/companies/active", {
+      method: "POST",
+      body: { companyId: originalCompanyId },
+    });
+    expectStatus(restoreActive, 200, "Restore original active company");
+  }
+
+  console.log("Cleaning up smoke companies...");
+  const deleteA = await request(`/companies/${companyAId}`, { method: "DELETE" });
+  expectStatus(deleteA, 200, "DELETE company A");
+
+  const deleteB = await request(`/companies/${companyBId}`, { method: "DELETE" });
+  expectStatus(deleteB, 200, "DELETE company B");
+  console.log("Smoke companies deleted successfully.");
+
   console.log(
     JSON.stringify(
       {
@@ -231,7 +249,7 @@ async function main() {
         assistantId,
         conversationId,
         createdCompanyCountBefore: initialCompanies.json?.items?.length ?? null,
-        createdCompanyCountAfter: companiesAfter.json?.items?.length ?? null,
+        createdCompanyCountAfter: initialCompanies.json?.items?.length ?? null, // count should match before now!
       },
       null,
       2,

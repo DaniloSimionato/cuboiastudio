@@ -1,6 +1,8 @@
 import {
   Body,
   Controller,
+  Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   Param,
@@ -107,5 +109,20 @@ export class CompaniesController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<CurrentCompanyResponse> {
     return this.companiesService.setActiveCompany({ dto, user });
+  }
+
+  @Delete(":id")
+  @UseGuards(AuthGuard, PermissionsGuard)
+  @RequirePermissions("companies:manage")
+  @ApiOperation({ summary: "Delete an isolated company and all its data (staging/dev only)" })
+  @ApiOkResponse({ description: "Company and related data deleted successfully." })
+  async delete(
+    @Param("id") id: string,
+  ): Promise<{ ok: boolean }> {
+    if (process.env.NODE_ENV === "production" && !process.env.ALLOW_PROD_CLEANUP) {
+      throw new ForbiddenException("Deleting companies is not allowed in production.");
+    }
+    await this.companiesService.deleteCompanyAndData(id);
+    return { ok: true };
   }
 }

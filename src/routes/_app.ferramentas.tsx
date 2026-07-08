@@ -217,54 +217,64 @@ function FerramentasPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {tools.map((tool) => (
-                <TableRow
-                  key={tool.id}
-                  data-state={tool.id === selectedToolId ? "selected" : undefined}
-                >
-                  <TableCell className="font-medium">{tool.nome}</TableCell>
-                  <TableCell>{clienteNome(tool.clienteId)}</TableCell>
-                  <TableCell>{tool.tipo}</TableCell>
-                  <TableCell>
-                    <code className="text-xs">{tool.metodo}</code>
-                  </TableCell>
-                  <TableCell className="max-w-[240px] truncate text-muted-foreground text-xs">
-                    {tool.url}
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge status={tool.status} />
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{tool.ultimoTeste}</TableCell>
-                  <TableCell>
-                    <div className="flex gap-1 justify-end">
-                      <Button size="sm" variant="ghost" onClick={() => setSelectedToolId(tool.id)}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setSelectedToolId(tool.id);
-                          testTool(tool.nome);
-                        }}
-                      >
-                        <PlayCircle className="h-4 w-4" />
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => duplicateTool(tool)}>
-                        <Copy className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="text-rose-600"
-                        onClick={() => removeTool(tool.id)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
+              {tools.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
+                    <Wrench className="h-8 w-8 mx-auto mb-2 opacity-50 text-primary animate-pulse" />
+                    <p className="font-semibold text-sm">Nenhuma ferramenta cadastrada</p>
+                    <p className="text-xs">Clique em "Nova ferramenta" no topo para criar sua primeira integração demonstrativa.</p>
                   </TableCell>
                 </TableRow>
-              ))}
+              ) : (
+                tools.map((tool) => (
+                  <TableRow
+                    key={tool.id}
+                    data-state={tool.id === selectedToolId ? "selected" : undefined}
+                  >
+                    <TableCell className="font-medium">{tool.nome}</TableCell>
+                    <TableCell>{clienteNome(tool.clienteId)}</TableCell>
+                    <TableCell>{tool.tipo}</TableCell>
+                    <TableCell>
+                      <code className="text-xs">{tool.metodo}</code>
+                    </TableCell>
+                    <TableCell className="max-w-[240px] truncate text-muted-foreground text-xs">
+                      {tool.url}
+                    </TableCell>
+                    <TableCell>
+                      <StatusBadge status={tool.status} />
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{tool.ultimoTeste}</TableCell>
+                    <TableCell>
+                      <div className="flex gap-1 justify-end">
+                        <Button size="sm" variant="ghost" onClick={() => setSelectedToolId(tool.id)}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setSelectedToolId(tool.id);
+                            testTool(tool.nome);
+                          }}
+                        >
+                          <PlayCircle className="h-4 w-4" />
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => duplicateTool(tool)}>
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-rose-600"
+                          onClick={() => removeTool(tool.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
             </TableBody>
           </Table>
         </CardContent>

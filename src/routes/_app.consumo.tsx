@@ -18,45 +18,28 @@ export const Route = createFileRoute("/_app/consumo")({
 });
 
 const kpis = [
-  { label: "Tokens utilizados (mês)", value: "3.482.190", icon: Coins, delta: "+8,2%" },
-  { label: "Requests à IA", value: "12.487", icon: Activity, delta: "últimos 30d" },
+  { label: "Tokens utilizados (mês)", value: "0", icon: Coins, delta: "vs R$ 0,00 mês anterior" },
+  { label: "Requests à IA", value: "0", icon: Activity, delta: "últimos 30d" },
   {
     label: "Custo estimado",
-    value: "R$ 1.284,50",
+    value: "R$ 0,00",
     icon: DollarSign,
-    delta: "vs R$ 1.190 mês anterior",
+    delta: "vs R$ 0,00 mês anterior",
   },
-  { label: "Tempo médio de resposta", value: "1,82 s", icon: Timer, delta: "-0,12 s" },
+  { label: "Tempo médio de resposta", value: "0,00 s", icon: Timer, delta: "0 s" },
   {
     label: "Conversas resolvidas pela IA",
-    value: "1.084",
+    value: "0",
     icon: MessageCircle,
-    delta: "82% das conversas",
+    delta: "0% das conversas",
   },
-  { label: "Transferências para humano", value: "187", icon: UserCheck, delta: "14,5%" },
+  { label: "Transferências para humano", value: "0", icon: UserCheck, delta: "0%" },
 ];
 
-const custoDia = [22, 38, 31, 47, 52, 41, 60, 55, 49, 63, 70, 58, 66, 72];
-const porAssistente = [
-  { l: "Atendente Comercial", v: 38, c: "R$ 488,12" },
-  { l: "Suporte Técnico", v: 27, c: "R$ 346,82" },
-  { l: "Agendamento", v: 18, c: "R$ 231,21" },
-  { l: "Financeiro e Boletos", v: 11, c: "R$ 141,30" },
-  { l: "Ordem de Serviço", v: 6, c: "R$ 77,05" },
-];
-const porCanal = [
-  { l: "WhatsApp Oficial", v: 62 },
-  { l: "Instagram", v: 18 },
-  { l: "Webchat", v: 12 },
-  { l: "Facebook", v: 5 },
-  { l: "Telegram", v: 3 },
-];
-const porModelo = [
-  { l: "gpt-4o-mini", v: 48 },
-  { l: "claude-3-5-sonnet", v: 27 },
-  { l: "gemini-1.5-pro", v: 17 },
-  { l: "gpt-4o", v: 8 },
-];
+const custoDia: number[] = [];
+const porAssistente: { l: string; v: number; c: string }[] = [];
+const porCanal: { l: string; v: number }[] = [];
+const porModelo: { l: string; v: number }[] = [];
 
 function ConsumoPage() {
   return (
@@ -104,15 +87,15 @@ function ConsumoPage() {
           <div className="grid grid-cols-3 gap-6 text-sm">
             <div>
               <div className="text-xs text-muted-foreground">Conversas resolvidas</div>
-              <div className="text-lg font-bold">1.084</div>
+              <div className="text-lg font-bold">0</div>
             </div>
             <div>
               <div className="text-xs text-muted-foreground">Tempo economizado</div>
-              <div className="text-lg font-bold">182h</div>
+              <div className="text-lg font-bold">0h</div>
             </div>
             <div>
               <div className="text-xs text-muted-foreground">Economia estimada</div>
-              <div className="text-lg font-bold text-emerald-600">R$ 9.480</div>
+              <div className="text-lg font-bold text-emerald-600">R$ 0,00</div>
             </div>
           </div>
         </CardContent>
@@ -126,21 +109,29 @@ function ConsumoPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="h-48 flex items-end gap-1.5">
-              {custoDia.map((v, i) => (
-                <div key={i} className="flex-1 bg-primary/15 rounded-t-md relative">
-                  <div
-                    className="absolute inset-x-0 bottom-0 bg-primary rounded-t-md"
-                    style={{ height: `${v}%` }}
-                  />
+            {custoDia.length === 0 ? (
+              <div className="h-48 grid place-items-center text-xs text-muted-foreground border border-dashed rounded-lg">
+                Nenhum dado de custo disponível para o período.
+              </div>
+            ) : (
+              <>
+                <div className="h-48 flex items-end gap-1.5">
+                  {custoDia.map((v, i) => (
+                    <div key={i} className="flex-1 bg-primary/15 rounded-t-md relative">
+                      <div
+                        className="absolute inset-x-0 bottom-0 bg-primary rounded-t-md"
+                        style={{ height: `${v}%` }}
+                      />
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-            <div className="flex justify-between text-[10px] text-muted-foreground mt-2">
-              {custoDia.map((_, i) => (
-                <span key={i}>d{i + 1}</span>
-              ))}
-            </div>
+                <div className="flex justify-between text-[10px] text-muted-foreground mt-2">
+                  {custoDia.map((_, i) => (
+                    <span key={i}>d{i + 1}</span>
+                  ))}
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -149,17 +140,21 @@ function ConsumoPage() {
             <CardTitle className="text-base">Custo por Assistente</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {porAssistente.map((i) => (
-              <div key={i.l}>
-                <div className="flex justify-between text-xs mb-1">
-                  <span className="truncate">{i.l}</span>
-                  <span className="text-muted-foreground">{i.c}</span>
+            {porAssistente.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-4 text-center">Nenhum custo registrado.</p>
+            ) : (
+              porAssistente.map((i) => (
+                <div key={i.l}>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="truncate">{i.l}</span>
+                    <span className="text-muted-foreground">{i.c}</span>
+                  </div>
+                  <div className="h-2 bg-muted rounded-full">
+                    <div className="h-2 bg-primary rounded-full" style={{ width: `${i.v * 2}%` }} />
+                  </div>
                 </div>
-                <div className="h-2 bg-muted rounded-full">
-                  <div className="h-2 bg-primary rounded-full" style={{ width: `${i.v * 2}%` }} />
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </CardContent>
         </Card>
       </div>
@@ -170,17 +165,21 @@ function ConsumoPage() {
             <CardTitle className="text-base">Custo por Canal</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {porCanal.map((i) => (
-              <div key={i.l}>
-                <div className="flex justify-between text-xs mb-1">
-                  <span>{i.l}</span>
-                  <span className="text-muted-foreground">{i.v}%</span>
+            {porCanal.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-4 text-center">Nenhum custo registrado.</p>
+            ) : (
+              porCanal.map((i) => (
+                <div key={i.l}>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span>{i.l}</span>
+                    <span className="text-muted-foreground">{i.v}%</span>
+                  </div>
+                  <div className="h-2 bg-muted rounded-full">
+                    <div className="h-2 bg-primary rounded-full" style={{ width: `${i.v}%` }} />
+                  </div>
                 </div>
-                <div className="h-2 bg-muted rounded-full">
-                  <div className="h-2 bg-primary rounded-full" style={{ width: `${i.v}%` }} />
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </CardContent>
         </Card>
 
@@ -189,17 +188,21 @@ function ConsumoPage() {
             <CardTitle className="text-base">Custo por Modelo</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {porModelo.map((i) => (
-              <div key={i.l}>
-                <div className="flex justify-between text-xs mb-1">
-                  <span>{i.l}</span>
-                  <span className="text-muted-foreground">{i.v}%</span>
+            {porModelo.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-4 text-center">Nenhum custo registrado.</p>
+            ) : (
+              porModelo.map((i) => (
+                <div key={i.l}>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span>{i.l}</span>
+                    <span className="text-muted-foreground">{i.v}%</span>
+                  </div>
+                  <div className="h-2 bg-muted rounded-full">
+                    <div className="h-2 bg-primary rounded-full" style={{ width: `${i.v}%` }} />
+                  </div>
                 </div>
-                <div className="h-2 bg-muted rounded-full">
-                  <div className="h-2 bg-primary rounded-full" style={{ width: `${i.v}%` }} />
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </CardContent>
         </Card>
       </div>

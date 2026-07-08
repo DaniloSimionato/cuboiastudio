@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -12,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/StatusBadge";
 import { logs, agenteNome } from "@/data/mock";
+import { backendAssistantsService } from "@/services";
 import { Bot, MessageSquare, UserCheck, TrendingUp, AlertTriangle, DollarSign } from "lucide-react";
 
 export const Route = createFileRoute("/_app/")({
@@ -19,16 +21,54 @@ export const Route = createFileRoute("/_app/")({
   component: Dashboard,
 });
 
-const kpis = [
-  { label: "Assistentes IA ativos", value: "4", icon: Bot, delta: "+1 esta semana" },
-  { label: "Conversas atendidas pela IA", value: "1.284", icon: MessageSquare, delta: "+12%" },
-  { label: "Transferências para humano", value: "187", icon: UserCheck, delta: "14,5%" },
-  { label: "Taxa de resolução", value: "82%", icon: TrendingUp, delta: "+3pp" },
-  { label: "Erros em ferramentas/webhooks", value: "9", icon: AlertTriangle, delta: "últimos 7d" },
-  { label: "Custo estimado de IA", value: "R$ 412,80", icon: DollarSign, delta: "este mês" },
-];
-
 function Dashboard() {
+  const [activeAssistantsCount, setActiveAssistantsCount] = useState<number>(0);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    backendAssistantsService
+      .list()
+      .then((items) => {
+        if (!cancelled) {
+          const activeCount = items.filter((a) => a.status === "ACTIVE").length;
+          setActiveAssistantsCount(activeCount);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const kpis = [
+    {
+      label: "Assistentes IA ativos",
+      value: loading ? "..." : String(activeAssistantsCount),
+      icon: Bot,
+      delta: "Ativos no momento",
+    },
+    {
+      label: "Conversas atendidas pela IA",
+      value: "0",
+      icon: MessageSquare,
+      delta: "0% de taxa de acerto",
+    },
+    { label: "Transferências para humano", value: "0", icon: UserCheck, delta: "0%" },
+    { label: "Taxa de resolução", value: "0%", icon: TrendingUp, delta: "0%" },
+    {
+      label: "Erros em ferramentas/webhooks",
+      value: "0",
+      icon: AlertTriangle,
+      delta: "últimos 7d",
+    },
+    { label: "Custo estimado de IA", value: "R$ 0,00", icon: DollarSign, delta: "este mês" },
+  ];
+
   return (
     <div>
       <PageHeader
@@ -64,20 +104,8 @@ function Dashboard() {
             <CardTitle className="text-base">Atendimentos por dia</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="h-48 flex items-end gap-2">
-              {[40, 65, 50, 80, 70, 95, 60].map((v, i) => (
-                <div key={i} className="flex-1 bg-primary/20 rounded-t-md relative">
-                  <div
-                    className="absolute inset-x-0 bottom-0 bg-primary rounded-t-md"
-                    style={{ height: `${v}%` }}
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="flex justify-between text-xs text-muted-foreground mt-2">
-              {["seg", "ter", "qua", "qui", "sex", "sab", "dom"].map((d) => (
-                <span key={d}>{d}</span>
-              ))}
+            <div className="h-48 flex items-end gap-2 border border-dashed rounded-lg justify-center items-center text-xs text-muted-foreground">
+              Nenhum atendimento registrado nos últimos 7 dias.
             </div>
           </CardContent>
         </Card>
@@ -86,24 +114,8 @@ function Dashboard() {
           <CardHeader>
             <CardTitle className="text-base">Principais intenções</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
-            {[
-              { l: "dúvida_produto", v: 38 },
-              { l: "2via_boleto", v: 24 },
-              { l: "agendar_consulta", v: 18 },
-              { l: "status_os", v: 12 },
-              { l: "transferir", v: 8 },
-            ].map((i) => (
-              <div key={i.l}>
-                <div className="flex justify-between text-xs mb-1">
-                  <span>{i.l}</span>
-                  <span className="text-muted-foreground">{i.v}%</span>
-                </div>
-                <div className="h-2 bg-muted rounded-full">
-                  <div className="h-2 bg-primary rounded-full" style={{ width: `${i.v * 2}%` }} />
-                </div>
-              </div>
-            ))}
+          <CardContent className="space-y-3 py-6 flex flex-col items-center justify-center text-xs text-muted-foreground border border-dashed rounded-lg h-48">
+            Nenhuma intenção identificada.
           </CardContent>
         </Card>
       </div>
@@ -126,25 +138,35 @@ function Dashboard() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {logs.slice(0, 6).map((l) => (
-                <TableRow key={l.id}>
-                  <TableCell className="font-medium">{l.clienteFinal}</TableCell>
-                  <TableCell>{l.canal}</TableCell>
-                  <TableCell>{agenteNome(l.agenteId)}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={l.status} />
-                  </TableCell>
-                  <TableCell className="max-w-[240px] truncate text-muted-foreground">
-                    {l.ultimaMensagem}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{l.data}</TableCell>
-                  <TableCell>
-                    <Button variant="ghost" size="sm" asChild>
-                      <Link to="/logs">Ver log</Link>
-                    </Button>
+              {logs.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
+                    <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-50 text-primary animate-pulse" />
+                    <p className="font-semibold text-sm">Nenhuma conversa registrada</p>
+                    <p className="text-xs">As interações dos assistentes aparecerão aqui em tempo real.</p>
                   </TableCell>
                 </TableRow>
-              ))}
+              ) : (
+                logs.slice(0, 6).map((l) => (
+                  <TableRow key={l.id}>
+                    <TableCell className="font-medium">{l.clienteFinal}</TableCell>
+                    <TableCell>{l.canal}</TableCell>
+                    <TableCell>{agenteNome(l.agenteId)}</TableCell>
+                    <TableCell>
+                      <StatusBadge status={l.status} />
+                    </TableCell>
+                    <TableCell className="max-w-[240px] truncate text-muted-foreground">
+                      {l.ultimaMensagem}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{l.data}</TableCell>
+                    <TableCell>
+                      <Button variant="ghost" size="sm" asChild>
+                        <Link to="/logs">Ver log</Link>
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
             </TableBody>
           </Table>
         </CardContent>

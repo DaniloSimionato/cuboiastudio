@@ -331,4 +331,62 @@ export class CompaniesService {
     const trimmed = value?.trim() ?? "";
     return trimmed.length > 0 ? trimmed : null;
   }
+
+  async deleteCompanyAndData(companyId: string): Promise<void> {
+    const compId = companyId;
+
+    await this.prisma.$transaction(async (tx) => {
+      // 1. App integrations & logs
+      await tx.appActionLog.deleteMany({ where: { companyId: compId } });
+      await tx.appCredential.deleteMany({ where: { companyId: compId } });
+      await tx.appInstallation.deleteMany({ where: { companyId: compId } });
+
+      // 2. Google Calendar
+      await tx.googleCalendarBooking.deleteMany({ where: { companyId: compId } });
+      await tx.googleCalendarResource.deleteMany({ where: { companyId: compId } });
+
+      // 3. Reservable resources
+      await tx.reservableResourceAttribute.deleteMany({ where: { companyId: compId } });
+      await tx.reservableResourceCategory.deleteMany({ where: { companyId: compId } });
+      await tx.reservableResourceType.deleteMany({ where: { companyId: compId } });
+
+      // 4. ChatwootConfigs & AISettings
+      await tx.chatwootInboxConfig.deleteMany({ where: { companyId: compId } });
+      await tx.companyAiSettings.deleteMany({ where: { companyId: compId } });
+
+      // 5. Assistant conversations, messages, logs & knowledge
+      await tx.assistantConversationMessage.deleteMany({ where: { companyId: compId } });
+      await tx.assistantConversation.deleteMany({ where: { companyId: compId } });
+      await tx.assistantPreviewLog.deleteMany({ where: { companyId: compId } });
+      await tx.assistantRuntimeLog.deleteMany({ where: { companyId: compId } });
+      await tx.assistantKnowledgeChunk.deleteMany({ where: { companyId: compId } });
+      await tx.assistantKnowledge.deleteMany({ where: { companyId: compId } });
+
+      // 6. Assistants
+      await tx.assistant.deleteMany({ where: { companyId: compId } });
+
+      // 7. Roles & permissions
+      const roles = await tx.role.findMany({ where: { companyId: compId }, select: { id: true } });
+      const roleIds = roles.map((r) => r.id);
+      await tx.userRole.deleteMany({ where: { roleId: { in: roleIds } } });
+      await tx.rolePermission.deleteMany({ where: { roleId: { in: roleIds } } });
+      await tx.role.deleteMany({ where: { companyId: compId } });
+
+      // 8. Update users activeCompanyId to null/primary if they are pointing to this deleted company
+      const usersToUpdate = await tx.user.findMany({
+        where: { activeCompanyId: compId },
+        select: { id: true, companyId: true }
+      });
+      for (const u of usersToUpdate) {
+        await tx.user.update({
+          where: { id: u.id },
+          data: { activeCompanyId: u.companyId }
+        });
+      }
+
+      // 9. Memberships & Company
+      await tx.companyMembership.deleteMany({ where: { companyId: compId } });
+      await tx.company.delete({ where: { id: compId } });
+    });
+  }
 }

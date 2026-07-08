@@ -42,45 +42,55 @@ function CanaisPage() {
         description="Vincule agentes aos canais conectados via Cubo.Chat."
       />
 
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-        {canais.map((c) => {
-          const Icon = icone[c.tipo] ?? MessageSquare;
-          return (
-            <Card key={c.id}>
-              <CardContent className="p-5">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="h-10 w-10 rounded-lg bg-primary/10 grid place-items-center">
-                    <Icon className="h-5 w-5 text-primary" />
+      {canais.length === 0 ? (
+        <Card className="mb-6">
+          <CardContent className="p-8 text-center text-muted-foreground">
+            <Radio className="h-8 w-8 mx-auto mb-2 opacity-50 text-primary animate-pulse" />
+            <p className="font-semibold text-sm">Nenhum canal conectado</p>
+            <p className="text-xs">Vincule seus canais do Cubo.Chat para ativar o atendimento da IA.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+          {canais.map((c) => {
+            const Icon = icone[c.tipo] ?? MessageSquare;
+            return (
+              <Card key={c.id}>
+                <CardContent className="p-5">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="h-10 w-10 rounded-lg bg-primary/10 grid place-items-center">
+                      <Icon className="h-5 w-5 text-primary" />
+                    </div>
+                    <StatusBadge status={c.status} />
                   </div>
-                  <StatusBadge status={c.status} />
-                </div>
-                <h3 className="font-semibold">{c.tipo}</h3>
-                <p className="text-xs text-muted-foreground">{c.inbox}</p>
-                <div className="mt-3 space-y-1 text-xs">
-                  <Row label="Cliente" value={clienteNome(c.clienteId)} />
-                  <Row label="Agente" value={c.agenteId ? agenteNome(c.agenteId) : "—"} />
-                </div>
-                <div className="flex gap-1 mt-4 pt-3 border-t">
-                  <Button size="sm" variant="outline">
-                    <Settings className="h-4 w-4" /> Configurar
-                  </Button>
-                  <Button size="sm" variant="ghost">
-                    {c.status === "ativo" ? (
-                      <>
-                        <Pause className="h-4 w-4" /> Pausar IA
-                      </>
-                    ) : (
-                      <>
-                        <Play className="h-4 w-4" /> Ativar IA
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
+                  <h3 className="font-semibold">{c.tipo}</h3>
+                  <p className="text-xs text-muted-foreground">{c.inbox}</p>
+                  <div className="mt-3 space-y-1 text-xs">
+                    <Row label="Cliente" value={clienteNome(c.clienteId)} />
+                    <Row label="Agente" value={c.agenteId ? agenteNome(c.agenteId) : "—"} />
+                  </div>
+                  <div className="flex gap-1 mt-4 pt-3 border-t">
+                    <Button size="sm" variant="outline">
+                      <Settings className="h-4 w-4" /> Configurar
+                    </Button>
+                    <Button size="sm" variant="ghost">
+                      {c.status === "ativo" ? (
+                        <>
+                          <Pause className="h-4 w-4" /> Pausar IA
+                        </>
+                      ) : (
+                        <>
+                          <Play className="h-4 w-4" /> Ativar IA
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
 
       <Card>
         <CardContent className="p-6 grid md:grid-cols-2 gap-4">

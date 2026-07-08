@@ -77,7 +77,11 @@ export function Topbar() {
           <DropdownMenuItem
             onClick={() => {
               logout();
-              navigate({ to: "/auth" });
+              if (user?.id?.startsWith("stg-usr-")) {
+                window.location.href = "/staging/logout";
+              } else {
+                navigate({ to: "/auth" });
+              }
             }}
             className="text-destructive focus:text-destructive"
           >

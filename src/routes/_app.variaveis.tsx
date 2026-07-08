@@ -11,7 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus } from "lucide-react";
+import { Plus, Braces } from "lucide-react";
 import { variaveis } from "@/data/mock";
 
 export const Route = createFileRoute("/_app/variaveis")({
@@ -44,25 +44,35 @@ function VarsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {variaveis.map((v) => (
-                <TableRow key={v.nome}>
-                  <TableCell>
-                    <code className="text-xs bg-muted px-2 py-1 rounded">{v.nome}</code>
-                  </TableCell>
-                  <TableCell>{v.descricao}</TableCell>
-                  <TableCell className="text-muted-foreground">{v.origem}</TableCell>
-                  <TableCell className="font-mono text-xs">{v.exemplo}</TableCell>
-                  <TableCell>
-                    <div className="flex gap-1 flex-wrap">
-                      {v.disponivelEm.map((d) => (
-                        <Badge key={d} variant="outline">
-                          {d}
-                        </Badge>
-                      ))}
-                    </div>
+              {variaveis.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
+                    <Braces className="h-8 w-8 mx-auto mb-2 opacity-50 text-primary animate-pulse" />
+                    <p className="font-semibold text-sm">Nenhuma variável cadastrada</p>
+                    <p className="text-xs">Crie variáveis de contexto para personalizar prompts e webhooks.</p>
                   </TableCell>
                 </TableRow>
-              ))}
+              ) : (
+                variaveis.map((v) => (
+                  <TableRow key={v.nome}>
+                    <TableCell>
+                      <code className="text-xs bg-muted px-2 py-1 rounded">{v.nome}</code>
+                    </TableCell>
+                    <TableCell>{v.descricao}</TableCell>
+                    <TableCell className="text-muted-foreground">{v.origem}</TableCell>
+                    <TableCell className="font-mono text-xs">{v.exemplo}</TableCell>
+                    <TableCell>
+                      <div className="flex gap-1 flex-wrap">
+                        {v.disponivelEm.map((d) => (
+                          <Badge key={d} variant="outline">
+                            {d}
+                          </Badge>
+                        ))}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
             </TableBody>
           </Table>
         </CardContent>
