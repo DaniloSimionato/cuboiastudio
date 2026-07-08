@@ -74,10 +74,10 @@ services:
     build:
       context: ./infra/auth-proxy
     restart: unless-stopped
+    env_file:
+      - ./.env.staging
     environment:
       PORT: 8080
-      STAGING_PASSWORD: ${STAGING_PASSWORD}
-      AUTH_PROXY_SHARED_SECRET: ${AUTH_PROXY_SHARED_SECRET}
       API_TARGET: http://api:3001
       FRONTEND_TARGET: http://frontend:4173
     depends_on:
