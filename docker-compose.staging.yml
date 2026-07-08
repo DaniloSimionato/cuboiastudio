@@ -63,7 +63,7 @@ services:
       - ./:/workspace
     command: >
       sh -lc "npm install &&
-      npm run build &&
+      NODE_ENV=production npm run build &&
       PORT=4173 node .output/server/index.mjs"
     depends_on:
       - api
