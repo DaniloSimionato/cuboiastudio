@@ -82,7 +82,9 @@ const DEMO_IDS = {
   user: "user_demo_cubo_ai_studio",
   assistant: "assistant_demo_cubo_ai_studio",
   roles: {
+    owner: "role_owner_cubo_ai_studio",
     admin: "role_admin_cubo_ai_studio",
+    member: "role_member_cubo_ai_studio",
     implantation: "role_implantation_cubo_ai_studio",
     support: "role_support_cubo_ai_studio",
     viewer: "role_viewer_cubo_ai_studio",
