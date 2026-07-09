@@ -62,6 +62,7 @@ type ChannelFormState = {
   webhookSecret: string;
   isActive: boolean;
   metadataJsonText: string;
+  channelType: "CHATWOOT" | "WHATSAPP";
 };
 
 const DEFAULT_FORM: ChannelFormState = {
@@ -74,6 +75,7 @@ const DEFAULT_FORM: ChannelFormState = {
   webhookSecret: "",
   isActive: true,
   metadataJsonText: "",
+  channelType: "CHATWOOT",
 };
 
 function CanaisPage() {
@@ -128,6 +130,8 @@ function CanaisPage() {
 
   const openEdit = (channel: ChatwootInboxConfigItem) => {
     setEditingChannel(channel);
+    const metadata = channel.metadataJson as Record<string, unknown> | null;
+    const channelType = (metadata?.channelType as "CHATWOOT" | "WHATSAPP") || "CHATWOOT";
     setForm({
       name: channel.name,
       baseUrl: channel.baseUrl,
@@ -138,6 +142,7 @@ function CanaisPage() {
       webhookSecret: "",
       isActive: channel.isActive,
       metadataJsonText: channel.metadataJson ? JSON.stringify(channel.metadataJson, null, 2) : "",
+      channelType,
     });
     setSheetOpen(true);
   };
@@ -148,7 +153,9 @@ function CanaisPage() {
       return;
     }
 
-    let metadataJson: Record<string, unknown> | undefined;
+    let metadataJson: Record<string, unknown> = {
+      channelType: form.channelType,
+    };
     const trimmedMetadata = form.metadataJsonText.trim();
     if (trimmedMetadata) {
       try {
@@ -156,7 +163,10 @@ function CanaisPage() {
         if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
           throw new Error();
         }
-        metadataJson = parsed as Record<string, unknown>;
+        metadataJson = {
+          ...metadataJson,
+          ...(parsed as Record<string, unknown>),
+        };
       } catch {
         toast.error("O metadata precisa ser um objeto JSON válido.");
         return;
@@ -174,7 +184,7 @@ function CanaisPage() {
         ...(form.apiAccessToken.trim() ? { apiAccessToken: form.apiAccessToken.trim() } : {}),
         ...(form.webhookSecret.trim() ? { webhookSecret: form.webhookSecret.trim() } : {}),
         isActive: form.isActive,
-        ...(metadataJson ? { metadataJson } : {}),
+        metadataJson,
       };
 
       if (editingChannel) {
@@ -315,7 +325,7 @@ function CanaisPage() {
                           <h3 className="truncate font-medium">{channel.name}</h3>
                         </div>
                         <p className="mt-1 text-xs text-muted-foreground">
-                          Chatwoot / WhatsApp
+                          {channel.metadataJson?.["channelType"] === "WHATSAPP" ? "WhatsApp" : "Chatwoot"}
                         </p>
                       </div>
                       <StatusBadge status={channel.isActive ? "ativo" : "pausado"} />
@@ -417,6 +427,25 @@ function CanaisPage() {
                 onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
                 placeholder="WhatsApp Comercial"
               />
+            </Field>
+            <Field label="Tipo de canal">
+              <Select
+                value={form.channelType}
+                onValueChange={(value) =>
+                  setForm((current) => ({
+                    ...current,
+                    channelType: value as "CHATWOOT" | "WHATSAPP",
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione o tipo" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="CHATWOOT">Chatwoot</SelectItem>
+                  <SelectItem value="WHATSAPP">WhatsApp</SelectItem>
+                </SelectContent>
+              </Select>
             </Field>
             <Field label="URL base do Chatwoot">
               <Input

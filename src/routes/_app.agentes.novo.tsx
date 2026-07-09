@@ -1567,7 +1567,7 @@ function NovoAgente() {
                               <div className="min-w-0">
                                 <div className="font-medium truncate">{channel.name}</div>
                                 <div className="text-xs text-muted-foreground">
-                                  Chatwoot / WhatsApp · Account {channel.accountId} · Inbox {channel.inboxId}
+                                  {channel.metadataJson?.["channelType"] === "WHATSAPP" ? "WhatsApp" : "Chatwoot"} · Account {channel.accountId} · Inbox {channel.inboxId}
                                 </div>
                               </div>
                               <StatusBadge status={channel.isActive ? "ativo" : "pausado"} />
