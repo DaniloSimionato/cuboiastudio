@@ -5,8 +5,6 @@ const http = require("http");
 const httpProxy = require("http-proxy");
 
 const app = express();
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
 app.use(cookieParser());
 
 const PORT = process.env.PORT || 8080;
@@ -314,7 +312,7 @@ app.get("/staging/login", (req, res) => {
   res.send(loginPageHtml());
 });
 
-app.post("/staging/login", async (req, res) => {
+app.post("/staging/login", express.urlencoded({ extended: true }), express.json(), async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).send(loginPageHtml("Informe e-mail e senha."));
