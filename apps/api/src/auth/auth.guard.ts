@@ -375,7 +375,10 @@ export class AuthGuard implements CanActivate {
       .map((membership) => membership.companyId);
 
     const fallbackCandidates = [
-      persistedUser.activeCompanyId,
+      persistedUser.activeCompany?.status === Status.ACTIVE &&
+      persistedUser.activeCompany.deletedAt === null
+        ? persistedUser.activeCompanyId
+        : null,
       persistedUser.company?.status === Status.ACTIVE && persistedUser.company.deletedAt === null
         ? persistedUser.companyId
         : null,

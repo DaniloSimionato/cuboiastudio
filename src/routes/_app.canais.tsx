@@ -45,7 +45,7 @@ import type {
   CurrentCompanyResponse,
   UpsertChatwootInboxConfigPayload,
 } from "@/types";
-import { SecurityNotice } from "@/components";
+import { MaskedSecretInput, SecurityNotice } from "@/components";
 
 export const Route = createFileRoute("/_app/canais")({
   head: () => ({ meta: [{ title: "Canais · Cubo AI Studio" }] }),
@@ -61,7 +61,7 @@ type ChannelFormState = {
   apiAccessToken: string;
   webhookSecret: string;
   isActive: boolean;
-  metadataJsonText: string;
+  notes: string;
   channelType: "CHATWOOT" | "WHATSAPP";
 };
 
@@ -74,7 +74,7 @@ const DEFAULT_FORM: ChannelFormState = {
   apiAccessToken: "",
   webhookSecret: "",
   isActive: true,
-  metadataJsonText: "",
+  notes: "",
   channelType: "CHATWOOT",
 };
 
@@ -141,7 +141,7 @@ function CanaisPage() {
       apiAccessToken: "",
       webhookSecret: "",
       isActive: channel.isActive,
-      metadataJsonText: channel.metadataJson ? JSON.stringify(channel.metadataJson, null, 2) : "",
+      notes: typeof metadata?.notes === "string" ? metadata.notes : "",
       channelType,
     });
     setSheetOpen(true);
@@ -153,25 +153,10 @@ function CanaisPage() {
       return;
     }
 
-    let metadataJson: Record<string, unknown> = {
+    const metadataJson: Record<string, unknown> = {
       channelType: form.channelType,
+      ...(form.notes.trim() ? { notes: form.notes.trim() } : {}),
     };
-    const trimmedMetadata = form.metadataJsonText.trim();
-    if (trimmedMetadata) {
-      try {
-        const parsed = JSON.parse(trimmedMetadata) as unknown;
-        if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
-          throw new Error();
-        }
-        metadataJson = {
-          ...metadataJson,
-          ...(parsed as Record<string, unknown>),
-        };
-      } catch {
-        toast.error("O metadata precisa ser um objeto JSON válido.");
-        return;
-      }
-    }
 
     setSaving(true);
     try {
@@ -259,10 +244,7 @@ function CanaisPage() {
     }
   };
 
-  const webhookExample = useMemo(() => {
-    const origin = typeof window !== "undefined" ? window.location.origin : "https://studio-stage.cubochat.com.br";
-    return `${origin.replace(/\/$/, "")}/api/webhooks/chatwoot?secret=SEU_SECRET`;
-  }, []);
+  const webhookExample = "https://api-stage.cubochat.com.br/webhooks/chatwoot";
 
   return (
     <div className="space-y-6">
@@ -494,25 +476,25 @@ function CanaisPage() {
               </Select>
             </Field>
             <Field label="Token de API (opcional)">
-              <Input
+              <MaskedSecretInput
                 value={form.apiAccessToken}
                 onChange={(event) => setForm((current) => ({ ...current, apiAccessToken: event.target.value }))}
                 placeholder={editingChannel?.apiAccessTokenConfigured ? "Ja configurado no backend" : "Cole aqui apenas se for atualizar"}
               />
             </Field>
             <Field label="Webhook secret (opcional)">
-              <Input
+              <MaskedSecretInput
                 value={form.webhookSecret}
                 onChange={(event) => setForm((current) => ({ ...current, webhookSecret: event.target.value }))}
                 placeholder={editingChannel?.webhookSecretConfigured ? "Ja configurado no backend" : "Cole aqui apenas se for atualizar"}
               />
             </Field>
-            <Field label="Metadata JSON (opcional)">
+            <Field label="Observações (opcional)">
               <Textarea
-                rows={4}
-                value={form.metadataJsonText}
-                onChange={(event) => setForm((current) => ({ ...current, metadataJsonText: event.target.value }))}
-                placeholder='{"channelType":"WHATSAPP"}'
+                rows={3}
+                value={form.notes}
+                onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))}
+                placeholder="Contexto operacional deste canal."
               />
             </Field>
             <div className="flex items-center justify-between rounded-lg border px-3 py-3">

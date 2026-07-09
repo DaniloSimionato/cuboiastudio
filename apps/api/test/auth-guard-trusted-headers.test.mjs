@@ -165,3 +165,65 @@ test("AuthGuard autentica usuário sem empresa no portal, sem conceder tenant", 
   assert.deepEqual(request.user?.memberships, []);
   assert.equal(request.tenant?.companyId, "");
 });
+
+test("AuthGuard ignora activeCompanyId inativo e escolhe membership ativa", async () => {
+  const secret = "shared-secret";
+  const timestamp = new Date().toISOString();
+  const signature = buildTrustedAuthSignature({
+    userId: "user-1",
+    email: "user@example.com",
+    name: "User",
+    timestamp,
+    secret,
+  });
+  const persisted = createPersistedUser();
+  persisted.activeCompanyId = "company-inactive";
+  persisted.activeCompany = {
+    id: "company-inactive",
+    status: "INACTIVE",
+    deletedAt: null,
+  };
+  persisted.memberships = [
+    {
+      companyId: "company-inactive",
+      company: { id: "company-inactive", status: "INACTIVE", deletedAt: null },
+    },
+    {
+      companyId: "company-2",
+      company: { id: "company-2", status: "ACTIVE", deletedAt: null },
+    },
+  ];
+  persisted.company = {
+    id: "company-inactive",
+    status: "INACTIVE",
+    deletedAt: null,
+  };
+  persisted.companyId = "company-inactive";
+
+  const guard = new AuthGuard(
+    {
+      withQueryTimeout: async (promise) => promise,
+      user: { findFirst: async () => persisted },
+      rolePermission: { findMany: async () => [] },
+    },
+    {
+      get: (key) => {
+        if (key === "AUTH_TRUST_MODE") return "signed-headers";
+        if (key === "AUTH_PROXY_SHARED_SECRET") return secret;
+        if (key === "AUTH_PROXY_SIGNATURE_TTL_MS") return 300000;
+        return undefined;
+      },
+    },
+  );
+  const request = createRequest({
+    "x-auth-user-id": "user-1",
+    "x-auth-user-email": "user@example.com",
+    "x-auth-user-name": "User",
+    "x-auth-timestamp": timestamp,
+    "x-auth-signature": signature,
+  });
+
+  await guard.canActivate(createContext(request));
+  assert.equal(request.user?.activeCompanyId, "company-2");
+  assert.equal(request.tenant?.companyId, "company-2");
+});

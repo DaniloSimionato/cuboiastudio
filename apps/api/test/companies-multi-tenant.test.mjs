@@ -58,7 +58,7 @@ test("CompaniesService lista apenas empresas vinculadas ao usuário", async () =
   });
 
   assert.equal(result.items.length, 2);
-  assert.equal(result.items[1].isActiveContext, true);
+  assert.equal(result.items[1].isActiveContext, false);
   assert.equal(result.items[0].isActiveContext, false);
 });
 
@@ -72,6 +72,171 @@ test("CompaniesService bloqueia troca para empresa sem vínculo", async () => {
         user: createUser({ memberships: ["company-1"] }),
       }),
     ForbiddenException,
+  );
+});
+
+test("CompaniesService bloqueia acesso a empresa inativa", async () => {
+  const service = new CompaniesService({
+    company: {
+      findFirst: async () => ({
+        id: "company-2",
+        name: "Empresa Inativa",
+        legalName: null,
+        document: null,
+        notes: null,
+        status: Status.INACTIVE,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      service.setActiveCompany({
+        dto: { companyId: "company-2" },
+        user: createUser({ memberships: ["company-1", "company-2"] }),
+      }),
+    ForbiddenException,
+  );
+});
+
+test("CompaniesService limpa activeCompanyId ao inativar empresa", async () => {
+  let activeContextCleared = false;
+  const existing = {
+    id: "company-1",
+    name: "Empresa A",
+    legalName: null,
+    document: null,
+    notes: null,
+    status: Status.ACTIVE,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const tx = {
+    company: {
+      update: async () => ({ ...existing, status: Status.INACTIVE }),
+    },
+    user: {
+      updateMany: async ({ where, data }) => {
+        assert.equal(where.activeCompanyId, "company-1");
+        assert.equal(data.activeCompanyId, null);
+        activeContextCleared = true;
+      },
+    },
+  };
+  const service = new CompaniesService({
+    company: { findFirst: async () => existing },
+    $transaction: async (callback) => callback(tx),
+  });
+
+  const result = await service.update({
+    id: "company-1",
+    dto: { status: Status.INACTIVE },
+    user: createUser(),
+  });
+
+  assert.equal(result.status, Status.INACTIVE);
+  assert.equal(activeContextCleared, true);
+});
+
+test("CompaniesService permite reativar empresa sem alterar contexto dos usuários", async () => {
+  let contextUpdates = 0;
+  const existing = {
+    id: "company-1",
+    name: "Empresa A",
+    legalName: null,
+    document: null,
+    notes: null,
+    status: Status.INACTIVE,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const service = new CompaniesService({
+    company: { findFirst: async () => existing },
+    $transaction: async (callback) =>
+      callback({
+        company: { update: async () => ({ ...existing, status: Status.ACTIVE }) },
+        user: { updateMany: async () => { contextUpdates += 1; } },
+      }),
+  });
+
+  const result = await service.update({
+    id: "company-1",
+    dto: { status: Status.ACTIVE },
+    user: createUser(),
+  });
+
+  assert.equal(result.status, Status.ACTIVE);
+  assert.equal(contextUpdates, 0);
+});
+
+test("CompaniesService exclui empresa não ativa quando há outra empresa acessível", async () => {
+  const company = {
+    id: "company-2",
+    name: "Empresa B",
+    legalName: null,
+    document: null,
+    notes: null,
+    status: Status.INACTIVE,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  let deletedId = null;
+  const service = new CompaniesService({
+    company: {
+      findFirst: async () => company,
+      count: async () => 1,
+    },
+  });
+  service.deleteCompanyAndData = async (id) => {
+    deletedId = id;
+  };
+
+  await service.deleteCompanySafely({
+    companyId: "company-2",
+    user: createUser({
+      activeCompanyId: "company-1",
+      memberships: ["company-1", "company-2"],
+      roles: ["studio_admin"],
+    }),
+  });
+
+  assert.equal(deletedId, "company-2");
+});
+
+test("CompaniesService bloqueia exclusão da empresa ativa ou última acessível", async () => {
+  const service = new CompaniesService({
+    company: {
+      findFirst: async () => ({
+        id: "company-1",
+        name: "Empresa A",
+        status: Status.ACTIVE,
+      }),
+      count: async () => 0,
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      service.deleteCompanySafely({
+        companyId: "company-1",
+        user: createUser({ roles: ["studio_admin"] }),
+      }),
+    ConflictException,
+  );
+
+  await assert.rejects(
+    () =>
+      service.deleteCompanySafely({
+        companyId: "company-2",
+        user: createUser({
+          activeCompanyId: null,
+          memberships: ["company-2"],
+          roles: ["studio_admin"],
+        }),
+      }),
+    ConflictException,
   );
 });
 

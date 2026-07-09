@@ -63,7 +63,8 @@ export class CompaniesService {
     return {
       items: items.map((company) => ({
         ...company,
-        isActiveContext: company.id === input.user.activeCompanyId,
+        isActiveContext:
+          company.status === Status.ACTIVE && company.id === input.user.activeCompanyId,
       })),
     };
   }
@@ -75,6 +76,9 @@ export class CompaniesService {
     this.assertCompanyAccess(input.user, input.tenant.companyId);
 
     const company = await this.findCompanyOrThrow(input.tenant.companyId);
+    if (company.status !== Status.ACTIVE) {
+      throw new ForbiddenException("Inactive companies cannot be used as an operational context.");
+    }
 
     return {
       company: {
@@ -206,18 +210,29 @@ export class CompaniesService {
       }
     }
 
-    return this.prisma.company.update({
-      where: { id: input.id },
-      data: {
-        ...(input.dto.name !== undefined ? { name: input.dto.name.trim() } : {}),
-        ...(input.dto.legalName !== undefined
-          ? { legalName: this.trimNullable(input.dto.legalName) }
-          : {}),
-        ...(document !== undefined ? { document } : {}),
-        ...(input.dto.notes !== undefined ? { notes: this.trimNullable(input.dto.notes) } : {}),
-        ...(input.dto.status !== undefined ? { status: input.dto.status } : {}),
-      },
-      select: companySelect,
+    return this.prisma.$transaction(async (tx) => {
+      const company = await tx.company.update({
+        where: { id: input.id },
+        data: {
+          ...(input.dto.name !== undefined ? { name: input.dto.name.trim() } : {}),
+          ...(input.dto.legalName !== undefined
+            ? { legalName: this.trimNullable(input.dto.legalName) }
+            : {}),
+          ...(document !== undefined ? { document } : {}),
+          ...(input.dto.notes !== undefined ? { notes: this.trimNullable(input.dto.notes) } : {}),
+          ...(input.dto.status !== undefined ? { status: input.dto.status } : {}),
+        },
+        select: companySelect,
+      });
+
+      if (input.dto.status === Status.INACTIVE) {
+        await tx.user.updateMany({
+          where: { activeCompanyId: input.id },
+          data: { activeCompanyId: null },
+        });
+      }
+
+      return company;
     });
   }
 
@@ -384,6 +399,12 @@ export class CompaniesService {
     }
   }
 
+  private assertStudioAdmin(user: AuthenticatedUser): void {
+    if (!user.roles.some((role) => role === "studio_admin" || role === "studio_owner")) {
+      throw new ForbiddenException("Only Studio administrators can delete companies.");
+    }
+  }
+
   private trimNullable(value: string | null | undefined): string | null {
     const trimmed = value?.trim() ?? "";
     return trimmed.length > 0 ? trimmed : null;
@@ -396,18 +417,50 @@ export class CompaniesService {
     return digitsOnly.length > 0 ? digitsOnly : trimmed;
   }
 
+  async deleteCompanySafely(input: {
+    companyId: string;
+    user: AuthenticatedUser;
+  }): Promise<void> {
+    this.assertStudioAdmin(input.user);
+    this.assertCompanyAccess(input.user, input.companyId);
+    await this.findCompanyOrThrow(input.companyId);
+
+    if (input.user.activeCompanyId === input.companyId) {
+      throw new ConflictException(
+        "Não é possível excluir a empresa ativa. Acesse outra empresa primeiro.",
+      );
+    }
+
+    const remainingCompanies = await this.prisma.company.count({
+      where: {
+        id: {
+          in: input.user.memberships,
+          not: input.companyId,
+        },
+        deletedAt: null,
+      },
+    });
+    if (remainingCompanies === 0) {
+      throw new ConflictException(
+        "Não é possível excluir a última empresa acessível do administrador.",
+      );
+    }
+
+    await this.deleteCompanyAndData(input.companyId);
+  }
+
   async deleteCompanyAndData(companyId: string): Promise<void> {
     const compId = companyId;
 
     await this.prisma.$transaction(async (tx) => {
-      // 1. App integrations & logs
+      // 1. Google Calendar must be removed before its app installation.
+      await tx.googleCalendarBooking.deleteMany({ where: { companyId: compId } });
+      await tx.googleCalendarResource.deleteMany({ where: { companyId: compId } });
+
+      // 2. App integrations & logs
       await tx.appActionLog.deleteMany({ where: { companyId: compId } });
       await tx.appCredential.deleteMany({ where: { companyId: compId } });
       await tx.appInstallation.deleteMany({ where: { companyId: compId } });
-
-      // 2. Google Calendar
-      await tx.googleCalendarBooking.deleteMany({ where: { companyId: compId } });
-      await tx.googleCalendarResource.deleteMany({ where: { companyId: compId } });
 
       // 3. Reservable resources
       await tx.reservableResourceAttribute.deleteMany({ where: { companyId: compId } });
@@ -436,15 +489,33 @@ export class CompaniesService {
       await tx.rolePermission.deleteMany({ where: { roleId: { in: roleIds } } });
       await tx.role.deleteMany({ where: { companyId: compId } });
 
-      // 8. Update users activeCompanyId to null/primary if they are pointing to this deleted company
+      // 8. Move identity pointers to another active membership, or clear them.
       const usersToUpdate = await tx.user.findMany({
-        where: { activeCompanyId: compId },
-        select: { id: true, companyId: true }
+        where: {
+          OR: [{ activeCompanyId: compId }, { companyId: compId }],
+        },
+        select: { id: true },
       });
       for (const u of usersToUpdate) {
+        const fallbackMembership = await tx.companyMembership.findFirst({
+          where: {
+            userId: u.id,
+            companyId: { not: compId },
+            status: Status.ACTIVE,
+            company: {
+              status: Status.ACTIVE,
+              deletedAt: null,
+            },
+          },
+          select: { companyId: true },
+          orderBy: { createdAt: "asc" },
+        });
         await tx.user.update({
           where: { id: u.id },
-          data: { activeCompanyId: u.companyId }
+          data: {
+            companyId: fallbackMembership?.companyId ?? null,
+            activeCompanyId: fallbackMembership?.companyId ?? null,
+          },
         });
       }
 

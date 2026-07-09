@@ -1247,6 +1247,32 @@ test("webhook desconhecido não chama runtime", async () => {
   assert.equal(calls.sendMessage.length, 0);
 });
 
+test("webhook ignora canal inativo", async () => {
+  const inboxService = new ChatwootInboxConfigService(
+    {
+      chatwootInboxConfig: {
+        findMany: async ({ where }) => {
+          assert.equal(where.isActive, true);
+          return [];
+        },
+      },
+    },
+    { get: () => "" },
+  );
+  const { service, calls } = createWebhookDeps({
+    resolveActiveByWebhook: (input) => inboxService.resolveActiveByWebhook(input),
+  });
+
+  const result = await service.processMessageCreated({
+    payload: createMessageCreatedPayload(),
+    webhookSecret: "secret-123",
+  });
+
+  assert.equal(result.ignored, true);
+  assert.equal(calls.ensureConversation.length, 0);
+  assert.equal(calls.sendMessage.length, 0);
+});
+
 test("resolveActiveByWebhook rejeita ambiguidade entre tenants", async () => {
   const prisma = {
     chatwootInboxConfig: {

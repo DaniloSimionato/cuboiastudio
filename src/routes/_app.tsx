@@ -11,12 +11,18 @@ export const Route = createFileRoute("/_app")({
 });
 
 function AppLayout() {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, loading, user } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
     if (!loading && !isAuthenticated) navigate({ to: "/auth" });
   }, [loading, isAuthenticated, navigate]);
+
+  useEffect(() => {
+    if (!loading && isAuthenticated && !user?.activeCompanyId) {
+      void navigate({ to: "/portal", replace: true });
+    }
+  }, [isAuthenticated, loading, navigate, user?.activeCompanyId]);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -29,7 +35,7 @@ function AppLayout() {
     }
   }, [isAuthenticated]);
 
-  if (loading || !isAuthenticated) {
+  if (loading || !isAuthenticated || !user?.activeCompanyId) {
     return (
       <div className="min-h-screen grid place-items-center bg-background text-muted-foreground">
         <Loader2 className="h-6 w-6 animate-spin" />

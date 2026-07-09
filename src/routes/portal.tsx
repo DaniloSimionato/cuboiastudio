@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import {
   ArrowRight,
+  AlertTriangle,
   Building2,
   CheckCircle2,
   ChevronRight,
@@ -9,10 +10,13 @@ import {
   LogOut,
   Pencil,
   Plus,
+  Power,
+  RotateCcw,
   ShieldCheck,
   Sparkles,
   UserRound,
   Users,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
@@ -118,6 +122,9 @@ function PortalPage() {
   const [userSheetOpen, setUserSheetOpen] = useState(false);
   const [savingCompany, setSavingCompany] = useState(false);
   const [savingUser, setSavingUser] = useState(false);
+  const [companyActionId, setCompanyActionId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<CurrentCompany | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [editingCompany, setEditingCompany] = useState<CurrentCompany | null>(null);
   const [editingUser, setEditingUser] = useState<StudioUser | null>(null);
   const [companyForm, setCompanyForm] = useState<CompanyForm>(EMPTY_COMPANY);
@@ -125,6 +132,7 @@ function PortalPage() {
 
   const canManageCompanies = Boolean(user?.permissions?.includes("companies:manage"));
   const canManageUsers = Boolean(user?.permissions?.includes("users:manage"));
+  const canDeleteCompanies = Boolean(user?.roles?.includes("studio_admin"));
   const activeCompany = companies.find((company) => company.isActiveContext);
 
   useEffect(() => {
@@ -213,6 +221,10 @@ function PortalPage() {
   };
 
   const enterCompany = async (company: CurrentCompany) => {
+    if (company.status !== "ACTIVE") {
+      toast.info("Reative a empresa para acessar.");
+      return;
+    }
     if (enteringCompanyId) return;
     try {
       await accessCompany({
@@ -225,6 +237,41 @@ function PortalPage() {
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Não foi possível acessar a empresa.");
+    }
+  };
+
+  const toggleCompanyStatus = async (company: CurrentCompany) => {
+    const nextStatus: BackendStatus = company.status === "ACTIVE" ? "INACTIVE" : "ACTIVE";
+    setCompanyActionId(company.id);
+    try {
+      await companiesService.update(company.id, { status: nextStatus });
+      await refreshUser();
+      await loadCompanies();
+      toast.success(nextStatus === "ACTIVE" ? "Empresa reativada." : "Empresa inativada.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível alterar a empresa.");
+    } finally {
+      setCompanyActionId(null);
+    }
+  };
+
+  const deleteCompany = async () => {
+    if (!deleteTarget || deleteConfirmation.trim() !== deleteTarget.name) {
+      toast.error("Digite o nome exato da empresa para confirmar.");
+      return;
+    }
+    setCompanyActionId(deleteTarget.id);
+    try {
+      await companiesService.remove(deleteTarget.id);
+      setDeleteTarget(null);
+      setDeleteConfirmation("");
+      await refreshUser();
+      await loadCompanies();
+      toast.success("Empresa e dados vinculados foram excluídos.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível excluir a empresa.");
+    } finally {
+      setCompanyActionId(null);
     }
   };
 
@@ -447,10 +494,17 @@ function PortalPage() {
                               key={company.id}
                               company={company}
                               canManage={canManageCompanies}
+                              canDelete={canDeleteCompanies}
                               loading={enteringCompanyId === company.id}
-                              actionsDisabled={enteringCompanyId !== null}
+                              actionLoading={companyActionId === company.id}
+                              actionsDisabled={enteringCompanyId !== null || companyActionId !== null}
                               onEdit={() => openCompany(company)}
                               onEnter={() => void enterCompany(company)}
+                              onToggleStatus={() => void toggleCompanyStatus(company)}
+                              onDelete={() => {
+                                setDeleteTarget(company);
+                                setDeleteConfirmation("");
+                              }}
                             />
                           ))}
                         </TableBody>
@@ -462,10 +516,17 @@ function PortalPage() {
                           key={company.id}
                           company={company}
                           canManage={canManageCompanies}
+                          canDelete={canDeleteCompanies}
                           loading={enteringCompanyId === company.id}
-                          actionsDisabled={enteringCompanyId !== null}
+                          actionLoading={companyActionId === company.id}
+                          actionsDisabled={enteringCompanyId !== null || companyActionId !== null}
                           onEdit={() => openCompany(company)}
                           onEnter={() => void enterCompany(company)}
+                          onToggleStatus={() => void toggleCompanyStatus(company)}
+                          onDelete={() => {
+                            setDeleteTarget(company);
+                            setDeleteConfirmation("");
+                          }}
                         />
                       ))}
                     </div>
@@ -557,6 +618,62 @@ function PortalPage() {
         saving={savingUser}
         onSave={() => void saveUser()}
       />
+      <Dialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => {
+          if (!open && companyActionId === null) {
+            setDeleteTarget(null);
+            setDeleteConfirmation("");
+          }
+        }}
+      >
+        <DialogContent className="studio-portal-dialog rounded-2xl border-slate-200 bg-white text-slate-950 sm:max-w-lg">
+          <DialogHeader>
+            <div className="mb-2 grid h-10 w-10 place-items-center rounded-xl bg-red-50 text-red-600">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+            <DialogTitle>Excluir empresa permanentemente?</DialogTitle>
+            <DialogDescription className="text-slate-500">
+              Assistentes, canais, conversas, conhecimentos, logs e demais dados vinculados serão
+              removidos. Esta ação não pode ser desfeita.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label className="text-xs font-medium text-slate-700">
+              Digite <strong>{deleteTarget?.name}</strong> para confirmar
+            </Label>
+            <Input
+              className="portal-input"
+              value={deleteConfirmation}
+              onChange={(event) => setDeleteConfirmation(event.target.value)}
+              autoComplete="off"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="border-slate-200 bg-white text-slate-700"
+              onClick={() => {
+                setDeleteTarget(null);
+                setDeleteConfirmation("");
+              }}
+              disabled={companyActionId !== null}
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void deleteCompany()}
+              disabled={
+                companyActionId !== null || deleteConfirmation.trim() !== deleteTarget?.name
+              }
+            >
+              {companyActionId && <Loader2 className="h-4 w-4 animate-spin" />}
+              Excluir empresa e dados
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }
@@ -793,17 +910,25 @@ function UserSheet(props: {
 function CompanyRow({
   company,
   canManage,
+  canDelete,
   loading,
+  actionLoading,
   actionsDisabled,
   onEdit,
   onEnter,
+  onToggleStatus,
+  onDelete,
 }: {
   company: CurrentCompany;
   canManage: boolean;
+  canDelete: boolean;
   loading: boolean;
+  actionLoading: boolean;
   actionsDisabled: boolean;
   onEdit: () => void;
   onEnter: () => void;
+  onToggleStatus: () => void;
+  onDelete: () => void;
 }) {
   return (
     <TableRow className="h-[68px] border-slate-100 bg-white hover:bg-blue-50/25">
@@ -832,21 +957,56 @@ function CompanyRow({
       <TableCell className="pr-5">
         <div className="flex justify-end gap-1.5">
           {canManage && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800"
-              onClick={onEdit}
-            >
-              <Pencil className="h-3.5 w-3.5" />
-              Editar
-            </Button>
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                onClick={onEdit}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                Editar
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                onClick={onToggleStatus}
+                disabled={actionsDisabled}
+                title={company.status === "ACTIVE" ? "Inativar empresa" : "Reativar empresa"}
+              >
+                {actionLoading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : company.status === "ACTIVE" ? (
+                  <Power className="h-3.5 w-3.5" />
+                ) : (
+                  <RotateCcw className="h-3.5 w-3.5" />
+                )}
+              </Button>
+              {canDelete && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="rounded-lg text-red-500 hover:bg-red-50 hover:text-red-700"
+                  onClick={onDelete}
+                  disabled={actionsDisabled || company.isActiveContext}
+                  title={
+                    company.isActiveContext
+                      ? "Troque de empresa antes de excluir"
+                      : "Excluir empresa"
+                  }
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </>
           )}
           <Button
             size="sm"
             className="min-w-24 rounded-lg bg-blue-600 text-white shadow-sm hover:bg-blue-700"
             onClick={onEnter}
-            disabled={actionsDisabled}
+            disabled={actionsDisabled || company.status !== "ACTIVE"}
+            title={company.status === "ACTIVE" ? "Acessar empresa" : "Reative a empresa para acessar"}
           >
             {loading ? (
               <>
@@ -884,20 +1044,51 @@ function CompanyMobileCard(props: Parameters<typeof CompanyRow>[0]) {
       </div>
       <div className="mt-4 flex gap-2">
         {props.canManage && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="flex-1 rounded-lg border-slate-200 bg-white text-slate-600"
-            onClick={props.onEdit}
-          >
-            Editar
-          </Button>
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              className="flex-1 rounded-lg border-slate-200 bg-white text-slate-600"
+              onClick={props.onEdit}
+            >
+              Editar
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="rounded-lg border-slate-200 bg-white px-2.5 text-slate-600"
+              onClick={props.onToggleStatus}
+              disabled={props.actionsDisabled}
+              aria-label={company.status === "ACTIVE" ? "Inativar empresa" : "Reativar empresa"}
+            >
+              {props.actionLoading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : company.status === "ACTIVE" ? (
+                <Power className="h-3.5 w-3.5" />
+              ) : (
+                <RotateCcw className="h-3.5 w-3.5" />
+              )}
+            </Button>
+            {props.canDelete && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="rounded-lg border-red-100 bg-white px-2.5 text-red-600"
+                onClick={props.onDelete}
+                disabled={props.actionsDisabled || company.isActiveContext}
+                aria-label="Excluir empresa"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </>
         )}
         <Button
           size="sm"
           className="flex-1 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
           onClick={props.onEnter}
-          disabled={props.actionsDisabled}
+          disabled={props.actionsDisabled || company.status !== "ACTIVE"}
+          title={company.status === "ACTIVE" ? "Acessar empresa" : "Reative a empresa para acessar"}
         >
           {props.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Acessar empresa"}
         </Button>

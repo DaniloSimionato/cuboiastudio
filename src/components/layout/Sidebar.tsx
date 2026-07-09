@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { companiesService, currentCompanyService } from "@/services";
 import type { CurrentCompanyResponse } from "@/types";
+import { toast } from "sonner";
 
 const items = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -92,12 +93,20 @@ export function Sidebar() {
   };
 
   const handleSwitchCompany = (companyId: string) => {
+    const targetCompany = companies.find((item) => item.id === companyId);
+    if (targetCompany?.status !== "ACTIVE") {
+      toast.info("Reative a empresa no Portal do Studio para acessar.");
+      return;
+    }
     setSwitchingCompanyId(companyId);
     void companiesService
       .setActive(companyId)
       .then((response) => {
         setCompany(response.company);
         window.location.reload();
+      })
+      .catch((error) => {
+        toast.error(error instanceof Error ? error.message : "Não foi possível trocar de empresa.");
       })
       .finally(() => {
         setSwitchingCompanyId(null);
@@ -168,11 +177,15 @@ export function Sidebar() {
                   companies.map((item) => (
                     <DropdownMenuItem
                       key={item.id}
-                      disabled={switchingCompanyId === item.id}
+                      disabled={switchingCompanyId === item.id || item.status !== "ACTIVE"}
                       onClick={() => handleSwitchCompany(item.id)}
                     >
                       {item.name}
-                      {item.id === company?.id ? " · ativa" : ""}
+                      {item.id === company?.id
+                        ? " · ativa"
+                        : item.status !== "ACTIVE"
+                          ? " · inativa"
+                          : ""}
                     </DropdownMenuItem>
                   ))
                 ) : (

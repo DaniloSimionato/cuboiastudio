@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Copy, Pencil, PlayCircle, Plus, Trash2 } from "lucide-react";
+import { Copy, Pencil, PlayCircle, Plus, Trash2, Wrench } from "lucide-react";
 
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -27,7 +27,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ferramentas, clientes, clienteNome } from "@/data/mock";
+import { toolsService } from "@/services";
+import { TOOLS_EMPTY_STATE } from "@/lib/tools-empty-state";
 import type { Tool } from "@/types";
 
 export const Route = createFileRoute("/_app/ferramentas")({
@@ -37,7 +38,6 @@ export const Route = createFileRoute("/_app/ferramentas")({
 
 type ToolDraft = {
   nome: string;
-  clienteId: string;
   descricao: string;
   tipo: Tool["tipo"];
   metodo: Tool["metodo"];
@@ -58,7 +58,6 @@ type ToolDraft = {
 
 const DEFAULT_DRAFT: ToolDraft = {
   nome: "",
-  clienteId: clientes[0]?.id ?? "",
   descricao: "",
   tipo: "API REST",
   metodo: "GET",
@@ -85,7 +84,6 @@ function createDraft(tool?: Tool): ToolDraft {
   return {
     ...DEFAULT_DRAFT,
     nome: tool.nome,
-    clienteId: tool.clienteId,
     descricao: `Ferramenta demo para ${tool.nome.toLowerCase()}`,
     tipo: tool.tipo,
     metodo: tool.metodo,
@@ -103,7 +101,7 @@ function buildToolFromDraft(id: string, draft: ToolDraft, previous?: Tool): Tool
   return {
     id,
     nome: draft.nome.trim() || "Nova ferramenta",
-    clienteId: draft.clienteId || clientes[0]?.id || "c1",
+    clienteId: previous?.clienteId ?? "current-company",
     tipo: draft.tipo,
     metodo: draft.metodo,
     url: draft.url.trim() || "https://exemplo.local/tool",
@@ -114,9 +112,11 @@ function buildToolFromDraft(id: string, draft: ToolDraft, previous?: Tool): Tool
 }
 
 function FerramentasPage() {
-  const [tools, setTools] = useState<Tool[]>(() => ferramentas);
-  const [selectedToolId, setSelectedToolId] = useState<string>(ferramentas[0]?.id ?? "");
-  const [draft, setDraft] = useState<ToolDraft>(() => createDraft(ferramentas[0]));
+  const [tools, setTools] = useState<Tool[]>([]);
+  const [selectedToolId, setSelectedToolId] = useState("");
+  const [draft, setDraft] = useState<ToolDraft>(() => createDraft());
+  const [loading, setLoading] = useState(true);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [testFeedback, setTestFeedback] = useState<string>(
     "Modo demonstrativo: ferramentas ainda não estão conectadas ao backend.",
   );
@@ -125,6 +125,27 @@ function FerramentasPage() {
     () => tools.find((tool) => tool.id === selectedToolId) ?? null,
     [selectedToolId, tools],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    void toolsService
+      .list()
+      .then((items) => {
+        if (!cancelled) setTools(items);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTools([]);
+          toast.error("Não foi possível carregar as ferramentas.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     setDraft(createDraft(selectedTool ?? undefined));
@@ -137,6 +158,7 @@ function FerramentasPage() {
   const startNewTool = () => {
     setSelectedToolId("");
     setDraft({ ...DEFAULT_DRAFT });
+    setEditorOpen(true);
     setTestFeedback("Novo rascunho iniciado em modo demonstrativo.");
     toast.info("Nova ferramenta em modo demonstrativo");
   };
@@ -152,6 +174,7 @@ function FerramentasPage() {
         : [nextTool, ...current],
     );
     setSelectedToolId(nextId);
+    setEditorOpen(true);
     toast.success(isEditing ? "Ferramenta atualizada localmente" : "Ferramenta criada localmente");
   };
 
@@ -165,11 +188,15 @@ function FerramentasPage() {
 
     setTools((current) => [duplicated, ...current]);
     setSelectedToolId(duplicated.id);
+    setEditorOpen(true);
     toast.success("Ferramenta duplicada no modo demonstrativo");
   };
 
   const removeTool = (toolId: string) => {
     setTools((current) => current.filter((tool) => tool.id !== toolId));
+    if (selectedToolId === toolId) {
+      setEditorOpen(false);
+    }
     setSelectedToolId((current) => {
       return current === toolId ? "" : current;
     });
@@ -207,7 +234,6 @@ function FerramentasPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Nome</TableHead>
-                <TableHead>Cliente</TableHead>
                 <TableHead>Tipo</TableHead>
                 <TableHead>Método</TableHead>
                 <TableHead>URL</TableHead>
@@ -217,12 +243,20 @@ function FerramentasPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {tools.length === 0 ? (
+              {loading ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
-                    <Wrench className="h-8 w-8 mx-auto mb-2 opacity-50 text-primary animate-pulse" />
-                    <p className="font-semibold text-sm">Nenhuma ferramenta cadastrada</p>
-                    <p className="text-xs">Clique em "Nova ferramenta" no topo para criar sua primeira integração demonstrativa.</p>
+                  <TableCell colSpan={7} className="py-12 text-center text-muted-foreground">
+                    Carregando ferramentas...
+                  </TableCell>
+                </TableRow>
+              ) : tools.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="py-14 text-center text-muted-foreground">
+                    <Wrench className="mx-auto mb-3 h-8 w-8 text-primary/60" />
+                    <p className="text-sm font-semibold text-foreground">{TOOLS_EMPTY_STATE.title}</p>
+                    <p className="mx-auto mt-1 max-w-lg text-xs">
+                      {TOOLS_EMPTY_STATE.description}
+                    </p>
                   </TableCell>
                 </TableRow>
               ) : (
@@ -232,7 +266,6 @@ function FerramentasPage() {
                     data-state={tool.id === selectedToolId ? "selected" : undefined}
                   >
                     <TableCell className="font-medium">{tool.nome}</TableCell>
-                    <TableCell>{clienteNome(tool.clienteId)}</TableCell>
                     <TableCell>{tool.tipo}</TableCell>
                     <TableCell>
                       <code className="text-xs">{tool.metodo}</code>
@@ -246,7 +279,14 @@ function FerramentasPage() {
                     <TableCell className="text-muted-foreground">{tool.ultimoTeste}</TableCell>
                     <TableCell>
                       <div className="flex gap-1 justify-end">
-                        <Button size="sm" variant="ghost" onClick={() => setSelectedToolId(tool.id)}>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setSelectedToolId(tool.id);
+                            setEditorOpen(true);
+                          }}
+                        >
                           <Pencil className="h-4 w-4" />
                         </Button>
                         <Button
@@ -254,6 +294,7 @@ function FerramentasPage() {
                           variant="ghost"
                           onClick={() => {
                             setSelectedToolId(tool.id);
+                            setEditorOpen(true);
                             testTool(tool.nome);
                           }}
                         >
@@ -280,30 +321,13 @@ function FerramentasPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      {editorOpen && <Card>
         <CardHeader>
           <CardTitle className="text-base">Editar ferramenta</CardTitle>
         </CardHeader>
         <CardContent className="grid md:grid-cols-2 gap-4">
           <Field label="Nome">
             <Input value={draft.nome} onChange={(e) => updateDraft("nome", e.target.value)} />
-          </Field>
-          <Field label="Cliente">
-            <Select
-              value={draft.clienteId}
-              onValueChange={(value) => updateDraft("clienteId", value)}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {clientes.map((client) => (
-                  <SelectItem key={client.id} value={client.id}>
-                    {client.nome}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </Field>
           <Field label="Descrição" className="md:col-span-2">
             <Textarea
@@ -466,7 +490,7 @@ function FerramentasPage() {
             </Button>
           </div>
         </CardContent>
-      </Card>
+      </Card>}
     </div>
   );
 }

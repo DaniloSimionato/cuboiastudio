@@ -4,13 +4,12 @@
  * jamais retornados em claro pelo GET.
  */
 import type { Tool } from "@/types";
-import { ferramentas } from "@/data/mock";
 import { mockDelay } from "./apiClient";
 
 export const toolsService = {
   /** GET /api/tools */
   async list(): Promise<Tool[]> {
-    return mockDelay(ferramentas as Tool[]);
+    return mockDelay([]);
   },
   /** POST /api/tools  |  PUT /api/tools/:id */
   async save(input: Partial<Tool> & { authToken?: string }): Promise<Tool> {

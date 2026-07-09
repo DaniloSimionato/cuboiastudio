@@ -118,11 +118,12 @@ export class CompaniesController {
   @ApiOkResponse({ description: "Company and related data deleted successfully." })
   async delete(
     @Param("id") id: string,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<{ ok: boolean }> {
     if (process.env.NODE_ENV === "production" && !process.env.ALLOW_PROD_CLEANUP) {
       throw new ForbiddenException("Deleting companies is not allowed in production.");
     }
-    await this.companiesService.deleteCompanyAndData(id);
+    await this.companiesService.deleteCompanySafely({ companyId: id, user });
     return { ok: true };
   }
 }

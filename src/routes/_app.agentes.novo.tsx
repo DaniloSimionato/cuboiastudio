@@ -1552,12 +1552,16 @@ function NovoAgente() {
                         Salve o assistente primeiro para vinculá-lo a um ou mais canais da empresa.
                       </div>
                     ) : publicationSummary.length === 0 ? (
-                      <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                        Nenhum canal cadastrado para esta empresa. Cadastre uma inbox em{" "}
-                        <Link to="/canais" className="font-medium text-primary underline-offset-4 hover:underline">
-                          Canais
-                        </Link>{" "}
-                        e depois volte para publicar este assistente.
+                      <div className="rounded-xl border border-dashed p-5">
+                        <div className="text-sm font-medium">
+                          Nenhum canal cadastrado.
+                        </div>
+                        <div className="mt-1 text-sm text-muted-foreground">
+                          Cadastre um canal em Canais para publicar este assistente.
+                        </div>
+                        <Button asChild variant="outline" size="sm" className="mt-4">
+                          <Link to="/canais">Ir para Canais</Link>
+                        </Button>
                       </div>
                     ) : (
                       <div className="grid gap-3 lg:grid-cols-2">

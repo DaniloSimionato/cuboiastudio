@@ -37,4 +37,10 @@ export const companiesService = {
       body: JSON.stringify({ companyId }),
     });
   },
+
+  async remove(companyId: string): Promise<{ ok: true }> {
+    return apiFetch<{ ok: true }>(`/companies/${companyId}`, {
+      method: "DELETE",
+    });
+  },
 };
