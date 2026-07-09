@@ -68,6 +68,32 @@ function readString(value: unknown): string | null {
   return trimString(value);
 }
 
+function readMessageType(value: unknown): string | null {
+  const raw =
+    typeof value === "number" && Number.isFinite(value)
+      ? String(value)
+      : typeof value === "string"
+        ? value.trim()
+        : "";
+  if (!raw) {
+    return null;
+  }
+
+  const normalized = raw.toLowerCase();
+  switch (normalized) {
+    case "0":
+      return "incoming";
+    case "1":
+      return "outgoing";
+    case "2":
+      return "activity";
+    case "3":
+      return "template";
+    default:
+      return normalized;
+  }
+}
+
 function readIdentifier(value: unknown): string | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return String(value);
@@ -138,7 +164,7 @@ export function summarizeChatwootPayloadStructure(payload: unknown) {
   return {
     event: readString(raw.event ?? raw.event_type ?? data?.event ?? data?.event_type),
     id: readIdentifier(raw.id ?? message?.id ?? data?.id),
-    message_type: readString(message?.message_type ?? raw.message_type ?? data?.message_type),
+    message_type: readMessageType(message?.message_type ?? raw.message_type ?? data?.message_type),
     private: readBoolean(message?.private ?? raw.private ?? data?.private),
     "account?.id": readIdentifier(account?.id),
     account_id: readIdentifier(raw.account_id ?? data?.account_id),
@@ -284,7 +310,7 @@ export function normalizeChatwootMessageCreatedPayload(
       ) ?? undefined,
     externalChannelId: pickFirstIdentifier(inboxId, inbox.external_id, raw.external_channel_id) ?? undefined,
     externalInboxId: inboxId ?? undefined,
-    messageType: pickFirstString(message.message_type, raw.message_type, data?.message_type) ?? undefined,
+    messageType: readMessageType(message.message_type ?? raw.message_type ?? data?.message_type) ?? undefined,
     attachments: normalizedAttachmentDtos && normalizedAttachmentDtos.length > 0 ? normalizedAttachmentDtos : undefined,
     contact:
       pickFirstString(contact.name, contact.pushname) || pickFirstString(contact.phone_number, contact.phone)
@@ -307,7 +333,7 @@ export function normalizeChatwootMessageCreatedPayload(
         raw.subject,
       ) ?? null,
     messageId: dto.externalMessageId ?? null,
-    messageType: pickFirstString(message.message_type, raw.message_type, data?.message_type) ?? null,
+    messageType: readMessageType(message.message_type ?? raw.message_type ?? data?.message_type) ?? null,
     isPrivate: readBoolean(message.private ?? raw.private ?? data?.private) ?? false,
     aiActive:
       readBoolean(conversation.ai_active) ??

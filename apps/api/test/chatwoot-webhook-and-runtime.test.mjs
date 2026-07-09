@@ -463,6 +463,60 @@ test("normalizador Chatwoot resolve accountId e inboxId por fallbacks", () => {
   assert.equal(normalized.dto.externalInboxId, "789");
 });
 
+test("normalizador Chatwoot resolve payload aninhado em data.message e data.conversation", () => {
+  const normalized = normalizeChatwootMessageCreatedPayload({
+    data: {
+      event: "message_created",
+      account: { id: 106 },
+      inbox: { id: 524 },
+      conversation: { id: 34, inbox_id: 524 },
+      message: {
+        id: 1000002,
+        content: "Mensagem em data.message",
+        message_type: "incoming",
+        private: false,
+        sender_type: "contact",
+      },
+    },
+  });
+
+  assert.equal(normalized.eventName, "message_created");
+  assert.equal(normalized.accountId, "106");
+  assert.equal(normalized.externalInboxId, "524");
+  assert.equal(normalized.externalConversationId, "34");
+  assert.equal(normalized.messageType, "incoming");
+});
+
+test("normalizador Chatwoot converte message_type numerico do enum Chatwoot", () => {
+  const incoming = normalizeChatwootMessageCreatedPayload(
+    createMessageCreatedPayload({
+      message: {
+        id: "message-1",
+        content: "Oi",
+        sender_type: "contact",
+        message_type: 0,
+        attachments: [],
+      },
+    }),
+  );
+  const outgoing = normalizeChatwootMessageCreatedPayload(
+    createMessageCreatedPayload({
+      message: {
+        id: "message-2",
+        content: "Resposta",
+        sender_type: "agent",
+        message_type: 1,
+        attachments: [],
+      },
+    }),
+  );
+
+  assert.equal(incoming.messageType, "incoming");
+  assert.equal(incoming.dto.messageType, "incoming");
+  assert.equal(outgoing.messageType, "outgoing");
+  assert.equal(outgoing.dto.messageType, "outgoing");
+});
+
 function createAssistantServiceDeps(overrides = {}) {
   const calls = {
     runtimeResolved: [],
@@ -1135,6 +1189,28 @@ test("webhook Chatwoot incoming válido chama processamento", async () => {
   assert.equal(calls.sendMessage.length, 1);
 });
 
+test("webhook Chatwoot incoming com message_type numerico processa", async () => {
+  const { service, calls } = createWebhookDeps();
+
+  const result = await service.processMessageCreated({
+    payload: createMessageCreatedPayload({
+      message: {
+        id: "message-1",
+        content: "Mensagem com enum numerico",
+        sender_type: "contact",
+        message_type: 0,
+        attachments: [],
+      },
+    }),
+    webhookSecret: "secret-123",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.ensureConversation.length, 1);
+  assert.equal(calls.sendMessage.length, 1);
+  assert.equal(calls.diagnostics[0].messageType, "incoming");
+});
+
 test("webhook Chatwoot sem conversationId retorna 400 controlado", async () => {
   const { service, calls } = createWebhookDeps();
   const payload = createMessageCreatedPayload();
@@ -1662,6 +1738,29 @@ test("mensagem outgoing é ignorada para evitar loop", async () => {
   assert.equal(result.ignored, true);
   assert.equal(calls.configResolution.length, 0);
   assert.equal(calls.sendMessage.length, 0);
+});
+
+test("mensagem outgoing numerica é ignorada para evitar loop", async () => {
+  const { service, calls } = createWebhookDeps();
+
+  const result = await service.processMessageCreated({
+    payload: createMessageCreatedPayload({
+      message: {
+        id: "message-1",
+        content: "Resposta do bot",
+        sender_type: "agent",
+        message_type: 1,
+        attachments: [],
+      },
+    }),
+    webhookSecret: "secret-123",
+  });
+
+  assert.equal(result.ignored, true);
+  assert.equal(result.reason, "AUTOMATED_OUTGOING_MESSAGE");
+  assert.equal(calls.configResolution.length, 0);
+  assert.equal(calls.sendMessage.length, 0);
+  assert.equal(calls.diagnostics[0].messageType, "outgoing");
 });
 
 test("mensagem template é ignorada para evitar loop", async () => {
