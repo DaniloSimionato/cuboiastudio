@@ -127,8 +127,9 @@ function normalizeSlug(slug: string): string {
 }
 
 function assertTenant(input: { user: AuthenticatedUser; tenant: RequestTenant }): void {
-  if (input.user.companyId !== input.tenant.companyId) {
-    throw new ForbiddenException("Tenant context does not match the authenticated user.");
+  const memberships = input.user.memberships || [input.user.companyId];
+  if (!memberships.includes(input.tenant.companyId)) {
+    throw new ForbiddenException("The authenticated user does not belong to this company.");
   }
 }
 

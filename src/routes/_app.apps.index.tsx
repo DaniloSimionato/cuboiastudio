@@ -237,7 +237,15 @@ function AppsPage() {
       ) : (
         <>
           {activeTab === "store" ? (
-            filteredApps.length === 0 ? (
+            apps.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center bg-muted/20 border border-dashed rounded-2xl">
+                <Blocks className="h-12 w-12 text-muted-foreground/60 mb-3 animate-pulse" />
+                <h3 className="text-lg font-semibold text-foreground">Nenhum app disponível no catálogo global.</h3>
+                <p className="text-sm text-muted-foreground max-w-sm mt-1">
+                  O catálogo global está vazio. Entre em contato com a equipe administrativa.
+                </p>
+              </div>
+            ) : filteredApps.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center bg-muted/20 border border-dashed rounded-2xl">
                 <Blocks className="h-12 w-12 text-muted-foreground/60 mb-3 animate-pulse" />
                 <h3 className="text-lg font-semibold text-foreground">Nenhum aplicativo encontrado</h3>

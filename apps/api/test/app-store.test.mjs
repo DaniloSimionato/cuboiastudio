@@ -35,6 +35,7 @@ function createAuth(companyId = "company-1") {
       name: "Test User",
       roles: [],
       permissions: ["tools:read", "tools:write"],
+      memberships: [companyId],
     },
     tenant: { companyId },
   };
@@ -1547,7 +1548,7 @@ test("suporte a múltiplas instalações e isolamento de configuração", async 
   const { prisma, oauth, fetchImpl } = await setupAvailabilityEnv();
   const service = new AppsService(prisma);
   const auth = {
-    user: { companyId: "company-1", id: "user-1", email: "a@a.com", name: "User", roles: [], permissions: ["tools:write", "tools:read"] },
+    user: { companyId: "company-1", id: "user-1", email: "a@a.com", name: "User", roles: [], permissions: ["tools:write", "tools:read"], memberships: ["company-1"] },
     tenant: { companyId: "company-1" },
   };
 
@@ -1587,7 +1588,7 @@ test("suporte a múltiplas instalações e isolamento de configuração", async 
 
   // 6. Impedir cross-tenant lookup
   const crossTenantAuth = {
-    user: { companyId: "company-2", id: "user-2", email: "b@b.com", name: "User 2", roles: [], permissions: ["tools:write", "tools:read"] },
+    user: { companyId: "company-2", id: "user-2", email: "b@b.com", name: "User 2", roles: [], permissions: ["tools:write", "tools:read"], memberships: ["company-2"] },
     tenant: { companyId: "company-2" },
   };
   await assert.rejects(
@@ -1629,5 +1630,25 @@ test("suporte a múltiplas instalações e isolamento de configuração", async 
     }),
     /Não é possível excluir/
   );
+});
+
+test("catálogo global é acessível por múltiplos tenants/companyIds sem isolar apps globais", async () => {
+  const { prisma } = await setupAvailabilityEnv();
+  const service = new AppsService(prisma);
+
+  const auth1 = {
+    user: { companyId: "company-1", id: "user-1", email: "a@a.com", name: "User 1", roles: [], permissions: ["tools:read"], memberships: ["company-1"] },
+    tenant: { companyId: "company-1" },
+  };
+  const catalog1 = await service.findAllApps(auth1);
+  assert.ok(catalog1.items.length >= 1);
+
+  const auth2 = {
+    user: { companyId: "company-1", id: "user-1", email: "a@a.com", name: "User 1", roles: [], permissions: ["tools:read"], memberships: ["company-1", "company-2"] },
+    tenant: { companyId: "company-2" },
+  };
+  const catalog2 = await service.findAllApps(auth2);
+  assert.ok(catalog2.items.length >= 1);
+  assert.equal(catalog1.items.length, catalog2.items.length);
 });
 
