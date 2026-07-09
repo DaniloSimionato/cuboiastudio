@@ -14,7 +14,7 @@ import {
 import {
   DEFAULT_COMPANY_ROLE_PERMISSION_MAP,
   RBAC_PERMISSIONS,
-} from "../src/auth/rbac.defaults.ts";
+} from "../dist/auth/rbac.defaults.js";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const candidateEnvFiles = [
