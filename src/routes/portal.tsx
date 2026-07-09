@@ -189,8 +189,8 @@ function PortalPage() {
     try {
       const payload: CreateCompanyPayload & UpdateCompanyPayload = {
         name: companyForm.name.trim(),
-        legalName: companyForm.legalName.trim() || null,
-        document: companyForm.document.trim() || null,
+        legalName: companyForm.legalName.trim() || undefined,
+        document: companyForm.document.trim() || undefined,
         status: companyForm.status,
         ...(!editingCompany
           ? { createDemoAssistant: companyForm.createDemoAssistant }

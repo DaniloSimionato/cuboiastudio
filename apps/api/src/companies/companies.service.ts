@@ -100,7 +100,7 @@ export class CompaniesService {
   }): Promise<CompanyResponse> {
     this.assertCanManageCompanies(input.user);
 
-    const duplicate = await this.prisma.company.findFirst({
+    const duplicateName = await this.prisma.company.findFirst({
       where: {
         deletedAt: null,
         name: {
@@ -110,8 +110,24 @@ export class CompaniesService {
       },
       select: { id: true },
     });
-    if (duplicate) {
+    if (duplicateName) {
       throw new ConflictException("Já existe uma empresa cadastrada com este nome.");
+    }
+
+    const document = this.sanitiseDocument(input.dto.document);
+    if (document) {
+      const duplicateDoc = await this.prisma.company.findFirst({
+        where: {
+          deletedAt: null,
+          document,
+        },
+        select: { id: true, name: true },
+      });
+      if (duplicateDoc) {
+        throw new ConflictException(
+          `Já existe uma empresa cadastrada com este documento/CNPJ (vinculado a "${duplicateDoc.name}").`,
+        );
+      }
     }
 
     const createdCompany = await this.prisma.$transaction(async (tx) => {
@@ -119,7 +135,7 @@ export class CompaniesService {
         data: {
           name: input.dto.name.trim(),
           legalName: this.trimNullable(input.dto.legalName),
-          document: this.trimNullable(input.dto.document),
+          document,
           status: input.dto.status ?? Status.ACTIVE,
           notes: this.trimNullable(input.dto.notes),
         },
@@ -156,6 +172,40 @@ export class CompaniesService {
     this.assertCompanyAccess(input.user, input.id);
     await this.findCompanyOrThrow(input.id);
 
+    if (input.dto.name !== undefined) {
+      const duplicateName = await this.prisma.company.findFirst({
+        where: {
+          deletedAt: null,
+          id: { not: input.id },
+          name: {
+            equals: input.dto.name.trim(),
+            mode: "insensitive",
+          },
+        },
+        select: { id: true },
+      });
+      if (duplicateName) {
+        throw new ConflictException("Já existe uma empresa cadastrada com este nome.");
+      }
+    }
+
+    const document = input.dto.document !== undefined ? this.sanitiseDocument(input.dto.document) : undefined;
+    if (document) {
+      const duplicateDoc = await this.prisma.company.findFirst({
+        where: {
+          deletedAt: null,
+          id: { not: input.id },
+          document,
+        },
+        select: { id: true, name: true },
+      });
+      if (duplicateDoc) {
+        throw new ConflictException(
+          `Já existe uma empresa cadastrada com este documento/CNPJ (vinculado a "${duplicateDoc.name}").`,
+        );
+      }
+    }
+
     return this.prisma.company.update({
       where: { id: input.id },
       data: {
@@ -163,9 +213,7 @@ export class CompaniesService {
         ...(input.dto.legalName !== undefined
           ? { legalName: this.trimNullable(input.dto.legalName) }
           : {}),
-        ...(input.dto.document !== undefined
-          ? { document: this.trimNullable(input.dto.document) }
-          : {}),
+        ...(document !== undefined ? { document } : {}),
         ...(input.dto.notes !== undefined ? { notes: this.trimNullable(input.dto.notes) } : {}),
         ...(input.dto.status !== undefined ? { status: input.dto.status } : {}),
       },
@@ -339,6 +387,13 @@ export class CompaniesService {
   private trimNullable(value: string | null | undefined): string | null {
     const trimmed = value?.trim() ?? "";
     return trimmed.length > 0 ? trimmed : null;
+  }
+
+  private sanitiseDocument(value: string | null | undefined): string | null {
+    const trimmed = value?.trim() ?? "";
+    if (!trimmed) return null;
+    const digitsOnly = trimmed.replace(/\D/g, "");
+    return digitsOnly.length > 0 ? digitsOnly : trimmed;
   }
 
   async deleteCompanyAndData(companyId: string): Promise<void> {

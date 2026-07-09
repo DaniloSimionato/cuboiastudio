@@ -96,6 +96,27 @@ test("CompaniesService bloqueia criação de empresa com nome duplicado", async 
   );
 });
 
+test("CompaniesService bloqueia criação de empresa com CNPJ/documento duplicado", async () => {
+  const service = new CompaniesService({
+    company: {
+      findFirst: async ({ where }) => {
+        if (where.name) return null; // pass name check
+        assert.equal(where.document, "36802890000100");
+        return { id: "company-existing", name: "Empresa Já Existente" };
+      },
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      service.create({
+        dto: { name: "FG Informatica", document: "36.802.890/0001-00" },
+        user: createUser(),
+      }),
+    ConflictException,
+  );
+});
+
 test("CompaniesService cria empresa nova sem copiar assistentes quando demo não é solicitado", async () => {
   const txCalls = {
     assistantCreateCount: 0,
