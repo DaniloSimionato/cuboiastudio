@@ -220,26 +220,38 @@ model CompanyAiSettings {
 }
 
 model ChatwootInboxConfig {
-  id                      String   @id @default(cuid())
-  companyId               String
-  assistantId             String?
-  name                    String
-  baseUrl                 String
-  accountId               String
-  inboxId                 String
-  apiAccessTokenEncrypted String?
-  apiAccessTokenIv        String?
-  apiAccessTokenAuthTag   String?
-  webhookSecretEncrypted  String?
-  webhookSecretIv         String?
-  webhookSecretAuthTag    String?
-  isActive                Boolean  @default(true)
-  metadataJson            Json?
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
+  id                        String    @id @default(cuid())
+  companyId                 String
+  assistantId               String?
+  name                      String
+  baseUrl                   String
+  accountId                 String
+  inboxId                   String
+  apiAccessTokenEncrypted   String?
+  apiAccessTokenIv          String?
+  apiAccessTokenAuthTag     String?
+  webhookSecretEncrypted    String?
+  webhookSecretIv           String?
+  webhookSecretAuthTag      String?
+  isActive                  Boolean   @default(true)
+  metadataJson              Json?
+  lastApiTestAt             DateTime?
+  lastApiTestOk             Boolean?
+  lastWebhookAt             DateTime?
+  lastWebhookEvent          String?
+  lastWebhookAccountId      String?
+  lastWebhookInboxId        String?
+  lastWebhookConversationId String?
+  lastWebhookMessageType    String?
+  lastWebhookIgnoredReason  String?
+  lastWebhookRequestId      String?
+  lastResponseAt            DateTime?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
 
-  company   Company    @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  assistant Assistant? @relation(fields: [assistantId], references: [id], onDelete: SetNull)
+  company            Company                     @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  assistant          Assistant?                  @relation(fields: [assistantId], references: [id], onDelete: SetNull)
+  webhookDiagnostics ChatwootWebhookDiagnostic[]
 
   @@unique([companyId, accountId, inboxId])
   @@index([companyId])
@@ -248,6 +260,26 @@ model ChatwootInboxConfig {
   @@index([inboxId])
   @@index([isActive])
   @@map("chatwoot_inbox_configs")
+}
+
+model ChatwootWebhookDiagnostic {
+  id             String   @id @default(cuid())
+  configId       String?
+  receivedAt     DateTime @default(now())
+  event          String?
+  accountId      String?
+  inboxId        String?
+  conversationId String?
+  messageType    String?
+  ignoredReason  String?
+  requestId      String?
+
+  config ChatwootInboxConfig? @relation(fields: [configId], references: [id], onDelete: SetNull)
+
+  @@index([configId, receivedAt])
+  @@index([accountId, inboxId, receivedAt])
+  @@index([receivedAt])
+  @@map("chatwoot_webhook_diagnostics")
 }
 
 model User {

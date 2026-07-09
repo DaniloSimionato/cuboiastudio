@@ -44,6 +44,7 @@ function createWebhookDeps(overrides = {}) {
     ensureConversation: [],
     sendMessage: [],
     configResolution: [],
+    diagnostics: [],
   };
 
   const prisma = {
@@ -67,6 +68,16 @@ function createWebhookDeps(overrides = {}) {
   };
 
   const chatwootInboxConfigService = {
+    recordWebhookReceived: async (input) => {
+      calls.diagnostics.push({ stage: "received", ...input });
+      return { configId: "cfg-1", diagnosticId: "diagnostic-1" };
+    },
+    completeWebhookDiagnostic: async (target, input) => {
+      calls.diagnostics.push({ stage: "completed", target, ...input });
+    },
+    recordResponseSent: async (configId) => {
+      calls.diagnostics.push({ stage: "response", configId });
+    },
     resolveActiveByWebhook: async (input) => {
       calls.configResolution.push(input);
       if (typeof overrides.resolveActiveByWebhook === "function") {
@@ -216,6 +227,106 @@ test("controller Chatwoot prioriza secret da query string", async () => {
   assert.equal(calls[0].webhookSecret, "query-secret");
   assert.equal(calls[0].requestId, "req-1");
   assert.equal(calls[0].correlationId, "corr-1");
+});
+
+test("GET do webhook Chatwoot retorna instrução amigável", () => {
+  const controller = new ChatwootController({
+    processMessageCreated: async () => ({ ok: true, source: "chatwoot" }),
+  });
+
+  assert.deepEqual(controller.getStatus(), {
+    ok: true,
+    message: "Webhook Chatwoot ativo. Use POST para eventos.",
+    expectedMethod: "POST",
+    expectedEvent: "message_created",
+  });
+});
+
+test("event=test salva diagnóstico seguro e retorna ignored", async () => {
+  const { service, calls } = createWebhookDeps();
+  const result = await service.processMessageCreated({
+    payload: createMessageCreatedPayload({ event: "test" }),
+    requestId: "request-test-event",
+  });
+
+  assert.equal(result.ignored, true);
+  assert.equal(result.reason, "event=non_message_created");
+  assert.deepEqual(calls.diagnostics[0], {
+    stage: "received",
+    event: "test",
+    accountId: "account-1",
+    inboxId: "inbox-1",
+    conversationId: "conversation-1",
+    messageType: "incoming",
+    requestId: "request-test-event",
+  });
+  assert.equal(calls.diagnostics[1].ignoredReason, "event=non_message_created");
+});
+
+test("diagnóstico atualiza o canal quando account e inbox são conhecidos", async () => {
+  const updates = [];
+  const diagnostics = [];
+  const prisma = {
+    chatwootInboxConfig: {
+      findMany: async () => [{ id: "cfg-known" }],
+      update: async (input) => {
+        updates.push(input);
+        return {};
+      },
+    },
+    chatwootWebhookDiagnostic: {
+      create: async (input) => {
+        diagnostics.push(input);
+        return { id: "diagnostic-known" };
+      },
+    },
+  };
+  const service = new ChatwootInboxConfigService(prisma, { get: () => undefined });
+
+  const target = await service.recordWebhookReceived({
+    event: "message_created",
+    accountId: "account-1",
+    inboxId: "inbox-1",
+    conversationId: "conversation-1",
+    messageType: "incoming",
+    requestId: "request-known",
+  });
+
+  assert.deepEqual(target, { configId: "cfg-known", diagnosticId: "diagnostic-known" });
+  assert.equal(updates[0].data.lastWebhookEvent, "message_created");
+  assert.equal(updates[0].data.lastWebhookAccountId, "account-1");
+  assert.equal(updates[0].data.lastWebhookInboxId, "inbox-1");
+  assert.equal(diagnostics[0].data.configId, "cfg-known");
+});
+
+test("diagnóstico global registra account e inbox desconhecidos sem quebrar", async () => {
+  const diagnostics = [];
+  const prisma = {
+    chatwootInboxConfig: {
+      findMany: async () => [],
+    },
+    chatwootWebhookDiagnostic: {
+      create: async (input) => {
+        diagnostics.push(input);
+        return { id: "diagnostic-unknown" };
+      },
+    },
+  };
+  const service = new ChatwootInboxConfigService(prisma, { get: () => undefined });
+
+  const target = await service.recordWebhookReceived({
+    event: "message_created",
+    accountId: "account-unknown",
+    inboxId: "inbox-unknown",
+    conversationId: "conversation-unknown",
+    messageType: "incoming",
+    requestId: "request-unknown",
+  });
+
+  assert.deepEqual(target, { configId: null, diagnosticId: "diagnostic-unknown" });
+  assert.equal(diagnostics[0].data.ignoredReason, "UNKNOWN_ACCOUNT_INBOX");
+  assert.equal(diagnostics[0].data.accountId, "account-unknown");
+  assert.equal(diagnostics[0].data.inboxId, "inbox-unknown");
 });
 
 test("controller Chatwoot aceita header legado quando query string está ausente", async () => {

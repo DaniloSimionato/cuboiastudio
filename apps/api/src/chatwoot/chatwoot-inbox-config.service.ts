@@ -21,6 +21,17 @@ const chatwootInboxConfigSelect = {
   webhookSecretAuthTag: true,
   isActive: true,
   metadataJson: true,
+  lastApiTestAt: true,
+  lastApiTestOk: true,
+  lastWebhookAt: true,
+  lastWebhookEvent: true,
+  lastWebhookAccountId: true,
+  lastWebhookInboxId: true,
+  lastWebhookConversationId: true,
+  lastWebhookMessageType: true,
+  lastWebhookIgnoredReason: true,
+  lastWebhookRequestId: true,
+  lastResponseAt: true,
   createdAt: true,
   updatedAt: true,
   assistant: {
@@ -64,6 +75,17 @@ export type SafeChatwootInboxConfig = {
   metadataJson: Prisma.JsonValue | null;
   apiAccessTokenConfigured: boolean;
   webhookSecretConfigured: boolean;
+  lastApiTestAt: Date | null;
+  lastApiTestOk: boolean | null;
+  lastWebhookAt: Date | null;
+  lastWebhookEvent: string | null;
+  lastWebhookAccountId: string | null;
+  lastWebhookInboxId: string | null;
+  lastWebhookConversationId: string | null;
+  lastWebhookMessageType: string | null;
+  lastWebhookIgnoredReason: string | null;
+  lastWebhookRequestId: string | null;
+  lastResponseAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -90,6 +112,11 @@ export type ChatwootInboxConfigTestResult = {
   };
 };
 
+export type ChatwootWebhookDiagnosticTarget = {
+  configId: string | null;
+  diagnosticId: string | null;
+};
+
 function trimNullableText(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -106,6 +133,11 @@ function resolveNullableTextInput(value?: string | null): string | null | undefi
 
   const trimmed = value?.trim() ?? "";
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function safeDiagnosticText(value: string | null, maxLength = 200): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed ? trimmed.slice(0, maxLength) : null;
 }
 
 @Injectable()
@@ -354,7 +386,7 @@ export class ChatwootInboxConfigService {
       });
 
       if (!response.ok) {
-        return {
+        const result = {
           ok: false,
           message: "Não foi possível validar a configuração.",
           reason: `Chatwoot respondeu com HTTP ${response.status}.`,
@@ -370,9 +402,11 @@ export class ChatwootInboxConfigService {
             assistantConfigured,
           },
         };
+        await this.recordApiTest(record.id, false);
+        return result;
       }
 
-      return {
+      const result = {
         ok: true,
         message: assistantConfigured
           ? "Conexão com Chatwoot validada e assistente vinculado."
@@ -389,8 +423,10 @@ export class ChatwootInboxConfigService {
           assistantConfigured,
         },
       };
+      await this.recordApiTest(record.id, true);
+      return result;
     } catch (error) {
-      return {
+      const result = {
         ok: false,
         message: "Não foi possível validar a configuração.",
         reason: error instanceof Error ? error.message.slice(0, 300) : "Erro inesperado.",
@@ -406,6 +442,128 @@ export class ChatwootInboxConfigService {
           assistantConfigured,
         },
       };
+      await this.recordApiTest(record.id, false);
+      return result;
+    }
+  }
+
+  async recordWebhookReceived(input: {
+    event: string | null;
+    accountId: string | null;
+    inboxId: string | null;
+    conversationId: string | null;
+    messageType: string | null;
+    requestId: string | null;
+  }): Promise<ChatwootWebhookDiagnosticTarget> {
+    const receivedAt = new Date();
+    const event = safeDiagnosticText(input.event, 100);
+    const accountId = safeDiagnosticText(input.accountId);
+    const inboxId = safeDiagnosticText(input.inboxId);
+    const conversationId = safeDiagnosticText(input.conversationId);
+    const messageType = safeDiagnosticText(input.messageType, 100);
+    const requestId = safeDiagnosticText(input.requestId);
+
+    try {
+      const matches =
+        accountId && inboxId
+          ? await this.prisma.chatwootInboxConfig.findMany({
+              where: {
+                accountId,
+                inboxId,
+              },
+              select: { id: true },
+              orderBy: [{ createdAt: "asc" }],
+              take: 2,
+            })
+          : [];
+      const configId = matches.length === 1 ? matches[0].id : null;
+      const ignoredReason =
+        matches.length > 1 ? "AMBIGUOUS_ACCOUNT_INBOX" : configId ? null : "UNKNOWN_ACCOUNT_INBOX";
+
+      if (configId) {
+        await this.prisma.chatwootInboxConfig.update({
+          where: { id: configId },
+          data: {
+            lastWebhookAt: receivedAt,
+            lastWebhookEvent: event,
+            lastWebhookAccountId: accountId,
+            lastWebhookInboxId: inboxId,
+            lastWebhookConversationId: conversationId,
+            lastWebhookMessageType: messageType,
+            lastWebhookIgnoredReason: null,
+            lastWebhookRequestId: requestId,
+          },
+        });
+      }
+
+      const diagnostic = await this.prisma.chatwootWebhookDiagnostic.create({
+        data: {
+          configId,
+          receivedAt,
+          event,
+          accountId,
+          inboxId,
+          conversationId,
+          messageType,
+          ignoredReason,
+          requestId,
+        },
+        select: { id: true },
+      });
+
+      return { configId, diagnosticId: diagnostic.id };
+    } catch (error) {
+      this.logger.warn(
+        `Could not persist Chatwoot webhook diagnostic: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return { configId: null, diagnosticId: null };
+    }
+  }
+
+  async completeWebhookDiagnostic(
+    target: ChatwootWebhookDiagnosticTarget,
+    input: { ignoredReason: string | null; responseSent: boolean },
+  ): Promise<void> {
+    try {
+      if (target.configId) {
+        await this.prisma.chatwootInboxConfig.update({
+          where: { id: target.configId },
+          data: {
+            lastWebhookIgnoredReason: input.ignoredReason,
+            ...(input.responseSent ? { lastResponseAt: new Date() } : {}),
+          },
+        });
+      }
+
+      if (target.diagnosticId) {
+        await this.prisma.chatwootWebhookDiagnostic.update({
+          where: { id: target.diagnosticId },
+          data: { ignoredReason: input.ignoredReason },
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Could not finalize Chatwoot webhook diagnostic: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  async recordResponseSent(configId: string): Promise<void> {
+    try {
+      await this.prisma.chatwootInboxConfig.update({
+        where: { id: configId },
+        data: { lastResponseAt: new Date(), lastWebhookIgnoredReason: null },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Could not persist Chatwoot response diagnostic for config=${configId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
 
@@ -486,9 +644,35 @@ export class ChatwootInboxConfigService {
       metadataJson: record.metadataJson ?? null,
       apiAccessTokenConfigured: Boolean(record.apiAccessTokenEncrypted),
       webhookSecretConfigured: Boolean(record.webhookSecretEncrypted),
+      lastApiTestAt: record.lastApiTestAt ?? null,
+      lastApiTestOk: record.lastApiTestOk ?? null,
+      lastWebhookAt: record.lastWebhookAt ?? null,
+      lastWebhookEvent: record.lastWebhookEvent ?? null,
+      lastWebhookAccountId: record.lastWebhookAccountId ?? null,
+      lastWebhookInboxId: record.lastWebhookInboxId ?? null,
+      lastWebhookConversationId: record.lastWebhookConversationId ?? null,
+      lastWebhookMessageType: record.lastWebhookMessageType ?? null,
+      lastWebhookIgnoredReason: record.lastWebhookIgnoredReason ?? null,
+      lastWebhookRequestId: record.lastWebhookRequestId ?? null,
+      lastResponseAt: record.lastResponseAt ?? null,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };
+  }
+
+  private async recordApiTest(configId: string, ok: boolean): Promise<void> {
+    try {
+      await this.prisma.chatwootInboxConfig.update({
+        where: { id: configId },
+        data: { lastApiTestAt: new Date(), lastApiTestOk: ok },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Could not persist Chatwoot API test diagnostic for config=${configId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   private toResolvedConfig(record: ChatwootInboxConfigRecord): ResolvedChatwootInboxConfig {

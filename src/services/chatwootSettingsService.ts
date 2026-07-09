@@ -10,6 +10,10 @@ export const chatwootSettingsService = {
     return apiFetch<ChatwootInboxConfigItem[]>("/settings/chatwoot/inboxes");
   },
 
+  async get(id: string): Promise<ChatwootInboxConfigItem> {
+    return apiFetch<ChatwootInboxConfigItem>(`/settings/chatwoot/inboxes/${id}`);
+  },
+
   async create(payload: UpsertChatwootInboxConfigPayload): Promise<ChatwootInboxConfigItem> {
     return apiFetch<ChatwootInboxConfigItem>("/settings/chatwoot/inboxes", {
       method: "POST",

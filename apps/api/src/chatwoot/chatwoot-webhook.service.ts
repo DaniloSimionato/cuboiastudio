@@ -23,6 +23,7 @@ import { ChatwootAttachmentDownloaderService } from "./chatwoot-attachment-downl
 import {
   ChatwootInboxConfigService,
   type ResolvedChatwootInboxConfig,
+  type ChatwootWebhookDiagnosticTarget,
 } from "./chatwoot-inbox-config.service";
 
 export type ChatwootWebhookProcessResult = {
@@ -72,6 +73,24 @@ export class ChatwootWebhookService {
       )}`,
     );
     const normalized = normalizeChatwootMessageCreatedPayload(input.payload);
+    const diagnostic = await this.recordWebhookReceived({
+      event: normalized.eventName,
+      accountId: normalized.accountId,
+      inboxId: normalized.externalInboxId,
+      conversationId: normalized.externalConversationId || null,
+      messageType: normalized.messageType,
+      requestId: input.requestId ?? null,
+    });
+    const finish = async (
+      result: ChatwootWebhookProcessResult,
+      responseSent = false,
+    ): Promise<ChatwootWebhookProcessResult> => {
+      await this.completeWebhookDiagnostic(diagnostic, {
+        ignoredReason: result.ignored ? result.reason ?? "IGNORED" : null,
+        responseSent,
+      });
+      return result;
+    };
     this.logger.log(
       `Chatwoot webhook received${traceLabel}: event=${normalized.eventName ?? "unknown"} account=${normalized.accountId ?? "unknown"} inbox=${normalized.externalInboxId ?? "unknown"}`,
     );
@@ -81,20 +100,34 @@ export class ChatwootWebhookService {
     });
     if (preConfigIgnoreReason) {
       this.logger.log(`Chatwoot webhook ignored${traceLabel}: ${preConfigIgnoreReason}`);
-      return this.ignore(preConfigIgnoreReason);
+      return finish(this.ignore(preConfigIgnoreReason));
     }
 
     if (!normalized.externalConversationId) {
+      await this.completeWebhookDiagnostic(diagnostic, {
+        ignoredReason: "MISSING_CONVERSATION_ID",
+        responseSent: false,
+      });
       throw new BadRequestException("Payload do CuboChat sem identificador de conversa.");
     }
 
-    const config = await this.resolveConfigOrIgnore(
-      normalized,
-      input.webhookSecret ?? null,
-      traceLabel,
-    );
+    let config: ResolvedChatwootInboxConfig | null;
+    try {
+      config = await this.resolveConfigOrIgnore(
+        normalized,
+        input.webhookSecret ?? null,
+        traceLabel,
+      );
+    } catch (error) {
+      await this.completeWebhookDiagnostic(diagnostic, {
+        ignoredReason:
+          error instanceof ForbiddenException ? "WEBHOOK_AUTH_FAILED" : "CONFIG_RESOLUTION_FAILED",
+        responseSent: false,
+      });
+      throw error;
+    }
     if (!config) {
-      return this.ignore("Nenhuma configuração ativa encontrada para o inbox.");
+      return finish(this.ignore("Nenhuma configuração ativa encontrada para o inbox."));
     }
 
     // Safely check AI active status. If null, fetch from API.
@@ -112,7 +145,7 @@ export class ChatwootWebhookService {
     const ignoreReason = this.resolveIgnoreReason(normalized, finalAiActive);
     if (ignoreReason) {
       this.logger.log(`Chatwoot webhook ignored${traceLabel}: ${ignoreReason}`);
-      return this.ignore(ignoreReason);
+      return finish(this.ignore(ignoreReason));
     }
 
     const assistantId = await this.resolveAssistantIdOrIgnore(
@@ -121,7 +154,7 @@ export class ChatwootWebhookService {
       traceLabel,
     );
     if (!assistantId) {
-      return this.ignore("Nenhum assistente ativo foi vinculado a esta inbox.");
+      return finish(this.ignore("Nenhum assistente ativo foi vinculado a esta inbox."));
     }
 
     const duplicate = await this.findDuplicateMessage(config.companyId, normalized.messageId);
@@ -129,14 +162,14 @@ export class ChatwootWebhookService {
       this.logger.log(
         `Chatwoot duplicate message ignored${traceLabel}: company=${config.companyId} messageId=${normalized.messageId ?? "unknown"}`,
       );
-      return {
+      return finish({
         ok: true,
         source: "chatwoot",
         conversationId: duplicate.conversationId,
         messageId: duplicate.id,
         ignored: true,
         reason: "duplicate",
-      };
+      });
     }
 
     try {
@@ -185,7 +218,7 @@ export class ChatwootWebhookService {
       });
 
       if (assistantSettings?.messageBufferEnabled && assistantSettings.messageBufferSeconds > 0) {
-        return this.handleBufferedMessage({
+        const bufferedResult = await this.handleBufferedMessage({
           conversationId: conversation.id,
           assistantId,
           config,
@@ -196,6 +229,7 @@ export class ChatwootWebhookService {
           user,
           tenant,
         });
+        return finish(bufferedResult);
       }
 
       this.logger.log(
@@ -214,13 +248,20 @@ export class ChatwootWebhookService {
         `Chatwoot webhook processed${traceLabel}: company=${config.companyId} conversation=${response.conversationId} attachments=${preparedAttachments.length}`,
       );
 
-      return {
+      return finish(
+        {
         ok: true,
         source: "chatwoot",
         conversationId: response.conversationId,
         messageId: response.assistantMessage.id,
-      };
+        },
+        true,
+      );
     } catch (error) {
+      await this.completeWebhookDiagnostic(diagnostic, {
+        ignoredReason: "PROCESSING_ERROR",
+        responseSent: false,
+      });
       if (error instanceof HttpException) {
         throw error;
       }
@@ -322,6 +363,7 @@ export class ChatwootWebhookService {
           tenant: input.tenant,
           preparedAttachments: combinedAttachments,
         });
+        await this.recordResponseSent(input.config.id);
       } catch (err) {
         this.logger.error(
           `Error processing buffered messages for conversation=${conversationId}: ${err}`,
@@ -640,6 +682,44 @@ export class ChatwootWebhookService {
       ignored: true,
       reason,
     };
+  }
+
+  private async recordWebhookReceived(input: {
+    event: string | null;
+    accountId: string | null;
+    inboxId: string | null;
+    conversationId: string | null;
+    messageType: string | null;
+    requestId: string | null;
+  }): Promise<ChatwootWebhookDiagnosticTarget> {
+    const service = this.chatwootInboxConfigService as ChatwootInboxConfigService & {
+      recordWebhookReceived?: ChatwootInboxConfigService["recordWebhookReceived"];
+    };
+    if (typeof service.recordWebhookReceived !== "function") {
+      return { configId: null, diagnosticId: null };
+    }
+    return service.recordWebhookReceived(input);
+  }
+
+  private async completeWebhookDiagnostic(
+    target: ChatwootWebhookDiagnosticTarget,
+    input: { ignoredReason: string | null; responseSent: boolean },
+  ): Promise<void> {
+    const service = this.chatwootInboxConfigService as ChatwootInboxConfigService & {
+      completeWebhookDiagnostic?: ChatwootInboxConfigService["completeWebhookDiagnostic"];
+    };
+    if (typeof service.completeWebhookDiagnostic === "function") {
+      await service.completeWebhookDiagnostic(target, input);
+    }
+  }
+
+  private async recordResponseSent(configId: string): Promise<void> {
+    const service = this.chatwootInboxConfigService as ChatwootInboxConfigService & {
+      recordResponseSent?: ChatwootInboxConfigService["recordResponseSent"];
+    };
+    if (typeof service.recordResponseSent === "function") {
+      await service.recordResponseSent(configId);
+    }
   }
 
   private buildTraceLabel(requestId: string | null, correlationId: string | null): string {

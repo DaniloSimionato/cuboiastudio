@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Body, Controller, Headers, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Headers, Param, Post, Query } from "@nestjs/common";
 import { ApiBadRequestResponse, ApiOperation, ApiParam, ApiQuery, ApiTags } from "@nestjs/swagger";
 import { ChatwootWebhookService } from "../chatwoot/chatwoot-webhook.service";
 
@@ -18,6 +18,22 @@ export class ChatwootController {
     return {
       requestId: normalizedRequestId,
       correlationId: normalizedCorrelationId,
+    };
+  }
+
+  @Get()
+  @ApiOperation({ summary: "Return public Chatwoot webhook health and usage instructions" })
+  getStatus(): {
+    ok: true;
+    message: string;
+    expectedMethod: "POST";
+    expectedEvent: "message_created";
+  } {
+    return {
+      ok: true,
+      message: "Webhook Chatwoot ativo. Use POST para eventos.",
+      expectedMethod: "POST",
+      expectedEvent: "message_created",
     };
   }
 

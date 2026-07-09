@@ -35,7 +35,8 @@
     "smoke:staging": "node scripts/smoke-staging.mjs",
     "db:cleanup:smoke": "npm --prefix apps/api run cleanup:smoke",
     "test:portal": "node --experimental-strip-types --test src/lib/portalAccess.test.ts",
-    "test:tools": "node --experimental-strip-types --test src/lib/tools-empty-state.test.ts"
+    "test:tools": "node --experimental-strip-types --test src/lib/tools-empty-state.test.ts",
+    "test:channels": "node --experimental-strip-types --test src/lib/chatwootDiagnostics.test.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

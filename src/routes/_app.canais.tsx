@@ -2,8 +2,10 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
-  Bot,
   CheckCircle2,
+  Circle,
+  Clipboard,
+  Clock3,
   Loader2,
   Pencil,
   Plus,
@@ -37,6 +39,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/StatusBadge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  getChannelChecklist,
+  getWebhookDiagnosticSummary,
+} from "@/lib/chatwootDiagnostics";
 import { backendAssistantsService, chatwootSettingsService, currentCompanyService } from "@/services";
 import type {
   BackendAssistantListItem,
@@ -65,6 +79,14 @@ type ChannelFormState = {
   channelType: "CHATWOOT" | "WHATSAPP";
 };
 
+type ReceiveTestState = {
+  channel: ChatwootInboxConfigItem;
+  baselineWebhookAt: number;
+  deadline: number;
+  remainingSeconds: number;
+  status: "waiting" | "success" | "timeout";
+};
+
 const DEFAULT_FORM: ChannelFormState = {
   name: "",
   baseUrl: "",
@@ -91,6 +113,7 @@ function CanaisPage() {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, ChatwootInboxConfigTestResponse>>({});
+  const [receiveTest, setReceiveTest] = useState<ReceiveTestState | null>(null);
 
   const activeAssistants = useMemo(
     () => assistants.filter((assistant) => assistant.status === "ACTIVE"),
@@ -121,6 +144,61 @@ function CanaisPage() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (!receiveTest || receiveTest.status !== "waiting") {
+      return;
+    }
+
+    let disposed = false;
+    let polling = false;
+    const updateCountdown = () => {
+      const remainingSeconds = Math.max(0, Math.ceil((receiveTest.deadline - Date.now()) / 1000));
+      setReceiveTest((current) =>
+        current?.status === "waiting" ? { ...current, remainingSeconds } : current,
+      );
+      if (remainingSeconds === 0) {
+        setReceiveTest((current) =>
+          current?.status === "waiting" ? { ...current, status: "timeout" } : current,
+        );
+      }
+    };
+    const poll = async () => {
+      if (polling || disposed) {
+        return;
+      }
+      polling = true;
+      try {
+        const latest = await chatwootSettingsService.get(receiveTest.channel.id);
+        const receivedAt = latest.lastWebhookAt ? new Date(latest.lastWebhookAt).getTime() : 0;
+        const matchesChannel =
+          latest.lastWebhookAccountId === latest.accountId &&
+          latest.lastWebhookInboxId === latest.inboxId;
+        if (receivedAt > receiveTest.baselineWebhookAt && matchesChannel && !disposed) {
+          setChannels((current) =>
+            current.map((channel) => (channel.id === latest.id ? latest : channel)),
+          );
+          setReceiveTest((current) =>
+            current ? { ...current, channel: latest, status: "success" } : current,
+          );
+        }
+      } catch {
+        // A transient polling error should not end the 60-second diagnostic window.
+      } finally {
+        polling = false;
+      }
+    };
+
+    updateCountdown();
+    void poll();
+    const countdownTimer = window.setInterval(updateCountdown, 1000);
+    const pollTimer = window.setInterval(() => void poll(), 2000);
+    return () => {
+      disposed = true;
+      window.clearInterval(countdownTimer);
+      window.clearInterval(pollTimer);
+    };
+  }, [receiveTest?.channel.id, receiveTest?.deadline, receiveTest?.status]);
 
   const openCreate = () => {
     setEditingChannel(null);
@@ -215,6 +293,7 @@ function CanaisPage() {
       const result = await chatwootSettingsService.test(channel.id);
       setTestResults((current) => ({ ...current, [channel.id]: result }));
       toast.success(result.ok ? result.message : result.reason ?? result.message);
+      await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Não foi possível testar o canal.");
     } finally {
@@ -245,6 +324,23 @@ function CanaisPage() {
   };
 
   const webhookExample = "https://api-stage.cubochat.com.br/webhooks/chatwoot";
+  const copyWebhook = async () => {
+    try {
+      await navigator.clipboard.writeText(webhookExample);
+      toast.success("URL do webhook copiada.");
+    } catch {
+      toast.error("Não foi possível copiar automaticamente.");
+    }
+  };
+  const startReceiveTest = (channel: ChatwootInboxConfigItem) => {
+    setReceiveTest({
+      channel,
+      baselineWebhookAt: channel.lastWebhookAt ? new Date(channel.lastWebhookAt).getTime() : 0,
+      deadline: Date.now() + 60_000,
+      remainingSeconds: 60,
+      status: "waiting",
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -278,8 +374,13 @@ function CanaisPage() {
           </SecurityNotice>
 
           <div className="rounded-2xl border bg-muted/20 p-4 text-sm">
-            <div className="font-medium">Webhook recomendado</div>
-            <div className="mt-1 break-all font-mono text-xs text-muted-foreground">{webhookExample}</div>
+            <div className="font-medium">URL do Webhook para cadastrar no Cubo.Chat</div>
+            <div className="mt-2 flex gap-2">
+              <Input readOnly value={webhookExample} className="font-mono text-xs" />
+              <Button variant="outline" size="icon" onClick={() => void copyWebhook()} title="Copiar URL">
+                <Clipboard className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
 
           {loading ? (
@@ -298,6 +399,8 @@ function CanaisPage() {
             <div className="grid gap-4 lg:grid-cols-2">
               {channels.map((channel) => {
                 const testResult = testResults[channel.id];
+                const diagnostic = getWebhookDiagnosticSummary(channel);
+                const checklist = getChannelChecklist(channel);
                 return (
                   <article key={channel.id} className="rounded-2xl border p-5 space-y-4">
                     <div className="flex items-start justify-between gap-3">
@@ -330,6 +433,47 @@ function CanaisPage() {
                       />
                     </div>
 
+                    <div className="rounded-xl border bg-muted/20 p-3">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        Checklist da conexão
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {checklist.map((item) => (
+                          <div key={item.label} className="flex items-center gap-2 text-xs">
+                            {item.complete ? (
+                              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                            ) : (
+                              <Circle className="h-3.5 w-3.5 text-muted-foreground/60" />
+                            )}
+                            <span className={item.complete ? "text-foreground" : "text-muted-foreground"}>
+                              {item.label}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div
+                      className={`rounded-xl border p-3 text-xs ${
+                        diagnostic.tone === "success"
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : diagnostic.tone === "warning"
+                            ? "border-amber-200 bg-amber-50 text-amber-700"
+                            : "bg-muted/20 text-muted-foreground"
+                      }`}
+                    >
+                      <div className="font-medium">{diagnostic.title}</div>
+                      <div className="mt-1">{diagnostic.detail}</div>
+                      {channel.lastWebhookAt ? (
+                        <div className="mt-2 opacity-75">
+                          {new Date(channel.lastWebhookAt).toLocaleString("pt-BR")}
+                          {channel.lastWebhookRequestId
+                            ? ` · Request ${channel.lastWebhookRequestId}`
+                            : ""}
+                        </div>
+                      ) : null}
+                    </div>
+
                     {testResult ? (
                       <div
                         className={`rounded-xl border p-3 text-xs ${
@@ -359,7 +503,11 @@ function CanaisPage() {
                         ) : (
                           <TestTube2 className="h-4 w-4" />
                         )}
-                        Testar
+                        Testar envio para Cubo.Chat
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => startReceiveTest(channel)}>
+                        <Webhook className="h-4 w-4" />
+                        Testar recebimento do Webhook
                       </Button>
                       <Button variant="destructive" size="sm" onClick={() => void removeChannel(channel)} disabled={deletingId === channel.id}>
                         {deletingId === channel.id ? (
@@ -437,14 +585,14 @@ function CanaisPage() {
               />
             </Field>
             <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Account ID">
+              <Field label="Account ID" help="Identificador numérico da conta no Cubo.Chat.">
                 <Input
                   value={form.accountId}
                   onChange={(event) => setForm((current) => ({ ...current, accountId: event.target.value }))}
                   placeholder="3"
                 />
               </Field>
-              <Field label="Inbox ID">
+              <Field label="Inbox ID" help="Identificador da caixa de entrada que recebe este WhatsApp.">
                 <Input
                   value={form.inboxId}
                   onChange={(event) => setForm((current) => ({ ...current, inboxId: event.target.value }))}
@@ -475,19 +623,36 @@ function CanaisPage() {
                 </SelectContent>
               </Select>
             </Field>
-            <Field label="Token de API (opcional)">
+            <Field
+              label="Token de API do Cubo.Chat para enviar respostas"
+              help="Usado pelo Studio para responder mensagens no Cubo.Chat. Não é o webhook."
+            >
               <MaskedSecretInput
                 value={form.apiAccessToken}
                 onChange={(event) => setForm((current) => ({ ...current, apiAccessToken: event.target.value }))}
                 placeholder={editingChannel?.apiAccessTokenConfigured ? "Ja configurado no backend" : "Cole aqui apenas se for atualizar"}
               />
             </Field>
-            <Field label="Webhook secret (opcional)">
+            <Field
+              label="Webhook secret / assinatura (opcional)"
+              help="Preencha somente se o Cubo.Chat estiver configurado para assinar webhooks. Se não houver assinatura no Cubo.Chat, deixe vazio."
+            >
               <MaskedSecretInput
                 value={form.webhookSecret}
                 onChange={(event) => setForm((current) => ({ ...current, webhookSecret: event.target.value }))}
                 placeholder={editingChannel?.webhookSecretConfigured ? "Ja configurado no backend" : "Cole aqui apenas se for atualizar"}
               />
+            </Field>
+            <Field
+              label="URL do Webhook para cadastrar no Cubo.Chat"
+              help="No Cubo.Chat, marque o evento Mensagem criada (message_created)."
+            >
+              <div className="flex gap-2">
+                <Input readOnly value={webhookExample} className="font-mono text-xs" />
+                <Button variant="outline" size="icon" onClick={() => void copyWebhook()} title="Copiar URL">
+                  <Clipboard className="h-4 w-4" />
+                </Button>
+              </div>
             </Field>
             <Field label="Observações (opcional)">
               <Textarea
@@ -519,6 +684,53 @@ function CanaisPage() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
+
+      <Dialog open={Boolean(receiveTest)} onOpenChange={(open) => !open && setReceiveTest(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Testar recebimento do Webhook</DialogTitle>
+            <DialogDescription>
+              Canal {receiveTest?.channel.name} · Account {receiveTest?.channel.accountId} · Inbox{" "}
+              {receiveTest?.channel.inboxId}
+            </DialogDescription>
+          </DialogHeader>
+
+          {receiveTest?.status === "waiting" ? (
+            <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5 text-center">
+              <Clock3 className="mx-auto h-7 w-7 animate-pulse text-blue-600" />
+              <div className="mt-3 font-medium text-blue-950">
+                Agora envie uma mensagem pelo WhatsApp para este inbox.
+              </div>
+              <div className="mt-2 text-sm text-blue-700">
+                Aguardando webhook real por {receiveTest.remainingSeconds}s.
+              </div>
+            </div>
+          ) : receiveTest?.status === "success" ? (
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-center">
+              <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-600" />
+              <div className="mt-3 font-medium text-emerald-950">Webhook recebido pelo Studio.</div>
+              <div className="mt-2 text-sm text-emerald-700">
+                {getWebhookDiagnosticSummary(receiveTest.channel).detail}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+              <AlertTriangle className="h-6 w-6 text-amber-600" />
+              <div className="mt-3 font-medium text-amber-950">Nenhum webhook chegou ao Studio.</div>
+              <div className="mt-2 text-sm text-amber-800">
+                Verifique se o webhook está cadastrado no Cubo.Chat, se o evento Mensagem
+                criada/message_created está marcado e se está na conta/inbox corretos.
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReceiveTest(null)}>
+              Fechar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -543,11 +755,20 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  help,
+  children,
+}: {
+  label: string;
+  help?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="space-y-1.5">
       <Label>{label}</Label>
       {children}
+      {help ? <p className="text-xs leading-relaxed text-muted-foreground">{help}</p> : null}
     </div>
   );
 }

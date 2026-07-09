@@ -440,6 +440,17 @@ export interface ChatwootInboxConfigItem {
   metadataJson: Record<string, unknown> | null;
   apiAccessTokenConfigured: boolean;
   webhookSecretConfigured: boolean;
+  lastApiTestAt: string | null;
+  lastApiTestOk: boolean | null;
+  lastWebhookAt: string | null;
+  lastWebhookEvent: string | null;
+  lastWebhookAccountId: string | null;
+  lastWebhookInboxId: string | null;
+  lastWebhookConversationId: string | null;
+  lastWebhookMessageType: string | null;
+  lastWebhookIgnoredReason: string | null;
+  lastWebhookRequestId: string | null;
+  lastResponseAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
