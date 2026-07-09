@@ -111,6 +111,40 @@
   --sidebar-ring: oklch(0.7 0.18 268);
 }
 
+.studio-portal-surface,
+.studio-portal-dialog {
+  --background: oklch(0.985 0.004 250);
+  --foreground: oklch(0.18 0.03 260);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.18 0.03 260);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0.03 260);
+  --primary: oklch(0.52 0.21 268);
+  --primary-foreground: oklch(0.99 0.003 250);
+  --secondary: oklch(0.96 0.012 255);
+  --secondary-foreground: oklch(0.22 0.04 265);
+  --muted: oklch(0.96 0.012 255);
+  --muted-foreground: oklch(0.52 0.03 260);
+  --accent: oklch(0.94 0.02 268);
+  --accent-foreground: oklch(0.22 0.04 265);
+  --border: oklch(0.92 0.01 255);
+  --input: oklch(0.9 0.012 255);
+  --ring: oklch(0.52 0.21 268);
+  color-scheme: light;
+}
+
+.portal-input {
+  height: 2.5rem;
+  border-color: rgb(226 232 240);
+  background: white;
+  color: rgb(15 23 42);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.025);
+}
+
+.portal-input::placeholder {
+  color: rgb(148 163 184);
+}
+
 @layer base {
   * {
     border-color: var(--color-border);

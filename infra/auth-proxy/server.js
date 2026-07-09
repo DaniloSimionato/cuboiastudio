@@ -36,17 +36,19 @@ const loginPageHtml = (error = "") => `
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-gradient: radial-gradient(circle at 50% 0%, #1e1b4b 0%, #0f172a 50%, #020617 100%);
-            --card-bg: rgba(15, 23, 42, 0.45);
-            --card-border: rgba(255, 255, 255, 0.08);
-            --primary: #6366f1;
-            --primary-hover: #4f46e5;
-            --primary-glow: rgba(99, 102, 241, 0.15);
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-            --error-bg: rgba(239, 68, 68, 0.1);
-            --error-border: rgba(239, 68, 68, 0.2);
-            --error-text: #f87171;
+            --bg-gradient: radial-gradient(circle at 16% 0%, rgba(37, 99, 235, 0.10), transparent 34%),
+                           radial-gradient(circle at 84% 12%, rgba(14, 165, 233, 0.07), transparent 28%),
+                           #f7f9fc;
+            --card-bg: rgba(255, 255, 255, 0.94);
+            --card-border: #e2e8f0;
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --primary-glow: rgba(37, 99, 235, 0.18);
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --error-bg: #fef2f2;
+            --error-border: #fecaca;
+            --error-text: #b91c1c;
         }
 
         * {
@@ -69,17 +71,27 @@ const loginPageHtml = (error = "") => `
 
         .login-card {
             background: var(--card-bg);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
             border: 1px solid var(--card-border);
-            border-radius: 24px;
+            border-radius: 20px;
             width: 100%;
-            max-width: 460px;
-            padding: 48px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 
-                        inset 0 1px 1px rgba(255, 255, 255, 0.1);
+            max-width: 420px;
+            padding: 36px;
+            box-shadow: 0 24px 60px -24px rgba(15, 23, 42, 0.22);
             position: relative;
             animation: fadeIn 0.6s ease-out;
+        }
+
+        .login-card::before {
+            content: "CUBO AI STUDIO";
+            position: absolute;
+            top: 18px;
+            left: 20px;
+            color: #94a3b8;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 1.6px;
         }
 
         @keyframes fadeIn {
@@ -89,22 +101,31 @@ const loginPageHtml = (error = "") => `
 
         .header-logo {
             text-align: center;
-            margin-bottom: 36px;
+            margin-bottom: 28px;
+            margin-top: 12px;
         }
 
         .logo-symbol {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            width: 64px;
-            height: 64px;
-            background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(168, 85, 247, 0.2));
-            border: 1px solid rgba(99, 102, 241, 0.3);
-            border-radius: 18px;
-            font-size: 32px;
-            margin-bottom: 16px;
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(145deg, #2563eb, #1d4ed8);
+            border: 1px solid rgba(255, 255, 255, 0.35);
+            border-radius: 14px;
+            font-size: 0;
+            margin-bottom: 14px;
             box-shadow: 0 8px 24px var(--primary-glow);
             transition: transform 0.3s ease;
+        }
+
+        .logo-symbol::after {
+            content: "C";
+            color: white;
+            font-family: 'Outfit', sans-serif;
+            font-size: 22px;
+            font-weight: 700;
         }
 
         .login-card:hover .logo-symbol {
@@ -113,12 +134,10 @@ const loginPageHtml = (error = "") => `
 
         h1 {
             font-family: 'Outfit', sans-serif;
-            font-size: 26px;
+            font-size: 25px;
             font-weight: 700;
             letter-spacing: -0.5px;
-            background: linear-gradient(135deg, #ffffff 30%, #c7d2fe 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            color: #0f172a;
         }
 
         .subtitle {
@@ -128,14 +147,14 @@ const loginPageHtml = (error = "") => `
         }
 
         .form-group {
-            margin-bottom: 22px;
+            margin-bottom: 18px;
         }
 
         label {
             display: block;
             font-size: 12px;
             font-weight: 600;
-            color: #cbd5e1;
+            color: #475569;
             margin-bottom: 8px;
             text-transform: uppercase;
             letter-spacing: 0.75px;
@@ -143,11 +162,11 @@ const loginPageHtml = (error = "") => `
 
         input {
             width: 100%;
-            padding: 14px 18px;
-            background: rgba(15, 23, 42, 0.6);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 12px;
-            color: white;
+            padding: 12px 14px;
+            background: #ffffff;
+            border: 1px solid #dbe3ee;
+            border-radius: 10px;
+            color: #0f172a;
             font-family: inherit;
             font-size: 15px;
             transition: all 0.25s ease;
@@ -157,19 +176,19 @@ const loginPageHtml = (error = "") => `
         input:focus {
             border-color: var(--primary);
             box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
-            background: rgba(15, 23, 42, 0.8);
+            background: #ffffff;
         }
 
         input::placeholder {
-            color: #475569;
+            color: #94a3b8;
         }
 
         .btn-submit {
             width: 100%;
-            padding: 15px;
-            background: linear-gradient(135deg, #6366f1, #4f46e5);
+            padding: 13px;
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
             border: none;
-            border-radius: 12px;
+            border-radius: 10px;
             color: white;
             font-family: inherit;
             font-size: 15px;
@@ -177,13 +196,13 @@ const loginPageHtml = (error = "") => `
             cursor: pointer;
             transition: all 0.25s ease;
             margin-top: 8px;
-            box-shadow: 0 4px 20px rgba(79, 70, 229, 0.35);
+            box-shadow: 0 8px 20px rgba(37, 99, 235, 0.22);
         }
 
         .btn-submit:hover {
             transform: translateY(-1px);
-            box-shadow: 0 6px 24px rgba(79, 70, 229, 0.5);
-            background: linear-gradient(135deg, #4f46e5, #4338ca);
+            box-shadow: 0 10px 24px rgba(37, 99, 235, 0.28);
+            background: linear-gradient(135deg, #1d4ed8, #1e40af);
         }
 
         .btn-submit:active {
@@ -212,7 +231,7 @@ const loginPageHtml = (error = "") => `
             margin-top: 32px;
             text-align: center;
             font-size: 11px;
-            color: #475569;
+            color: #94a3b8;
             letter-spacing: 0.5px;
             text-transform: uppercase;
         }
@@ -221,9 +240,9 @@ const loginPageHtml = (error = "") => `
 <body>
     <div class="login-card">
         <div class="header-logo">
-            <div class="logo-symbol">🤖</div>
+            <div class="logo-symbol" aria-hidden="true"></div>
             <h1>Cubo AI Studio</h1>
-            <p class="subtitle">Ambiente de Homologação (Staging)</p>
+            <p class="subtitle">Acesse o portal global da sua operação.</p>
         </div>
         
         ${error ? `<div class="error-message">${escapeHtml(error)}</div>` : ""}
@@ -241,7 +260,7 @@ const loginPageHtml = (error = "") => `
         </form>
         
         <footer>
-            Uso Interno Autorizado Apenas
+            Ambiente de homologação · Uso interno
         </footer>
     </div>
 </body>

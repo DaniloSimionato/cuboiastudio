@@ -20,6 +20,7 @@
     "db:seed": "npm run prisma:seed",
     "staging:bootstrap-admin": "node scripts/bootstrap-staging-admin.js",
     "cleanup:smoke": "node scripts/cleanup-staging-smoke-data.mjs",
+    "cleanup:duplicate-companies": "node scripts/cleanup-duplicate-companies.mjs",
     "test:apps": "npm run build && node --test test/app-store.test.mjs test/assistant-calendar-tools.test.mjs",
     "test:attachments": "npm run build && node --test test/attachment-pipeline.test.mjs",
     "test:chatwoot": "npm run build && node --test test/chatwoot-webhook-and-runtime.test.mjs",

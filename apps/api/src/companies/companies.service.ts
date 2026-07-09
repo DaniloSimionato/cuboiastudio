@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -98,6 +99,20 @@ export class CompaniesService {
     user: AuthenticatedUser;
   }): Promise<CompanyResponse> {
     this.assertCanManageCompanies(input.user);
+
+    const duplicate = await this.prisma.company.findFirst({
+      where: {
+        deletedAt: null,
+        name: {
+          equals: input.dto.name.trim(),
+          mode: "insensitive",
+        },
+      },
+      select: { id: true },
+    });
+    if (duplicate) {
+      throw new ConflictException("Já existe uma empresa cadastrada com este nome.");
+    }
 
     const createdCompany = await this.prisma.$transaction(async (tx) => {
       const company = await tx.company.create({

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ForbiddenException, NotFoundException } from "@nestjs/common";
+import { ConflictException, ForbiddenException, NotFoundException } from "@nestjs/common";
 import { Status } from "@prisma/client";
 import { CompaniesService } from "../dist/companies/companies.service.js";
 import { AssistantFlowsService } from "../dist/assistant-flows/assistant-flows.service.js";
@@ -75,6 +75,27 @@ test("CompaniesService bloqueia troca para empresa sem vínculo", async () => {
   );
 });
 
+test("CompaniesService bloqueia criação de empresa com nome duplicado", async () => {
+  const service = new CompaniesService({
+    company: {
+      findFirst: async ({ where }) => {
+        assert.equal(where.name.equals, "Cubo AI Teste");
+        assert.equal(where.name.mode, "insensitive");
+        return { id: "company-existing" };
+      },
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      service.create({
+        dto: { name: "  Cubo AI Teste  " },
+        user: createUser(),
+      }),
+    ConflictException,
+  );
+});
+
 test("CompaniesService cria empresa nova sem copiar assistentes quando demo não é solicitado", async () => {
   const txCalls = {
     assistantCreateCount: 0,
@@ -134,6 +155,9 @@ test("CompaniesService cria empresa nova sem copiar assistentes quando demo não
   };
 
   const service = new CompaniesService({
+    company: {
+      findFirst: async () => null,
+    },
     $transaction: async (callback) => callback(tx),
   });
 
@@ -201,6 +225,9 @@ test("CompaniesService só cria assistente demo quando solicitado explicitamente
   };
 
   const service = new CompaniesService({
+    company: {
+      findFirst: async () => null,
+    },
     $transaction: async (callback) => callback(tx),
   });
 

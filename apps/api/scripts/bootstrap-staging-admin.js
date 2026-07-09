@@ -32,7 +32,21 @@ async function main() {
     const companyDocument = readArg("document") || null;
     const notes = readArg("notes") || null;
     const userId = readArg("user-id") || `user_${randomUUID().slice(0, 12)}`;
-    const companyId = readArg("company-id") || `company_${randomUUID().slice(0, 12)}`;
+    const requestedCompanyId = readArg("company-id");
+    const existingCompany = requestedCompanyId
+      ? await prisma.company.findUnique({ where: { id: requestedCompanyId } })
+      : await prisma.company.findFirst({
+          where: {
+            deletedAt: null,
+            OR: [
+              ...(companyDocument ? [{ document: companyDocument }] : []),
+              { name: { equals: companyName, mode: "insensitive" } },
+            ],
+          },
+          orderBy: { createdAt: "asc" },
+        });
+    const companyId =
+      existingCompany?.id || requestedCompanyId || `company_${randomUUID().slice(0, 12)}`;
     const passwordHash = await hashPassword(password);
 
     const result = await prisma.$transaction(async (tx) => {
