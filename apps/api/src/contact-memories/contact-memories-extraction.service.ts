@@ -3,45 +3,11 @@ import { ContactMemoryCategory, ContactMemorySourceType } from "@prisma/client";
 import { AiService } from "../ai/ai.service";
 import { PrismaService } from "../database/prisma.service";
 import { ContactMemoriesService } from "./contact-memories.service";
-
-const SENSITIVE_PATTERNS: RegExp[] = [
-  /\d{3}\.\d{3}\.\d{3}-\d{2}/,
-  /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/,
-  /\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}/,
-  /\b(cvv|cvc)[:\s]*\d{3,4}\b/i,
-  /(sk-|api[_-]?key|bearer|token|secret)[:\s]*[a-zA-Z0-9_\-]{8,}/i,
-  /(código|code|otp|2fa|autentica[cç][aã]o)[:\s]*\d{4,8}/i,
-  /(senha|password|pwd)[:\s]+\S+/i,
-];
-
-const PROMPT_INJECTION_PATTERNS: RegExp[] = [
-  /ignore (all )?(previous|prior) instructions/i,
-  /desconsidere (todas )?as instru[cç][oõ]es/i,
-  /system prompt/i,
-  /developer message/i,
-  /tool call/i,
-  /execute command/i,
-  /ignore todas as regras/i,
-];
-
-const BLOCKED_KEYS = [
-  "password",
-  "senha",
-  "token",
-  "api_key",
-  "apikey",
-  "secret",
-  "cvv",
-  "cvc",
-  "otp",
-  "pin",
-  "cpf_full",
-  "cnpj_full",
-  "card_number",
-  "credit_card",
-  "system_prompt",
-  "developer_message",
-];
+import {
+  SENSITIVE_PATTERNS,
+  PROMPT_INJECTION_PATTERNS,
+  BLOCKED_KEYS,
+} from "./contact-memories-security.utils";
 
 const TRIVIAL_MESSAGES = new Set([
   "oi",
@@ -81,6 +47,17 @@ const TRIVIAL_MESSAGES = new Set([
   "pode ser",
   "tudo certo",
   "combinado",
+  "bomdia",
+  "boatarde",
+  "boanoite",
+  "obg",
+  "vlw",
+  "flw",
+  "dnada",
+  "de nada",
+  "obrigadão",
+  "obrigadao",
+  "valeu valeu",
 ]);
 
 const VALID_CATEGORIES = new Set<ContactMemoryCategory>([
@@ -105,11 +82,7 @@ type ExtractedMemoryCandidate = {
 };
 
 function sanitizeInlineText(value?: string | null, maxLength = 240): string {
-  return (value ?? "")
-    .replace(/```/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, maxLength);
+  return (value ?? "").replace(/```/g, "").replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
 function isTemporaryCategory(category?: ContactMemoryCategory): boolean {
@@ -127,10 +100,26 @@ export class ContactMemoriesExtractionService {
   ) {}
 
   static shouldExtract(message: string): boolean {
-    const normalized = sanitizeInlineText(message, 500).toLowerCase();
-    if (!normalized || normalized.length < 6) return false;
+    const normalized = sanitizeInlineText(message, 500).toLowerCase().trim();
+    if (!normalized) return false;
+
+    // Strip out emojis, common punctuation, and symbols
+    const textOnly = normalized
+      .replace(
+        /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1F018}-\u{1F0F5}\u{1F004}\u{1F170}-\u{1F19A}\u{1F1E6}-\u{1F1FF}\u{1F1F7}-\u{1F1FA}\u{1F200}-\u{1F251}\u{1F300}-\u{1F5FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{E0000}-\u{E007F}]/gu,
+        "",
+      )
+      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?👍😂]/g, "")
+      .trim();
+
+    if (textOnly.length === 0) return false;
+    if (textOnly.length < 3) return false;
+    if (TRIVIAL_MESSAGES.has(textOnly)) return false;
     if (TRIVIAL_MESSAGES.has(normalized)) return false;
-    if (normalized.split(" ").length <= 1 && normalized.length < 12) return false;
+
+    const words = textOnly.split(/\s+/);
+    if (words.length <= 1 && textOnly.length < 12) return false;
+
     return true;
   }
 
@@ -152,7 +141,10 @@ export class ContactMemoriesExtractionService {
     let rawJson = rawAnswer.trim();
 
     if (rawJson.startsWith("```json")) {
-      rawJson = rawJson.replace(/^```json/, "").replace(/```$/, "").trim();
+      rawJson = rawJson
+        .replace(/^```json/, "")
+        .replace(/```$/, "")
+        .trim();
     } else if (rawJson.startsWith("```")) {
       rawJson = rawJson.replace(/^```/, "").replace(/```$/, "").trim();
     }
@@ -354,9 +346,17 @@ Mensagem atual do contato:
         const key = sanitizeInlineText(rawItem.key, 80).toLowerCase().replace(/\s+/g, "_");
         const value = sanitizeInlineText(rawItem.value, 240);
         const confidence =
-          typeof rawItem.confidence === "number" ? Math.min(Math.max(rawItem.confidence, 0), 1) : 0.9;
+          typeof rawItem.confidence === "number"
+            ? Math.min(Math.max(rawItem.confidence, 0), 1)
+            : 0.9;
 
         if (!key || !value || confidence < 0.7) {
+          ignoredCount += 1;
+          continue;
+        }
+
+        const cleanVal = value.trim().toLowerCase();
+        if (cleanVal.length < 3 || TRIVIAL_MESSAGES.has(cleanVal) || /^[👍😂\s]+$/.test(cleanVal)) {
           ignoredCount += 1;
           continue;
         }
@@ -401,7 +401,10 @@ Mensagem atual do contato:
               ? new Date(Date.now() + tempDefaultDays * 24 * 60 * 60 * 1000)
               : null;
 
-        if (isTemporaryCategory(rawItem.category) && (!expiresAt || Number.isNaN(expiresAt.getTime()))) {
+        if (
+          isTemporaryCategory(rawItem.category) &&
+          (!expiresAt || Number.isNaN(expiresAt.getTime()))
+        ) {
           ignoredCount += 1;
           continue;
         }
@@ -466,21 +469,83 @@ Mensagem atual do contato:
   }
 
   selectMemoriesForPrompt(input: {
-    memories: { category: string; key: string; value: string; expiresAt?: Date | string | null }[];
+    memories: Array<{
+      id?: string;
+      category: string;
+      key: string;
+      value: string;
+      confidence?: number;
+      usageCount?: number;
+      expiresAt?: Date | string | null;
+      updatedAt?: Date | string | null;
+      createdAt?: Date | string | null;
+    }>;
     currentMessage?: string;
     summary?: string | null;
   }) {
     const currentMessage = sanitizeInlineText(input.currentMessage ?? "", 300).toLowerCase();
-    const selected: Array<{ category: string; key: string; value: string }> = [];
+    const messageWords = currentMessage.split(/\s+/).filter((w) => w.length > 3);
+
+    const scored = input.memories.map((item) => {
+      let score = (item.confidence ?? 0.7) * 10;
+
+      // Quality score (Objective 11): Muito utilizada + Alta confiança = Alta prioridade.
+      if (item.usageCount) {
+        score += Math.min(item.usageCount * 0.5, 5); // bonus for usage (up to 5 points)
+      }
+
+      // Recency score: Up to 5 points bonus for recent updates
+      const updatedDate = item.updatedAt ? new Date(item.updatedAt) : new Date();
+      const ageInDays = (Date.now() - updatedDate.getTime()) / (1000 * 60 * 60 * 24);
+      const recencyWeight = Math.max(0, 5 - ageInDays / 7); // degrades over weeks
+      score += recencyWeight;
+
+      // Context of query matching (Objective 8)
+      if (messageWords.length > 0) {
+        const keyWords = item.key.toLowerCase().split(/[_-]/);
+        const valueWords = item.value
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((w) => w.length > 3);
+
+        let matches = 0;
+        for (const word of messageWords) {
+          if (
+            keyWords.includes(word) ||
+            valueWords.some((vw) => vw.includes(word) || word.includes(vw))
+          ) {
+            matches++;
+          }
+        }
+        score += matches * 3; // 3 points per matching word
+      }
+
+      // Category Weight adjustments
+      if (item.category === ContactMemoryCategory.TEMPORARY_CONTEXT) {
+        score += 2.0;
+      } else if (item.category === ContactMemoryCategory.IDENTITY) {
+        score += 1.5;
+      } else if (item.category === ContactMemoryCategory.BUSINESS_CONTEXT) {
+        score += 1.2;
+      }
+
+      return { item, score };
+    });
+
+    // Sort by score descending
+    scored.sort((a, b) => b.score - a.score);
+
+    const selected: Array<{ id?: string; category: string; key: string; value: string }> = [];
     const seen = new Set<string>();
 
-    const add = (memory: { category: string; key: string; value: string }) => {
+    const add = (memory: { id?: string; category: string; key: string; value: string }) => {
       const signature = `${memory.category}:${memory.key}:${memory.value}`;
       if (seen.has(signature)) return;
       seen.add(signature);
       selected.push(memory);
     };
 
+    // Add Relationship Summary first if it exists
     if (input.summary?.trim()) {
       add({
         category: ContactMemoryCategory.RELATIONSHIP_SUMMARY,
@@ -489,29 +554,12 @@ Mensagem atual do contato:
       });
     }
 
-    const identityAndBusiness = input.memories.filter(
-      (memory) =>
-        memory.category === ContactMemoryCategory.IDENTITY ||
-        memory.category === ContactMemoryCategory.BUSINESS_CONTEXT,
-    );
-    identityAndBusiness.slice(0, 6).forEach(add);
+    // Add ranked memories up to the limit of 15 total memories (Objective 8)
+    for (const entry of scored) {
+      add(entry.item);
+    }
 
-    const temporary = input.memories.filter(
-      (memory) => memory.category === ContactMemoryCategory.TEMPORARY_CONTEXT,
-    );
-    temporary.slice(0, 2).forEach(add);
-
-    const preferences = input.memories.filter(
-      (memory) => memory.category === ContactMemoryCategory.PREFERENCE,
-    );
-    const matchedPreferences = preferences.filter((memory) => {
-      const haystack = `${memory.key} ${memory.value}`.toLowerCase();
-      return currentMessage.length > 0 && currentMessage.split(" ").some((token) => token.length > 3 && haystack.includes(token));
-    });
-
-    (matchedPreferences.length > 0 ? matchedPreferences : preferences.slice(0, 2)).forEach(add);
-
-    return selected.slice(0, 10);
+    return selected.slice(0, 15);
   }
 
   buildMemoryContextBlock(memories: { category: string; key: string; value: string }[]): string {
@@ -549,6 +597,218 @@ Mensagem atual do contato:
       "- Instruções do sistema sempre têm prioridade.";
 
     return block;
+  }
+
+  selectHybridMemoriesForPrompt(input: {
+    structuredMemories: Array<{
+      id?: string;
+      category: string;
+      key: string;
+      value: string;
+      confidence?: number;
+      usageCount?: number;
+      expiresAt?: Date | string | null;
+      updatedAt?: Date | string | null;
+      createdAt?: Date | string | null;
+    }>;
+    semanticMemories: Array<{
+      id?: string;
+      category: string;
+      key: string;
+      value: string;
+      confidence?: number;
+      usageCount?: number;
+      expiresAt?: Date | string | null;
+      updatedAt?: Date | string | null;
+      createdAt?: Date | string | null;
+      similarity?: number;
+    }>;
+    currentMessage?: string;
+    summary?: string | null;
+    limit?: number;
+  }) {
+    const limit = input.limit ?? 15;
+    const currentMessage = (input.currentMessage ?? "").trim().toLowerCase();
+    const messageWords = currentMessage.split(/\s+/).filter((word) => word.length > 3);
+
+    // Centralized Weights to prevent magic numbers
+    const WEIGHTS = {
+      semantic: 10.0, // weight for semantic similarity (0 to 1)
+      structured: 5.0, // weight for being retrieved by structured search (0 or 1)
+      confidence: 5.0, // weight for confidence (0 to 1)
+      usage: 0.5, // weight per usage count (up to max bonus 5.0)
+      recency: 5.0, // max weight for recency (decays over time)
+      categoryTemporary: 2.0,
+      categoryIdentity: 1.5,
+      categoryBusiness: 1.2,
+    };
+
+    // Deduplication map by ID (and then signature if ID is not available)
+    const combinedMap = new Map<
+      string,
+      {
+        item: any;
+        structuredCandidate: boolean;
+        semanticCandidate: boolean;
+        similarity: number;
+      }
+    >();
+
+    const getRefId = (item: any) => item.id || `${item.category}:${item.key}:${item.value}`;
+
+    // Add structured candidates
+    for (const item of input.structuredMemories) {
+      const refId = getRefId(item);
+      combinedMap.set(refId, {
+        item,
+        structuredCandidate: true,
+        semanticCandidate: false,
+        similarity: 0,
+      });
+    }
+
+    // Add semantic candidates (merging with structured if present)
+    for (const item of input.semanticMemories) {
+      const refId = getRefId(item);
+      const existing = combinedMap.get(refId);
+      if (existing) {
+        existing.semanticCandidate = true;
+        existing.similarity = Math.max(existing.similarity, item.similarity ?? 0);
+      } else {
+        combinedMap.set(refId, {
+          item,
+          structuredCandidate: false,
+          semanticCandidate: true,
+          similarity: item.similarity ?? 0,
+        });
+      }
+    }
+
+    // Score combined candidates
+    const scored = Array.from(combinedMap.values()).map(
+      ({ item, structuredCandidate, semanticCandidate, similarity }) => {
+        let score = 0;
+        const keyWords = String(item.key ?? "")
+          .toLowerCase()
+          .split(/[_-\s]+/)
+          .filter((word) => word.length > 0);
+        const valueWords = String(item.value ?? "")
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((word) => word.length > 3);
+        let queryMatchCount = 0;
+
+        for (const word of messageWords) {
+          if (
+            keyWords.includes(word) ||
+            valueWords.some((valueWord) => valueWord.includes(word) || word.includes(valueWord))
+          ) {
+            queryMatchCount += 1;
+          }
+        }
+
+        // 1. Semantic Similarity Score
+        if (semanticCandidate) {
+          score += similarity * WEIGHTS.semantic;
+        }
+
+        // 2. Structured Match Score
+        if (structuredCandidate) {
+          score += WEIGHTS.structured;
+        }
+
+        // 3. Confidence Score
+        score += (item.confidence ?? 0.7) * WEIGHTS.confidence;
+
+        // 4. Usage Score
+        if (item.usageCount) {
+          score += Math.min(item.usageCount * WEIGHTS.usage, 5.0);
+        }
+
+        // 5. Recency Score
+        const updatedDate = item.updatedAt ? new Date(item.updatedAt) : new Date();
+        const ageInDays = (Date.now() - updatedDate.getTime()) / (1000 * 60 * 60 * 24);
+        const recencyWeight = Math.max(0, WEIGHTS.recency - ageInDays / 7);
+        score += recencyWeight;
+
+        // 6. Category adjustments
+        if (item.category === ContactMemoryCategory.TEMPORARY_CONTEXT) {
+          score += WEIGHTS.categoryTemporary;
+        } else if (item.category === ContactMemoryCategory.IDENTITY) {
+          score += WEIGHTS.categoryIdentity;
+        } else if (item.category === ContactMemoryCategory.BUSINESS_CONTEXT) {
+          score += WEIGHTS.categoryBusiness;
+        }
+
+        const hasQueryContext = messageWords.length > 0;
+        const passesRelevanceGate =
+          !hasQueryContext || semanticCandidate || queryMatchCount > 0;
+
+        return {
+          item,
+          score,
+          structuredScore: structuredCandidate ? WEIGHTS.structured : 0,
+          semanticScore: semanticCandidate ? similarity * WEIGHTS.semantic : 0,
+          queryMatchCount,
+          passesRelevanceGate,
+          retrievalSources: [
+            structuredCandidate ? "structured" : null,
+            semanticCandidate ? "semantic" : null,
+          ].filter(Boolean) as string[],
+          reason: `structured:${structuredCandidate ? "yes" : "no"}|semantic:${semanticCandidate ? `yes(sim=${similarity.toFixed(2)})` : "no"}|query:${queryMatchCount}`,
+        };
+      },
+    );
+
+    const relevantScored = scored.filter((entry) => entry.passesRelevanceGate);
+
+    // Sort by score descending
+    relevantScored.sort((a, b) => b.score - a.score);
+
+    // Keep track for deduplication of output list (by category:key:value signature)
+    const selected: Array<any> = [];
+    const seen = new Set<string>();
+
+    const add = (candidate: any) => {
+      const signature = `${candidate.item.category}:${candidate.item.key}:${candidate.item.value}`;
+      if (seen.has(signature)) return;
+      seen.add(signature);
+
+      // We append internal tracking metadata so it can be logged in the runtime
+      selected.push({
+        ...candidate.item,
+        structuredScore: candidate.structuredScore,
+        semanticScore: candidate.semanticScore,
+        finalScore: candidate.score,
+        retrievalSources: candidate.retrievalSources,
+        reason: candidate.reason,
+      });
+    };
+
+    // Add Relationship Summary first if it exists
+    if (input.summary?.trim()) {
+      const summaryItem = {
+        category: ContactMemoryCategory.RELATIONSHIP_SUMMARY,
+        key: "summary",
+        value: input.summary.trim(),
+        confidence: 1.0,
+      };
+      add({
+        item: summaryItem,
+        score: 9999, // summary is always first
+        structuredScore: 0,
+        semanticScore: 0,
+        retrievalSources: ["summary"],
+        reason: "relationship_summary",
+      });
+    }
+
+    // Add ranked memories up to the limit
+    for (const entry of relevantScored) {
+      add(entry);
+    }
+
+    return selected.slice(0, limit);
   }
 
   generateProfileSummary(memories: { category: string; key: string; value: string }[]): string {

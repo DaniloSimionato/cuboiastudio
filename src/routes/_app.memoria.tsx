@@ -9,6 +9,10 @@ import {
   RefreshCw,
   ShieldAlert,
   Trash2,
+  BarChart3,
+  Clock,
+  Users,
+  CheckCircle,
 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -52,6 +56,7 @@ import type {
   ContactMemoryEvent,
   ContactMemoryItem,
   ContactMemoryProfile,
+  ContactMemoryStatsResponse,
 } from "@/services/contactMemoriesService";
 import { currentCompanyService } from "@/services/currentCompanyService";
 import type { ContactMemoryCategory, CurrentCompanyResponse } from "@/types";
@@ -105,10 +110,14 @@ export const Route = createFileRoute("/_app/memoria")({
 function MemoriaPage() {
   const [company, setCompany] = useState<CurrentCompanyResponse["company"] | null>(null);
   const [items, setItems] = useState<ContactMemoryItem[]>([]);
-  const [profiles, setProfiles] = useState<Array<ContactMemoryProfile & { _count: { items: number } }>>([]);
+  const [profiles, setProfiles] = useState<
+    Array<ContactMemoryProfile & { _count: { items: number } }>
+  >([]);
   const [selectedItem, setSelectedItem] = useState<ContactMemoryItem | null>(null);
   const [selectedEvents, setSelectedEvents] = useState<ContactMemoryEvent[]>([]);
-  const [selectedProfile, setSelectedProfile] = useState<(ContactMemoryProfile & { items: ContactMemoryItem[] }) | null>(null);
+  const [selectedProfile, setSelectedProfile] = useState<
+    (ContactMemoryProfile & { items: ContactMemoryItem[] }) | null
+  >(null);
   const [search, setSearch] = useState("");
   const [channelType, setChannelType] = useState("all");
   const [category, setCategory] = useState("all");
@@ -124,14 +133,52 @@ function MemoriaPage() {
   const [editingItem, setEditingItem] = useState<ContactMemoryItem | null>(null);
   const [form, setForm] = useState<MemoryFormState>(DEFAULT_FORM);
 
+  // New States for Stats and Pagination
+  const [stats, setStats] = useState<ContactMemoryStatsResponse | null>(null);
+  const [itemsPage, setItemsPage] = useState(1);
+  const [itemsTotal, setItemsTotal] = useState(0);
+  const itemsLimit = 20;
+
+  const [profilesPage, setProfilesPage] = useState(1);
+  const [profilesTotal, setProfilesTotal] = useState(0);
+  const profilesLimit = 10;
+
+  const [allProfiles, setAllProfiles] = useState<ContactMemoryProfile[]>([]);
+
+  const loadAllProfiles = useCallback(async () => {
+    try {
+      const response = await contactMemoriesService.listProfiles({
+        limit: 100,
+      });
+      setAllProfiles(response.items);
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
   const loadProfiles = useCallback(async () => {
-    const response = await contactMemoriesService.listProfiles({
-      channelType: channelType !== "all" ? channelType : undefined,
-      search: search.trim() || undefined,
-      limit: 100,
-    });
-    setProfiles(response.items);
-  }, [channelType, search]);
+    try {
+      const response = await contactMemoriesService.listProfiles({
+        channelType: channelType !== "all" ? channelType : undefined,
+        search: search.trim() || undefined,
+        page: profilesPage,
+        limit: profilesLimit,
+      });
+      setProfiles(response.items);
+      setProfilesTotal(response.total);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [channelType, search, profilesPage]);
+
+  const loadStats = useCallback(async () => {
+    try {
+      const statsRes = await contactMemoriesService.getStats();
+      setStats(statsRes);
+    } catch (e) {
+      console.error("Failed to load memory stats", e);
+    }
+  }, []);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -146,23 +193,43 @@ function MemoriaPage() {
           active: active !== "all" ? active === "true" : undefined,
           expired: expired !== "all" ? expired === "true" : undefined,
           search: search.trim() || undefined,
-          limit: 100,
+          page: itemsPage,
+          limit: itemsLimit,
         }),
       ]);
 
       setCompany(companyResponse.company);
       setItems(itemsResponse.items);
+      setItemsTotal(itemsResponse.total);
       await loadProfiles();
+      await loadStats();
+      await loadAllProfiles();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Não foi possível carregar as memórias.");
     } finally {
       setLoading(false);
     }
-  }, [active, category, channelType, expired, loadProfiles, search, sourceType]);
+  }, [
+    active,
+    category,
+    channelType,
+    expired,
+    loadProfiles,
+    loadStats,
+    loadAllProfiles,
+    search,
+    sourceType,
+    itemsPage,
+  ]);
 
   useEffect(() => {
     void loadItems();
   }, [loadItems]);
+
+  useEffect(() => {
+    setItemsPage(1);
+    setProfilesPage(1);
+  }, [active, category, channelType, expired, search, sourceType]);
 
   const groupedProfileItems = useMemo(() => {
     if (!selectedProfile) return [];
@@ -308,6 +375,72 @@ function MemoriaPage() {
         title="Memória"
         description="Memórias reais por contato, com histórico, origem e controle manual por tenant."
       />
+
+      {/* Indicadores Administrativos */}
+      {stats && (
+        <div className="grid gap-4 grid-cols-2 md:grid-cols-5 mb-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Total de Memórias
+              </CardTitle>
+              <Brain className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.totalMemories}</div>
+              <p className="text-[10px] text-muted-foreground">Cadastradas no sistema</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Ativas
+              </CardTitle>
+              <CheckCircle className="h-4 w-4 text-emerald-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.activeMemories}</div>
+              <p className="text-[10px] text-muted-foreground">Participando de prompts</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Temporárias
+              </CardTitle>
+              <Clock className="h-4 w-4 text-amber-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.temporaryMemories}</div>
+              <p className="text-[10px] text-muted-foreground">Contexto com expiração</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Expiradas
+              </CardTitle>
+              <Clock className="h-4 w-4 text-rose-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.expiredMemories}</div>
+              <p className="text-[10px] text-muted-foreground">Já expiradas/inativas</p>
+            </CardContent>
+          </Card>
+          <Card className="col-span-2 md:col-span-1">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Média por Contato
+              </CardTitle>
+              <Users className="h-4 w-4 text-blue-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.averagePerContact}</div>
+              <p className="text-[10px] text-muted-foreground">Memórias ativas/contato</p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       <Alert className="mb-4 border-amber-200 bg-amber-50">
         <ShieldAlert className="h-4 w-4 text-amber-600" />
@@ -539,7 +672,127 @@ function MemoriaPage() {
             </TableBody>
           </Table>
         </CardContent>
+        {itemsTotal > itemsLimit && (
+          <div className="flex items-center justify-between p-4 border-t bg-muted/10">
+            <div className="text-xs text-muted-foreground">
+              Mostrando {Math.min((itemsPage - 1) * itemsLimit + 1, itemsTotal)}–
+              {Math.min(itemsPage * itemsLimit, itemsTotal)} de {itemsTotal} memórias
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setItemsPage((p) => Math.max(p - 1, 1))}
+                disabled={itemsPage === 1}
+              >
+                Anterior
+              </Button>
+              <div className="text-sm font-medium">
+                Página {itemsPage} de {Math.ceil(itemsTotal / itemsLimit)}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setItemsPage((p) => Math.min(p + 1, Math.ceil(itemsTotal / itemsLimit)))
+                }
+                disabled={itemsPage === Math.ceil(itemsTotal / itemsLimit)}
+              >
+                Próxima
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
+
+      {/* Top Categorias e Top Contatos */}
+      {stats && (
+        <div className="grid gap-4 md:grid-cols-2 mt-4 mb-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <BarChart3 className="h-4 w-4 text-primary" /> Top Categorias
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Categoria</TableHead>
+                    <TableHead className="text-right">Quantidade Ativa</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {stats.topCategories.map((c) => (
+                    <TableRow key={c.category}>
+                      <TableCell className="font-medium">{formatCategory(c.category)}</TableCell>
+                      <TableCell className="text-right font-semibold">{c.count}</TableCell>
+                    </TableRow>
+                  ))}
+                  {stats.topCategories.length === 0 && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={2}
+                        className="text-center text-muted-foreground py-4 text-xs"
+                      >
+                        Nenhuma categoria ativa encontrada.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <Users className="h-4 w-4 text-primary" /> Top Contatos com mais Memória
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Contato</TableHead>
+                    <TableHead>Telefone</TableHead>
+                    <TableHead className="text-right">Memórias Ativas</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {stats.topContacts.map((c) => (
+                    <TableRow key={c.profileId}>
+                      <TableCell>
+                        <button
+                          type="button"
+                          className="font-medium hover:text-primary text-left text-xs md:text-sm"
+                          onClick={() => void openProfile(c.profileId)}
+                        >
+                          {c.displayName}
+                        </button>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {c.phoneNormalized || "—"}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold">{c.count}</TableCell>
+                    </TableRow>
+                  ))}
+                  {stats.topContacts.length === 0 && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={3}
+                        className="text-center text-muted-foreground py-4 text-xs"
+                      >
+                        Nenhum contato com memórias.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
         <DialogContent className="max-w-2xl">
@@ -558,7 +811,7 @@ function MemoriaPage() {
                   <SelectValue placeholder="Selecione um perfil" />
                 </SelectTrigger>
                 <SelectContent>
-                  {profiles.map((profile) => (
+                  {allProfiles.map((profile) => (
                     <SelectItem key={profile.id} value={profile.id}>
                       {(profile.displayName ?? "Contato sem nome") +
                         (profile.phoneNormalized ? ` • ${profile.phoneNormalized}` : "")}
@@ -610,7 +863,9 @@ function MemoriaPage() {
               <Label>Chave</Label>
               <Input
                 value={form.key}
-                onChange={(event) => setForm((current) => ({ ...current, key: event.target.value }))}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, key: event.target.value }))
+                }
                 placeholder="name, company, role, responsibility..."
               />
             </div>
@@ -676,12 +931,21 @@ function MemoriaPage() {
                 <Detail label="Valor atual" value={selectedItem.value} />
                 <Detail label="Confiança" value={selectedItem.confidence.toFixed(2)} />
                 <Detail label="Origem" value={formatSource(selectedItem.sourceType)} />
-                <Detail label="Canal" value={formatChannel(selectedItem.profile?.channelType ?? "UNKNOWN")} />
+                <Detail
+                  label="Canal"
+                  value={formatChannel(selectedItem.profile?.channelType ?? "UNKNOWN")}
+                />
                 <Detail label="Criado em" value={formatDate(selectedItem.createdAt)} />
                 <Detail label="Atualizado em" value={formatDate(selectedItem.updatedAt)} />
                 <Detail label="Última confirmação" value={formatDate(selectedItem.lastSeenAt)} />
-                <Detail label="Expiração" value={selectedItem.expiresAt ? formatDate(selectedItem.expiresAt) : "—"} />
-                <Detail label="Conversa de origem" value={selectedItem.sourceConversationId ?? "—"} />
+                <Detail
+                  label="Expiração"
+                  value={selectedItem.expiresAt ? formatDate(selectedItem.expiresAt) : "—"}
+                />
+                <Detail
+                  label="Conversa de origem"
+                  value={selectedItem.sourceConversationId ?? "—"}
+                />
                 <Detail label="Mensagem de origem" value={selectedItem.sourceMessageId ?? "—"} />
                 <Detail label="Status" value={renderStatusText(selectedItem)} />
               </div>
@@ -724,7 +988,10 @@ function MemoriaPage() {
         </DialogContent>
       </Dialog>
 
-      <Sheet open={Boolean(selectedProfile)} onOpenChange={(open) => !open && setSelectedProfile(null)}>
+      <Sheet
+        open={Boolean(selectedProfile)}
+        onOpenChange={(open) => !open && setSelectedProfile(null)}
+      >
         <SheetContent className="sm:max-w-2xl overflow-y-auto">
           <SheetHeader>
             <SheetTitle>Perfil de memória do contato</SheetTitle>
@@ -742,16 +1009,66 @@ function MemoriaPage() {
                   <Detail label="Contato" value={selectedProfile.displayName ?? "—"} />
                   <Detail label="Telefone" value={selectedProfile.phoneNormalized ?? "—"} />
                   <Detail label="Canal" value={formatChannel(selectedProfile.channelType)} />
-                  <Detail label="Contato externo" value={selectedProfile.externalContactId ?? "—"} />
+                  <Detail
+                    label="Contato externo"
+                    value={selectedProfile.externalContactId ?? "—"}
+                  />
                   <Detail label="Inbox externo" value={selectedProfile.externalInboxId ?? "—"} />
                   <Detail label="Conta externa" value={selectedProfile.externalAccountId ?? "—"} />
                   <Detail label="Resumo" value={selectedProfile.summary ?? "Ainda não gerado"} />
-                  <Detail label="Última interação" value={formatDate(selectedProfile.lastInteractionAt ?? selectedProfile.updatedAt)} />
+                  <Detail
+                    label="Última interação"
+                    value={formatDate(
+                      selectedProfile.lastInteractionAt ?? selectedProfile.updatedAt,
+                    )}
+                  />
                 </CardContent>
               </Card>
 
+              {selectedProfile.stats && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                      <BarChart3 className="h-4 w-4 text-primary" /> Estatísticas do Contato
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid gap-3 p-4 md:grid-cols-2 pt-0">
+                    <Detail
+                      label="Total de Memórias"
+                      value={String(selectedProfile.stats.totalCount)}
+                    />
+                    <Detail
+                      label="Memórias Ativas"
+                      value={String(selectedProfile.stats.activeCount)}
+                    />
+                    <Detail
+                      label="Memórias Expiradas"
+                      value={String(selectedProfile.stats.expiredCount)}
+                    />
+                    <Detail
+                      label="Última Atualização"
+                      value={formatDate(selectedProfile.stats.lastUpdatedAt)}
+                    />
+                    <Detail
+                      label="Última Utilização em Prompt"
+                      value={formatDate(selectedProfile.stats.lastUsedAt)}
+                    />
+                    <Detail
+                      label="Primeira Conversa"
+                      value={formatDate(selectedProfile.stats.firstConversationAt)}
+                    />
+                    <Detail
+                      label="Última Conversa"
+                      value={formatDate(selectedProfile.stats.lastConversationAt)}
+                    />
+                  </CardContent>
+                </Card>
+              )}
+
               {groupedProfileItems.length === 0 ? (
-                <div className="text-sm text-muted-foreground">Este perfil ainda não possui memórias.</div>
+                <div className="text-sm text-muted-foreground">
+                  Este perfil ainda não possui memórias.
+                </div>
               ) : (
                 groupedProfileItems.map((group) => (
                   <Card key={group.category}>
@@ -767,7 +1084,8 @@ function MemoriaPage() {
                                 {item.key}: {item.value}
                               </div>
                               <div className="text-xs text-muted-foreground">
-                                {formatSource(item.sourceType)} • confiança {item.confidence.toFixed(2)}
+                                {formatSource(item.sourceType)} • confiança{" "}
+                                {item.confidence.toFixed(2)}
                               </div>
                             </div>
                             <StatusBadge item={item} />
@@ -802,7 +1120,9 @@ function StatusBadge({ item }: { item: ContactMemoryItem }) {
 function Detail({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border p-3">
-      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
       <div className="mt-1 text-sm">{value}</div>
     </div>
   );
@@ -813,25 +1133,29 @@ function formatCategory(value: string) {
 }
 
 function formatSource(value: string) {
-  return {
-    CONTACT_MESSAGE: "Mensagem do contato",
-    HUMAN_AGENT: "Atendente humano",
-    AI_EXTRACTED: "IA",
-    WEBHOOK_TOOL: "Webhook/Ferramenta",
-    GOOGLE_CALENDAR: "Google Agenda",
-    CHATWOOT: "Chatwoot",
-    MANUAL: "Manual",
-    SYSTEM: "Sistema",
-  }[value] ?? value;
+  return (
+    {
+      CONTACT_MESSAGE: "Mensagem do contato",
+      HUMAN_AGENT: "Atendente humano",
+      AI_EXTRACTED: "IA",
+      WEBHOOK_TOOL: "Webhook/Ferramenta",
+      GOOGLE_CALENDAR: "Google Agenda",
+      CHATWOOT: "Chatwoot",
+      MANUAL: "Manual",
+      SYSTEM: "Sistema",
+    }[value] ?? value
+  );
 }
 
 function formatChannel(value: string) {
-  return {
-    WHATSAPP: "WhatsApp",
-    INSTAGRAM: "Instagram",
-    WEBCHAT: "Webchat",
-    UNKNOWN: "Desconhecido",
-  }[value] ?? value;
+  return (
+    {
+      WHATSAPP: "WhatsApp",
+      INSTAGRAM: "Instagram",
+      WEBCHAT: "Webchat",
+      UNKNOWN: "Desconhecido",
+    }[value] ?? value
+  );
 }
 
 function formatDate(value: string | null) {

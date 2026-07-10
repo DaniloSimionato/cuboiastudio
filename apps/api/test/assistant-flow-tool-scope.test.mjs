@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AssistantConversationsService } from "../dist/assistant-conversations/assistant-conversations.service.js";
+import { ContactMemoriesExtractionService } from "../dist/contact-memories/contact-memories-extraction.service.js";
 import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
 
 const now = new Date("2026-07-07T12:00:00.000Z");
@@ -127,6 +128,17 @@ function createState(overrides = {}) {
         model: "gpt-4o-mini",
         temperature: 0.2,
         ragEnabled: false,
+        memoryEnabled: false,
+        memoryPrePromptEnabled: true,
+        memoryExtractionEnabled: true,
+        memoryAllowedCategories: null,
+        memoryConfidenceThreshold: 0.7,
+        memoryTempDefaultDays: 7,
+        memorySharedAcrossAssistants: true,
+        semanticMemoryEnabled: false,
+        semanticMemoryThreshold: 0.7,
+        semanticMemoryMaxCandidates: 20,
+        semanticMemoryMaxResults: 10,
         fallbackMessage: null,
         safetyInstruction: null,
         avoidPhrases: null,
@@ -393,6 +405,8 @@ function createServices(state, options = {}) {
   };
 
   const promptCompilerService = new PromptCompilerService();
+  const contactMemoriesService = options.contactMemoriesService;
+  const contactMemoriesExtractionService = options.contactMemoriesExtractionService;
   const intentRouterService = {
     route: async ({ message, flows }) => {
       const lower = message.toLowerCase();
@@ -422,6 +436,9 @@ function createServices(state, options = {}) {
     assistantKnowledgeRetrievalService,
     promptCompilerService,
     intentRouterService,
+    undefined,
+    contactMemoriesService,
+    contactMemoriesExtractionService,
   );
 
   return { service, state, aiCalls, toolCalls };
@@ -437,6 +454,49 @@ const user = {
 };
 
 const tenant = { companyId: "company-1" };
+
+function buildAppleRuntimeFixtures() {
+  const appleMemory = {
+    id: "memory-apple",
+    profileId: "profile-apple",
+    companyId: "company-1",
+    category: "BUSINESS_CONTEXT",
+    key: "apple_inventory",
+    value: "O cliente possui 3 MacBook Air e 2 Mac Mini.",
+    confidence: 0.96,
+    usageCount: 4,
+    active: true,
+    deletedAt: null,
+    updatedAt: now,
+    createdAt: now,
+  };
+  const positiveMatchers = [/apple/i, /\bmacs?\b/i, /maçã/i, /\bmaca\b/i];
+  const extractionService = new ContactMemoriesExtractionService(null, null, null);
+  const usageCalls = [];
+
+  const contactMemoriesService = {
+    findOrCreateProfile: async () => ({
+      id: "profile-apple",
+      companyId: "company-1",
+      summary: null,
+    }),
+    getActiveMemories: async () => [appleMemory],
+    searchSemanticMemories: async ({ query }) =>
+      positiveMatchers.some((matcher) => matcher.test(query))
+        ? [{ ...appleMemory, similarity: 0.93, cacheHit: false }]
+        : [],
+    incrementUsage: async (ids) => {
+      usageCalls.push(ids);
+    },
+  };
+
+  return {
+    appleMemory,
+    contactMemoriesService,
+    contactMemoriesExtractionService: extractionService,
+    usageCalls,
+  };
+}
 
 test("Fase 1.6 aplica escopo de Padel e filtra resourcesContext", async () => {
   const state = createState();
@@ -510,6 +570,164 @@ test("Fase 1.6 aplica escopo de Padel e filtra resourcesContext", async () => {
   const requestLog = runtimeState.logs.find((item) => item.action === "tool_call_requested");
   assert.equal(requestLog.metadata.calendarScopeApplied, true);
   assert.equal(requestLog.metadata.toolArgsOverridden, true);
+});
+
+test("Runtime híbrido inclui memória Apple apenas em perguntas semanticamente relacionadas", async () => {
+  const positiveMessages = [
+    "Quantos computadores Apple eu tenho?",
+    "Quais equipamentos da Apple estão registrados?",
+    "Quantos Macs esse cliente possui?",
+    "Ele tem algum computador da marca da maçã?",
+  ];
+  const negativeMessages = [
+    "Qual é o horário de funcionamento?",
+    "Quero remarcar minha quadra.",
+    "Qual é o valor da mensalidade?",
+  ];
+
+  for (const message of positiveMessages) {
+    const state = createState();
+    Object.assign(state.assistants[0], {
+      memoryEnabled: true,
+      memoryExtractionEnabled: false,
+      semanticMemoryEnabled: true,
+      semanticMemoryThreshold: 0.7,
+      semanticMemoryMaxCandidates: 20,
+      semanticMemoryMaxResults: 10,
+    });
+    const fixtures = buildAppleRuntimeFixtures();
+    const { service, aiCalls } = createServices(state, {
+      contactMemoriesService: fixtures.contactMemoriesService,
+      contactMemoriesExtractionService: fixtures.contactMemoriesExtractionService,
+    });
+
+    await service.sendMessage({
+      assistantId: "assistant-1",
+      conversationId: "conversation-1",
+      dto: { message },
+      user,
+      tenant,
+    });
+
+    const promptText = aiCalls[0].messages.map((entry) => entry.content ?? "").join("\n");
+    assert.match(promptText, /3 MacBook Air e 2 Mac Mini/);
+    assert.equal(fixtures.usageCalls.length, 1);
+    assert.deepEqual(fixtures.usageCalls[0], ["memory-apple"]);
+  }
+
+  for (const message of negativeMessages) {
+    const state = createState();
+    Object.assign(state.assistants[0], {
+      memoryEnabled: true,
+      memoryExtractionEnabled: false,
+      semanticMemoryEnabled: true,
+      semanticMemoryThreshold: 0.7,
+      semanticMemoryMaxCandidates: 20,
+      semanticMemoryMaxResults: 10,
+    });
+    const fixtures = buildAppleRuntimeFixtures();
+    const { service, aiCalls } = createServices(state, {
+      contactMemoriesService: fixtures.contactMemoriesService,
+      contactMemoriesExtractionService: fixtures.contactMemoriesExtractionService,
+    });
+
+    await service.sendMessage({
+      assistantId: "assistant-1",
+      conversationId: "conversation-1",
+      dto: { message },
+      user,
+      tenant,
+    });
+
+    const promptText = aiCalls[0].messages.map((entry) => entry.content ?? "").join("\n");
+    assert.doesNotMatch(promptText, /3 MacBook Air e 2 Mac Mini/);
+    assert.equal(fixtures.usageCalls.length, 0);
+  }
+});
+
+test("Runtime mantém fallback estruturado quando a busca vetorial falha", async () => {
+  const state = createState();
+  Object.assign(state.assistants[0], {
+    memoryEnabled: true,
+    memoryExtractionEnabled: false,
+    semanticMemoryEnabled: true,
+    semanticMemoryThreshold: 0.7,
+  });
+  const fixtures = buildAppleRuntimeFixtures();
+  const { service, aiCalls } = createServices(state, {
+    contactMemoriesService: {
+      ...fixtures.contactMemoriesService,
+      searchSemanticMemories: async () => {
+        throw new Error("vector search down");
+      },
+    },
+    contactMemoriesExtractionService: fixtures.contactMemoriesExtractionService,
+  });
+
+  const response = await service.sendMessage({
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    dto: { message: "Quais MacBook esse cliente possui?" },
+    user,
+    tenant,
+  });
+
+  const promptText = aiCalls[0].messages.map((entry) => entry.content ?? "").join("\n");
+  assert.equal(response.assistantMessage.content, "ok");
+  assert.match(promptText, /3 MacBook Air e 2 Mac Mini/);
+});
+
+test("Runtime continua com memória estruturada quando a flag semântica está desligada", async () => {
+  const state = createState();
+  Object.assign(state.assistants[0], {
+    memoryEnabled: true,
+    memoryExtractionEnabled: false,
+    semanticMemoryEnabled: false,
+  });
+  const fixtures = buildAppleRuntimeFixtures();
+  const { service, aiCalls } = createServices(state, {
+    contactMemoriesService: fixtures.contactMemoriesService,
+    contactMemoriesExtractionService: fixtures.contactMemoriesExtractionService,
+  });
+
+  await service.sendMessage({
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    dto: { message: "Liste os MacBook desse cliente." },
+    user,
+    tenant,
+  });
+
+  const promptText = aiCalls[0].messages.map((entry) => entry.content ?? "").join("\n");
+  assert.match(promptText, /3 MacBook Air e 2 Mac Mini/);
+});
+
+test("Runtime continua com memória estruturada quando não há embedding pronto", async () => {
+  const state = createState();
+  Object.assign(state.assistants[0], {
+    memoryEnabled: true,
+    memoryExtractionEnabled: false,
+    semanticMemoryEnabled: true,
+  });
+  const fixtures = buildAppleRuntimeFixtures();
+  const { service, aiCalls } = createServices(state, {
+    contactMemoriesService: {
+      ...fixtures.contactMemoriesService,
+      searchSemanticMemories: async () => [],
+    },
+    contactMemoriesExtractionService: fixtures.contactMemoriesExtractionService,
+  });
+
+  await service.sendMessage({
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    dto: { message: "Mostre os MacBook cadastrados." },
+    user,
+    tenant,
+  });
+
+  const promptText = aiCalls[0].messages.map((entry) => entry.content ?? "").join("\n");
+  assert.match(promptText, /3 MacBook Air e 2 Mac Mini/);
 });
 
 test("Fase 1.6 aplica escopo de Beach Tennis", async () => {

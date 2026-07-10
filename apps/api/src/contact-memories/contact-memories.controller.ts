@@ -23,6 +23,7 @@ import { Tenant } from "../auth/tenant.decorator";
 import { ContactMemoriesExtractionService } from "./contact-memories-extraction.service";
 import { ContactMemoriesService } from "./contact-memories.service";
 import { CreateContactMemoryDto } from "./dto/create-contact-memory.dto";
+import { ReindexContactMemoryDto } from "./dto/reindex-contact-memory.dto";
 import { ExtractContactMemoryDto } from "./dto/extract-contact-memory.dto";
 import { UpdateContactMemoryDto } from "./dto/update-contact-memory.dto";
 
@@ -123,13 +124,17 @@ export class ContactMemoriesController {
     );
   }
 
+  @Get("stats")
+  @UseGuards(AuthGuard, PermissionsGuard)
+  @RequirePermissions("assistants:read")
+  async getStats(@Tenant() tenant: RequestTenant) {
+    return this.contactMemoriesService.getStats(tenant.companyId);
+  }
+
   @Get(":id")
   @UseGuards(AuthGuard, PermissionsGuard)
   @RequirePermissions("assistants:read")
-  async getItem(
-    @Tenant() tenant: RequestTenant,
-    @Param("id") id: string,
-  ) {
+  async getItem(@Tenant() tenant: RequestTenant, @Param("id") id: string) {
     return this.contactMemoriesService.getItemById({
       id,
       companyId: tenant.companyId,
@@ -186,7 +191,12 @@ export class ContactMemoriesController {
       value: body.value,
       valueJson: body.valueJson,
       confidence: body.confidence,
-      expiresAt: body.expiresAt !== undefined ? (body.expiresAt ? new Date(body.expiresAt) : null) : undefined,
+      expiresAt:
+        body.expiresAt !== undefined
+          ? body.expiresAt
+            ? new Date(body.expiresAt)
+            : null
+          : undefined,
       active: body.active,
       userId: user.id,
     });
@@ -234,10 +244,7 @@ export class ContactMemoriesController {
   @Get(":id/events")
   @UseGuards(AuthGuard, PermissionsGuard)
   @RequirePermissions("assistants:read")
-  async getItemEvents(
-    @Tenant() tenant: RequestTenant,
-    @Param("id") id: string,
-  ) {
+  async getItemEvents(@Tenant() tenant: RequestTenant, @Param("id") id: string) {
     return this.contactMemoriesService.getItemEvents({
       memoryItemId: id,
       companyId: tenant.companyId,
@@ -247,20 +254,14 @@ export class ContactMemoriesController {
   @Get("items/:id/events")
   @UseGuards(AuthGuard, PermissionsGuard)
   @RequirePermissions("assistants:read")
-  async getItemEventsLegacy(
-    @Tenant() tenant: RequestTenant,
-    @Param("id") id: string,
-  ) {
+  async getItemEventsLegacy(@Tenant() tenant: RequestTenant, @Param("id") id: string) {
     return this.getItemEvents(tenant, id);
   }
 
   @Post("extract")
   @UseGuards(AuthGuard, PermissionsGuard)
   @RequirePermissions("assistants:write")
-  async extractForTest(
-    @Tenant() tenant: RequestTenant,
-    @Body() body: ExtractContactMemoryDto,
-  ) {
+  async extractForTest(@Tenant() tenant: RequestTenant, @Body() body: ExtractContactMemoryDto) {
     const existingMemories = await this.contactMemoriesService.getActiveMemories({
       profileId: body.profileId,
       companyId: tenant.companyId,
@@ -278,6 +279,19 @@ export class ContactMemoriesController {
       sourceConversationId: body.sourceConversationId,
       sourceMessageId: body.sourceMessageId,
       allowedCategories: body.allowedCategories,
+    });
+  }
+
+  @Post("reindex")
+  @UseGuards(AuthGuard, PermissionsGuard)
+  @RequirePermissions("assistants:write")
+  async reindex(@Tenant() tenant: RequestTenant, @Body() body: ReindexContactMemoryDto) {
+    return this.contactMemoriesService.reindexMemories({
+      companyId: tenant.companyId,
+      assistantId: body.assistantId,
+      memoryId: body.memoryItemId || body.memoryId,
+      status: body.status,
+      version: body.version,
     });
   }
 }

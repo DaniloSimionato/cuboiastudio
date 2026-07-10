@@ -1,6 +1,16 @@
 import type { ContactMemoryCategory } from "@/types";
 import { apiFetch } from "./apiClient";
 
+export interface ProfileStats {
+  totalCount: number;
+  activeCount: number;
+  expiredCount: number;
+  lastUpdatedAt: string;
+  lastUsedAt: string | null;
+  firstConversationAt: string;
+  lastConversationAt: string;
+}
+
 export interface ContactMemoryProfile {
   id: string;
   companyId: string;
@@ -17,6 +27,7 @@ export interface ContactMemoryProfile {
   lastInteractionAt: string | null;
   createdAt: string;
   updatedAt: string;
+  stats?: ProfileStats;
 }
 
 export interface ContactMemoryItem {
@@ -79,17 +90,19 @@ function toQueryString(query: Record<string, string | number | boolean | undefin
 }
 
 export const contactMemoriesService = {
-  async listItems(query: {
-    profileId?: string;
-    channelType?: string;
-    category?: string;
-    active?: boolean;
-    expired?: boolean;
-    sourceType?: string;
-    search?: string;
-    page?: number;
-    limit?: number;
-  } = {}): Promise<ContactMemoriesListResponse> {
+  async listItems(
+    query: {
+      profileId?: string;
+      channelType?: string;
+      category?: string;
+      active?: boolean;
+      expired?: boolean;
+      sourceType?: string;
+      search?: string;
+      page?: number;
+      limit?: number;
+    } = {},
+  ): Promise<ContactMemoriesListResponse> {
     return apiFetch<ContactMemoriesListResponse>(
       `/contact-memories${toQueryString({
         profileId: query.profileId,
@@ -109,12 +122,14 @@ export const contactMemoriesService = {
     return apiFetch<ContactMemoryItem>(`/contact-memories/${id}`);
   },
 
-  async listProfiles(query: {
-    channelType?: string;
-    search?: string;
-    page?: number;
-    limit?: number;
-  } = {}): Promise<ContactMemoryProfilesListResponse> {
+  async listProfiles(
+    query: {
+      channelType?: string;
+      search?: string;
+      page?: number;
+      limit?: number;
+    } = {},
+  ): Promise<ContactMemoryProfilesListResponse> {
     return apiFetch<ContactMemoryProfilesListResponse>(
       `/contact-memories/profiles${toQueryString({
         channelType: query.channelType,
@@ -125,7 +140,9 @@ export const contactMemoriesService = {
     );
   },
 
-  async getProfile(profileId: string): Promise<ContactMemoryProfile & { items: ContactMemoryItem[] }> {
+  async getProfile(
+    profileId: string,
+  ): Promise<ContactMemoryProfile & { items: ContactMemoryItem[] }> {
     return apiFetch<ContactMemoryProfile & { items: ContactMemoryItem[] }>(
       `/contact-memories/profiles/${profileId}`,
     );
@@ -159,12 +176,34 @@ export const contactMemoriesService = {
   },
 
   async deleteItem(id: string): Promise<{ success: boolean; item: ContactMemoryItem | null }> {
-    return apiFetch<{ success: boolean; item: ContactMemoryItem | null }>(`/contact-memories/${id}`, {
-      method: "DELETE",
-    });
+    return apiFetch<{ success: boolean; item: ContactMemoryItem | null }>(
+      `/contact-memories/${id}`,
+      {
+        method: "DELETE",
+      },
+    );
   },
 
   async getEvents(id: string): Promise<ContactMemoryEvent[]> {
     return apiFetch<ContactMemoryEvent[]>(`/contact-memories/${id}/events`);
   },
+
+  async getStats(): Promise<ContactMemoryStatsResponse> {
+    return apiFetch<ContactMemoryStatsResponse>("/contact-memories/stats");
+  },
 };
+
+export interface ContactMemoryStatsResponse {
+  totalMemories: number;
+  activeMemories: number;
+  temporaryMemories: number;
+  expiredMemories: number;
+  averagePerContact: number;
+  topCategories: Array<{ category: ContactMemoryCategory; count: number }>;
+  topContacts: Array<{
+    profileId: string;
+    displayName: string;
+    phoneNormalized: string;
+    count: number;
+  }>;
+}

@@ -452,13 +452,17 @@ model Assistant {
   safetyInstruction String?
   ragEnabled        Boolean @default(false)
 
-  memoryEnabled              Boolean @default(false)
-  memoryPrePromptEnabled     Boolean @default(true)
-  memoryExtractionEnabled    Boolean @default(true)
-  memoryAllowedCategories    String?
-  memoryConfidenceThreshold  Float   @default(0.7)
-  memoryTempDefaultDays      Int     @default(7)
+  memoryEnabled                Boolean @default(false)
+  memoryPrePromptEnabled       Boolean @default(true)
+  memoryExtractionEnabled      Boolean @default(true)
+  memoryAllowedCategories      String?
+  memoryConfidenceThreshold    Float   @default(0.7)
+  memoryTempDefaultDays        Int     @default(7)
   memorySharedAcrossAssistants Boolean @default(true)
+  semanticMemoryEnabled        Boolean @default(false)
+  semanticMemoryThreshold      Float   @default(0.7)
+  semanticMemoryMaxCandidates  Int     @default(20)
+  semanticMemoryMaxResults     Int     @default(10)
 
   messageBufferEnabled Boolean @default(true)
   messageBufferSeconds Int     @default(6)
@@ -900,8 +904,8 @@ model AssistantKnowledgeChunk {
 model AssistantToolConfig {
   id                   String   @id @default(cuid())
   assistantId          String
-  appId                String   // ID or slug of the app
-  toolName             String   // Name of the legacy or custom tool
+  appId                String // ID or slug of the app
+  toolName             String // Name of the legacy or custom tool
   enabled              Boolean  @default(true)
   permissionType       String   @default("READ") // "READ" or "WRITE"
   requiresConfirmation Boolean  @default(false)
@@ -916,27 +920,27 @@ model AssistantToolConfig {
 }
 
 model CustomWebhookAction {
-  id               String   @id @default(cuid())
-  companyId        String
-  installationId   String
-  name             String   // E.g., "consultar_estoque"
-  displayName      String   // E.g., "Consultar Estoque"
-  descriptionAdmin String?
-  descriptionAi    String?
-  method           String   @default("GET") // GET, POST, PUT, DELETE, PATCH
-  url              String
-  headers          Json?    // E.g., { "Content-Type": "application/json" }
-  authType         String?  // NONE, BEARER, API_KEY, BASIC
-  authConfig       Json?    // Sensitive credentials
-  bodyTemplate     String?  // parameterized JSON body
-  parameterSchema  Json?    // JSON Schema parameter definitions
-  timeoutMs        Int      @default(5000)
-  permissionType   String   @default("READ") // READ or WRITE
-  requiresConfirmation Boolean @default(false)
-  responseFilter   Json?    // Allowed response fields or paths
-  active           Boolean  @default(true)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                   String   @id @default(cuid())
+  companyId            String
+  installationId       String
+  name                 String // E.g., "consultar_estoque"
+  displayName          String // E.g., "Consultar Estoque"
+  descriptionAdmin     String?
+  descriptionAi        String?
+  method               String   @default("GET") // GET, POST, PUT, DELETE, PATCH
+  url                  String
+  headers              Json? // E.g., { "Content-Type": "application/json" }
+  authType             String? // NONE, BEARER, API_KEY, BASIC
+  authConfig           Json? // Sensitive credentials
+  bodyTemplate         String? // parameterized JSON body
+  parameterSchema      Json? // JSON Schema parameter definitions
+  timeoutMs            Int      @default(5000)
+  permissionType       String   @default("READ") // READ or WRITE
+  requiresConfirmation Boolean  @default(false)
+  responseFilter       Json? // Allowed response fields or paths
+  active               Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   company      Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
   installation AppInstallation @relation(fields: [installationId], references: [id], onDelete: Cascade)
@@ -947,24 +951,24 @@ model CustomWebhookAction {
 }
 
 model ContactMemoryProfile {
-  id                  String                  @id @default(cuid())
-  companyId           String
-  assistantId         String?
-  identityKey         String
-  channelType         ConversationChannelType @default(UNKNOWN)
-  externalAccountId   String?
-  externalContactId   String?
-  externalInboxId     String?
-  chatwootContactId   String?
-  phoneNormalized     String?
-  displayName         String?
-  summary             String?
-  lastInteractionAt   DateTime                @default(now())
-  createdAt           DateTime                @default(now())
-  updatedAt           DateTime                @updatedAt
+  id                String                  @id @default(cuid())
+  companyId         String
+  assistantId       String?
+  identityKey       String
+  channelType       ConversationChannelType @default(UNKNOWN)
+  externalAccountId String?
+  externalContactId String?
+  externalInboxId   String?
+  chatwootContactId String?
+  phoneNormalized   String?
+  displayName       String?
+  summary           String?
+  lastInteractionAt DateTime                @default(now())
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
 
-  company  Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  items    ContactMemoryItem[]
+  company Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  items   ContactMemoryItem[]
 
   @@unique([companyId, identityKey])
   @@index([companyId])
@@ -977,27 +981,37 @@ model ContactMemoryProfile {
 }
 
 model ContactMemoryItem {
-  id                      String                    @id @default(cuid())
-  profileId               String
-  companyId               String
-  category                ContactMemoryCategory
-  key                     String
-  value                   String
-  valueJson               Json?
-  confidence              Float                     @default(0.9)
-  sourceType              ContactMemorySourceType   @default(CONTACT_MESSAGE)
-  sourceConversationId    String?
-  sourceMessageId         String?
-  expiresAt               DateTime?
-  lastSeenAt              DateTime                  @default(now())
-  active                  Boolean                   @default(true)
-  deletedAt               DateTime?
-  createdAt               DateTime                  @default(now())
-  updatedAt               DateTime                  @updatedAt
+  id                    String                       @id @default(cuid())
+  profileId             String
+  companyId             String
+  category              ContactMemoryCategory
+  key                   String
+  value                 String
+  valueJson             Json?
+  confidence            Float                        @default(0.9)
+  sourceType            ContactMemorySourceType      @default(CONTACT_MESSAGE)
+  sourceConversationId  String?
+  sourceMessageId       String?
+  expiresAt             DateTime?
+  lastSeenAt            DateTime                     @default(now())
+  active                Boolean                      @default(true)
+  deletedAt             DateTime?
+  usageCount            Int                          @default(0)
+  lastUsedAt            DateTime?
+  embedding             Unsupported("vector(1536)")?
+  embeddingModel        String?
+  embeddingVersion      String?
+  embeddingStatus       String?                      @default("PENDING")
+  embeddedAt            DateTime?
+  contentHash           String?
+  embeddingError        String?
+  embeddingProcessingAt DateTime?
+  createdAt             DateTime                     @default(now())
+  updatedAt             DateTime                     @updatedAt
 
-  profile  ContactMemoryProfile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
-  company  Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  events   ContactMemoryEvent[]
+  profile ContactMemoryProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  company Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  events  ContactMemoryEvent[]
 
   @@unique([profileId, category, key])
   @@index([companyId])
@@ -1009,17 +1023,17 @@ model ContactMemoryItem {
 }
 
 model ContactMemoryEvent {
-  id                      String                      @id @default(cuid())
-  memoryItemId            String
-  companyId               String
-  eventType               ContactMemoryEventType
-  previousValue           String?
-  newValue                String?
-  sourceType              ContactMemorySourceType     @default(SYSTEM)
-  sourceConversationId    String?
-  sourceMessageId         String?
-  userId                  String?
-  createdAt               DateTime                    @default(now())
+  id                   String                  @id @default(cuid())
+  memoryItemId         String
+  companyId            String
+  eventType            ContactMemoryEventType
+  previousValue        String?
+  newValue             String?
+  sourceType           ContactMemorySourceType @default(SYSTEM)
+  sourceConversationId String?
+  sourceMessageId      String?
+  userId               String?
+  createdAt            DateTime                @default(now())
 
   memoryItem ContactMemoryItem @relation(fields: [memoryItemId], references: [id], onDelete: Cascade)
   company    Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)

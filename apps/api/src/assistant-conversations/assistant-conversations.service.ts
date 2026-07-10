@@ -250,6 +250,10 @@ const assistantConversationRuntimeAssistantSelect = {
   memoryConfidenceThreshold: true,
   memoryTempDefaultDays: true,
   memorySharedAcrossAssistants: true,
+  semanticMemoryEnabled: true,
+  semanticMemoryThreshold: true,
+  semanticMemoryMaxCandidates: true,
+  semanticMemoryMaxResults: true,
   latitude: true,
   longitude: true,
   behavior: true,
@@ -1540,7 +1544,11 @@ export class AssistantConversationsService {
     let contactMemoryProfileId: string | null = null;
     let existingMemories: any[] = [];
 
-    if (assistant.memoryEnabled && this.contactMemoriesService && this.contactMemoriesExtractionService) {
+    if (
+      assistant.memoryEnabled &&
+      this.contactMemoriesService &&
+      this.contactMemoriesExtractionService
+    ) {
       try {
         const profile = await this.contactMemoriesService.findOrCreateProfile({
           companyId: input.tenant.companyId,
@@ -1554,14 +1562,16 @@ export class AssistantConversationsService {
           assistantId: input.assistantId,
           sharedAcrossAssistants: assistant.memorySharedAcrossAssistants,
         });
-        
+
         contactMemoryProfileId = profile.id;
 
         if (assistant.memoryPrePromptEnabled) {
           let categories;
           try {
-            categories = assistant.memoryAllowedCategories ? JSON.parse(assistant.memoryAllowedCategories) : undefined;
-          } catch(e) {}
+            categories = assistant.memoryAllowedCategories
+              ? JSON.parse(assistant.memoryAllowedCategories)
+              : undefined;
+          } catch (e) {}
 
           const memories = await this.contactMemoriesService.getActiveMemories({
             profileId: profile.id,
@@ -1570,14 +1580,82 @@ export class AssistantConversationsService {
             categories,
           });
 
+          const startSemantic = Date.now();
+          let semanticMemories: any[] = [];
+          let topSemanticScore = 0;
+          let cacheHit = false;
+          let fallbackUsed = false;
+          let errorCode = null;
+
+          if (assistant.semanticMemoryEnabled) {
+            try {
+              semanticMemories = await this.contactMemoriesService.searchSemanticMemories({
+                companyId: input.tenant.companyId,
+                profileId: profile.id,
+                query: interpretedMessage,
+                threshold: assistant.semanticMemoryThreshold ?? 0.7,
+                maxCandidates: assistant.semanticMemoryMaxCandidates ?? 20,
+                assistantId: input.assistantId,
+                provider: assistant.model ? "openai" : "openai",
+              });
+
+              if (semanticMemories.length > 0) {
+                topSemanticScore = Math.max(...semanticMemories.map((m) => m.similarity ?? 0));
+                cacheHit = semanticMemories[0].cacheHit ?? false;
+              }
+            } catch (err: any) {
+              fallbackUsed = true;
+              errorCode = err.code ?? err.message ?? "UNKNOWN_ERROR";
+              this.logger.error(
+                `Semantic memory search failed, falling back to structured memory: ${err.message}`,
+                err.stack,
+              );
+            }
+          }
+
+          const semanticDurationMs = Date.now() - startSemantic;
+
           existingMemories = memories;
-          const selectedMemories = this.contactMemoriesExtractionService.selectMemoriesForPrompt({
-            memories,
-            currentMessage: interpretedMessage,
-            summary: profile.summary,
+          const selectedMemories =
+            this.contactMemoriesExtractionService.selectHybridMemoriesForPrompt({
+              structuredMemories: memories,
+              semanticMemories,
+              currentMessage: interpretedMessage,
+              summary: profile.summary,
+              limit: assistant.semanticMemoryMaxResults ?? 15,
+            });
+
+          // Log structured semantic query info
+          this.logger.log({
+            message: "Semantic memory search executed",
+            companyId: input.tenant.companyId,
+            assistantId: input.assistantId,
+            conversationId: input.conversationId,
+            contactId: profile.id,
+            semanticMemoryEnabled: assistant.semanticMemoryEnabled,
+            embeddingModel: "text-embedding-3-small",
+            embeddingVersion: "v1",
+            structuredCandidateCount: memories.length,
+            semanticCandidateCount: semanticMemories.length,
+            selectedMemoryCount: selectedMemories.length,
+            threshold: assistant.semanticMemoryThreshold ?? 0.7,
+            topSemanticScore,
+            cacheHit,
+            durationMs: semanticDurationMs,
+            fallbackUsed,
+            errorCode,
           });
+
           memoryContextBlock =
             this.contactMemoriesExtractionService.buildMemoryContextBlock(selectedMemories);
+
+          // Increment usage stats in the background for selected database memories
+          const selectedIds = selectedMemories
+            .map((m) => m.id)
+            .filter((id): id is string => typeof id === "string");
+          if (selectedIds.length > 0) {
+            void this.contactMemoriesService.incrementUsage(selectedIds);
+          }
         }
       } catch (err: any) {
         this.logger.error(`Error loading contact memory: ${err.message}`, err.stack);
@@ -1888,7 +1966,9 @@ export class AssistantConversationsService {
               try {
                 const allowedSlugs = JSON.parse(selectedFlow.allowedToolSlugs);
                 if (Array.isArray(allowedSlugs)) {
-                  resolvedTools = resolvedTools.filter((t) => allowedSlugs.includes(t.function.name));
+                  resolvedTools = resolvedTools.filter((t) =>
+                    allowedSlugs.includes(t.function.name),
+                  );
                 }
               } catch (e) {
                 // Ignore invalid JSON
@@ -2095,14 +2175,23 @@ export class AssistantConversationsService {
                     });
                     if (action) {
                       const appInst = await this.prisma.appInstallation.findFirst({
-                        where: { companyId: input.tenant.companyId, app: { slug: "custom_webhook" } },
+                        where: {
+                          companyId: input.tenant.companyId,
+                          app: { slug: "custom_webhook" },
+                        },
                       });
                       const override = appInst
                         ? await this.prisma.assistantToolConfig.findFirst({
-                            where: { assistantId: input.assistantId, appId: appInst.appId, toolName },
+                            where: {
+                              assistantId: input.assistantId,
+                              appId: appInst.appId,
+                              toolName,
+                            },
                           })
                         : null;
-                      requiresConfirmation = override ? override.requiresConfirmation : action.requiresConfirmation;
+                      requiresConfirmation = override
+                        ? override.requiresConfirmation
+                        : action.requiresConfirmation;
                     }
                   } else {
                     const isMutating = [
@@ -2111,7 +2200,10 @@ export class AssistantConversationsService {
                       "calendar_cancelBooking",
                     ].includes(toolName);
                     const appInst = await this.prisma.appInstallation.findFirst({
-                      where: { companyId: input.tenant.companyId, app: { slug: "google_calendar" } },
+                      where: {
+                        companyId: input.tenant.companyId,
+                        app: { slug: "google_calendar" },
+                      },
                     });
                     const override = appInst
                       ? await this.prisma.assistantToolConfig.findFirst({
@@ -2969,7 +3061,9 @@ export class AssistantConversationsService {
         try {
           const allowedSlugs = JSON.parse(selectedFlow.allowedToolSlugs);
           if (Array.isArray(allowedSlugs) && !allowedSlugs.includes(toolName)) {
-            throw new Error(`Erro de execução: a ferramenta '${toolName}' não está autorizada no fluxo atual.`);
+            throw new Error(
+              `Erro de execução: a ferramenta '${toolName}' não está autorizada no fluxo atual.`,
+            );
           }
         } catch {
           // Ignore invalid JSON in flow config but fail safe
@@ -2998,7 +3092,9 @@ export class AssistantConversationsService {
         where: { assistantId, appId: appInst.appId, toolName },
       });
       if (config && !config.enabled) {
-        throw new Error(`Erro de execução: a ferramenta '${toolName}' está desabilitada para este assistente.`);
+        throw new Error(
+          `Erro de execução: a ferramenta '${toolName}' está desabilitada para este assistente.`,
+        );
       }
 
       // 3. Verify calendar tools are active in environment
@@ -3071,11 +3167,23 @@ export class AssistantConversationsService {
         where: { companyId, name: actionName, active: true },
       });
       if (!action) {
-        throw new Error(`Erro de execução: ação de webhook '${actionName}' não encontrada ou inativa.`);
+        throw new Error(
+          `Erro de execução: ação de webhook '${actionName}' não encontrada ou inativa.`,
+        );
       }
 
-      if (action.authConfig && action.authType && action.authType !== "NONE" && !(action.authConfig as any).encryptedData) {
-        const migrated = await getOrMigrateWebhookCredentials(this.prisma, action.id, action.authType || "NONE", action.authConfig);
+      if (
+        action.authConfig &&
+        action.authType &&
+        action.authType !== "NONE" &&
+        !(action.authConfig as any).encryptedData
+      ) {
+        const migrated = await getOrMigrateWebhookCredentials(
+          this.prisma,
+          action.id,
+          action.authType || "NONE",
+          action.authConfig,
+        );
         if (migrated) {
           action.authConfig = migrated;
         }
@@ -3083,10 +3191,17 @@ export class AssistantConversationsService {
 
       // 2. Verify custom_webhook App is installed and active for company
       const appInst = await this.prisma.appInstallation.findFirst({
-        where: { id: action.installationId, companyId, app: { slug: "custom_webhook" }, status: "ACTIVE" },
+        where: {
+          id: action.installationId,
+          companyId,
+          app: { slug: "custom_webhook" },
+          status: "ACTIVE",
+        },
       });
       if (!appInst) {
-        throw new Error("Erro de execução: extensão Webhook Personalizado não está ativa para esta ação.");
+        throw new Error(
+          "Erro de execução: extensão Webhook Personalizado não está ativa para esta ação.",
+        );
       }
 
       // 3. Verify tool configuration is enabled for assistant
@@ -3094,7 +3209,9 @@ export class AssistantConversationsService {
         where: { assistantId, appId: appInst.appId, toolName },
       });
       if (config && !config.enabled) {
-        throw new Error(`Erro de execução: a ferramenta '${toolName}' está desabilitada para este assistente.`);
+        throw new Error(
+          `Erro de execução: a ferramenta '${toolName}' está desabilitada para este assistente.`,
+        );
       }
 
       // 4. Log start
@@ -3110,7 +3227,10 @@ export class AssistantConversationsService {
         // Parse allowed parameters from schema to restrict placeholder injection
         const allowedParams = new Set<string>();
         if (action.parameterSchema) {
-          const paramSchema = typeof action.parameterSchema === "string" ? JSON.parse(action.parameterSchema) : action.parameterSchema;
+          const paramSchema =
+            typeof action.parameterSchema === "string"
+              ? JSON.parse(action.parameterSchema)
+              : action.parameterSchema;
           if (paramSchema && paramSchema.properties) {
             for (const key of Object.keys(paramSchema.properties)) {
               allowedParams.add(key);
@@ -3130,7 +3250,9 @@ export class AssistantConversationsService {
         url = url.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
           const trimKey = key.trim();
           if (!allowedParams.has(trimKey)) {
-            throw new Error(`Placeholder '{{${trimKey}}}' não está declarado no schema de parâmetros.`);
+            throw new Error(
+              `Placeholder '{{${trimKey}}}' não está declarado no schema de parâmetros.`,
+            );
           }
           return params[trimKey] !== undefined ? encodeURIComponent(String(params[trimKey])) : "";
         });
@@ -3140,13 +3262,16 @@ export class AssistantConversationsService {
         };
 
         if (action.headers) {
-          const customHeaders = typeof action.headers === "string" ? JSON.parse(action.headers) : action.headers;
+          const customHeaders =
+            typeof action.headers === "string" ? JSON.parse(action.headers) : action.headers;
           for (const [k, v] of Object.entries(customHeaders)) {
             let headerVal = String(v);
             headerVal = headerVal.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
               const trimKey = key.trim();
               if (!allowedParams.has(trimKey)) {
-                throw new Error(`Placeholder '{{${trimKey}}}' não está declarado no schema de parâmetros.`);
+                throw new Error(
+                  `Placeholder '{{${trimKey}}}' não está declarado no schema de parâmetros.`,
+                );
               }
               return params[trimKey] !== undefined ? String(params[trimKey]) : "";
             });
@@ -3156,9 +3281,17 @@ export class AssistantConversationsService {
 
         // Decrypt authConfig credentials
         if (action.authType && action.authType !== "NONE" && action.authConfig) {
-          const authConfigRaw = typeof action.authConfig === "string" ? JSON.parse(action.authConfig) : action.authConfig;
+          const authConfigRaw =
+            typeof action.authConfig === "string"
+              ? JSON.parse(action.authConfig)
+              : action.authConfig;
           let auth = authConfigRaw;
-          if (authConfigRaw && authConfigRaw.encryptedData && authConfigRaw.iv && authConfigRaw.authTag) {
+          if (
+            authConfigRaw &&
+            authConfigRaw.encryptedData &&
+            authConfigRaw.iv &&
+            authConfigRaw.authTag
+          ) {
             try {
               const decryptedStr = decryptData(authConfigRaw);
               auth = JSON.parse(decryptedStr);
@@ -3172,7 +3305,9 @@ export class AssistantConversationsService {
             if (action.authType === "BEARER" && auth.token) {
               headers["Authorization"] = `Bearer ${auth.token}`;
             } else if (action.authType === "BASIC" && auth.username && auth.password) {
-              const credentials = Buffer.from(`${auth.username}:${auth.password}`).toString("base64");
+              const credentials = Buffer.from(`${auth.username}:${auth.password}`).toString(
+                "base64",
+              );
               headers["Authorization"] = `Basic ${credentials}`;
             } else if (action.authType === "API_KEY" && auth.keyName && auth.keyValue) {
               headers[auth.keyName] = auth.keyValue;
@@ -3186,7 +3321,9 @@ export class AssistantConversationsService {
             body = action.bodyTemplate.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
               const trimKey = key.trim();
               if (!allowedParams.has(trimKey)) {
-                throw new Error(`Placeholder '{{${trimKey}}}' não está declarado no schema de parâmetros.`);
+                throw new Error(
+                  `Placeholder '{{${trimKey}}}' não está declarado no schema de parâmetros.`,
+                );
               }
               return params[trimKey] !== undefined
                 ? typeof params[trimKey] === "object"
@@ -3198,7 +3335,9 @@ export class AssistantConversationsService {
             try {
               JSON.parse(body);
             } catch {
-              throw new Error("O corpo do request gerado a partir do template não é um JSON válido.");
+              throw new Error(
+                "O corpo do request gerado a partir do template não é um JSON válido.",
+              );
             }
           } else {
             body = JSON.stringify(params);
@@ -3206,13 +3345,22 @@ export class AssistantConversationsService {
         }
 
         // Call the secureFetch client containing SSRF and resource limit controls
-        const { status: responseStatus, text: responseText } = await secureFetch(url, action.method, headers, body, action.timeoutMs || 5000);
+        const { status: responseStatus, text: responseText } = await secureFetch(
+          url,
+          action.method,
+          headers,
+          body,
+          action.timeoutMs || 5000,
+        );
 
         let finalResult: any = responseText;
         try {
           const jsonRes = JSON.parse(responseText);
           if (action.responseFilter) {
-            const filterKeys = typeof action.responseFilter === "string" ? JSON.parse(action.responseFilter) : action.responseFilter;
+            const filterKeys =
+              typeof action.responseFilter === "string"
+                ? JSON.parse(action.responseFilter)
+                : action.responseFilter;
             if (Array.isArray(filterKeys) && filterKeys.length > 0) {
               const filtered: Record<string, any> = {};
               for (const k of filterKeys) {
@@ -3322,10 +3470,7 @@ export class AssistantConversationsService {
     }
   }
 
-  private async resolveAssistantTools(input: {
-    companyId: string;
-    assistantId: string;
-  }) {
+  private async resolveAssistantTools(input: { companyId: string; assistantId: string }) {
     const installations = await this.prisma.appInstallation.findMany({
       where: {
         companyId: input.companyId,
@@ -3342,7 +3487,7 @@ export class AssistantConversationsService {
       },
     });
 
-    const configMap = new Map<string, typeof configs[number]>();
+    const configMap = new Map<string, (typeof configs)[number]>();
     for (const c of configs) {
       configMap.set(`${c.appId}:${c.toolName}`, c);
     }
@@ -3356,7 +3501,7 @@ export class AssistantConversationsService {
         const calendarActive = await this.areGoogleCalendarToolsAvailable(input.companyId);
         if (calendarActive) {
           const calendarDefinitions = this.getGoogleCalendarToolsDefinitions();
-          
+
           for (const def of calendarDefinitions) {
             const name = def.function.name;
             const key = `${inst.app.id}:${name}`;
@@ -3383,14 +3528,19 @@ export class AssistantConversationsService {
 
           if (!config || config.enabled) {
             const paramSchema = action.parameterSchema
-              ? (typeof action.parameterSchema === "string" ? JSON.parse(action.parameterSchema) : action.parameterSchema)
+              ? typeof action.parameterSchema === "string"
+                ? JSON.parse(action.parameterSchema)
+                : action.parameterSchema
               : { type: "object", properties: {}, required: [] };
 
             resolvedTools.push({
               type: "function",
               function: {
                 name: toolName,
-                description: action.descriptionAi || action.displayName || "Executa uma chamada de webhook externo.",
+                description:
+                  action.descriptionAi ||
+                  action.displayName ||
+                  "Executa uma chamada de webhook externo.",
                 parameters: paramSchema,
               },
             });

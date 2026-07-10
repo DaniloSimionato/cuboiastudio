@@ -127,6 +127,49 @@ export class UpdateAssistantDto {
   @IsBoolean()
   memorySharedAcrossAssistants?: boolean;
 
+  @IsOptional()
+  @IsBoolean()
+  semanticMemoryEnabled?: boolean;
+
+  @Transform(({ value }) => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed === "" ? undefined : Number(trimmed);
+    }
+    return value;
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  semanticMemoryThreshold?: number;
+
+  @Transform(({ value }) => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed === "" ? undefined : Number(trimmed);
+    }
+    return value;
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(100)
+  semanticMemoryMaxCandidates?: number;
+
+  @Transform(({ value }) => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed === "" ? undefined : Number(trimmed);
+    }
+    return value;
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(100)
+  semanticMemoryMaxResults?: number;
+
   @Transform(({ value }) => trimString(value))
   @IsOptional()
   @IsString()

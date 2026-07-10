@@ -60,6 +60,10 @@ export type AssistantListItem = {
   memoryConfidenceThreshold: number;
   memoryTempDefaultDays: number;
   memorySharedAcrossAssistants: boolean;
+  semanticMemoryEnabled: boolean;
+  semanticMemoryThreshold: number;
+  semanticMemoryMaxCandidates: number;
+  semanticMemoryMaxResults: number;
   messageBufferEnabled: boolean;
   messageBufferSeconds: number;
   splitResponseEnabled: boolean;
@@ -167,6 +171,10 @@ const assistantSafeSelect = {
   memoryConfidenceThreshold: true,
   memoryTempDefaultDays: true,
   memorySharedAcrossAssistants: true,
+  semanticMemoryEnabled: true,
+  semanticMemoryThreshold: true,
+  semanticMemoryMaxCandidates: true,
+  semanticMemoryMaxResults: true,
   messageBufferEnabled: true,
   messageBufferSeconds: true,
   splitResponseEnabled: true,
@@ -282,9 +290,7 @@ type DeterministicExecutionResult = {
   sources: AssistantRuntimeSource[];
 };
 
-function parseMemoryAllowedCategories(
-  value: string | null,
-): ContactMemoryCategory[] | null {
+function parseMemoryAllowedCategories(value: string | null): ContactMemoryCategory[] | null {
   if (!value) {
     return null;
   }
@@ -334,6 +340,10 @@ function toAssistantResponse(assistant: AssistantSafeRecord): AssistantListItem 
     memoryConfidenceThreshold: assistant.memoryConfidenceThreshold,
     memoryTempDefaultDays: assistant.memoryTempDefaultDays,
     memorySharedAcrossAssistants: assistant.memorySharedAcrossAssistants,
+    semanticMemoryEnabled: assistant.semanticMemoryEnabled,
+    semanticMemoryThreshold: assistant.semanticMemoryThreshold,
+    semanticMemoryMaxCandidates: assistant.semanticMemoryMaxCandidates,
+    semanticMemoryMaxResults: assistant.semanticMemoryMaxResults,
     messageBufferEnabled: assistant.messageBufferEnabled,
     messageBufferSeconds: assistant.messageBufferSeconds,
     splitResponseEnabled: assistant.splitResponseEnabled,
@@ -558,6 +568,10 @@ export class AssistantsService {
         memoryConfidenceThreshold: input.dto.memoryConfidenceThreshold ?? 0.7,
         memoryTempDefaultDays: input.dto.memoryTempDefaultDays ?? 7,
         memorySharedAcrossAssistants: input.dto.memorySharedAcrossAssistants ?? true,
+        semanticMemoryEnabled: input.dto.semanticMemoryEnabled ?? false,
+        semanticMemoryThreshold: input.dto.semanticMemoryThreshold ?? 0.7,
+        semanticMemoryMaxCandidates: input.dto.semanticMemoryMaxCandidates ?? 20,
+        semanticMemoryMaxResults: input.dto.semanticMemoryMaxResults ?? 10,
         messageBufferEnabled: input.dto.messageBufferEnabled ?? true,
         messageBufferSeconds: input.dto.messageBufferSeconds ?? 6,
         splitResponseEnabled: input.dto.splitResponseEnabled ?? false,
@@ -640,6 +654,10 @@ export class AssistantsService {
     const hasMemoryConfidenceThreshold = hasField("memoryConfidenceThreshold");
     const hasMemoryTempDefaultDays = hasField("memoryTempDefaultDays");
     const hasMemorySharedAcrossAssistants = hasField("memorySharedAcrossAssistants");
+    const hasSemanticMemoryEnabled = hasField("semanticMemoryEnabled");
+    const hasSemanticMemoryThreshold = hasField("semanticMemoryThreshold");
+    const hasSemanticMemoryMaxCandidates = hasField("semanticMemoryMaxCandidates");
+    const hasSemanticMemoryMaxResults = hasField("semanticMemoryMaxResults");
     const hasMessageBufferEnabled = hasField("messageBufferEnabled");
     const hasMessageBufferSeconds = hasField("messageBufferSeconds");
     const hasSplitResponseEnabled = hasField("splitResponseEnabled");
@@ -680,6 +698,10 @@ export class AssistantsService {
       !hasMemoryConfidenceThreshold &&
       !hasMemoryTempDefaultDays &&
       !hasMemorySharedAcrossAssistants &&
+      !hasSemanticMemoryEnabled &&
+      !hasSemanticMemoryThreshold &&
+      !hasSemanticMemoryMaxCandidates &&
+      !hasSemanticMemoryMaxResults &&
       !hasMessageBufferEnabled &&
       !hasMessageBufferSeconds &&
       !hasSplitResponseEnabled &&
@@ -765,6 +787,18 @@ export class AssistantsService {
           : {}),
         ...(hasMemorySharedAcrossAssistants
           ? { memorySharedAcrossAssistants: input.dto.memorySharedAcrossAssistants ?? true }
+          : {}),
+        ...(hasSemanticMemoryEnabled
+          ? { semanticMemoryEnabled: input.dto.semanticMemoryEnabled ?? false }
+          : {}),
+        ...(hasSemanticMemoryThreshold
+          ? { semanticMemoryThreshold: input.dto.semanticMemoryThreshold ?? 0.7 }
+          : {}),
+        ...(hasSemanticMemoryMaxCandidates
+          ? { semanticMemoryMaxCandidates: input.dto.semanticMemoryMaxCandidates ?? 20 }
+          : {}),
+        ...(hasSemanticMemoryMaxResults
+          ? { semanticMemoryMaxResults: input.dto.semanticMemoryMaxResults ?? 10 }
           : {}),
         ...(hasMessageBufferEnabled
           ? { messageBufferEnabled: input.dto.messageBufferEnabled ?? true }
@@ -1075,11 +1109,7 @@ export class AssistantsService {
     };
   }
 
-  async findTools(input: {
-    id: string;
-    user: AuthenticatedUser;
-    tenant: RequestTenant;
-  }) {
+  async findTools(input: { id: string; user: AuthenticatedUser; tenant: RequestTenant }) {
     if (input.user.companyId !== input.tenant.companyId) {
       throw new ForbiddenException("Tenant context does not match the authenticated user.");
     }
@@ -1110,7 +1140,7 @@ export class AssistantsService {
       },
     });
 
-    const configMap = new Map<string, typeof configs[number]>();
+    const configMap = new Map<string, (typeof configs)[number]>();
     for (const c of configs) {
       configMap.set(`${c.appId}:${c.toolName}`, c);
     }
@@ -1119,14 +1149,44 @@ export class AssistantsService {
 
     for (const inst of installations) {
       const appSlug = inst.app.slug;
-      
+
       if (appSlug === "google_calendar") {
         const calendarTools = [
-          { name: "calendar_checkAvailability", label: "Consultar disponibilidade", desc: "Consultar horários livres nas agendas.", defaultPerm: "READ", defaultConf: false },
-          { name: "calendar_getBookingsByContact", label: "Consultar agendamentos", desc: "Listar agendamentos futuros do cliente pelo telefone.", defaultPerm: "READ", defaultConf: false },
-          { name: "calendar_createBooking", label: "Criar agendamento", desc: "Marcar um novo horário.", defaultPerm: "WRITE", defaultConf: true },
-          { name: "calendar_rescheduleBooking", label: "Remarcar agendamento", desc: "Mudar data ou horário de reserva existente.", defaultPerm: "WRITE", defaultConf: true },
-          { name: "calendar_cancelBooking", label: "Cancelar agendamento", desc: "Excluir reserva existente.", defaultPerm: "WRITE", defaultConf: true }
+          {
+            name: "calendar_checkAvailability",
+            label: "Consultar disponibilidade",
+            desc: "Consultar horários livres nas agendas.",
+            defaultPerm: "READ",
+            defaultConf: false,
+          },
+          {
+            name: "calendar_getBookingsByContact",
+            label: "Consultar agendamentos",
+            desc: "Listar agendamentos futuros do cliente pelo telefone.",
+            defaultPerm: "READ",
+            defaultConf: false,
+          },
+          {
+            name: "calendar_createBooking",
+            label: "Criar agendamento",
+            desc: "Marcar um novo horário.",
+            defaultPerm: "WRITE",
+            defaultConf: true,
+          },
+          {
+            name: "calendar_rescheduleBooking",
+            label: "Remarcar agendamento",
+            desc: "Mudar data ou horário de reserva existente.",
+            defaultPerm: "WRITE",
+            defaultConf: true,
+          },
+          {
+            name: "calendar_cancelBooking",
+            label: "Cancelar agendamento",
+            desc: "Excluir reserva existente.",
+            defaultPerm: "WRITE",
+            defaultConf: true,
+          },
         ];
 
         for (const t of calendarTools) {
@@ -1163,10 +1223,13 @@ export class AssistantsService {
             appName: inst.app.name,
             toolName: toolName,
             displayName: action.displayName,
-            description: action.descriptionAdmin || action.descriptionAi || "Ação de webhook customizado.",
+            description:
+              action.descriptionAdmin || action.descriptionAi || "Ação de webhook customizado.",
             enabled: existing ? existing.enabled : true,
             permissionType: existing ? existing.permissionType : action.permissionType,
-            requiresConfirmation: existing ? existing.requiresConfirmation : action.requiresConfirmation,
+            requiresConfirmation: existing
+              ? existing.requiresConfirmation
+              : action.requiresConfirmation,
           });
         }
       }
@@ -1218,8 +1281,8 @@ export class AssistantsService {
             permissionType: t.permissionType,
             requiresConfirmation: t.requiresConfirmation,
           },
-        })
-      )
+        }),
+      ),
     );
 
     return { success: true };

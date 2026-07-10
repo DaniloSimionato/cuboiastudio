@@ -33,3 +33,8 @@ logs/
 
 # local backups
 *_backup*/
+
+# local runtime data
+scratch/
+storage/
+apps/api/storage/attachments/
