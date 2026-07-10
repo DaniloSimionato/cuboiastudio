@@ -13,3 +13,6 @@ export { toolsService } from "./toolsService";
 export { agentsService } from "./agentsService";
 export { knowledgeService } from "./knowledgeService";
 export { logsService } from "./logsService";
+export { contactMemoriesService } from "./contactMemoriesService";
+export type { ContactMemoryItem, ContactMemoryProfile } from "./contactMemoriesService";
+

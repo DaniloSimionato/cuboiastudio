@@ -36,6 +36,8 @@ import {
 import { type CreateAssistantConversationDto } from "./dto/create-assistant-conversation.dto";
 import { type SendAssistantConversationMessageDto } from "./dto/send-assistant-conversation-message.dto";
 import { CalendarToolsService } from "../apps/calendar-tools.service";
+import { ContactMemoriesService } from "../contact-memories/contact-memories.service";
+import { ContactMemoriesExtractionService } from "../contact-memories/contact-memories-extraction.service";
 import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
 import { PromptCompilerService } from "../prompt-compiler/prompt-compiler.service";
 import { IntentRouterService } from "../intent-router/intent-router.service";
@@ -241,6 +243,13 @@ const assistantConversationRuntimeAssistantSelect = {
   avoidPhrases: true,
   splitResponseEnabled: true,
   splitResponseStyle: true,
+  memoryEnabled: true,
+  memoryPrePromptEnabled: true,
+  memoryExtractionEnabled: true,
+  memoryAllowedCategories: true,
+  memoryConfidenceThreshold: true,
+  memoryTempDefaultDays: true,
+  memorySharedAcrossAssistants: true,
   latitude: true,
   longitude: true,
   behavior: true,
@@ -391,6 +400,8 @@ export class AssistantConversationsService {
     private readonly promptCompilerService?: PromptCompilerService,
     private readonly intentRouterService?: IntentRouterService,
     private readonly assistantSecurityRulesService?: AssistantSecurityRulesService,
+    private readonly contactMemoriesService?: ContactMemoriesService,
+    private readonly contactMemoriesExtractionService?: ContactMemoriesExtractionService,
   ) {}
 
   private assertTenantContext(input: { user: AuthenticatedUser; tenant: RequestTenant }): void {
@@ -1525,6 +1536,54 @@ export class AssistantConversationsService {
       },
     });
 
+    let memoryContextBlock: string | null = null;
+    let contactMemoryProfileId: string | null = null;
+    let existingMemories: any[] = [];
+
+    if (assistant.memoryEnabled && this.contactMemoriesService && this.contactMemoriesExtractionService) {
+      try {
+        const profile = await this.contactMemoriesService.findOrCreateProfile({
+          companyId: input.tenant.companyId,
+          channelType: channelTypeUpdate,
+          externalAccountId: input.dto.externalAccountId,
+          externalContactId: input.dto.externalContactId,
+          externalInboxId: input.dto.externalInboxId,
+          chatwootContactId: input.dto.externalContactId ?? input.dto.externalSenderId,
+          phoneNormalized: input.dto.externalSenderPhone,
+          displayName: input.dto.externalSenderName,
+          assistantId: input.assistantId,
+          sharedAcrossAssistants: assistant.memorySharedAcrossAssistants,
+        });
+        
+        contactMemoryProfileId = profile.id;
+
+        if (assistant.memoryPrePromptEnabled) {
+          let categories;
+          try {
+            categories = assistant.memoryAllowedCategories ? JSON.parse(assistant.memoryAllowedCategories) : undefined;
+          } catch(e) {}
+
+          const memories = await this.contactMemoriesService.getActiveMemories({
+            profileId: profile.id,
+            companyId: input.tenant.companyId,
+            confidenceThreshold: assistant.memoryConfidenceThreshold,
+            categories,
+          });
+
+          existingMemories = memories;
+          const selectedMemories = this.contactMemoriesExtractionService.selectMemoriesForPrompt({
+            memories,
+            currentMessage: interpretedMessage,
+            summary: profile.summary,
+          });
+          memoryContextBlock =
+            this.contactMemoriesExtractionService.buildMemoryContextBlock(selectedMemories);
+        }
+      } catch (err: any) {
+        this.logger.error(`Error loading contact memory: ${err.message}`, err.stack);
+      }
+    }
+
     let knowledgeItems: { id: string; title: string; content: string }[] = [];
     let ragContextBlock = "";
     let ragLogData: any = null;
@@ -1924,6 +1983,7 @@ export class AssistantConversationsService {
                         serverTime,
                       }
                     : null,
+                  memoryContextBlock,
                 })
               : buildConversationPromptMessages({
                   assistantName: assistant.name,
@@ -2338,6 +2398,40 @@ export class AssistantConversationsService {
           await new Promise((resolve) => setTimeout(resolve, 1500));
         }
       }
+    }
+
+    // Async memory extraction
+    if (
+      assistant.memoryEnabled &&
+      assistant.memoryExtractionEnabled &&
+      this.contactMemoriesExtractionService &&
+      contactMemoryProfileId
+    ) {
+      // Execute in background
+      void this.contactMemoriesExtractionService
+        .extractMemories({
+          companyId: input.tenant.companyId,
+          assistantId: assistant.id,
+          profileId: contactMemoryProfileId,
+          currentMessage: interpretedMessage,
+          recentMessages: priorHistory.slice(-5).map((m) => ({ role: m.role, content: m.content })),
+          existingMemories,
+          sourceConversationId: conversation.id,
+          sourceMessageId: userMessage.id,
+          allowedCategories: (() => {
+            try {
+              return assistant.memoryAllowedCategories
+                ? JSON.parse(assistant.memoryAllowedCategories)
+                : undefined;
+            } catch {
+              return undefined;
+            }
+          })(),
+          tempDefaultDays: assistant.memoryTempDefaultDays,
+        })
+        .catch((err) => {
+          this.logger.error(`Background memory extraction failed: ${err.message}`);
+        });
     }
 
     return {

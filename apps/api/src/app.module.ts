@@ -4,6 +4,7 @@ import { Logger as PinoLogger, LoggerModule } from "nestjs-pino";
 import { randomUUID } from "node:crypto";
 import { APP_NAME } from "./app.constants";
 import { AuthModule } from "./auth/auth.module";
+import { ContactMemoriesModule } from "./contact-memories/contact-memories.module";
 import { AssistantConversationsModule } from "./assistant-conversations/assistant-conversations.module";
 import { AssistantKnowledgeModule } from "./assistant-knowledge/assistant-knowledge.module";
 import { AssistantRuntimeLogsModule } from "./assistant-runtime-logs/assistant-runtime-logs.module";
@@ -59,6 +60,7 @@ import { StudioUsersModule } from "./studio-users/studio-users.module";
       }),
     }),
     AuthModule,
+    ContactMemoriesModule,
     AiSettingsModule,
     AssistantConversationsModule,
     AssistantKnowledgeModule,

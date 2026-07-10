@@ -51,6 +51,33 @@ enum GoogleCalendarBookingStatus {
   FAILED
 }
 
+enum ContactMemoryCategory {
+  IDENTITY
+  PREFERENCE
+  BUSINESS_CONTEXT
+  RELATIONSHIP_SUMMARY
+  TEMPORARY_CONTEXT
+}
+
+enum ContactMemorySourceType {
+  CONTACT_MESSAGE
+  HUMAN_AGENT
+  AI_EXTRACTED
+  WEBHOOK_TOOL
+  GOOGLE_CALENDAR
+  CHATWOOT
+  MANUAL
+  SYSTEM
+}
+
+enum ContactMemoryEventType {
+  CREATED
+  UPDATED
+  DEACTIVATED
+  REACTIVATED
+  DELETED
+}
+
 model Company {
   id        String    @id @default(cuid())
   name      String
@@ -86,6 +113,9 @@ model Company {
   reservableResourceCategories  ReservableResourceCategory[]
   reservableResourceAttributes  ReservableResourceAttribute[]
   customWebhookActions          CustomWebhookAction[]
+  contactMemoryProfiles         ContactMemoryProfile[]
+  contactMemoryItems            ContactMemoryItem[]
+  contactMemoryEvents           ContactMemoryEvent[]
 
   @@index([status])
   @@index([deletedAt])
@@ -421,6 +451,14 @@ model Assistant {
   fallbackMessage   String?
   safetyInstruction String?
   ragEnabled        Boolean @default(false)
+
+  memoryEnabled              Boolean @default(false)
+  memoryPrePromptEnabled     Boolean @default(true)
+  memoryExtractionEnabled    Boolean @default(true)
+  memoryAllowedCategories    String?
+  memoryConfidenceThreshold  Float   @default(0.7)
+  memoryTempDefaultDays      Int     @default(7)
+  memorySharedAcrossAssistants Boolean @default(true)
 
   messageBufferEnabled Boolean @default(true)
   messageBufferSeconds Int     @default(6)
@@ -906,4 +944,88 @@ model CustomWebhookAction {
   @@unique([companyId, name])
   @@index([installationId])
   @@map("custom_webhook_actions")
+}
+
+model ContactMemoryProfile {
+  id                  String                  @id @default(cuid())
+  companyId           String
+  assistantId         String?
+  identityKey         String
+  channelType         ConversationChannelType @default(UNKNOWN)
+  externalAccountId   String?
+  externalContactId   String?
+  externalInboxId     String?
+  chatwootContactId   String?
+  phoneNormalized     String?
+  displayName         String?
+  summary             String?
+  lastInteractionAt   DateTime                @default(now())
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  company  Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  items    ContactMemoryItem[]
+
+  @@unique([companyId, identityKey])
+  @@index([companyId])
+  @@index([companyId, externalAccountId])
+  @@index([companyId, externalInboxId])
+  @@index([companyId, chatwootContactId])
+  @@index([companyId, phoneNormalized])
+  @@index([companyId, assistantId])
+  @@map("contact_memory_profiles")
+}
+
+model ContactMemoryItem {
+  id                      String                    @id @default(cuid())
+  profileId               String
+  companyId               String
+  category                ContactMemoryCategory
+  key                     String
+  value                   String
+  valueJson               Json?
+  confidence              Float                     @default(0.9)
+  sourceType              ContactMemorySourceType   @default(CONTACT_MESSAGE)
+  sourceConversationId    String?
+  sourceMessageId         String?
+  expiresAt               DateTime?
+  lastSeenAt              DateTime                  @default(now())
+  active                  Boolean                   @default(true)
+  deletedAt               DateTime?
+  createdAt               DateTime                  @default(now())
+  updatedAt               DateTime                  @updatedAt
+
+  profile  ContactMemoryProfile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  company  Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  events   ContactMemoryEvent[]
+
+  @@unique([profileId, category, key])
+  @@index([companyId])
+  @@index([profileId])
+  @@index([companyId, active])
+  @@index([companyId, deletedAt])
+  @@index([expiresAt])
+  @@map("contact_memory_items")
+}
+
+model ContactMemoryEvent {
+  id                      String                      @id @default(cuid())
+  memoryItemId            String
+  companyId               String
+  eventType               ContactMemoryEventType
+  previousValue           String?
+  newValue                String?
+  sourceType              ContactMemorySourceType     @default(SYSTEM)
+  sourceConversationId    String?
+  sourceMessageId         String?
+  userId                  String?
+  createdAt               DateTime                    @default(now())
+
+  memoryItem ContactMemoryItem @relation(fields: [memoryItemId], references: [id], onDelete: Cascade)
+  company    Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([memoryItemId])
+  @@index([companyId])
+  @@index([companyId, createdAt])
+  @@map("contact_memory_events")
 }

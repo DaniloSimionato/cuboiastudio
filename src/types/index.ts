@@ -12,6 +12,12 @@ export type BackendStatus = "ACTIVE" | "INACTIVE";
 export type AppInstallationStatus = "ACTIVE" | "INACTIVE" | "ERROR";
 export type BackendConversationSource = "UNKNOWN" | "MANUAL_TEST" | "CHATWOOT" | "SMOKE" | "SYSTEM";
 export type BackendConversationChannelType = "UNKNOWN" | "WHATSAPP" | "INSTAGRAM" | "WEBCHAT";
+export type ContactMemoryCategory =
+  | "IDENTITY"
+  | "PREFERENCE"
+  | "BUSINESS_CONTEXT"
+  | "RELATIONSHIP_SUMMARY"
+  | "TEMPORARY_CONTEXT";
 
 export interface CurrentCompany {
   id: string;
@@ -519,6 +525,13 @@ export interface BackendAssistantListItem {
   fallbackMessage: string | null;
   safetyInstruction: string | null;
   ragEnabled: boolean;
+  memoryEnabled: boolean;
+  memoryPrePromptEnabled: boolean;
+  memoryExtractionEnabled: boolean;
+  memoryAllowedCategories: ContactMemoryCategory[] | null;
+  memoryConfidenceThreshold: number;
+  memoryTempDefaultDays: number;
+  memorySharedAcrossAssistants: boolean;
   messageBufferEnabled: boolean;
   messageBufferSeconds: number;
   splitResponseEnabled: boolean;

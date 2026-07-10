@@ -65,6 +65,7 @@ import type {
   BackendAssistantListItem,
   ChatwootInboxConfigItem,
   AssistantSecurityRuleItem,
+  ContactMemoryCategory,
 } from "@/types";
 import { currentCompanyService } from "@/services/currentCompanyService";
 import { toast } from "sonner";
@@ -97,6 +98,14 @@ const DEFAULT_SECURITY_RULE_FORM: SecurityRuleFormState = {
   instruction: "",
   sortOrder: 0,
 };
+
+const MEMORY_CATEGORY_OPTIONS: Array<{ value: ContactMemoryCategory; label: string }> = [
+  { value: "IDENTITY", label: "Identidade" },
+  { value: "PREFERENCE", label: "Preferências" },
+  { value: "BUSINESS_CONTEXT", label: "Contexto de Negócio" },
+  { value: "RELATIONSHIP_SUMMARY", label: "Resumo de Relacionamento" },
+  { value: "TEMPORARY_CONTEXT", label: "Contexto Temporário" },
+];
 
 function splitCityRegion(value: string | null | undefined): { city: string; state: string } {
   const text = value?.trim() ?? "";
@@ -160,6 +169,15 @@ function NovoAgente() {
   const [aiAlwaysAvailable, setAiAlwaysAvailable] = useState(true);
   const [initialMessage, setInitialMessage] = useState("");
   const [ragEnabled, setRagEnabled] = useState(false);
+  const [memoryEnabled, setMemoryEnabled] = useState(false);
+  const [memoryPrePromptEnabled, setMemoryPrePromptEnabled] = useState(true);
+  const [memoryExtractionEnabled, setMemoryExtractionEnabled] = useState(true);
+  const [memoryAllowedCategories, setMemoryAllowedCategories] = useState<ContactMemoryCategory[]>(
+    ["IDENTITY", "PREFERENCE", "BUSINESS_CONTEXT", "TEMPORARY_CONTEXT"],
+  );
+  const [memoryConfidenceThreshold, setMemoryConfidenceThreshold] = useState(0.7);
+  const [memoryTempDefaultDays, setMemoryTempDefaultDays] = useState(7);
+  const [memorySharedAcrossAssistants, setMemorySharedAcrossAssistants] = useState(true);
   const [status, setStatus] = useState<"ACTIVE" | "INACTIVE">("ACTIVE");
   const [instructions, setInstructions] = useState(
     "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
@@ -253,6 +271,13 @@ function NovoAgente() {
       aiAlwaysAvailable,
       initialMessage,
       ragEnabled,
+      memoryEnabled,
+      memoryPrePromptEnabled,
+      memoryExtractionEnabled,
+      memoryAllowedCategories,
+      memoryConfidenceThreshold,
+      memoryTempDefaultDays,
+      memorySharedAcrossAssistants,
       status,
       instructions,
       personality,
@@ -287,6 +312,13 @@ function NovoAgente() {
       aiAlwaysAvailable,
       initialMessage,
       ragEnabled,
+      memoryEnabled,
+      memoryPrePromptEnabled,
+      memoryExtractionEnabled,
+      memoryAllowedCategories,
+      memoryConfidenceThreshold,
+      memoryTempDefaultDays,
+      memorySharedAcrossAssistants,
       status,
       instructions,
       personality,
@@ -585,6 +617,20 @@ function NovoAgente() {
         setNoAnswerMessage(assistant.fallbackMessage ?? "");
         setSecurityInstructions(assistant.safetyInstruction ?? "");
         setRagEnabled(assistant.ragEnabled ?? false);
+        setMemoryEnabled(assistant.memoryEnabled ?? false);
+        setMemoryPrePromptEnabled(assistant.memoryPrePromptEnabled ?? true);
+        setMemoryExtractionEnabled(assistant.memoryExtractionEnabled ?? true);
+        setMemoryAllowedCategories(
+          assistant.memoryAllowedCategories ?? [
+            "IDENTITY",
+            "PREFERENCE",
+            "BUSINESS_CONTEXT",
+            "TEMPORARY_CONTEXT",
+          ],
+        );
+        setMemoryConfidenceThreshold(assistant.memoryConfidenceThreshold ?? 0.7);
+        setMemoryTempDefaultDays(assistant.memoryTempDefaultDays ?? 7);
+        setMemorySharedAcrossAssistants(assistant.memorySharedAcrossAssistants ?? true);
         setMessageBufferEnabled(assistant.messageBufferEnabled ?? true);
         setMessageBufferSeconds(assistant.messageBufferSeconds ?? 6);
         setSplitResponseEnabled(assistant.splitResponseEnabled ?? false);
@@ -629,6 +675,19 @@ function NovoAgente() {
           noAnswerMessage: assistant.fallbackMessage ?? "",
           securityInstructions: assistant.safetyInstruction ?? "",
           ragEnabled: assistant.ragEnabled ?? false,
+          memoryEnabled: assistant.memoryEnabled ?? false,
+          memoryPrePromptEnabled: assistant.memoryPrePromptEnabled ?? true,
+          memoryExtractionEnabled: assistant.memoryExtractionEnabled ?? true,
+          memoryAllowedCategories:
+            assistant.memoryAllowedCategories ?? [
+              "IDENTITY",
+              "PREFERENCE",
+              "BUSINESS_CONTEXT",
+              "TEMPORARY_CONTEXT",
+            ],
+          memoryConfidenceThreshold: assistant.memoryConfidenceThreshold ?? 0.7,
+          memoryTempDefaultDays: assistant.memoryTempDefaultDays ?? 7,
+          memorySharedAcrossAssistants: assistant.memorySharedAcrossAssistants ?? true,
           messageBufferEnabled: assistant.messageBufferEnabled ?? true,
           messageBufferSeconds: assistant.messageBufferSeconds ?? 6,
           splitResponseEnabled: assistant.splitResponseEnabled ?? false,
@@ -661,6 +720,14 @@ function NovoAgente() {
     setWeeklySchedule(createDefaultBusinessHoursSchedule());
     setAiAlwaysAvailable(true);
     setInitialMessage("");
+    setRagEnabled(false);
+    setMemoryEnabled(false);
+    setMemoryPrePromptEnabled(true);
+    setMemoryExtractionEnabled(true);
+    setMemoryAllowedCategories(["IDENTITY", "PREFERENCE", "BUSINESS_CONTEXT", "TEMPORARY_CONTEXT"]);
+    setMemoryConfidenceThreshold(0.7);
+    setMemoryTempDefaultDays(7);
+    setMemorySharedAcrossAssistants(true);
     setInstructions(
       "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
     );
@@ -702,6 +769,13 @@ function NovoAgente() {
       aiAlwaysAvailable: true,
       initialMessage: "",
       ragEnabled: false,
+      memoryEnabled: false,
+      memoryPrePromptEnabled: true,
+      memoryExtractionEnabled: true,
+      memoryAllowedCategories: ["IDENTITY", "PREFERENCE", "BUSINESS_CONTEXT", "TEMPORARY_CONTEXT"],
+      memoryConfidenceThreshold: 0.7,
+      memoryTempDefaultDays: 7,
+      memorySharedAcrossAssistants: true,
       status: "ACTIVE",
       instructions:
         "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
@@ -898,6 +972,13 @@ function NovoAgente() {
           fallbackMessage: noAnswerMessage.trim() || null,
           safetyInstruction: securityInstructions.trim() || null,
           ragEnabled,
+          memoryEnabled,
+          memoryPrePromptEnabled,
+          memoryExtractionEnabled,
+          memoryAllowedCategories,
+          memoryConfidenceThreshold,
+          memoryTempDefaultDays,
+          memorySharedAcrossAssistants,
           messageBufferEnabled,
           messageBufferSeconds,
           splitResponseEnabled,
@@ -942,6 +1023,20 @@ function NovoAgente() {
         setNoAnswerMessage(updated.fallbackMessage ?? "");
         setSecurityInstructions(updated.safetyInstruction ?? "");
         setRagEnabled(updated.ragEnabled ?? false);
+        setMemoryEnabled(updated.memoryEnabled ?? false);
+        setMemoryPrePromptEnabled(updated.memoryPrePromptEnabled ?? true);
+        setMemoryExtractionEnabled(updated.memoryExtractionEnabled ?? true);
+        setMemoryAllowedCategories(
+          updated.memoryAllowedCategories ?? [
+            "IDENTITY",
+            "PREFERENCE",
+            "BUSINESS_CONTEXT",
+            "TEMPORARY_CONTEXT",
+          ],
+        );
+        setMemoryConfidenceThreshold(updated.memoryConfidenceThreshold ?? 0.7);
+        setMemoryTempDefaultDays(updated.memoryTempDefaultDays ?? 7);
+        setMemorySharedAcrossAssistants(updated.memorySharedAcrossAssistants ?? true);
         setMessageBufferEnabled(updated.messageBufferEnabled ?? true);
         setMessageBufferSeconds(updated.messageBufferSeconds ?? 6);
         setSplitResponseEnabled(updated.splitResponseEnabled ?? false);
@@ -990,6 +1085,19 @@ function NovoAgente() {
           noAnswerMessage: updated.fallbackMessage ?? "",
           securityInstructions: updated.safetyInstruction ?? "",
           ragEnabled: updated.ragEnabled ?? false,
+          memoryEnabled: updated.memoryEnabled ?? false,
+          memoryPrePromptEnabled: updated.memoryPrePromptEnabled ?? true,
+          memoryExtractionEnabled: updated.memoryExtractionEnabled ?? true,
+          memoryAllowedCategories:
+            updated.memoryAllowedCategories ?? [
+              "IDENTITY",
+              "PREFERENCE",
+              "BUSINESS_CONTEXT",
+              "TEMPORARY_CONTEXT",
+            ],
+          memoryConfidenceThreshold: updated.memoryConfidenceThreshold ?? 0.7,
+          memoryTempDefaultDays: updated.memoryTempDefaultDays ?? 7,
+          memorySharedAcrossAssistants: updated.memorySharedAcrossAssistants ?? true,
           messageBufferEnabled: updated.messageBufferEnabled ?? true,
           messageBufferSeconds: updated.messageBufferSeconds ?? 6,
           splitResponseEnabled: updated.splitResponseEnabled ?? false,
@@ -1029,6 +1137,13 @@ function NovoAgente() {
           fallbackMessage: noAnswerMessage.trim() || null,
           safetyInstruction: securityInstructions.trim() || null,
           ragEnabled,
+          memoryEnabled,
+          memoryPrePromptEnabled,
+          memoryExtractionEnabled,
+          memoryAllowedCategories,
+          memoryConfidenceThreshold,
+          memoryTempDefaultDays,
+          memorySharedAcrossAssistants,
           messageBufferEnabled,
           messageBufferSeconds,
           splitResponseEnabled,
@@ -1067,6 +1182,20 @@ function NovoAgente() {
         setNoAnswerMessage(created.fallbackMessage ?? "");
         setSecurityInstructions(created.safetyInstruction ?? "");
         setRagEnabled(created.ragEnabled ?? false);
+        setMemoryEnabled(created.memoryEnabled ?? false);
+        setMemoryPrePromptEnabled(created.memoryPrePromptEnabled ?? true);
+        setMemoryExtractionEnabled(created.memoryExtractionEnabled ?? true);
+        setMemoryAllowedCategories(
+          created.memoryAllowedCategories ?? [
+            "IDENTITY",
+            "PREFERENCE",
+            "BUSINESS_CONTEXT",
+            "TEMPORARY_CONTEXT",
+          ],
+        );
+        setMemoryConfidenceThreshold(created.memoryConfidenceThreshold ?? 0.7);
+        setMemoryTempDefaultDays(created.memoryTempDefaultDays ?? 7);
+        setMemorySharedAcrossAssistants(created.memorySharedAcrossAssistants ?? true);
         setStatus(created.status);
         await loadKnowledge(created.id);
 
@@ -1104,6 +1233,19 @@ function NovoAgente() {
           noAnswerMessage: created.fallbackMessage ?? "",
           securityInstructions: created.safetyInstruction ?? "",
           ragEnabled: created.ragEnabled ?? false,
+          memoryEnabled: created.memoryEnabled ?? false,
+          memoryPrePromptEnabled: created.memoryPrePromptEnabled ?? true,
+          memoryExtractionEnabled: created.memoryExtractionEnabled ?? true,
+          memoryAllowedCategories:
+            created.memoryAllowedCategories ?? [
+              "IDENTITY",
+              "PREFERENCE",
+              "BUSINESS_CONTEXT",
+              "TEMPORARY_CONTEXT",
+            ],
+          memoryConfidenceThreshold: created.memoryConfidenceThreshold ?? 0.7,
+          memoryTempDefaultDays: created.memoryTempDefaultDays ?? 7,
+          memorySharedAcrossAssistants: created.memorySharedAcrossAssistants ?? true,
           messageBufferEnabled: created.messageBufferEnabled ?? true,
           messageBufferSeconds: created.messageBufferSeconds ?? 6,
           splitResponseEnabled: created.splitResponseEnabled ?? false,
@@ -2206,11 +2348,157 @@ function NovoAgente() {
 
             <TabsContent value="memoria">
               <Card>
-                <CardContent className="p-6">
-                  <EmptyState
-                    title="Memória avançada ainda não conectada"
-                    description="A memória persiste apenas no runtime backend atual."
-                  />
+                <CardHeader>
+                  <CardTitle className="text-base">Memória Inteligente do contato</CardTitle>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    A memória só é usada quando você ativar explicitamente. Assistentes antigos não
+                    passam a salvar dados automaticamente.
+                  </p>
+                </CardHeader>
+                <CardContent className="p-6 pt-0 space-y-6">
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                    Armazenamos apenas fatos úteis para futuras conversas. Dados sensíveis,
+                    credenciais, OTP, cartões, documentos completos e texto com tentativa de mudar
+                    regras são bloqueados no backend.
+                  </div>
+
+                  <div className="rounded-xl border bg-card p-4 space-y-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <Label className="text-base font-semibold cursor-pointer">
+                          Habilitar memória para este assistente
+                        </Label>
+                        <p className="text-sm text-muted-foreground">
+                          Quando desativado, o runtime não carrega nem extrai memória.
+                        </p>
+                      </div>
+                      <Switch checked={memoryEnabled} onCheckedChange={setMemoryEnabled} />
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="flex items-center justify-between rounded-lg border p-4">
+                        <div>
+                          <Label className="cursor-pointer">Usar memória antes de responder</Label>
+                          <p className="text-xs text-muted-foreground">
+                            Injeta memórias relevantes no contexto do prompt.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={memoryPrePromptEnabled}
+                          onCheckedChange={setMemoryPrePromptEnabled}
+                          disabled={!memoryEnabled}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-lg border p-4">
+                        <div>
+                          <Label className="cursor-pointer">Extrair memória automaticamente</Label>
+                          <p className="text-xs text-muted-foreground">
+                            Analisa mensagens do contato ao final do atendimento.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={memoryExtractionEnabled}
+                          onCheckedChange={setMemoryExtractionEnabled}
+                          disabled={!memoryEnabled}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-lg border p-4 md:col-span-2">
+                        <div>
+                          <Label className="cursor-pointer">
+                            Compartilhar memória com outros assistentes da empresa
+                          </Label>
+                          <p className="text-xs text-muted-foreground">
+                            Desative para usar somente memória criada neste assistente.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={memorySharedAcrossAssistants}
+                          onCheckedChange={setMemorySharedAcrossAssistants}
+                          disabled={!memoryEnabled}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-6 lg:grid-cols-[1.4fr,1fr]">
+                    <div className="rounded-xl border p-4 space-y-4">
+                      <div>
+                        <Label className="text-base font-semibold">Categorias permitidas</Label>
+                        <p className="text-sm text-muted-foreground">
+                          O extrator só poderá salvar memórias destas categorias.
+                        </p>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        {MEMORY_CATEGORY_OPTIONS.map((option) => {
+                          const checked = memoryAllowedCategories.includes(option.value);
+                          return (
+                            <label
+                              key={option.value}
+                              className={`flex items-start gap-3 rounded-lg border p-3 ${checked ? "border-primary/40 bg-primary/5" : ""} ${!memoryEnabled ? "opacity-60" : ""}`}
+                            >
+                              <Checkbox
+                                checked={checked}
+                                disabled={!memoryEnabled}
+                                onCheckedChange={(nextChecked) => {
+                                  setMemoryAllowedCategories((current) => {
+                                    if (nextChecked) {
+                                      return current.includes(option.value)
+                                        ? current
+                                        : [...current, option.value];
+                                    }
+                                    const next = current.filter((value) => value !== option.value);
+                                    return next.length > 0 ? next : current;
+                                  });
+                                }}
+                              />
+                              <div>
+                                <div className="font-medium text-sm">{option.label}</div>
+                                <div className="text-xs text-muted-foreground">{option.value}</div>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border p-4 space-y-5">
+                      <div className="space-y-3">
+                        <Label className="text-base font-semibold">
+                          Limiar mínimo de confiança: {memoryConfidenceThreshold.toFixed(2)}
+                        </Label>
+                        <Slider
+                          value={[memoryConfidenceThreshold]}
+                          min={0.5}
+                          max={1}
+                          step={0.05}
+                          disabled={!memoryEnabled}
+                          onValueChange={(values) => setMemoryConfidenceThreshold(values[0] ?? 0.7)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Memórias abaixo deste nível não entram no prompt.
+                        </p>
+                      </div>
+
+                      <div className="space-y-3">
+                        <Label className="text-base font-semibold">
+                          Duração padrão do contexto temporário: {memoryTempDefaultDays} dias
+                        </Label>
+                        <Slider
+                          value={[memoryTempDefaultDays]}
+                          min={1}
+                          max={30}
+                          step={1}
+                          disabled={!memoryEnabled}
+                          onValueChange={(values) => setMemoryTempDefaultDays(values[0] ?? 7)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Usado quando o contato informa algo temporário sem data final explícita.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
             </TabsContent>
@@ -2690,6 +2978,22 @@ function NovoAgente() {
                       <Summary
                         label="Conhecimento no Atendimento Real"
                         value={ragEnabled ? "Ativado" : "Desativado"}
+                      />
+                      <Summary
+                        label="Memória Inteligente"
+                        value={memoryEnabled ? "Ativada" : "Desativada"}
+                      />
+                      <Summary
+                        label="Memória no Prompt"
+                        value={memoryPrePromptEnabled ? "Ativada" : "Desativada"}
+                      />
+                      <Summary
+                        label="Extração Automática"
+                        value={memoryExtractionEnabled ? "Ativada" : "Desativada"}
+                      />
+                      <Summary
+                        label="Categorias de Memória"
+                        value={memoryAllowedCategories.length > 0 ? memoryAllowedCategories.join(", ") : "Nenhuma"}
                       />
                       <Summary
                         label="Regras de Segurança"

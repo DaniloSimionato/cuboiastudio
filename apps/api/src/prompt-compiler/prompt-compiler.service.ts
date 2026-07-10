@@ -32,6 +32,7 @@ export type PromptCompilerInput = {
     serverTime?: string | null;
     resourcesContext?: string | null;
   } | null;
+  memoryContextBlock?: string | null;
 };
 
 @Injectable()
@@ -47,6 +48,7 @@ export class PromptCompilerService {
       currentMessage,
       officialBusinessContext,
       calendarContext,
+      memoryContextBlock,
     } = input;
     const messages: AiChatCompletionMessage[] = [];
 
@@ -138,6 +140,14 @@ export class PromptCompilerService {
       messages.push({
         role: "system",
         content: calendarLines.join("\n"),
+      });
+    }
+
+    // 4.5 Memory Context Block
+    if (memoryContextBlock) {
+      messages.push({
+        role: "system",
+        content: memoryContextBlock,
       });
     }
 

@@ -1,5 +1,7 @@
 import { Transform } from "class-transformer";
 import {
+  IsArray,
+  IsEnum,
   IsNumber,
   IsNotEmpty,
   IsOptional,
@@ -10,6 +12,7 @@ import {
   IsBoolean,
   IsUrl,
 } from "class-validator";
+import { ContactMemoryCategory } from "@prisma/client";
 
 function trimString(value: unknown): unknown {
   return typeof value === "string" ? value.trim() : value;
@@ -76,6 +79,53 @@ export class UpdateAssistantDto {
   @IsOptional()
   @IsBoolean()
   ragEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  memoryEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  memoryPrePromptEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  memoryExtractionEnabled?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @IsEnum(ContactMemoryCategory, { each: true })
+  memoryAllowedCategories?: ContactMemoryCategory[];
+
+  @Transform(({ value }) => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed === "" ? undefined : Number(trimmed);
+    }
+    return value;
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  memoryConfidenceThreshold?: number;
+
+  @Transform(({ value }) => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed === "" ? undefined : Number(trimmed);
+    }
+    return value;
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(90)
+  memoryTempDefaultDays?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  memorySharedAcrossAssistants?: boolean;
 
   @Transform(({ value }) => trimString(value))
   @IsOptional()

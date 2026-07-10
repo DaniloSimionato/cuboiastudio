@@ -7,6 +7,7 @@ import { AssistantKnowledgeModule } from "../assistant-knowledge/assistant-knowl
 import { PromptCompilerModule } from "../prompt-compiler/prompt-compiler.module";
 import { IntentRouterModule } from "../intent-router/intent-router.module";
 import { AssistantSecurityRulesModule } from "../assistant-security-rules/assistant-security-rules.module";
+import { ContactMemoriesModule } from "../contact-memories/contact-memories.module";
 import { AssistantConversationsController } from "./assistant-conversations.controller";
 import { AssistantConversationsService } from "./assistant-conversations.service";
 
@@ -20,6 +21,7 @@ import { AssistantConversationsService } from "./assistant-conversations.service
     PromptCompilerModule,
     IntentRouterModule,
     AssistantSecurityRulesModule,
+    ContactMemoriesModule,
   ],
   controllers: [AssistantConversationsController],
   providers: [AssistantConversationsService],

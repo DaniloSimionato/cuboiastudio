@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { Prisma, Status } from "@prisma/client";
+import { ContactMemoryCategory, Prisma, Status } from "@prisma/client";
 import { type AuthenticatedUser, type RequestTenant } from "../auth/auth.types";
 import { PrismaService } from "../database/prisma.service";
 import { buildDeterministicAssistantResponse } from "./assistant-runtime";
@@ -53,6 +53,13 @@ export type AssistantListItem = {
   fallbackMessage: string | null;
   safetyInstruction: string | null;
   ragEnabled: boolean;
+  memoryEnabled: boolean;
+  memoryPrePromptEnabled: boolean;
+  memoryExtractionEnabled: boolean;
+  memoryAllowedCategories: ContactMemoryCategory[] | null;
+  memoryConfidenceThreshold: number;
+  memoryTempDefaultDays: number;
+  memorySharedAcrossAssistants: boolean;
   messageBufferEnabled: boolean;
   messageBufferSeconds: number;
   splitResponseEnabled: boolean;
@@ -153,6 +160,13 @@ const assistantSafeSelect = {
   fallbackMessage: true,
   safetyInstruction: true,
   ragEnabled: true,
+  memoryEnabled: true,
+  memoryPrePromptEnabled: true,
+  memoryExtractionEnabled: true,
+  memoryAllowedCategories: true,
+  memoryConfidenceThreshold: true,
+  memoryTempDefaultDays: true,
+  memorySharedAcrossAssistants: true,
   messageBufferEnabled: true,
   messageBufferSeconds: true,
   splitResponseEnabled: true,
@@ -268,6 +282,21 @@ type DeterministicExecutionResult = {
   sources: AssistantRuntimeSource[];
 };
 
+function parseMemoryAllowedCategories(
+  value: string | null,
+): ContactMemoryCategory[] | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? (parsed as ContactMemoryCategory[]) : null;
+  } catch {
+    return null;
+  }
+}
+
 function toAssistantResponse(assistant: AssistantSafeRecord): AssistantListItem {
   return {
     id: assistant.id,
@@ -298,6 +327,13 @@ function toAssistantResponse(assistant: AssistantSafeRecord): AssistantListItem 
     fallbackMessage: assistant.fallbackMessage,
     safetyInstruction: assistant.safetyInstruction,
     ragEnabled: assistant.ragEnabled,
+    memoryEnabled: assistant.memoryEnabled,
+    memoryPrePromptEnabled: assistant.memoryPrePromptEnabled,
+    memoryExtractionEnabled: assistant.memoryExtractionEnabled,
+    memoryAllowedCategories: parseMemoryAllowedCategories(assistant.memoryAllowedCategories),
+    memoryConfidenceThreshold: assistant.memoryConfidenceThreshold,
+    memoryTempDefaultDays: assistant.memoryTempDefaultDays,
+    memorySharedAcrossAssistants: assistant.memorySharedAcrossAssistants,
     messageBufferEnabled: assistant.messageBufferEnabled,
     messageBufferSeconds: assistant.messageBufferSeconds,
     splitResponseEnabled: assistant.splitResponseEnabled,
@@ -513,6 +549,15 @@ export class AssistantsService {
         fallbackMessage: input.dto.fallbackMessage ?? null,
         safetyInstruction: input.dto.safetyInstruction ?? null,
         ragEnabled: input.dto.ragEnabled ?? false,
+        memoryEnabled: input.dto.memoryEnabled ?? false,
+        memoryPrePromptEnabled: input.dto.memoryPrePromptEnabled ?? true,
+        memoryExtractionEnabled: input.dto.memoryExtractionEnabled ?? true,
+        memoryAllowedCategories: input.dto.memoryAllowedCategories
+          ? JSON.stringify(input.dto.memoryAllowedCategories)
+          : null,
+        memoryConfidenceThreshold: input.dto.memoryConfidenceThreshold ?? 0.7,
+        memoryTempDefaultDays: input.dto.memoryTempDefaultDays ?? 7,
+        memorySharedAcrossAssistants: input.dto.memorySharedAcrossAssistants ?? true,
         messageBufferEnabled: input.dto.messageBufferEnabled ?? true,
         messageBufferSeconds: input.dto.messageBufferSeconds ?? 6,
         splitResponseEnabled: input.dto.splitResponseEnabled ?? false,
@@ -588,6 +633,13 @@ export class AssistantsService {
     const hasFallbackMessage = hasField("fallbackMessage");
     const hasSafetyInstruction = hasField("safetyInstruction");
     const hasRagEnabled = hasField("ragEnabled");
+    const hasMemoryEnabled = hasField("memoryEnabled");
+    const hasMemoryPrePromptEnabled = hasField("memoryPrePromptEnabled");
+    const hasMemoryExtractionEnabled = hasField("memoryExtractionEnabled");
+    const hasMemoryAllowedCategories = hasField("memoryAllowedCategories");
+    const hasMemoryConfidenceThreshold = hasField("memoryConfidenceThreshold");
+    const hasMemoryTempDefaultDays = hasField("memoryTempDefaultDays");
+    const hasMemorySharedAcrossAssistants = hasField("memorySharedAcrossAssistants");
     const hasMessageBufferEnabled = hasField("messageBufferEnabled");
     const hasMessageBufferSeconds = hasField("messageBufferSeconds");
     const hasSplitResponseEnabled = hasField("splitResponseEnabled");
@@ -621,6 +673,13 @@ export class AssistantsService {
       !hasFallbackMessage &&
       !hasSafetyInstruction &&
       !hasRagEnabled &&
+      !hasMemoryEnabled &&
+      !hasMemoryPrePromptEnabled &&
+      !hasMemoryExtractionEnabled &&
+      !hasMemoryAllowedCategories &&
+      !hasMemoryConfidenceThreshold &&
+      !hasMemoryTempDefaultDays &&
+      !hasMemorySharedAcrossAssistants &&
       !hasMessageBufferEnabled &&
       !hasMessageBufferSeconds &&
       !hasSplitResponseEnabled &&
@@ -684,6 +743,29 @@ export class AssistantsService {
         ...(hasFallbackMessage ? { fallbackMessage: input.dto.fallbackMessage ?? null } : {}),
         ...(hasSafetyInstruction ? { safetyInstruction: input.dto.safetyInstruction ?? null } : {}),
         ...(hasRagEnabled ? { ragEnabled: input.dto.ragEnabled ?? false } : {}),
+        ...(hasMemoryEnabled ? { memoryEnabled: input.dto.memoryEnabled ?? false } : {}),
+        ...(hasMemoryPrePromptEnabled
+          ? { memoryPrePromptEnabled: input.dto.memoryPrePromptEnabled ?? true }
+          : {}),
+        ...(hasMemoryExtractionEnabled
+          ? { memoryExtractionEnabled: input.dto.memoryExtractionEnabled ?? true }
+          : {}),
+        ...(hasMemoryAllowedCategories
+          ? {
+              memoryAllowedCategories: input.dto.memoryAllowedCategories
+                ? JSON.stringify(input.dto.memoryAllowedCategories)
+                : null,
+            }
+          : {}),
+        ...(hasMemoryConfidenceThreshold
+          ? { memoryConfidenceThreshold: input.dto.memoryConfidenceThreshold ?? 0.7 }
+          : {}),
+        ...(hasMemoryTempDefaultDays
+          ? { memoryTempDefaultDays: input.dto.memoryTempDefaultDays ?? 7 }
+          : {}),
+        ...(hasMemorySharedAcrossAssistants
+          ? { memorySharedAcrossAssistants: input.dto.memorySharedAcrossAssistants ?? true }
+          : {}),
         ...(hasMessageBufferEnabled
           ? { messageBufferEnabled: input.dto.messageBufferEnabled ?? true }
           : {}),

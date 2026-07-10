@@ -98,6 +98,13 @@ export const backendAssistantsService = {
     fallbackMessage?: string | null;
     safetyInstruction?: string | null;
     ragEnabled?: boolean;
+    memoryEnabled?: boolean;
+    memoryPrePromptEnabled?: boolean;
+    memoryExtractionEnabled?: boolean;
+    memoryAllowedCategories?: string[] | null;
+    memoryConfidenceThreshold?: number | null;
+    memoryTempDefaultDays?: number | null;
+    memorySharedAcrossAssistants?: boolean;
     messageBufferEnabled?: boolean;
     messageBufferSeconds?: number;
     splitResponseEnabled?: boolean;
@@ -139,6 +146,13 @@ export const backendAssistantsService = {
       fallbackMessage?: string | null;
       safetyInstruction?: string | null;
       ragEnabled?: boolean;
+      memoryEnabled?: boolean;
+      memoryPrePromptEnabled?: boolean;
+      memoryExtractionEnabled?: boolean;
+      memoryAllowedCategories?: string[] | null;
+      memoryConfidenceThreshold?: number | null;
+      memoryTempDefaultDays?: number | null;
+      memorySharedAcrossAssistants?: boolean;
       messageBufferEnabled?: boolean;
       messageBufferSeconds?: number;
       splitResponseEnabled?: boolean;
