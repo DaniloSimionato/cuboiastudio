@@ -28,7 +28,7 @@ export class UpdateAssistantDto {
   @Transform(({ value }) => trimString(value))
   @IsOptional()
   @IsString()
-  @MaxLength(4000)
+  @MaxLength(16000)
   instructions?: string;
 
   @Transform(({ value }) => trimString(value))
@@ -60,7 +60,7 @@ export class UpdateAssistantDto {
   @Transform(({ value }) => trimString(value))
   @IsOptional()
   @IsString()
-  @MaxLength(1000)
+  @MaxLength(4000)
   safetyInstruction?: string;
 
   @IsOptional()
