@@ -17,6 +17,11 @@ import { type PreviewAssistantDto } from "./dto/preview-assistant.dto";
 import { type RunAssistantDto } from "./dto/run-assistant.dto";
 import { type UpdateAssistantStatusDto } from "./dto/update-assistant-status.dto";
 import { type UpdateAssistantDto } from "./dto/update-assistant.dto";
+import {
+  buildOfficialBusinessContext,
+  isValidIanaTimezone,
+  validateBusinessHoursSchedule,
+} from "./official-business-context";
 
 export type AssistantListItem = {
   id: string;
@@ -24,6 +29,14 @@ export type AssistantListItem = {
   description: string | null;
   businessAddress: string | null;
   businessCityRegion: string | null;
+  businessCity: string | null;
+  businessState: string | null;
+  businessPostalCode: string | null;
+  businessPhone: string | null;
+  businessWhatsapp: string | null;
+  businessWhatsappSupport: string | null;
+  websiteUrl: string | null;
+  timezone: string | null;
   googleMapsUrl: string | null;
   latitude: number | null;
   longitude: number | null;
@@ -116,6 +129,14 @@ const assistantSafeSelect = {
   description: true,
   businessAddress: true,
   businessCityRegion: true,
+  businessCity: true,
+  businessState: true,
+  businessPostalCode: true,
+  businessPhone: true,
+  businessWhatsapp: true,
+  businessWhatsappSupport: true,
+  websiteUrl: true,
+  timezone: true,
   googleMapsUrl: true,
   latitude: true,
   longitude: true,
@@ -146,8 +167,34 @@ type AssistantSafeRecord = Prisma.AssistantGetPayload<{
 
 const assistantPreviewAssistantSelect = {
   id: true,
+  companyId: true,
   name: true,
+  description: true,
+  businessAddress: true,
+  businessCityRegion: true,
+  businessCity: true,
+  businessState: true,
+  businessPostalCode: true,
+  businessPhone: true,
+  businessWhatsapp: true,
+  businessWhatsappSupport: true,
+  websiteUrl: true,
+  timezone: true,
+  googleMapsUrl: true,
+  latitude: true,
+  longitude: true,
+  weeklySchedule: true,
+  aiAlwaysAvailable: true,
+  instructions: true,
+  model: true,
+  temperature: true,
   status: true,
+  company: {
+    select: {
+      name: true,
+      timezone: true,
+    },
+  },
 } satisfies Prisma.AssistantSelect;
 
 type AssistantPreviewAssistantRecord = Prisma.AssistantGetPayload<{
@@ -227,6 +274,14 @@ function toAssistantResponse(assistant: AssistantSafeRecord): AssistantListItem 
     description: assistant.description,
     businessAddress: assistant.businessAddress,
     businessCityRegion: assistant.businessCityRegion,
+    businessCity: assistant.businessCity,
+    businessState: assistant.businessState,
+    businessPostalCode: assistant.businessPostalCode,
+    businessPhone: assistant.businessPhone,
+    businessWhatsapp: assistant.businessWhatsapp,
+    businessWhatsappSupport: assistant.businessWhatsappSupport,
+    websiteUrl: assistant.websiteUrl,
+    timezone: assistant.timezone,
     googleMapsUrl: assistant.googleMapsUrl,
     latitude: assistant.latitude,
     longitude: assistant.longitude,
@@ -271,6 +326,23 @@ export class AssistantsService {
     private readonly retrievalService: AssistantKnowledgeRetrievalService,
   ) {}
 
+  private validateOfficialBusinessFields(
+    dto: Pick<CreateAssistantDto & UpdateAssistantDto, "weeklySchedule" | "timezone">,
+  ): void {
+    if (dto.timezone !== undefined && dto.timezone !== null && !isValidIanaTimezone(dto.timezone)) {
+      throw new BadRequestException("Timezone inválido. Use um timezone IANA válido.");
+    }
+
+    if (dto.weeklySchedule !== undefined) {
+      const issues = validateBusinessHoursSchedule(dto.weeklySchedule);
+      if (issues.length > 0) {
+        throw new BadRequestException(
+          `Horário de atendimento inválido: ${issues[0].message} (${issues[0].day}).`,
+        );
+      }
+    }
+  }
+
   private async loadDeterministicExecution(input: {
     id: string;
     question: string;
@@ -310,7 +382,30 @@ export class AssistantsService {
 
     const { answer, sources } = buildDeterministicAssistantResponse({
       question: input.question,
+      assistantName: assistant.name,
+      instructions: assistant.instructions ?? null,
       knowledgeItems,
+      officialBusinessContext: buildOfficialBusinessContext({
+        companyName: assistant.company.name,
+        assistantName: assistant.name,
+        companyTimezone: assistant.company.timezone,
+        assistantTimezone: assistant.timezone,
+        description: assistant.description,
+        businessAddress: assistant.businessAddress,
+        businessCity: assistant.businessCity,
+        businessState: assistant.businessState,
+        businessCityRegion: assistant.businessCityRegion,
+        businessPostalCode: assistant.businessPostalCode,
+        googleMapsUrl: assistant.googleMapsUrl,
+        latitude: assistant.latitude,
+        longitude: assistant.longitude,
+        businessPhone: assistant.businessPhone,
+        businessWhatsapp: assistant.businessWhatsapp,
+        businessWhatsappSupport: assistant.businessWhatsappSupport,
+        websiteUrl: assistant.websiteUrl,
+        weeklySchedule: assistant.weeklySchedule,
+        aiAlwaysAvailable: assistant.aiAlwaysAvailable,
+      }),
     });
 
     return {
@@ -385,6 +480,8 @@ export class AssistantsService {
       throw new ForbiddenException("Tenant context does not match the authenticated user.");
     }
 
+    this.validateOfficialBusinessFields(input.dto);
+
     const assistant = await this.prisma.assistant.create({
       data: {
         companyId: input.tenant.companyId,
@@ -392,6 +489,14 @@ export class AssistantsService {
         description: input.dto.description ?? null,
         businessAddress: input.dto.businessAddress ?? null,
         businessCityRegion: input.dto.businessCityRegion ?? null,
+        businessCity: input.dto.businessCity ?? null,
+        businessState: input.dto.businessState ?? null,
+        businessPostalCode: input.dto.businessPostalCode ?? null,
+        businessPhone: input.dto.businessPhone ?? null,
+        businessWhatsapp: input.dto.businessWhatsapp ?? null,
+        businessWhatsappSupport: input.dto.businessWhatsappSupport ?? null,
+        websiteUrl: input.dto.websiteUrl ?? null,
+        timezone: input.dto.timezone ?? null,
         googleMapsUrl: input.dto.googleMapsUrl ?? null,
         latitude: input.dto.latitude ?? null,
         longitude: input.dto.longitude ?? null,
@@ -459,6 +564,14 @@ export class AssistantsService {
     const hasDescription = hasField("description");
     const hasBusinessAddress = hasField("businessAddress");
     const hasBusinessCityRegion = hasField("businessCityRegion");
+    const hasBusinessCity = hasField("businessCity");
+    const hasBusinessState = hasField("businessState");
+    const hasBusinessPostalCode = hasField("businessPostalCode");
+    const hasBusinessPhone = hasField("businessPhone");
+    const hasBusinessWhatsapp = hasField("businessWhatsapp");
+    const hasBusinessWhatsappSupport = hasField("businessWhatsappSupport");
+    const hasWebsiteUrl = hasField("websiteUrl");
+    const hasTimezone = hasField("timezone");
     const hasWeeklySchedule = hasField("weeklySchedule");
     const hasAiAlwaysAvailable = hasField("aiAlwaysAvailable");
     const hasInitialMessage = hasField("initialMessage");
@@ -484,6 +597,14 @@ export class AssistantsService {
       !hasDescription &&
       !hasBusinessAddress &&
       !hasBusinessCityRegion &&
+      !hasBusinessCity &&
+      !hasBusinessState &&
+      !hasBusinessPostalCode &&
+      !hasBusinessPhone &&
+      !hasBusinessWhatsapp &&
+      !hasBusinessWhatsappSupport &&
+      !hasWebsiteUrl &&
+      !hasTimezone &&
       !hasWeeklySchedule &&
       !hasAiAlwaysAvailable &&
       !hasInitialMessage &&
@@ -506,6 +627,8 @@ export class AssistantsService {
     ) {
       throw new BadRequestException("At least one editable field must be provided.");
     }
+
+    this.validateOfficialBusinessFields(input.dto);
 
     const assistant = await this.prisma.assistant.findFirst({
       where: {
@@ -533,6 +656,18 @@ export class AssistantsService {
         ...(hasBusinessCityRegion
           ? { businessCityRegion: input.dto.businessCityRegion ?? null }
           : {}),
+        ...(hasBusinessCity ? { businessCity: input.dto.businessCity ?? null } : {}),
+        ...(hasBusinessState ? { businessState: input.dto.businessState ?? null } : {}),
+        ...(hasBusinessPostalCode
+          ? { businessPostalCode: input.dto.businessPostalCode ?? null }
+          : {}),
+        ...(hasBusinessPhone ? { businessPhone: input.dto.businessPhone ?? null } : {}),
+        ...(hasBusinessWhatsapp ? { businessWhatsapp: input.dto.businessWhatsapp ?? null } : {}),
+        ...(hasBusinessWhatsappSupport
+          ? { businessWhatsappSupport: input.dto.businessWhatsappSupport ?? null }
+          : {}),
+        ...(hasWebsiteUrl ? { websiteUrl: input.dto.websiteUrl ?? null } : {}),
+        ...(hasTimezone ? { timezone: input.dto.timezone ?? null } : {}),
         ...(hasGoogleMapsUrl ? { googleMapsUrl: input.dto.googleMapsUrl ?? null } : {}),
         ...(hasLatitude ? { latitude: input.dto.latitude ?? null } : {}),
         ...(hasLongitude ? { longitude: input.dto.longitude ?? null } : {}),
@@ -637,7 +772,7 @@ export class AssistantsService {
       // 1. Validar Assistente
       const assistant = await this.prisma.assistant.findFirst({
         where: { id: input.id, companyId: input.tenant.companyId },
-        select: { id: true, name: true, instructions: true, model: true, temperature: true },
+        select: assistantPreviewAssistantSelect,
       });
       if (!assistant) throw new NotFoundException("Assistant not found.");
 
@@ -676,7 +811,34 @@ export class AssistantsService {
         if (!isProviderConfigured) {
           answer = "ERRO: Provedor de IA não configurado para realizar o teste de RAG.";
         } else {
-          const sysPrompt = (assistant.instructions || "") + contextBlock;
+          const officialContext = buildOfficialBusinessContext({
+            companyName: assistant.company.name,
+            assistantName: assistant.name,
+            companyTimezone: assistant.company.timezone,
+            assistantTimezone: assistant.timezone,
+            description: assistant.description,
+            businessAddress: assistant.businessAddress,
+            businessCity: assistant.businessCity,
+            businessState: assistant.businessState,
+            businessCityRegion: assistant.businessCityRegion,
+            businessPostalCode: assistant.businessPostalCode,
+            googleMapsUrl: assistant.googleMapsUrl,
+            latitude: assistant.latitude,
+            longitude: assistant.longitude,
+            businessPhone: assistant.businessPhone,
+            businessWhatsapp: assistant.businessWhatsapp,
+            businessWhatsappSupport: assistant.businessWhatsappSupport,
+            websiteUrl: assistant.websiteUrl,
+            weeklySchedule: assistant.weeklySchedule,
+            aiAlwaysAvailable: assistant.aiAlwaysAvailable,
+          });
+          const sysPrompt = [
+            officialContext.promptBlock,
+            assistant.instructions || "",
+            contextBlock,
+          ]
+            .filter(Boolean)
+            .join("\n\n---\n\n");
           const completion = await this.aiService.generateChatCompletion({
             companyId: input.tenant.companyId,
             model: assistant.model || undefined,

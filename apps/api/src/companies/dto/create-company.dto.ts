@@ -31,6 +31,12 @@ export class CreateCompanyDto {
   @MaxLength(4000)
   notes?: string;
 
+  @ApiPropertyOptional({ example: "America/Sao_Paulo" })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  timezone?: string;
+
   @ApiPropertyOptional({
     example: false,
     description: "Quando true, cria um assistente demo explícito para o tenant recém-criado.",

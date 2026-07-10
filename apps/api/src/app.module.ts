@@ -11,6 +11,7 @@ import { DatabaseModule } from "./database/database.module";
 import { AssistantsModule } from "./assistants/assistants.module";
 import { AssistantBehaviorsModule } from "./assistant-behaviors/assistant-behaviors.module";
 import { AssistantFlowsModule } from "./assistant-flows/assistant-flows.module";
+import { AssistantSecurityRulesModule } from "./assistant-security-rules/assistant-security-rules.module";
 import { PromptCompilerModule } from "./prompt-compiler/prompt-compiler.module";
 import { IntentRouterModule } from "./intent-router/intent-router.module";
 import { AppsModule } from "./apps/apps.module";
@@ -67,6 +68,7 @@ import { StudioUsersModule } from "./studio-users/studio-users.module";
     AssistantsModule,
     AssistantBehaviorsModule,
     AssistantFlowsModule,
+    AssistantSecurityRulesModule,
     PromptCompilerModule,
     IntentRouterModule,
     CompaniesModule,

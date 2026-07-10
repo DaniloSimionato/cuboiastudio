@@ -31,4 +31,10 @@ export class UpdateCompanyDto {
   @IsString()
   @MaxLength(4000)
   notes?: string | null;
+
+  @ApiPropertyOptional({ example: "America/Sao_Paulo" })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  timezone?: string | null;
 }

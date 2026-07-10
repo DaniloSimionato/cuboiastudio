@@ -1,5 +1,15 @@
 import { Transform } from "class-transformer";
-import { IsNumber, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min, IsBoolean, IsUrl } from "class-validator";
+import {
+  IsNumber,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+  IsBoolean,
+  IsUrl,
+} from "class-validator";
 
 function trimString(value: unknown): unknown {
   return typeof value === "string" ? value.trim() : value;
@@ -77,6 +87,54 @@ export class CreateAssistantDto {
   @IsString()
   @MaxLength(100)
   businessCityRegion?: string;
+
+  @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  businessCity?: string;
+
+  @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  businessState?: string;
+
+  @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  businessPostalCode?: string;
+
+  @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  businessPhone?: string;
+
+  @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  businessWhatsapp?: string;
+
+  @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  businessWhatsappSupport?: string;
+
+  @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @IsUrl()
+  websiteUrl?: string;
+
+  @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  timezone?: string;
 
   @IsOptional()
   weeklySchedule?: any;

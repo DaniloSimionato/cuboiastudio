@@ -10,17 +10,8 @@ export type ConnectionState = "conectado" | "desconectado" | "testando" | "erro"
 
 export type BackendStatus = "ACTIVE" | "INACTIVE";
 export type AppInstallationStatus = "ACTIVE" | "INACTIVE" | "ERROR";
-export type BackendConversationSource =
-  | "UNKNOWN"
-  | "MANUAL_TEST"
-  | "CHATWOOT"
-  | "SMOKE"
-  | "SYSTEM";
-export type BackendConversationChannelType =
-  | "UNKNOWN"
-  | "WHATSAPP"
-  | "INSTAGRAM"
-  | "WEBCHAT";
+export type BackendConversationSource = "UNKNOWN" | "MANUAL_TEST" | "CHATWOOT" | "SMOKE" | "SYSTEM";
+export type BackendConversationChannelType = "UNKNOWN" | "WHATSAPP" | "INSTAGRAM" | "WEBCHAT";
 
 export interface CurrentCompany {
   id: string;
@@ -28,6 +19,7 @@ export interface CurrentCompany {
   legalName: string | null;
   document: string | null;
   notes: string | null;
+  timezone: string;
   status: BackendStatus;
   isActiveContext?: boolean;
   createdAt?: string;
@@ -55,6 +47,7 @@ export interface CreateCompanyPayload {
   document?: string | null;
   status?: BackendStatus;
   notes?: string | null;
+  timezone?: string;
   createDemoAssistant?: boolean;
 }
 
@@ -64,6 +57,7 @@ export interface UpdateCompanyPayload {
   document?: string | null;
   status?: BackendStatus;
   notes?: string | null;
+  timezone?: string | null;
 }
 
 export type StudioGlobalRole = "STUDIO_ADMIN" | "STUDIO_OPERATOR" | "STUDIO_VIEWER";
@@ -426,6 +420,16 @@ export interface SecureStatus {
   message?: string;
 }
 
+export type BusinessDayKey =
+  "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
+
+export interface BusinessHoursInterval {
+  start: string;
+  end: string;
+}
+
+export type BusinessHoursSchedule = Record<BusinessDayKey, BusinessHoursInterval[]>;
+
 export interface ChatwootInboxConfigItem {
   id: string;
   companyId: string;
@@ -492,10 +496,18 @@ export interface BackendAssistantListItem {
   description: string | null;
   businessAddress: string | null;
   businessCityRegion: string | null;
+  businessCity: string | null;
+  businessState: string | null;
+  businessPostalCode: string | null;
+  businessPhone: string | null;
+  businessWhatsapp: string | null;
+  businessWhatsappSupport: string | null;
+  websiteUrl: string | null;
+  timezone: string | null;
   googleMapsUrl: string | null;
   latitude: number | null;
   longitude: number | null;
-  weeklySchedule: any | null;
+  weeklySchedule: BusinessHoursSchedule | any | null;
   aiAlwaysAvailable: boolean;
   initialMessage: string | null;
   instructions: string | null;
@@ -517,6 +529,19 @@ export interface BackendAssistantListItem {
 }
 
 export type BackendAssistantResponse = BackendAssistantListItem;
+
+export type AssistantSecurityRuleItem = {
+  id: string;
+  companyId: string;
+  assistantId: string;
+  name: string;
+  ruleType: string;
+  instruction: string;
+  status: BackendStatus;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export type BackendAssistantKnowledgeItem = {
   id: string;

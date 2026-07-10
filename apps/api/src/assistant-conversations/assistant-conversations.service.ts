@@ -28,12 +28,21 @@ import {
   toAssistantRuntimeSources,
   type AssistantRuntimeSource,
 } from "../assistants/assistant-runtime";
+import {
+  buildOfficialBusinessContext,
+  buildOutsideBusinessHoursReply,
+  type OfficialBusinessContext,
+} from "../assistants/official-business-context";
 import { type CreateAssistantConversationDto } from "./dto/create-assistant-conversation.dto";
 import { type SendAssistantConversationMessageDto } from "./dto/send-assistant-conversation-message.dto";
 import { CalendarToolsService } from "../apps/calendar-tools.service";
 import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
 import { PromptCompilerService } from "../prompt-compiler/prompt-compiler.service";
 import { IntentRouterService } from "../intent-router/intent-router.service";
+import {
+  AssistantSecurityRulesService,
+  type AssistantSecurityRuleItem,
+} from "../assistant-security-rules/assistant-security-rules.service";
 import {
   filterResourcesByCalendarToolScope,
   hasCalendarToolScope,
@@ -100,6 +109,8 @@ export type AssistantConversationRuntime = {
     historyLimit: number;
     initialMessageIncluded: boolean;
     instructionsIncluded: boolean;
+    safetyInstructionIncluded?: boolean;
+    activeSecurityRulesCount?: number;
     detectedIntent?: string | null;
     selectedFlowId?: string | null;
     selectedFlowName?: string | null;
@@ -114,6 +125,14 @@ export type AssistantConversationRuntime = {
     resourceScopeApplied?: boolean | null;
     blockedByToolScope?: boolean | null;
     blockReason?: string | null;
+    officialTimezoneUsed?: string | null;
+    officialLocalDate?: string | null;
+    officialLocalTime?: string | null;
+    officialOpenNow?: boolean | null;
+    officialOnBreak?: boolean | null;
+    officialDataSource?: string | null;
+    outsideBusinessHours?: boolean | null;
+    outsideBusinessHoursPolicy?: string | null;
   };
   logId?: string;
   reason?:
@@ -193,12 +212,23 @@ type AssistantConversationAssistantRecord = Prisma.AssistantGetPayload<{
 
 const assistantConversationRuntimeAssistantSelect = {
   id: true,
+  companyId: true,
   name: true,
   description: true,
   businessAddress: true,
   businessCityRegion: true,
+  businessCity: true,
+  businessState: true,
+  businessPostalCode: true,
+  businessPhone: true,
+  businessWhatsapp: true,
+  businessWhatsappSupport: true,
+  websiteUrl: true,
+  timezone: true,
   googleMapsUrl: true,
   status: true,
+  weeklySchedule: true,
+  aiAlwaysAvailable: true,
   initialMessage: true,
   instructions: true,
   model: true,
@@ -213,6 +243,12 @@ const assistantConversationRuntimeAssistantSelect = {
   longitude: true,
   behavior: true,
   flows: true,
+  company: {
+    select: {
+      name: true,
+      timezone: true,
+    },
+  },
 } satisfies Prisma.AssistantSelect;
 
 type AssistantConversationRuntimeAssistantRecord = Prisma.AssistantGetPayload<{
@@ -352,12 +388,38 @@ export class AssistantConversationsService {
     private readonly assistantKnowledgeRetrievalService?: AssistantKnowledgeRetrievalService,
     private readonly promptCompilerService?: PromptCompilerService,
     private readonly intentRouterService?: IntentRouterService,
+    private readonly assistantSecurityRulesService?: AssistantSecurityRulesService,
   ) {}
 
   private assertTenantContext(input: { user: AuthenticatedUser; tenant: RequestTenant }): void {
     if (input.user.companyId !== input.tenant.companyId) {
       throw new ForbiddenException("Tenant context does not match the authenticated user.");
     }
+  }
+
+  private logOfficialBusinessContext(input: {
+    assistantId: string;
+    companyId: string;
+    context: OfficialBusinessContext;
+  }): void {
+    this.logger.log(
+      [
+        "[OfficialBusinessContext]",
+        `companyId=${input.companyId}`,
+        `assistantId=${input.assistantId}`,
+        `timezone=${input.context.timezone}`,
+        `localDate=${input.context.businessStatus.localDate}`,
+        `localTime=${input.context.businessStatus.localTime}`,
+        `status=${
+          input.context.businessStatus.isOnBreak
+            ? "break"
+            : input.context.businessStatus.isOpenNow
+              ? "open"
+              : "closed"
+        }`,
+        "businessHoursSource=structured-assistant-company",
+      ].join(" "),
+    );
   }
 
   private normalizeConversationSource(
@@ -1513,36 +1575,62 @@ export class AssistantConversationsService {
       });
     }
 
-    let instructionsWithLocation = assistant.instructions || "";
-    if (
-      assistant.businessAddress ||
-      assistant.businessCityRegion ||
-      assistant.googleMapsUrl ||
-      (assistant.latitude !== null && assistant.longitude !== null)
-    ) {
-      let googleMapsUrl = assistant.googleMapsUrl;
-      if (assistant.latitude !== null && assistant.longitude !== null) {
-        googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${assistant.latitude},${assistant.longitude}`;
-      }
+    const activeSecurityRules: AssistantSecurityRuleItem[] = this.assistantSecurityRulesService
+      ? await this.assistantSecurityRulesService.findActiveForRuntime({
+          assistantId: input.assistantId,
+          companyId: input.tenant.companyId,
+        })
+      : [];
 
-      const locationPrompt = [
-        "Localização da empresa:",
-        assistant.businessAddress ? `Endereço: ${assistant.businessAddress}` : null,
-        assistant.businessCityRegion ? `Cidade/Região: ${assistant.businessCityRegion}` : null,
-        googleMapsUrl ? `Google Maps: ${googleMapsUrl}` : null,
-        "Se o cliente perguntar onde fica, endereço ou localização, responda com essas informações e envie o link do Google Maps.",
-      ]
-        .filter(Boolean)
-        .join("\n");
+    const officialBusinessContext = buildOfficialBusinessContext({
+      companyName: assistant.company.name,
+      assistantName: assistant.name,
+      companyTimezone: assistant.company.timezone,
+      assistantTimezone: assistant.timezone,
+      description: assistant.description,
+      businessAddress: assistant.businessAddress,
+      businessCity: assistant.businessCity,
+      businessState: assistant.businessState,
+      businessCityRegion: assistant.businessCityRegion,
+      businessPostalCode: assistant.businessPostalCode,
+      googleMapsUrl: assistant.googleMapsUrl,
+      latitude: assistant.latitude,
+      longitude: assistant.longitude,
+      businessPhone: assistant.businessPhone,
+      businessWhatsapp: assistant.businessWhatsapp,
+      businessWhatsappSupport: assistant.businessWhatsappSupport,
+      websiteUrl: assistant.websiteUrl,
+      weeklySchedule: assistant.weeklySchedule,
+      aiAlwaysAvailable: assistant.aiAlwaysAvailable,
+    });
 
-      instructionsWithLocation = [instructionsWithLocation, locationPrompt]
-        .filter(Boolean)
-        .join("\n\n---\n\n");
-    }
+    this.logOfficialBusinessContext({
+      assistantId: assistant.id,
+      companyId: input.tenant.companyId,
+      context: officialBusinessContext,
+    });
 
-    const effectiveInstructions = assistant.ragEnabled
-      ? [instructionsWithLocation, ragContextBlock].filter(Boolean).join("\n\n---\n\n")
-      : instructionsWithLocation;
+    const promptInstructions = assistant.ragEnabled
+      ? [assistant.instructions || "", ragContextBlock].filter(Boolean).join("\n\n---\n\n")
+      : assistant.instructions || "";
+    const safetyInstructionBlock = [
+      assistant.safetyInstruction?.trim()
+        ? `Regra legada de segurança:\n${assistant.safetyInstruction.trim()}`
+        : null,
+      activeSecurityRules.length > 0
+        ? [
+            "Regras de segurança ativas:",
+            ...activeSecurityRules.map(
+              (rule, index) => `${index + 1}. ${rule.name} (${rule.ruleType}): ${rule.instruction}`,
+            ),
+          ].join("\n")
+        : null,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    const effectiveInstructions = [promptInstructions, safetyInstructionBlock]
+      .filter(Boolean)
+      .join("\n\n---\n\n");
 
     const recentMessages = await this.prisma.assistantConversationMessage.findMany({
       where: {
@@ -1574,6 +1662,14 @@ export class AssistantConversationsService {
       historyLimit: MAX_RUNTIME_HISTORY_MESSAGES,
       initialMessageIncluded: Boolean(assistant.initialMessage?.trim()),
       instructionsIncluded: Boolean(assistant.instructions?.trim()),
+      safetyInstructionIncluded: Boolean(assistant.safetyInstruction?.trim()),
+      activeSecurityRulesCount: activeSecurityRules.length,
+      officialTimezoneUsed: officialBusinessContext.timezone,
+      officialLocalDate: officialBusinessContext.businessStatus.localDate,
+      officialLocalTime: officialBusinessContext.businessStatus.localTime,
+      officialOpenNow: officialBusinessContext.businessStatus.isOpenNow,
+      officialOnBreak: officialBusinessContext.businessStatus.isOnBreak,
+      officialDataSource: "structured-assistant-company",
     };
 
     const deterministicRuntime = buildDeterministicAssistantResponse({
@@ -1581,6 +1677,7 @@ export class AssistantConversationsService {
       assistantName: assistant.name,
       instructions: effectiveInstructions,
       knowledgeItems,
+      officialBusinessContext,
     });
 
     const runtimeConfig = await this.aiService.resolveRuntimeConfig(input.tenant.companyId);
@@ -1588,7 +1685,7 @@ export class AssistantConversationsService {
     const temperature = this.resolveRuntimeTemperature(assistant);
     const temperatureSource = this.resolveRuntimeTemperatureSource(assistant);
     let answer = deterministicRuntime.answer;
-    const sources = deterministicRuntime.sources;
+    let sources = deterministicRuntime.sources;
     let providerErrorLogFields: RuntimeLogProviderErrorFields = {};
     let runtime: AssistantConversationRuntime = {
       mode: "deterministic-runtime",
@@ -1624,7 +1721,32 @@ export class AssistantConversationsService {
       console.log("=== END RUNTIME GATE CHECK ===\n");
     }
 
-    if (runtimeConfig.runtimeEnabled) {
+    if (
+      !officialBusinessContext.aiRespondsOutsideBusinessHours &&
+      !officialBusinessContext.businessStatus.isOpenNow
+    ) {
+      answer =
+        assistant.fallbackMessage?.trim() ||
+        buildOutsideBusinessHoursReply(officialBusinessContext);
+      sources = [
+        {
+          id: "official-structured-data",
+          title: "Dados oficiais da empresa",
+        },
+      ];
+      Object.assign(contextMetadata, {
+        llmSkipped: true,
+        outsideBusinessHours: true,
+        outsideBusinessHoursPolicy: "assistant-disabled",
+      });
+      runtime = {
+        ...runtime,
+        mode: "deterministic-runtime",
+        fallback: false,
+        outcome: "success",
+        reason: undefined,
+      };
+    } else if (runtimeConfig.runtimeEnabled) {
       const configured = await this.aiService.isProviderConfigured(
         input.tenant.companyId,
         resolvedModel.model,
@@ -1778,12 +1900,17 @@ export class AssistantConversationsService {
             // 2. Build Prompt using PromptCompiler
             promptMessages = this.promptCompilerService
               ? this.promptCompilerService.compile({
-                  assistant,
+                  assistant: {
+                    ...assistant,
+                    instructions: promptInstructions,
+                  },
                   behavior: assistant.behavior,
                   flow: selectedFlow,
+                  securityRules: activeSecurityRules,
                   knowledgeItems,
                   historyMessages: priorHistory,
                   currentMessage: interpretedMessage,
+                  officialBusinessContext,
                   calendarContext: calendarToolsActive
                     ? {
                         conversationId: conversation.id,
@@ -1797,11 +1924,14 @@ export class AssistantConversationsService {
                   assistantName: assistant.name,
                   assistantDescription: assistant.description ?? null,
                   initialMessage: assistant.initialMessage ?? null,
-                  instructions: assistant.instructions ?? null,
+                  instructions: promptInstructions,
+                  safetyInstruction: assistant.safetyInstruction ?? null,
+                  securityRules: activeSecurityRules,
                   avoidPhrases: assistant.avoidPhrases ?? null,
                   knowledgeItems,
                   historyMessages: priorHistory,
                   currentMessage: interpretedMessage,
+                  officialBusinessContext,
                   calendarContext: calendarToolsActive
                     ? {
                         conversationId: conversation.id,
@@ -2086,6 +2216,17 @@ export class AssistantConversationsService {
             resourceScopeApplied: runtime.context.resourceScopeApplied,
             blockedByToolScope: runtime.context.blockedByToolScope,
             blockReason: runtime.context.blockReason,
+            safetyInstructionIncluded: runtime.context.safetyInstructionIncluded,
+            activeSecurityRulesCount: runtime.context.activeSecurityRulesCount,
+            activeSecurityRuleIds: activeSecurityRules.map((rule) => rule.id),
+            officialTimezoneUsed: runtime.context.officialTimezoneUsed,
+            officialLocalDate: runtime.context.officialLocalDate,
+            officialLocalTime: runtime.context.officialLocalTime,
+            officialOpenNow: runtime.context.officialOpenNow,
+            officialOnBreak: runtime.context.officialOnBreak,
+            officialDataSource: runtime.context.officialDataSource,
+            outsideBusinessHours: runtime.context.outsideBusinessHours,
+            outsideBusinessHoursPolicy: runtime.context.outsideBusinessHoursPolicy,
           }),
         },
         select: {

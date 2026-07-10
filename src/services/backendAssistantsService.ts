@@ -5,6 +5,7 @@ import type {
   BackendAssistantResponse,
   BackendAssistantRunResponse,
   BackendStatus,
+  AssistantSecurityRuleItem,
 } from "@/types";
 
 type AssistantsListResponse = {
@@ -53,6 +54,10 @@ type PreviewLogsResponse = {
   }>;
 };
 
+type AssistantSecurityRulesListResponse = {
+  items: AssistantSecurityRuleItem[];
+};
+
 export const backendAssistantsService = {
   async list(options: { signal?: AbortSignal } = {}): Promise<BackendAssistantListItem[]> {
     const response = await apiFetch<AssistantsListResponse>("/assistants", {
@@ -70,6 +75,14 @@ export const backendAssistantsService = {
     description?: string | null;
     businessAddress?: string | null;
     businessCityRegion?: string | null;
+    businessCity?: string | null;
+    businessState?: string | null;
+    businessPostalCode?: string | null;
+    businessPhone?: string | null;
+    businessWhatsapp?: string | null;
+    businessWhatsappSupport?: string | null;
+    websiteUrl?: string | null;
+    timezone?: string | null;
     googleMapsUrl?: string | null;
     latitude?: number | null;
     longitude?: number | null;
@@ -103,6 +116,14 @@ export const backendAssistantsService = {
       description?: string | null;
       businessAddress?: string | null;
       businessCityRegion?: string | null;
+      businessCity?: string | null;
+      businessState?: string | null;
+      businessPostalCode?: string | null;
+      businessPhone?: string | null;
+      businessWhatsapp?: string | null;
+      businessWhatsappSupport?: string | null;
+      websiteUrl?: string | null;
+      timezone?: string | null;
       googleMapsUrl?: string | null;
       latitude?: number | null;
       longitude?: number | null;
@@ -137,7 +158,11 @@ export const backendAssistantsService = {
     });
   },
 
-  async preview(id: string, question: string, usePreparedKnowledge?: boolean): Promise<BackendAssistantPreviewResponse> {
+  async preview(
+    id: string,
+    question: string,
+    usePreparedKnowledge?: boolean,
+  ): Promise<BackendAssistantPreviewResponse> {
     return apiFetch<BackendAssistantPreviewResponse>(`/assistants/${id}/preview`, {
       method: "POST",
       body: JSON.stringify({ question, usePreparedKnowledge }),
@@ -153,6 +178,60 @@ export const backendAssistantsService = {
 
   async previewLogs(assistantId: string): Promise<PreviewLogsResponse> {
     return apiFetch<PreviewLogsResponse>(`/assistants/${assistantId}/preview-logs`);
+  },
+
+  async securityRulesList(assistantId: string): Promise<AssistantSecurityRuleItem[]> {
+    const response = await apiFetch<AssistantSecurityRulesListResponse>(
+      `/assistants/${assistantId}/security-rules`,
+    );
+    return response.items;
+  },
+
+  async securityRuleCreate(
+    assistantId: string,
+    input: {
+      name: string;
+      ruleType: string;
+      instruction: string;
+      sortOrder?: number;
+    },
+  ): Promise<AssistantSecurityRuleItem> {
+    return apiFetch<AssistantSecurityRuleItem>(`/assistants/${assistantId}/security-rules`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  async securityRuleUpdate(
+    assistantId: string,
+    ruleId: string,
+    input: {
+      name?: string;
+      ruleType?: string;
+      instruction?: string;
+      status?: BackendStatus;
+      sortOrder?: number;
+    },
+  ): Promise<AssistantSecurityRuleItem> {
+    return apiFetch<AssistantSecurityRuleItem>(
+      `/assistants/${assistantId}/security-rules/${ruleId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      },
+    );
+  },
+
+  async securityRuleDelete(
+    assistantId: string,
+    ruleId: string,
+  ): Promise<AssistantSecurityRuleItem> {
+    return apiFetch<AssistantSecurityRuleItem>(
+      `/assistants/${assistantId}/security-rules/${ruleId}`,
+      {
+        method: "DELETE",
+      },
+    );
   },
 
   async knowledgeList(assistantId: string): Promise<AssistantKnowledgeListResponse["items"]> {

@@ -1,4 +1,6 @@
 import type { AiChatCompletionMessage } from "../ai/ai.types";
+import type { OfficialBusinessContext } from "./official-business-context";
+import { buildStructuredBusinessAnswer } from "./official-business-context";
 
 type AssistantKnowledgeInput = {
   id: string;
@@ -24,10 +26,17 @@ type AssistantConversationPromptInput = {
   assistantDescription?: string | null;
   initialMessage?: string | null;
   instructions?: string | null;
+  safetyInstruction?: string | null;
+  securityRules?: Array<{
+    name: string;
+    ruleType: string;
+    instruction: string;
+  }>;
   avoidPhrases?: string | null;
   knowledgeItems: AssistantKnowledgeInput[];
   historyMessages: AssistantConversationHistoryMessage[];
   currentMessage: string;
+  officialBusinessContext?: OfficialBusinessContext | null;
   calendarContext?: {
     conversationId: string;
     contactPhone: string;
@@ -95,10 +104,28 @@ export function buildDeterministicAssistantResponse(input: {
   assistantName?: string | null;
   instructions?: string | null;
   knowledgeItems: AssistantKnowledgeInput[];
+  officialBusinessContext?: OfficialBusinessContext | null;
 }): {
   answer: string;
   sources: AssistantRuntimeSource[];
 } {
+  const structuredAnswer = buildStructuredBusinessAnswer(
+    input.question,
+    input.officialBusinessContext ?? null,
+  );
+
+  if (structuredAnswer) {
+    return {
+      answer: structuredAnswer.answer,
+      sources: [
+        {
+          id: "official-structured-data",
+          title: structuredAnswer.sourceTitle,
+        },
+      ],
+    };
+  }
+
   const keywords = extractKeywords(input.question);
   const rankedKnowledge = [...input.knowledgeItems].sort((left, right) => {
     const leftIndex = input.knowledgeItems.indexOf(left);
@@ -155,6 +182,13 @@ export function buildConversationPromptMessages(
     },
   ];
 
+  if (input.officialBusinessContext) {
+    messages.push({
+      role: "system",
+      content: input.officialBusinessContext.promptBlock,
+    });
+  }
+
   if (input.avoidPhrases && input.avoidPhrases.trim().length > 0) {
     messages.push({
       role: "system",
@@ -171,11 +205,13 @@ export function buildConversationPromptMessages(
       "- Antes de criar, remarcar ou cancelar um agendamento ou reserva, você DEVE apresentar um resumo claro dos detalhes (recurso/serviço, data, horário, nome e telefone) e pedir a confirmação explícita do usuário (ex: 'Confirmando: ..., posso confirmar?'). NUNCA chame as ferramentas de criação, remarcação ou cancelamento sem obter essa confirmação explícita.",
       `- Dados do cliente atual: Telefone: ${input.calendarContext.contactPhone}. ID da conversa: ${input.calendarContext.conversationId}.`,
       "- Nunca invente disponibilidade ou diga que reservou sem que a ferramenta retorne sucesso.",
-      "- Se a ferramenta falhar, explique de forma amigável sem expor detalhes técnicos e sem mostrar segredos."
+      "- Se a ferramenta falhar, explique de forma amigável sem expor detalhes técnicos e sem mostrar segredos.",
     ];
 
     if (input.calendarContext.serverTime) {
-      calendarLines.push(`- Data e hora atual do servidor: ${input.calendarContext.serverTime}. Sempre utilize esta referência para interpretar expressões de data/hora relativas informadas pelo usuário (ex: 'amanhã', 'hoje', 'terça que vem às 15h').`);
+      calendarLines.push(
+        `- Data e hora atual do servidor: ${input.calendarContext.serverTime}. Sempre utilize esta referência para interpretar expressões de data/hora relativas informadas pelo usuário (ex: 'amanhã', 'hoje', 'terça que vem às 15h').`,
+      );
     }
 
     if (input.calendarContext.resourcesContext) {
@@ -215,6 +251,23 @@ export function buildConversationPromptMessages(
     messages.push({
       role: "system",
       content: `Instruções do assistente (siga rigorosamente, estas têm prioridade sobre comportamentos padrão):\n${instructions}`,
+    });
+  }
+
+  const safetyInstruction = input.safetyInstruction?.trim();
+  const securityRules = (input.securityRules ?? []).filter((rule) => rule.instruction.trim());
+  if (safetyInstruction || securityRules.length > 0) {
+    const lines = [
+      "REGRAS DE SEGURANÇA DO ASSISTENTE (guardrails obrigatórios):",
+      safetyInstruction ? `- Regra legada: ${safetyInstruction}` : null,
+      ...securityRules.map(
+        (rule, index) =>
+          `- ${index + 1}. ${rule.name} (${rule.ruleType}): ${rule.instruction.trim()}`,
+      ),
+    ].filter((line): line is string => Boolean(line));
+    messages.push({
+      role: "system",
+      content: lines.join("\n"),
     });
   }
 

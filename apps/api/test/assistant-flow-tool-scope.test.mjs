@@ -45,8 +45,23 @@ function createFlow({
 function createState(overrides = {}) {
   return {
     apps: [{ id: "app-google-calendar", slug: "google_calendar" }],
-    installations: [{ id: "installation-1", companyId: "company-1", appId: "app-google-calendar", status: "ACTIVE" }],
-    credentials: [{ id: "credential-1", companyId: "company-1", installationId: "installation-1", provider: "google", status: "ACTIVE" }],
+    installations: [
+      {
+        id: "installation-1",
+        companyId: "company-1",
+        appId: "app-google-calendar",
+        status: "ACTIVE",
+      },
+    ],
+    credentials: [
+      {
+        id: "credential-1",
+        companyId: "company-1",
+        installationId: "installation-1",
+        provider: "google",
+        status: "ACTIVE",
+      },
+    ],
     resources: [
       {
         id: "resource-padel-1",
@@ -95,7 +110,17 @@ function createState(overrides = {}) {
         description: "Assistente de testes",
         businessAddress: null,
         businessCityRegion: null,
+        businessCity: null,
+        businessState: null,
+        businessPostalCode: null,
+        businessPhone: null,
+        businessWhatsapp: null,
+        businessWhatsappSupport: null,
+        websiteUrl: null,
+        timezone: null,
         googleMapsUrl: null,
+        weeklySchedule: null,
+        aiAlwaysAvailable: true,
         status: "ACTIVE",
         initialMessage: null,
         instructions: "Siga as regras.",
@@ -111,6 +136,10 @@ function createState(overrides = {}) {
         longitude: null,
         behavior: null,
         flows: [],
+        company: {
+          name: "Empresa Teste",
+          timezone: "America/Sao_Paulo",
+        },
       },
     ],
     conversations: [
@@ -143,19 +172,18 @@ function createState(overrides = {}) {
 
 function createMockPrisma(state) {
   const prisma = {
-    $transaction: async (callback) => callback({
-      assistantConversation: prisma.assistantConversation,
-      assistantConversationMessage: prisma.assistantConversationMessage,
-      assistantRuntimeLog: prisma.assistantRuntimeLog,
-    }),
+    $transaction: async (callback) =>
+      callback({
+        assistantConversation: prisma.assistantConversation,
+        assistantConversationMessage: prisma.assistantConversationMessage,
+        assistantRuntimeLog: prisma.assistantRuntimeLog,
+      }),
     app: {
       findUnique: async ({ where }) =>
         state.apps.find((app) => app.slug === where.slug || app.id === where.id) ?? null,
       findFirst: async ({ where }) =>
         state.apps.find(
-          (app) =>
-            (!where?.slug || app.slug === where.slug) &&
-            (!where?.id || app.id === where.id),
+          (app) => (!where?.slug || app.slug === where.slug) && (!where?.id || app.id === where.id),
         ) ?? null,
     },
     appInstallation: {
@@ -305,9 +333,27 @@ function createServices(state, options = {}) {
       toolCalls.push({ toolName: "calendar_checkAvailability", args: dto });
       const optionsByCategory =
         dto.category === "Padel"
-          ? [{ resourceId: "resource-padel-1", resourceName: "Padel Quadra 03", calendarId: "padel-1@example.com", startAt: "2026-07-07T22:00:00.000Z", endAt: "2026-07-07T23:00:00.000Z", label: "Padel Quadra 03 às 19:00" }]
+          ? [
+              {
+                resourceId: "resource-padel-1",
+                resourceName: "Padel Quadra 03",
+                calendarId: "padel-1@example.com",
+                startAt: "2026-07-07T22:00:00.000Z",
+                endAt: "2026-07-07T23:00:00.000Z",
+                label: "Padel Quadra 03 às 19:00",
+              },
+            ]
           : dto.category === "Beach Tennis"
-            ? [{ resourceId: "resource-beach-1", resourceName: "Beach Quadra 01", calendarId: "beach-1@example.com", startAt: "2026-07-07T22:00:00.000Z", endAt: "2026-07-07T23:00:00.000Z", label: "Beach Quadra 01 às 19:00" }]
+            ? [
+                {
+                  resourceId: "resource-beach-1",
+                  resourceName: "Beach Quadra 01",
+                  calendarId: "beach-1@example.com",
+                  startAt: "2026-07-07T22:00:00.000Z",
+                  endAt: "2026-07-07T23:00:00.000Z",
+                  label: "Beach Quadra 01 às 19:00",
+                },
+              ]
             : [];
       return {
         available: optionsByCategory.length > 0,
@@ -337,7 +383,9 @@ function createServices(state, options = {}) {
         flows.find((item) => {
           const keywords = item.triggerKeywords ? JSON.parse(item.triggerKeywords) : [];
           return keywords.some((keyword) => lower.includes(String(keyword).toLowerCase()));
-        }) ?? flows[0] ?? null;
+        }) ??
+        flows[0] ??
+        null;
 
       return {
         flowId: flow?.id ?? null,
@@ -392,7 +440,12 @@ test("Fase 1.6 aplica escopo de Padel e filtra resourcesContext", async () => {
     }),
   ];
 
-  const { service, aiCalls, toolCalls, state: runtimeState } = createServices(state, {
+  const {
+    service,
+    aiCalls,
+    toolCalls,
+    state: runtimeState,
+  } = createServices(state, {
     aiResponses: [
       {
         answer: "",
@@ -596,7 +649,11 @@ test("Fase 1.6 bloqueia createBooking fora do escopo do fluxo", async () => {
           },
         ],
       },
-      { answer: "Nao posso confirmar essa reserva nesse fluxo.", provider: "openai", model: "gpt-4o-mini" },
+      {
+        answer: "Nao posso confirmar essa reserva nesse fluxo.",
+        provider: "openai",
+        model: "gpt-4o-mini",
+      },
     ],
   });
 
@@ -626,7 +683,9 @@ test("Fluxo Aulas limita tools e nao expõe calendar_createBooking", async () =>
   ];
 
   const { service, aiCalls } = createServices(state, {
-    aiResponses: [{ answer: "Posso verificar horários para aula.", provider: "openai", model: "gpt-4o-mini" }],
+    aiResponses: [
+      { answer: "Posso verificar horários para aula.", provider: "openai", model: "gpt-4o-mini" },
+    ],
   });
 
   await service.sendMessage({
@@ -662,7 +721,10 @@ test("Fluxo fixed_message e fluxo financeiro handoff continuam sem LLM nem tool"
     tenant,
   });
 
-  assert.equal(goomerResponse.assistantMessage.content, "Pedidos pelo delivery seguem por outro canal.");
+  assert.equal(
+    goomerResponse.assistantMessage.content,
+    "Pedidos pelo delivery seguem por outro canal.",
+  );
   assert.equal(goomer.aiCalls.length, 0);
   assert.equal(goomer.state.logs.length, 0);
 

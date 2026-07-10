@@ -6,11 +6,21 @@ import { AppsModule } from "../apps/apps.module";
 import { AssistantKnowledgeModule } from "../assistant-knowledge/assistant-knowledge.module";
 import { PromptCompilerModule } from "../prompt-compiler/prompt-compiler.module";
 import { IntentRouterModule } from "../intent-router/intent-router.module";
+import { AssistantSecurityRulesModule } from "../assistant-security-rules/assistant-security-rules.module";
 import { AssistantConversationsController } from "./assistant-conversations.controller";
 import { AssistantConversationsService } from "./assistant-conversations.service";
 
 @Module({
-  imports: [AiModule, AttachmentInterpreterModule, ChatwootModule, AppsModule, AssistantKnowledgeModule, PromptCompilerModule, IntentRouterModule],
+  imports: [
+    AiModule,
+    AttachmentInterpreterModule,
+    ChatwootModule,
+    AppsModule,
+    AssistantKnowledgeModule,
+    PromptCompilerModule,
+    IntentRouterModule,
+    AssistantSecurityRulesModule,
+  ],
   controllers: [AssistantConversationsController],
   providers: [AssistantConversationsService],
   exports: [AssistantConversationsService],

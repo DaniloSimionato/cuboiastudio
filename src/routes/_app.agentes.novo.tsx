@@ -1,12 +1,25 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState, useRef, type ReactNode } from "react";
-import { ArrowLeft, Save, Pause, PlayCircle, Link2, Sparkles, AlertTriangle, Plus, Check } from "lucide-react";
+import {
+  ArrowLeft,
+  Save,
+  Pause,
+  PlayCircle,
+  Link2,
+  Sparkles,
+  AlertTriangle,
+  Plus,
+  Loader2,
+  Trash2,
+} from "lucide-react";
 
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { AiIntegrationTest } from "../components/assistant/AiIntegrationTest";
-import { AssistantBehaviorTab, type AssistantBehaviorTabRef } from "../components/assistant/AssistantBehaviorTab";
+import {
+  AssistantBehaviorTab,
+  type AssistantBehaviorTabRef,
+} from "../components/assistant/AssistantBehaviorTab";
 import { AssistantFlowsTab } from "../components/assistant/AssistantFlowsTab";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,7 +29,14 @@ import { Slider } from "@/components/ui/slider";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -24,7 +44,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, ErrorState, LoadingState } from "@/components/feedback/States";
@@ -33,17 +58,65 @@ import { chatwootSettingsService } from "@/services/chatwootSettingsService";
 import type {
   BackendAssistantKnowledgeItem,
   BackendAssistantPreviewResponse,
+  BusinessDayKey,
+  BusinessHoursSchedule,
   CurrentCompanyResponse,
   BackendAssistantListItem,
   ChatwootInboxConfigItem,
+  AssistantSecurityRuleItem,
 } from "@/types";
 import { currentCompanyService } from "@/services/currentCompanyService";
 import { toast } from "sonner";
 import { filterOperationalAssistants, resolveOperationalAssistantId } from "@/lib/assistants";
+import {
+  BUSINESS_DAYS,
+  buildCityRegion,
+  collapseToContinuousInterval,
+  createDefaultBusinessHoursSchedule,
+  hasBusinessHoursValidationErrors,
+  isValidIanaTimezone,
+  normalizeBusinessHoursSchedule,
+  validateBusinessHoursSchedule,
+} from "@/lib/business-hours";
 
 type RouteSearch = {
   assistantId?: string;
 };
+
+type SecurityRuleFormState = {
+  name: string;
+  ruleType: string;
+  instruction: string;
+  sortOrder: number;
+};
+
+const DEFAULT_SECURITY_RULE_FORM: SecurityRuleFormState = {
+  name: "",
+  ruleType: "Não inventar resposta",
+  instruction: "",
+  sortOrder: 0,
+};
+
+function splitCityRegion(value: string | null | undefined): { city: string; state: string } {
+  const text = value?.trim() ?? "";
+  if (!text) {
+    return { city: "", state: "" };
+  }
+
+  const parts = text
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length >= 2) {
+    return {
+      city: parts.slice(0, -1).join(", "),
+      state: parts.at(-1) ?? "",
+    };
+  }
+
+  return { city: text, state: "" };
+}
 
 export const Route = createFileRoute("/_app/agentes/novo")({
   validateSearch: (search: Record<string, unknown>): RouteSearch => ({
@@ -69,15 +142,27 @@ function NovoAgente() {
   const [description, setDescription] = useState("");
   const [businessAddress, setBusinessAddress] = useState("");
   const [businessCityRegion, setBusinessCityRegion] = useState("");
+  const [businessCity, setBusinessCity] = useState("");
+  const [businessState, setBusinessState] = useState("");
+  const [businessPostalCode, setBusinessPostalCode] = useState("");
+  const [businessPhone, setBusinessPhone] = useState("");
+  const [businessWhatsapp, setBusinessWhatsapp] = useState("");
+  const [businessWhatsappSupport, setBusinessWhatsappSupport] = useState("");
+  const [websiteUrl, setWebsiteUrl] = useState("");
+  const [timezone, setTimezone] = useState("America/Sao_Paulo");
   const [googleMapsUrl, setGoogleMapsUrl] = useState("");
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
-  const [weeklySchedule, setWeeklySchedule] = useState<any>(null);
+  const [weeklySchedule, setWeeklySchedule] = useState<BusinessHoursSchedule>(
+    createDefaultBusinessHoursSchedule(),
+  );
   const [aiAlwaysAvailable, setAiAlwaysAvailable] = useState(true);
   const [initialMessage, setInitialMessage] = useState("");
   const [ragEnabled, setRagEnabled] = useState(false);
   const [status, setStatus] = useState<"ACTIVE" | "INACTIVE">("ACTIVE");
-  const [instructions, setInstructions] = useState("Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.");
+  const [instructions, setInstructions] = useState(
+    "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
+  );
   const [personality, setPersonality] = useState("");
   const [toneOfVoice, setToneOfVoice] = useState("");
   const [avoidPhrases, setAvoidPhrases] = useState("");
@@ -95,14 +180,24 @@ function NovoAgente() {
 
   const [noAnswerMessage, setNoAnswerMessage] = useState("");
   const [securityInstructions, setSecurityInstructions] = useState("");
-  const [securityRules, setSecurityRules] = useState<{ id: string, name: string, type: string, instruction: string, active: boolean }[]>([
-    { id: '1', name: 'Não informar preços sem base', type: 'Não inventar resposta', instruction: 'Se o preço não estiver na base de conhecimento ou ferramenta autorizada, diga que não possui essa informação e ofereça transferência para atendimento humano.', active: true }
-  ]);
+  const [securityRules, setSecurityRules] = useState<AssistantSecurityRuleItem[]>([]);
+  const [securityRulesLoading, setSecurityRulesLoading] = useState(false);
+  const [securityRulesError, setSecurityRulesError] = useState<string | null>(null);
+  const [securityRuleSavingId, setSecurityRuleSavingId] = useState<string | null>(null);
+  const [securityRuleDeletingId, setSecurityRuleDeletingId] = useState<string | null>(null);
+  const [editingSecurityRule, setEditingSecurityRule] = useState<AssistantSecurityRuleItem | null>(
+    null,
+  );
+  const [securityRuleForm, setSecurityRuleForm] = useState<SecurityRuleFormState>(
+    DEFAULT_SECURITY_RULE_FORM,
+  );
   const [isReviewConfirmed, setIsReviewConfirmed] = useState(false);
   const [isAddingKnowledge, setIsAddingKnowledge] = useState(false);
   const [isAddingSecurityRule, setIsAddingSecurityRule] = useState(false);
   const [knowledgeFormId, setKnowledgeFormId] = useState<string | null>(null);
-  const [knowledgeFormType, setKnowledgeFormType] = useState<"TEXT" | "URL" | "CONVERSATION">("TEXT");
+  const [knowledgeFormType, setKnowledgeFormType] = useState<"TEXT" | "URL" | "CONVERSATION">(
+    "TEXT",
+  );
   const [knowledgeFormTitle, setKnowledgeFormTitle] = useState("");
   const [knowledgeFormContent, setKnowledgeFormContent] = useState("");
   const [knowledgeFormUrl, setKnowledgeFormUrl] = useState("");
@@ -136,24 +231,127 @@ function NovoAgente() {
     [publicationChannels, selectedAssistantId],
   );
 
-  const currentFormData = useMemo(() => ({
-    name, description, businessAddress, businessCityRegion, googleMapsUrl,
-    latitude, longitude, weeklySchedule,
-    aiAlwaysAvailable, initialMessage, ragEnabled, status, instructions,
-    personality, toneOfVoice, avoidPhrases, messageBufferEnabled,
-    messageBufferSeconds, splitResponseEnabled, splitResponseStyle,
-    model, temperature, noAnswerMessage, securityInstructions
-  }), [
-    name, description, businessAddress, businessCityRegion, googleMapsUrl,
-    latitude, longitude, weeklySchedule,
-    aiAlwaysAvailable, initialMessage, ragEnabled, status, instructions,
-    personality, toneOfVoice, avoidPhrases, messageBufferEnabled,
-    messageBufferSeconds, splitResponseEnabled, splitResponseStyle,
-    model, temperature, noAnswerMessage, securityInstructions
-  ]);
+  const currentFormData = useMemo(
+    () => ({
+      name,
+      description,
+      businessAddress,
+      businessCityRegion,
+      businessCity,
+      businessState,
+      businessPostalCode,
+      businessPhone,
+      businessWhatsapp,
+      businessWhatsappSupport,
+      websiteUrl,
+      timezone,
+      googleMapsUrl,
+      latitude,
+      longitude,
+      weeklySchedule,
+      aiAlwaysAvailable,
+      initialMessage,
+      ragEnabled,
+      status,
+      instructions,
+      personality,
+      toneOfVoice,
+      avoidPhrases,
+      messageBufferEnabled,
+      messageBufferSeconds,
+      splitResponseEnabled,
+      splitResponseStyle,
+      model,
+      temperature,
+      noAnswerMessage,
+      securityInstructions,
+    }),
+    [
+      name,
+      description,
+      businessAddress,
+      businessCityRegion,
+      businessCity,
+      businessState,
+      businessPostalCode,
+      businessPhone,
+      businessWhatsapp,
+      businessWhatsappSupport,
+      websiteUrl,
+      timezone,
+      googleMapsUrl,
+      latitude,
+      longitude,
+      weeklySchedule,
+      aiAlwaysAvailable,
+      initialMessage,
+      ragEnabled,
+      status,
+      instructions,
+      personality,
+      toneOfVoice,
+      avoidPhrases,
+      messageBufferEnabled,
+      messageBufferSeconds,
+      splitResponseEnabled,
+      splitResponseStyle,
+      model,
+      temperature,
+      noAnswerMessage,
+      securityInstructions,
+    ],
+  );
 
   const [initialFormData, setInitialFormData] = useState<any>(currentFormData);
-  const isDirty = useMemo(() => JSON.stringify(currentFormData) !== JSON.stringify(initialFormData), [currentFormData, initialFormData]);
+  const isDirty = useMemo(
+    () => JSON.stringify(currentFormData) !== JSON.stringify(initialFormData),
+    [currentFormData, initialFormData],
+  );
+  const businessHoursErrors = useMemo(
+    () => validateBusinessHoursSchedule(weeklySchedule),
+    [weeklySchedule],
+  );
+
+  const updateDayIntervals = (
+    day: BusinessDayKey,
+    intervals: BusinessHoursSchedule[BusinessDayKey],
+  ) => {
+    setWeeklySchedule((current) => ({
+      ...current,
+      [day]: intervals,
+    }));
+  };
+
+  const toggleDayOpen = (day: BusinessDayKey, open: boolean) => {
+    updateDayIntervals(day, open ? [{ start: "08:00", end: "18:00" }] : []);
+  };
+
+  const addDayInterval = (day: BusinessDayKey) => {
+    const currentIntervals = weeklySchedule[day] ?? [];
+    const fallbackStart = currentIntervals.at(-1)?.end ?? "13:30";
+    updateDayIntervals(day, [...currentIntervals, { start: fallbackStart, end: "18:00" }]);
+  };
+
+  const updateDayInterval = (
+    day: BusinessDayKey,
+    index: number,
+    field: "start" | "end",
+    value: string,
+  ) => {
+    updateDayIntervals(
+      day,
+      (weeklySchedule[day] ?? []).map((interval, intervalIndex) =>
+        intervalIndex === index ? { ...interval, [field]: value } : interval,
+      ),
+    );
+  };
+
+  const removeDayInterval = (day: BusinessDayKey, index: number) => {
+    updateDayIntervals(
+      day,
+      (weeklySchedule[day] ?? []).filter((_, intervalIndex) => intervalIndex !== index),
+    );
+  };
 
   const loadKnowledge = async (assistantId: string) => {
     if (!assistantId) {
@@ -163,6 +361,27 @@ function NovoAgente() {
 
     const items = await backendAssistantsService.knowledgeList(assistantId);
     setKnowledge(items);
+  };
+
+  const loadSecurityRules = async (assistantId: string) => {
+    if (!assistantId) {
+      setSecurityRules([]);
+      setSecurityRulesError(null);
+      return;
+    }
+
+    setSecurityRulesLoading(true);
+    setSecurityRulesError(null);
+    try {
+      const items = await backendAssistantsService.securityRulesList(assistantId);
+      setSecurityRules(items);
+    } catch (err) {
+      setSecurityRulesError(
+        err instanceof Error ? err.message : "Não foi possível carregar as regras de segurança.",
+      );
+    } finally {
+      setSecurityRulesLoading(false);
+    }
   };
 
   const loadPublicationChannels = async () => {
@@ -202,10 +421,18 @@ function NovoAgente() {
           setDescription("");
           setBusinessAddress("");
           setBusinessCityRegion("");
+          setBusinessCity("");
+          setBusinessState("");
+          setBusinessPostalCode("");
+          setBusinessPhone("");
+          setBusinessWhatsapp("");
+          setBusinessWhatsappSupport("");
+          setWebsiteUrl("");
+          setTimezone(companyResponse.company.timezone ?? "America/Sao_Paulo");
           setGoogleMapsUrl("");
           setLatitude("");
           setLongitude("");
-          setWeeklySchedule(null);
+          setWeeklySchedule(createDefaultBusinessHoursSchedule());
           setAiAlwaysAvailable(true);
           setPersonality("");
           setToneOfVoice("");
@@ -217,16 +444,41 @@ function NovoAgente() {
           setStatus("ACTIVE");
           setRagEnabled(false);
           setKnowledge([]);
-          
+
           setInitialFormData({
-            name: "", description: "", businessAddress: "", businessCityRegion: "",
-            googleMapsUrl: "", latitude: "", longitude: "",
-            weeklySchedule: null, aiAlwaysAvailable: true, initialMessage: "",
-            ragEnabled: false, status: "ACTIVE", instructions: "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
-            personality: "", toneOfVoice: "", avoidPhrases: "",
-            messageBufferEnabled: true, messageBufferSeconds: 6,
-            splitResponseEnabled: false, splitResponseStyle: "",
-            model: "", temperature: null, noAnswerMessage: "", securityInstructions: ""
+            name: "",
+            description: "",
+            businessAddress: "",
+            businessCityRegion: "",
+            businessCity: "",
+            businessState: "",
+            businessPostalCode: "",
+            businessPhone: "",
+            businessWhatsapp: "",
+            businessWhatsappSupport: "",
+            websiteUrl: "",
+            timezone: companyResponse.company.timezone ?? "America/Sao_Paulo",
+            googleMapsUrl: "",
+            latitude: "",
+            longitude: "",
+            weeklySchedule: createDefaultBusinessHoursSchedule(),
+            aiAlwaysAvailable: true,
+            initialMessage: "",
+            ragEnabled: false,
+            status: "ACTIVE",
+            instructions:
+              "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
+            personality: "",
+            toneOfVoice: "",
+            avoidPhrases: "",
+            messageBufferEnabled: true,
+            messageBufferSeconds: 6,
+            splitResponseEnabled: false,
+            splitResponseStyle: "",
+            model: "",
+            temperature: null,
+            noAnswerMessage: "",
+            securityInstructions: "",
           });
         }
       } catch (err) {
@@ -285,6 +537,8 @@ function NovoAgente() {
   useEffect(() => {
     if (!selectedAssistantId) {
       setKnowledge([]);
+      setSecurityRules([]);
+      setSecurityRulesError(null);
       return;
     }
 
@@ -295,13 +549,33 @@ function NovoAgente() {
         setDescription(assistant.description ?? "");
         setBusinessAddress(assistant.businessAddress ?? "");
         setBusinessCityRegion(assistant.businessCityRegion ?? "");
+        const parsedCityRegion = splitCityRegion(assistant.businessCityRegion);
+        setBusinessCity(assistant.businessCity ?? parsedCityRegion.city);
+        setBusinessState(assistant.businessState ?? parsedCityRegion.state);
+        setBusinessPostalCode(assistant.businessPostalCode ?? "");
+        setBusinessPhone(assistant.businessPhone ?? "");
+        setBusinessWhatsapp(assistant.businessWhatsapp ?? "");
+        setBusinessWhatsappSupport(assistant.businessWhatsappSupport ?? "");
+        setWebsiteUrl(assistant.websiteUrl ?? "");
+        setTimezone(assistant.timezone ?? company?.timezone ?? "America/Sao_Paulo");
         setGoogleMapsUrl(assistant.googleMapsUrl ?? "");
-        setLatitude(assistant.latitude !== null && assistant.latitude !== undefined ? String(assistant.latitude) : "");
-        setLongitude(assistant.longitude !== null && assistant.longitude !== undefined ? String(assistant.longitude) : "");
-        setWeeklySchedule(assistant.weeklySchedule ?? null);
+        setLatitude(
+          assistant.latitude !== null && assistant.latitude !== undefined
+            ? String(assistant.latitude)
+            : "",
+        );
+        setLongitude(
+          assistant.longitude !== null && assistant.longitude !== undefined
+            ? String(assistant.longitude)
+            : "",
+        );
+        setWeeklySchedule(normalizeBusinessHoursSchedule(assistant.weeklySchedule));
         setAiAlwaysAvailable(assistant.aiAlwaysAvailable ?? true);
         setInitialMessage(assistant.initialMessage ?? "");
-        setInstructions(assistant.instructions ?? "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.");
+        setInstructions(
+          assistant.instructions ??
+            "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
+        );
         setPersonality(assistant.personality ?? "");
         setToneOfVoice(assistant.toneOfVoice ?? "");
         setAvoidPhrases(assistant.avoidPhrases ?? "");
@@ -316,19 +590,36 @@ function NovoAgente() {
         setSplitResponseStyle(assistant.splitResponseStyle ?? "");
         setStatus(assistant.status);
         await loadKnowledge(selectedAssistantId);
-        
+        await loadSecurityRules(selectedAssistantId);
+
         setInitialFormData({
           name: assistant.name,
           description: assistant.description ?? "",
           businessAddress: assistant.businessAddress ?? "",
           businessCityRegion: assistant.businessCityRegion ?? "",
+          businessCity: assistant.businessCity ?? parsedCityRegion.city,
+          businessState: assistant.businessState ?? parsedCityRegion.state,
+          businessPostalCode: assistant.businessPostalCode ?? "",
+          businessPhone: assistant.businessPhone ?? "",
+          businessWhatsapp: assistant.businessWhatsapp ?? "",
+          businessWhatsappSupport: assistant.businessWhatsappSupport ?? "",
+          websiteUrl: assistant.websiteUrl ?? "",
+          timezone: assistant.timezone ?? company?.timezone ?? "America/Sao_Paulo",
           googleMapsUrl: assistant.googleMapsUrl ?? "",
-          latitude: assistant.latitude !== null && assistant.latitude !== undefined ? String(assistant.latitude) : "",
-          longitude: assistant.longitude !== null && assistant.longitude !== undefined ? String(assistant.longitude) : "",
-          weeklySchedule: assistant.weeklySchedule ?? null,
+          latitude:
+            assistant.latitude !== null && assistant.latitude !== undefined
+              ? String(assistant.latitude)
+              : "",
+          longitude:
+            assistant.longitude !== null && assistant.longitude !== undefined
+              ? String(assistant.longitude)
+              : "",
+          weeklySchedule: normalizeBusinessHoursSchedule(assistant.weeklySchedule),
           aiAlwaysAvailable: assistant.aiAlwaysAvailable ?? true,
           initialMessage: assistant.initialMessage ?? "",
-          instructions: assistant.instructions ?? "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
+          instructions:
+            assistant.instructions ??
+            "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
           personality: assistant.personality ?? "",
           toneOfVoice: assistant.toneOfVoice ?? "",
           avoidPhrases: assistant.avoidPhrases ?? "",
@@ -341,13 +632,13 @@ function NovoAgente() {
           messageBufferSeconds: assistant.messageBufferSeconds ?? 6,
           splitResponseEnabled: assistant.splitResponseEnabled ?? false,
           splitResponseStyle: assistant.splitResponseStyle ?? "",
-          status: assistant.status
+          status: assistant.status,
         });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Não foi possível carregar o assistente.");
       }
     })();
-  }, [selectedAssistantId]);
+  }, [selectedAssistantId, company?.timezone]);
 
   const handleCreateNew = () => {
     setSelectedAssistantId("");
@@ -355,13 +646,23 @@ function NovoAgente() {
     setDescription("");
     setBusinessAddress("");
     setBusinessCityRegion("");
+    setBusinessCity("");
+    setBusinessState("");
+    setBusinessPostalCode("");
+    setBusinessPhone("");
+    setBusinessWhatsapp("");
+    setBusinessWhatsappSupport("");
+    setWebsiteUrl("");
+    setTimezone(company?.timezone ?? "America/Sao_Paulo");
     setGoogleMapsUrl("");
     setLatitude("");
     setLongitude("");
-    setWeeklySchedule(null);
+    setWeeklySchedule(createDefaultBusinessHoursSchedule());
     setAiAlwaysAvailable(true);
     setInitialMessage("");
-    setInstructions("Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.");
+    setInstructions(
+      "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
+    );
     setPersonality("");
     setToneOfVoice("");
     setAvoidPhrases("");
@@ -376,21 +677,157 @@ function NovoAgente() {
     setPreviewResult(null);
     setNoAnswerMessage("");
     setSecurityInstructions("");
-    setSecurityRules([
-      { id: '1', name: 'Não informar preços sem base', type: 'Não inventar resposta', instruction: 'Se o preço não estiver na base de conhecimento ou ferramenta autorizada, diga que não possui essa informação e ofereça transferência para atendimento humano.', active: true }
-    ]);
+    setSecurityRules([]);
+    setSecurityRulesError(null);
     setIsReviewConfirmed(false);
-    
+
     setInitialFormData({
-      name: "", description: "", businessAddress: "", businessCityRegion: "",
-      googleMapsUrl: "", latitude: "", longitude: "",
-      weeklySchedule: null, aiAlwaysAvailable: true, initialMessage: "",
-      ragEnabled: false, status: "ACTIVE", instructions: "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
-      personality: "", toneOfVoice: "", avoidPhrases: "",
-      messageBufferEnabled: true, messageBufferSeconds: 6,
-      splitResponseEnabled: false, splitResponseStyle: "",
-      model: "", temperature: null, noAnswerMessage: "", securityInstructions: ""
+      name: "",
+      description: "",
+      businessAddress: "",
+      businessCityRegion: "",
+      businessCity: "",
+      businessState: "",
+      businessPostalCode: "",
+      businessPhone: "",
+      businessWhatsapp: "",
+      businessWhatsappSupport: "",
+      websiteUrl: "",
+      timezone: company?.timezone ?? "America/Sao_Paulo",
+      googleMapsUrl: "",
+      latitude: "",
+      longitude: "",
+      weeklySchedule: createDefaultBusinessHoursSchedule(),
+      aiAlwaysAvailable: true,
+      initialMessage: "",
+      ragEnabled: false,
+      status: "ACTIVE",
+      instructions:
+        "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
+      personality: "",
+      toneOfVoice: "",
+      avoidPhrases: "",
+      messageBufferEnabled: true,
+      messageBufferSeconds: 6,
+      splitResponseEnabled: false,
+      splitResponseStyle: "",
+      model: "",
+      temperature: null,
+      noAnswerMessage: "",
+      securityInstructions: "",
     });
+  };
+
+  const openCreateSecurityRule = () => {
+    if (!selectedAssistantId) {
+      toast.warning("Salve ou selecione um assistente antes de criar regras de segurança.");
+      return;
+    }
+
+    setEditingSecurityRule(null);
+    setSecurityRuleForm({
+      ...DEFAULT_SECURITY_RULE_FORM,
+      sortOrder: securityRules.length,
+    });
+    setIsAddingSecurityRule(true);
+  };
+
+  const openEditSecurityRule = (rule: AssistantSecurityRuleItem) => {
+    setEditingSecurityRule(rule);
+    setSecurityRuleForm({
+      name: rule.name,
+      ruleType: rule.ruleType,
+      instruction: rule.instruction,
+      sortOrder: rule.sortOrder,
+    });
+    setIsAddingSecurityRule(true);
+  };
+
+  const handleSaveSecurityRule = async () => {
+    if (!selectedAssistantId) {
+      toast.warning("Salve ou selecione um assistente antes de criar regras de segurança.");
+      return;
+    }
+
+    if (!securityRuleForm.name.trim() || !securityRuleForm.instruction.trim()) {
+      toast.error("Preencha nome e instrução da regra.");
+      return;
+    }
+
+    const savingId = editingSecurityRule?.id ?? "new";
+    setSecurityRuleSavingId(savingId);
+    try {
+      if (editingSecurityRule) {
+        await backendAssistantsService.securityRuleUpdate(
+          selectedAssistantId,
+          editingSecurityRule.id,
+          {
+            name: securityRuleForm.name.trim(),
+            ruleType: securityRuleForm.ruleType.trim(),
+            instruction: securityRuleForm.instruction.trim(),
+            sortOrder: securityRuleForm.sortOrder,
+          },
+        );
+        toast.success("Regra de segurança atualizada.");
+      } else {
+        await backendAssistantsService.securityRuleCreate(selectedAssistantId, {
+          name: securityRuleForm.name.trim(),
+          ruleType: securityRuleForm.ruleType.trim(),
+          instruction: securityRuleForm.instruction.trim(),
+          sortOrder: securityRuleForm.sortOrder,
+        });
+        toast.success("Regra de segurança criada.");
+      }
+
+      setIsAddingSecurityRule(false);
+      setEditingSecurityRule(null);
+      setSecurityRuleForm(DEFAULT_SECURITY_RULE_FORM);
+      await loadSecurityRules(selectedAssistantId);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Não foi possível salvar a regra.");
+    } finally {
+      setSecurityRuleSavingId(null);
+    }
+  };
+
+  const toggleSecurityRuleStatus = async (rule: AssistantSecurityRuleItem, active: boolean) => {
+    if (!selectedAssistantId) {
+      return;
+    }
+
+    setSecurityRuleSavingId(rule.id);
+    try {
+      await backendAssistantsService.securityRuleUpdate(selectedAssistantId, rule.id, {
+        status: active ? "ACTIVE" : "INACTIVE",
+      });
+      await loadSecurityRules(selectedAssistantId);
+      toast.success(active ? "Regra ativada." : "Regra desativada.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Não foi possível atualizar a regra.");
+    } finally {
+      setSecurityRuleSavingId(null);
+    }
+  };
+
+  const removeSecurityRule = async (rule: AssistantSecurityRuleItem) => {
+    if (!selectedAssistantId) {
+      return;
+    }
+
+    if (!window.confirm(`Excluir a regra "${rule.name}"?`)) {
+      return;
+    }
+
+    setSecurityRuleDeletingId(rule.id);
+    try {
+      await backendAssistantsService.securityRuleDelete(selectedAssistantId, rule.id);
+      await loadSecurityRules(selectedAssistantId);
+      toast.success("Regra excluída.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Não foi possível excluir a regra.");
+    } finally {
+      setSecurityRuleDeletingId(null);
+    }
   };
 
   const handleSave = async () => {
@@ -399,7 +836,17 @@ function NovoAgente() {
     }
 
     if (googleMapsUrl.trim() && !/^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(googleMapsUrl.trim())) {
-      toast.error("O link do Google Maps deve ser uma URL válida (ex: https://maps.google.com/...)");
+      toast.error(
+        "O link do Google Maps deve ser uma URL válida (ex: https://maps.google.com/...)",
+      );
+      return;
+    }
+    if (websiteUrl.trim() && !/^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(websiteUrl.trim())) {
+      toast.error("O site deve ser uma URL válida (ex: https://empresa.com.br).");
+      return;
+    }
+    if (!isValidIanaTimezone(timezone.trim())) {
+      toast.error("Use um timezone IANA válido, como America/Campo_Grande ou America/Sao_Paulo.");
       return;
     }
     if (latitude.trim() && isNaN(Number(latitude))) {
@@ -410,18 +857,31 @@ function NovoAgente() {
       toast.error("A longitude deve ser um número válido.");
       return;
     }
+    if (hasBusinessHoursValidationErrors(weeklySchedule)) {
+      toast.error("Revise os horários de atendimento. Há intervalos inválidos ou sobrepostos.");
+      return;
+    }
 
     setSaving(true);
     try {
       const payloadLatitude = latitude.trim() ? parseFloat(latitude) : null;
       const payloadLongitude = longitude.trim() ? parseFloat(longitude) : null;
+      const payloadCityRegion = buildCityRegion(businessCity, businessState, businessCityRegion);
 
       if (selectedAssistantId) {
         const updated = await backendAssistantsService.update(selectedAssistantId, {
           name: name.trim(),
           description: description.trim() || null,
           businessAddress: businessAddress.trim() || null,
-          businessCityRegion: businessCityRegion.trim() || null,
+          businessCityRegion: payloadCityRegion,
+          businessCity: businessCity.trim() || null,
+          businessState: businessState.trim() || null,
+          businessPostalCode: businessPostalCode.trim() || null,
+          businessPhone: businessPhone.trim() || null,
+          businessWhatsapp: businessWhatsapp.trim() || null,
+          businessWhatsappSupport: businessWhatsappSupport.trim() || null,
+          websiteUrl: websiteUrl.trim() || null,
+          timezone: timezone.trim(),
           googleMapsUrl: googleMapsUrl.trim() || null,
           latitude: payloadLatitude,
           longitude: payloadLongitude,
@@ -447,13 +907,32 @@ function NovoAgente() {
         setDescription(updated.description ?? "");
         setBusinessAddress(updated.businessAddress ?? "");
         setBusinessCityRegion(updated.businessCityRegion ?? "");
+        setBusinessCity(updated.businessCity ?? "");
+        setBusinessState(updated.businessState ?? "");
+        setBusinessPostalCode(updated.businessPostalCode ?? "");
+        setBusinessPhone(updated.businessPhone ?? "");
+        setBusinessWhatsapp(updated.businessWhatsapp ?? "");
+        setBusinessWhatsappSupport(updated.businessWhatsappSupport ?? "");
+        setWebsiteUrl(updated.websiteUrl ?? "");
+        setTimezone(updated.timezone ?? company?.timezone ?? "America/Sao_Paulo");
         setGoogleMapsUrl(updated.googleMapsUrl ?? "");
-        setLatitude(updated.latitude !== null && updated.latitude !== undefined ? String(updated.latitude) : "");
-        setLongitude(updated.longitude !== null && updated.longitude !== undefined ? String(updated.longitude) : "");
-        setWeeklySchedule(updated.weeklySchedule ?? null);
+        setLatitude(
+          updated.latitude !== null && updated.latitude !== undefined
+            ? String(updated.latitude)
+            : "",
+        );
+        setLongitude(
+          updated.longitude !== null && updated.longitude !== undefined
+            ? String(updated.longitude)
+            : "",
+        );
+        setWeeklySchedule(normalizeBusinessHoursSchedule(updated.weeklySchedule));
         setAiAlwaysAvailable(updated.aiAlwaysAvailable ?? true);
         setInitialMessage(updated.initialMessage ?? "");
-        setInstructions(updated.instructions ?? "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.");
+        setInstructions(
+          updated.instructions ??
+            "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
+        );
         setPersonality(updated.personality ?? "");
         setToneOfVoice(updated.toneOfVoice ?? "");
         setAvoidPhrases(updated.avoidPhrases ?? "");
@@ -475,16 +954,30 @@ function NovoAgente() {
             items.map((item) => (item.id === updatedStatus.id ? updatedStatus : item)),
           );
         }
-        
+
         setInitialFormData({
           name: updated.name,
           description: updated.description ?? "",
           businessAddress: updated.businessAddress ?? "",
           businessCityRegion: updated.businessCityRegion ?? "",
+          businessCity: updated.businessCity ?? "",
+          businessState: updated.businessState ?? "",
+          businessPostalCode: updated.businessPostalCode ?? "",
+          businessPhone: updated.businessPhone ?? "",
+          businessWhatsapp: updated.businessWhatsapp ?? "",
+          businessWhatsappSupport: updated.businessWhatsappSupport ?? "",
+          websiteUrl: updated.websiteUrl ?? "",
+          timezone: updated.timezone ?? company?.timezone ?? "America/Sao_Paulo",
           googleMapsUrl: updated.googleMapsUrl ?? "",
-          latitude: updated.latitude !== null && updated.latitude !== undefined ? String(updated.latitude) : "",
-          longitude: updated.longitude !== null && updated.longitude !== undefined ? String(updated.longitude) : "",
-          weeklySchedule: updated.weeklySchedule ?? null,
+          latitude:
+            updated.latitude !== null && updated.latitude !== undefined
+              ? String(updated.latitude)
+              : "",
+          longitude:
+            updated.longitude !== null && updated.longitude !== undefined
+              ? String(updated.longitude)
+              : "",
+          weeklySchedule: normalizeBusinessHoursSchedule(updated.weeklySchedule),
           aiAlwaysAvailable: updated.aiAlwaysAvailable ?? true,
           initialMessage: updated.initialMessage ?? "",
           instructions: updated.instructions ?? "",
@@ -500,7 +993,7 @@ function NovoAgente() {
           messageBufferSeconds: updated.messageBufferSeconds ?? 6,
           splitResponseEnabled: updated.splitResponseEnabled ?? false,
           splitResponseStyle: updated.splitResponseStyle ?? "",
-          status: status
+          status: status,
         });
 
         await behaviorTabRef.current?.saveBehavior(selectedAssistantId);
@@ -511,7 +1004,15 @@ function NovoAgente() {
           name: name.trim(),
           description: description.trim() || null,
           businessAddress: businessAddress.trim() || null,
-          businessCityRegion: businessCityRegion.trim() || null,
+          businessCityRegion: payloadCityRegion,
+          businessCity: businessCity.trim() || null,
+          businessState: businessState.trim() || null,
+          businessPostalCode: businessPostalCode.trim() || null,
+          businessPhone: businessPhone.trim() || null,
+          businessWhatsapp: businessWhatsapp.trim() || null,
+          businessWhatsappSupport: businessWhatsappSupport.trim() || null,
+          websiteUrl: websiteUrl.trim() || null,
+          timezone: timezone.trim(),
           googleMapsUrl: googleMapsUrl.trim() || null,
           latitude: payloadLatitude,
           longitude: payloadLongitude,
@@ -538,9 +1039,26 @@ function NovoAgente() {
         setDescription(created.description ?? "");
         setBusinessAddress(created.businessAddress ?? "");
         setBusinessCityRegion(created.businessCityRegion ?? "");
+        setBusinessCity(created.businessCity ?? "");
+        setBusinessState(created.businessState ?? "");
+        setBusinessPostalCode(created.businessPostalCode ?? "");
+        setBusinessPhone(created.businessPhone ?? "");
+        setBusinessWhatsapp(created.businessWhatsapp ?? "");
+        setBusinessWhatsappSupport(created.businessWhatsappSupport ?? "");
+        setWebsiteUrl(created.websiteUrl ?? "");
+        setTimezone(created.timezone ?? company?.timezone ?? "America/Sao_Paulo");
         setGoogleMapsUrl(created.googleMapsUrl ?? "");
-        setLatitude(created.latitude !== null && created.latitude !== undefined ? String(created.latitude) : "");
-        setLongitude(created.longitude !== null && created.longitude !== undefined ? String(created.longitude) : "");
+        setLatitude(
+          created.latitude !== null && created.latitude !== undefined
+            ? String(created.latitude)
+            : "",
+        );
+        setLongitude(
+          created.longitude !== null && created.longitude !== undefined
+            ? String(created.longitude)
+            : "",
+        );
+        setWeeklySchedule(normalizeBusinessHoursSchedule(created.weeklySchedule));
         setInitialMessage(created.initialMessage ?? "");
         setInstructions(created.instructions ?? "");
         setModel(created.model ?? "");
@@ -550,16 +1068,30 @@ function NovoAgente() {
         setRagEnabled(created.ragEnabled ?? false);
         setStatus(created.status);
         await loadKnowledge(created.id);
-        
+
         setInitialFormData({
           name: created.name,
           description: created.description ?? "",
           businessAddress: created.businessAddress ?? "",
           businessCityRegion: created.businessCityRegion ?? "",
+          businessCity: created.businessCity ?? "",
+          businessState: created.businessState ?? "",
+          businessPostalCode: created.businessPostalCode ?? "",
+          businessPhone: created.businessPhone ?? "",
+          businessWhatsapp: created.businessWhatsapp ?? "",
+          businessWhatsappSupport: created.businessWhatsappSupport ?? "",
+          websiteUrl: created.websiteUrl ?? "",
+          timezone: created.timezone ?? company?.timezone ?? "America/Sao_Paulo",
           googleMapsUrl: created.googleMapsUrl ?? "",
-          latitude: created.latitude !== null && created.latitude !== undefined ? String(created.latitude) : "",
-          longitude: created.longitude !== null && created.longitude !== undefined ? String(created.longitude) : "",
-          weeklySchedule: created.weeklySchedule ?? null,
+          latitude:
+            created.latitude !== null && created.latitude !== undefined
+              ? String(created.latitude)
+              : "",
+          longitude:
+            created.longitude !== null && created.longitude !== undefined
+              ? String(created.longitude)
+              : "",
+          weeklySchedule: normalizeBusinessHoursSchedule(created.weeklySchedule),
           aiAlwaysAvailable: created.aiAlwaysAvailable ?? true,
           initialMessage: created.initialMessage ?? "",
           instructions: created.instructions ?? "",
@@ -575,7 +1107,7 @@ function NovoAgente() {
           messageBufferSeconds: created.messageBufferSeconds ?? 6,
           splitResponseEnabled: created.splitResponseEnabled ?? false,
           splitResponseStyle: created.splitResponseStyle ?? "",
-          status: created.status
+          status: created.status,
         });
 
         await behaviorTabRef.current?.saveBehavior(created.id);
@@ -609,7 +1141,11 @@ function NovoAgente() {
 
     setPreviewLoading(true);
     try {
-      const response = await backendAssistantsService.preview(selectedAssistantId, previewQuestion, usePreparedKnowledge);
+      const response = await backendAssistantsService.preview(
+        selectedAssistantId,
+        previewQuestion,
+        usePreparedKnowledge,
+      );
       setPreviewResult(response);
     } finally {
       setPreviewLoading(false);
@@ -650,7 +1186,7 @@ function NovoAgente() {
     if (!knowledgeFormTitle.trim() || !knowledgeFormContent.trim() || !selectedAssistantId) {
       return;
     }
-    
+
     setKnowledgeSaving(true);
     try {
       if (knowledgeFormId) {
@@ -660,8 +1196,8 @@ function NovoAgente() {
           status: knowledgeFormStatus,
           metadata: {
             type: knowledgeFormType,
-            ...(knowledgeFormType === "URL" ? { sourceUrl: knowledgeFormUrl.trim() } : {})
-          }
+            ...(knowledgeFormType === "URL" ? { sourceUrl: knowledgeFormUrl.trim() } : {}),
+          },
         });
       } else {
         await backendAssistantsService.knowledgeCreate(selectedAssistantId, {
@@ -669,8 +1205,8 @@ function NovoAgente() {
           content: knowledgeFormContent.trim(),
           metadata: {
             type: knowledgeFormType,
-            ...(knowledgeFormType === "URL" ? { sourceUrl: knowledgeFormUrl.trim() } : {})
-          }
+            ...(knowledgeFormType === "URL" ? { sourceUrl: knowledgeFormUrl.trim() } : {}),
+          },
         });
       }
       await loadKnowledge(selectedAssistantId);
@@ -684,7 +1220,7 @@ function NovoAgente() {
 
   const handlePrepareForAI = async (item: BackendAssistantKnowledgeItem) => {
     if (!selectedAssistantId) return;
-    
+
     if (item.status === "INACTIVE") {
       alert("Ative este conhecimento antes de prepará-lo para a IA.");
       return;
@@ -703,10 +1239,16 @@ function NovoAgente() {
     }
   };
 
-  const activeKnowledgeCount = knowledge.filter(k => k.status === "ACTIVE").length;
-  const readyKnowledgeCount = knowledge.filter(k => k.status === "ACTIVE" && k.processingStatus === "READY").length;
-  const errorKnowledgeCount = knowledge.filter(k => k.status === "ACTIVE" && k.processingStatus === "ERROR").length;
-  const draftKnowledgeCount = knowledge.filter(k => k.status === "ACTIVE" && k.processingStatus === "DRAFT").length;
+  const activeKnowledgeCount = knowledge.filter((k) => k.status === "ACTIVE").length;
+  const readyKnowledgeCount = knowledge.filter(
+    (k) => k.status === "ACTIVE" && k.processingStatus === "READY",
+  ).length;
+  const errorKnowledgeCount = knowledge.filter(
+    (k) => k.status === "ACTIVE" && k.processingStatus === "ERROR",
+  ).length;
+  const draftKnowledgeCount = knowledge.filter(
+    (k) => k.status === "ACTIVE" && k.processingStatus === "DRAFT",
+  ).length;
 
   const handleSearchKnowledge = async () => {
     if (!selectedAssistantId) return;
@@ -714,19 +1256,24 @@ function NovoAgente() {
       alert("Digite uma pergunta para testar.");
       return;
     }
-    
+
     setIsSearching(true);
     setSearchError(null);
     setSearchResults(null);
 
     try {
-      const response = await backendAssistantsService.knowledgeSearch(selectedAssistantId, searchQuery);
+      const response = await backendAssistantsService.knowledgeSearch(
+        selectedAssistantId,
+        searchQuery,
+      );
       setSearchResults(response.results);
       if (response.results.length === 0) {
         setSearchError("Nenhum conhecimento preparado foi encontrado para essa pergunta.");
       }
     } catch (err) {
-      setSearchError("Erro ao buscar conhecimento: " + (err instanceof Error ? err.message : String(err)));
+      setSearchError(
+        "Erro ao buscar conhecimento: " + (err instanceof Error ? err.message : String(err)),
+      );
     } finally {
       setIsSearching(false);
     }
@@ -738,7 +1285,6 @@ function NovoAgente() {
         title="Criar / Editar Agente"
         actions={
           <div className="flex items-center gap-2">
-            
             <Button variant="outline" asChild size="sm">
               <Link to="/agentes">
                 <ArrowLeft className="h-4 w-4 mr-1" /> Voltar
@@ -747,18 +1293,23 @@ function NovoAgente() {
             {selectedAssistantId && (
               <div className="flex items-center gap-2 mr-2">
                 <StatusBadge status={isActive ? "ativo" : "pausado"} />
-                <Button 
-                  variant={isActive ? "outline" : "destructive"} 
-                  onClick={handleToggleStatus} 
+                <Button
+                  variant={isActive ? "outline" : "destructive"}
+                  onClick={handleToggleStatus}
                   size="sm"
                 >
-                  {isActive ? <Pause className="h-4 w-4 mr-1" /> : <PlayCircle className="h-4 w-4 mr-1" />}
+                  {isActive ? (
+                    <Pause className="h-4 w-4 mr-1" />
+                  ) : (
+                    <PlayCircle className="h-4 w-4 mr-1" />
+                  )}
                   {isActive ? "Inativar" : "Ativar"}
                 </Button>
               </div>
             )}
             <Button onClick={() => void handleSave()} disabled={saving || !name.trim()} size="sm">
-              <Save className="h-4 w-4 mr-1" /> {saving ? "Salvando..." : (selectedAssistantId ? "Salvar" : "Criar")}
+              <Save className="h-4 w-4 mr-1" />{" "}
+              {saving ? "Salvando..." : selectedAssistantId ? "Salvar" : "Criar"}
             </Button>
           </div>
         }
@@ -845,7 +1396,9 @@ function NovoAgente() {
                             if (googleMapsUrl.trim()) {
                               window.open(googleMapsUrl.trim(), "_blank");
                             } else {
-                              toast.warning("Adicione um link do Google Maps para testar a localização.");
+                              toast.warning(
+                                "Adicione um link do Google Maps para testar a localização.",
+                              );
                             }
                           }}
                         >
@@ -853,7 +1406,8 @@ function NovoAgente() {
                         </Button>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Use o link do Google Maps para que o agente possa enviar a localização quando o cliente perguntar onde fica a empresa.
+                        Use o link do Google Maps para que o agente possa enviar a localização
+                        quando o cliente perguntar onde fica a empresa.
                       </p>
 
                       <div className="grid md:grid-cols-2 gap-4 pt-2">
@@ -864,12 +1418,44 @@ function NovoAgente() {
                             placeholder="Ex: Av. Paulista, 1000 - Bela Vista"
                           />
                         </Field>
-                        <Field label="Cidade / Região" className="md:col-span-2">
+                        <Field label="Cidade">
+                          <Input
+                            value={businessCity}
+                            onChange={(e) => setBusinessCity(e.target.value)}
+                            placeholder="Ex: Dourados"
+                          />
+                        </Field>
+                        <Field label="Estado / UF">
+                          <Input
+                            value={businessState}
+                            onChange={(e) => setBusinessState(e.target.value)}
+                            placeholder="Ex: MS"
+                          />
+                        </Field>
+                        <Field label="CEP">
+                          <Input
+                            value={businessPostalCode}
+                            onChange={(e) => setBusinessPostalCode(e.target.value)}
+                            placeholder="Ex: 79800-000"
+                          />
+                        </Field>
+                        <Field label="Cidade / Região (legado)">
                           <Input
                             value={businessCityRegion}
                             onChange={(e) => setBusinessCityRegion(e.target.value)}
-                            placeholder="Ex: São Paulo, SP"
+                            placeholder="Ex: Dourados, MS"
                           />
+                        </Field>
+                        <Field label="Fuso horário da empresa" className="md:col-span-2">
+                          <Input
+                            value={timezone}
+                            onChange={(e) => setTimezone(e.target.value)}
+                            placeholder="Ex: America/Campo_Grande"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Usado para responder corretamente perguntas sobre horário de
+                            funcionamento, abertura, fechamento, almoço, coleta e disponibilidade.
+                          </p>
                         </Field>
                         <Field label="Link do Google Maps" className="md:col-span-2">
                           <Input
@@ -897,17 +1483,54 @@ function NovoAgente() {
                   </div>
 
                   <div className="pt-4 border-t space-y-4">
+                    <h3 className="text-lg font-semibold">Contatos oficiais</h3>
+                    <div className="grid md:grid-cols-2 gap-4">
+                      <Field label="Telefone">
+                        <Input
+                          value={businessPhone}
+                          onChange={(e) => setBusinessPhone(e.target.value)}
+                          placeholder="Ex: (67) 3422-0000"
+                        />
+                      </Field>
+                      <Field label="WhatsApp principal">
+                        <Input
+                          value={businessWhatsapp}
+                          onChange={(e) => setBusinessWhatsapp(e.target.value)}
+                          placeholder="Ex: (67) 99999-9999"
+                        />
+                      </Field>
+                      <Field label="WhatsApp assistência">
+                        <Input
+                          value={businessWhatsappSupport}
+                          onChange={(e) => setBusinessWhatsappSupport(e.target.value)}
+                          placeholder="Ex: (67) 98888-8888"
+                        />
+                      </Field>
+                      <Field label="Site">
+                        <Input
+                          value={websiteUrl}
+                          onChange={(e) => setWebsiteUrl(e.target.value)}
+                          placeholder="Ex: https://www.empresa.com.br"
+                        />
+                      </Field>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t space-y-4">
                     <h3 className="text-lg font-semibold">Horário de atendimento</h3>
-                    
+
                     <div className="flex items-center justify-between bg-secondary/20 p-4 rounded-lg border">
                       <div className="space-y-0.5 max-w-[80%]">
-                        <Label htmlFor="ai-always-available" className="text-base font-medium cursor-pointer">
-                          IA atende 24 horas
+                        <Label
+                          htmlFor="ai-always-available"
+                          className="text-base font-medium cursor-pointer"
+                        >
+                          IA responde fora do horário de atendimento
                         </Label>
                         <p className="text-sm text-muted-foreground">
-                          {aiAlwaysAvailable 
-                            ? "Quando ativado, o agente pode responder clientes mesmo fora do horário de atendimento. O horário abaixo serve como referência oficial da empresa." 
-                            : "Quando desativado, fora do horário o agente poderá usar a mensagem de indisponibilidade configurada."}
+                          {aiAlwaysAvailable
+                            ? "Quando ativado, a IA pode responder clientes mesmo fora do horário oficial da empresa. Isso não altera o horário de funcionamento da empresa."
+                            : "Quando desativado, fora do horário oficial a IA pode usar a mensagem de indisponibilidade configurada."}
                         </p>
                       </div>
                       <Switch
@@ -917,58 +1540,107 @@ function NovoAgente() {
                       />
                     </div>
 
-                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
-                      {[
-                        { id: 'monday', label: 'Segunda-feira', short: 'Seg' },
-                        { id: 'tuesday', label: 'Terça-feira', short: 'Ter' },
-                        { id: 'wednesday', label: 'Quarta-feira', short: 'Qua' },
-                        { id: 'thursday', label: 'Quinta-feira', short: 'Qui' },
-                        { id: 'friday', label: 'Sexta-feira', short: 'Sex' },
-                        { id: 'saturday', label: 'Sábado', short: 'Sáb' },
-                        { id: 'sunday', label: 'Domingo', short: 'Dom' }
-                      ].map(day => {
-                        const defaultDayConfig = day.id === 'sunday' 
-                          ? { open: false, start: "08:00", end: "18:00" } 
-                          : { open: true, start: "08:00", end: "18:00" };
-                        const dayConfig = weeklySchedule?.[day.id] || defaultDayConfig;
-                        const updateDay = (key: string, value: any) => {
-                          setWeeklySchedule((prev: any) => ({
-                            ...(prev || {}),
-                            [day.id]: { ...dayConfig, [key]: value }
-                          }));
-                        };
-                        
+                    <div className="grid gap-4">
+                      {BUSINESS_DAYS.map((day) => {
+                        const intervals = weeklySchedule[day.id] ?? [];
+                        const isOpen = intervals.length > 0;
+
                         return (
-                          <div key={day.id} className="flex flex-col gap-2 p-3 border rounded-md bg-card">
-                            <div className="flex items-center justify-between">
-                              <span className="font-medium text-sm" title={day.label}>{day.short}</span>
-                              <Switch 
-                                checked={dayConfig.open} 
-                                onCheckedChange={(c) => updateDay('open', c)} 
-                              />
+                          <div key={day.id} className="rounded-lg border bg-card p-4 space-y-3">
+                            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                              <div>
+                                <div className="font-medium">{day.label}</div>
+                                <div className="text-xs text-muted-foreground">
+                                  {isOpen ? "Aberto" : "Fechado"}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <Label htmlFor={`open-${day.id}`} className="text-sm">
+                                  Aberto
+                                </Label>
+                                <Switch
+                                  id={`open-${day.id}`}
+                                  checked={isOpen}
+                                  onCheckedChange={(checked) => toggleDayOpen(day.id, checked)}
+                                />
+                              </div>
                             </div>
-                            <div className="text-xs text-muted-foreground">{dayConfig.open ? "Aberto" : "Fechado"}</div>
-                            {dayConfig.open && (
-                              <div className="flex flex-col gap-1.5 mt-1">
-                                <div className="flex items-center gap-1">
-                                  <Input 
-                                    type="time" 
-                                    className="h-8 text-xs px-2 w-full" 
-                                    value={dayConfig.start} 
-                                    onChange={(e) => updateDay('start', e.target.value)} 
-                                  />
+
+                            {isOpen && (
+                              <div className="space-y-3">
+                                <div className="flex flex-wrap gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      updateDayIntervals(
+                                        day.id,
+                                        collapseToContinuousInterval(intervals),
+                                      )
+                                    }
+                                  >
+                                    Não fecha para almoço
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => addDayInterval(day.id)}
+                                  >
+                                    <Plus className="h-4 w-4 mr-1" />
+                                    Adicionar intervalo
+                                  </Button>
                                 </div>
-                                <div className="flex items-center gap-1 text-center justify-center">
-                                  <span className="text-[10px] text-muted-foreground">até</span>
+
+                                <div className="space-y-2">
+                                  {intervals.map((interval, index) => (
+                                    <div
+                                      key={`${day.id}-${index}`}
+                                      className="flex flex-col gap-2 rounded-md border p-3 md:flex-row md:items-end"
+                                    >
+                                      <Field label={`Intervalo ${index + 1}`} className="md:w-40">
+                                        <Input
+                                          type="time"
+                                          value={interval.start}
+                                          onChange={(e) =>
+                                            updateDayInterval(
+                                              day.id,
+                                              index,
+                                              "start",
+                                              e.target.value,
+                                            )
+                                          }
+                                        />
+                                      </Field>
+                                      <Field label="Até" className="md:w-40">
+                                        <Input
+                                          type="time"
+                                          value={interval.end}
+                                          onChange={(e) =>
+                                            updateDayInterval(day.id, index, "end", e.target.value)
+                                          }
+                                        />
+                                      </Field>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => removeDayInterval(day.id, index)}
+                                        className="md:mb-0.5"
+                                      >
+                                        <Trash2 className="h-4 w-4 mr-1" />
+                                        Remover
+                                      </Button>
+                                    </div>
+                                  ))}
                                 </div>
-                                <div className="flex items-center gap-1">
-                                  <Input 
-                                    type="time" 
-                                    className="h-8 text-xs px-2 w-full" 
-                                    value={dayConfig.end} 
-                                    onChange={(e) => updateDay('end', e.target.value)} 
-                                  />
-                                </div>
+
+                                {businessHoursErrors[day.id] && (
+                                  <p className="text-xs text-red-600">
+                                    {businessHoursErrors[day.id]}
+                                  </p>
+                                )}
                               </div>
                             )}
                           </div>
@@ -1009,8 +1681,13 @@ function NovoAgente() {
                         </div>
                       </Field>
                       <Field label="Tom de voz">
-                        <Select value={toneOfVoice || "Profissional"} onValueChange={(val) => setToneOfVoice(val)}>
-                          <SelectTrigger><SelectValue placeholder="Selecione o tom de voz" /></SelectTrigger>
+                        <Select
+                          value={toneOfVoice || "Profissional"}
+                          onValueChange={(val) => setToneOfVoice(val)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecione o tom de voz" />
+                          </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="Profissional">Profissional</SelectItem>
                             <SelectItem value="Amigável">Amigável</SelectItem>
@@ -1035,11 +1712,15 @@ function NovoAgente() {
                     <div className="p-4 border rounded-lg bg-secondary/10">
                       <div className="flex items-center justify-between mb-4">
                         <div>
-                          <Label htmlFor="message-buffer" className="text-base font-semibold cursor-pointer">
+                          <Label
+                            htmlFor="message-buffer"
+                            className="text-base font-semibold cursor-pointer"
+                          >
                             Comportamento de mensagens
                           </Label>
                           <p className="text-sm text-muted-foreground">
-                            Aguardar mensagens antes de responder (evita que o agente responda várias vezes quando o cliente manda mensagens quebradas).
+                            Aguardar mensagens antes de responder (evita que o agente responda
+                            várias vezes quando o cliente manda mensagens quebradas).
                           </p>
                         </div>
                         <Switch
@@ -1060,13 +1741,20 @@ function NovoAgente() {
                             />
                           </Field>
                           <Field label="Estilo da resposta">
-                             <Select value={splitResponseStyle || "SINGLE"} onValueChange={(val) => setSplitResponseStyle(val)}>
-                               <SelectTrigger><SelectValue placeholder="Selecione o estilo" /></SelectTrigger>
-                               <SelectContent>
-                                 <SelectItem value="SINGLE">Mensagem Única</SelectItem>
-                                 <SelectItem value="NATURAL_BLOCKS">Blocos Naturais (Separados)</SelectItem>
-                               </SelectContent>
-                             </Select>
+                            <Select
+                              value={splitResponseStyle || "SINGLE"}
+                              onValueChange={(val) => setSplitResponseStyle(val)}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="Selecione o estilo" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="SINGLE">Mensagem Única</SelectItem>
+                                <SelectItem value="NATURAL_BLOCKS">
+                                  Blocos Naturais (Separados)
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
                           </Field>
                         </div>
                       )}
@@ -1085,18 +1773,27 @@ function NovoAgente() {
                     </Field>
 
                     <Accordion type="single" collapsible className="w-full">
-                      <AccordionItem value="fallback-message" className="border rounded-lg px-4 py-1 bg-secondary/5">
+                      <AccordionItem
+                        value="fallback-message"
+                        className="border rounded-lg px-4 py-1 bg-secondary/5"
+                      >
                         <AccordionTrigger className="hover:no-underline py-3">
                           <div className="flex flex-col text-left space-y-1">
-                            <span className="font-semibold text-sm">Mensagem quando não souber responder</span>
+                            <span className="font-semibold text-sm">
+                              Mensagem quando não souber responder
+                            </span>
                             <span className="text-xs text-muted-foreground font-normal">
-                              {noAnswerMessage ? noAnswerMessage.substring(0, 80) + (noAnswerMessage.length > 80 ? "..." : "") : "Resposta padrão quando a IA não encontra informação."}
+                              {noAnswerMessage
+                                ? noAnswerMessage.substring(0, 80) +
+                                  (noAnswerMessage.length > 80 ? "..." : "")
+                                : "Resposta padrão quando a IA não encontra informação."}
                             </span>
                           </div>
                         </AccordionTrigger>
                         <AccordionContent className="pt-2 pb-4">
                           <p className="text-xs text-muted-foreground mb-3">
-                            Mensagem usada quando o agente não tiver informação suficiente para responder.
+                            Mensagem usada quando o agente não tiver informação suficiente para
+                            responder.
                           </p>
                           <Textarea
                             rows={3}
@@ -1123,8 +1820,9 @@ function NovoAgente() {
                 <CardContent className="p-6 space-y-6">
                   <div className="bg-primary/5 border border-primary/20 p-4 rounded-lg">
                     <p className="text-sm text-primary">
-                      <strong>Dica:</strong> Use esta área apenas para regras que valem para todo o atendimento. 
-                      Informações específicas da empresa devem ir na Base de Conhecimento. Regras por assunto devem ir em Fluxos.
+                      <strong>Dica:</strong> Use esta área apenas para regras que valem para todo o
+                      atendimento. Informações específicas da empresa devem ir na Base de
+                      Conhecimento. Regras por assunto devem ir em Fluxos.
                     </p>
                   </div>
 
@@ -1143,21 +1841,26 @@ function NovoAgente() {
                   {/* Advanced Settings Accordion */}
                   <div className="pt-6 border-t mt-6">
                     <h3 className="text-lg font-semibold mb-4">Regras Avançadas</h3>
-                    
+
                     <Accordion type="single" collapsible className="w-full">
-                      
-                      <AccordionItem value="avoid-phrases" className="border rounded-lg mb-3 px-4 py-1 bg-secondary/5">
+                      <AccordionItem
+                        value="avoid-phrases"
+                        className="border rounded-lg mb-3 px-4 py-1 bg-secondary/5"
+                      >
                         <AccordionTrigger className="hover:no-underline py-3">
                           <div className="flex flex-col text-left space-y-1">
                             <span className="font-semibold text-sm">Frases a evitar</span>
                             <span className="text-xs text-muted-foreground font-normal">
-                              {avoidPhrases ? "Evita repetições configuradas." : "Evita repetições como 'é só me avisar'."}
+                              {avoidPhrases
+                                ? "Evita repetições configuradas."
+                                : "Evita repetições como 'é só me avisar'."}
                             </span>
                           </div>
                         </AccordionTrigger>
                         <AccordionContent className="pt-2 pb-4">
                           <p className="text-xs text-muted-foreground mb-3">
-                            Liste frases, vícios de linguagem ou encerramentos que o agente deve evitar repetir.
+                            Liste frases, vícios de linguagem ou encerramentos que o agente deve
+                            evitar repetir.
                           </p>
                           <Textarea
                             rows={3}
@@ -1168,7 +1871,10 @@ function NovoAgente() {
                         </AccordionContent>
                       </AccordionItem>
 
-                      <AccordionItem value="guardrails" className="border rounded-lg px-4 py-1 bg-secondary/5">
+                      <AccordionItem
+                        value="guardrails"
+                        className="border rounded-lg px-4 py-1 bg-secondary/5"
+                      >
                         <AccordionTrigger className="hover:no-underline py-3">
                           <div className="flex flex-col text-left space-y-1">
                             <span className="font-semibold text-sm">Guardrails básicos</span>
@@ -1179,7 +1885,8 @@ function NovoAgente() {
                         </AccordionTrigger>
                         <AccordionContent className="pt-2 pb-4">
                           <p className="text-xs text-muted-foreground mb-3">
-                            Defina limites obrigatórios, como não inventar informações, não expor dados internos e transferir para humano quando necessário.
+                            Defina limites obrigatórios, como não inventar informações, não expor
+                            dados internos e transferir para humano quando necessário.
                           </p>
                           <Textarea
                             rows={4}
@@ -1189,24 +1896,31 @@ function NovoAgente() {
                           />
                         </AccordionContent>
                       </AccordionItem>
-                      
                     </Accordion>
                   </div>
 
                   <div className="flex items-center justify-between bg-primary/5 p-4 rounded-lg border border-primary/10 mt-6">
                     <div className="space-y-0.5 max-w-[80%]">
-                      <Label htmlFor="use-rag-production" className="text-base font-medium cursor-pointer">
+                      <Label
+                        htmlFor="use-rag-production"
+                        className="text-base font-medium cursor-pointer"
+                      >
                         Usar conhecimento preparado no atendimento real
                       </Label>
                       <p className="text-sm text-muted-foreground">
-                        Busca respostas baseadas nos arquivos de conhecimento antes de responder ao cliente.
+                        Busca respostas baseadas nos arquivos de conhecimento antes de responder ao
+                        cliente.
                       </p>
-                      {ragEnabled && knowledge.filter(k => k.status === "ACTIVE" && k.processingStatus === "READY").length === 0 && (
-                        <div className="text-amber-600 text-xs mt-2 flex items-center">
-                          <AlertTriangle className="h-3 w-3 mr-1" />
-                          Você não possui conhecimentos ATIVOS e PREPARADOS. O agente responderá normalmente sem contexto até que os arquivos estejam prontos.
-                        </div>
-                      )}
+                      {ragEnabled &&
+                        knowledge.filter(
+                          (k) => k.status === "ACTIVE" && k.processingStatus === "READY",
+                        ).length === 0 && (
+                          <div className="text-amber-600 text-xs mt-2 flex items-center">
+                            <AlertTriangle className="h-3 w-3 mr-1" />
+                            Você não possui conhecimentos ATIVOS e PREPARADOS. O agente responderá
+                            normalmente sem contexto até que os arquivos estejam prontos.
+                          </div>
+                        )}
                     </div>
                     <Switch
                       id="use-rag-production"
@@ -1223,20 +1937,34 @@ function NovoAgente() {
                 <CardHeader className="flex flex-row items-center justify-between">
                   <CardTitle className="text-base">Conhecimentos do agente</CardTitle>
                   <Dialog open={isAddingKnowledge} onOpenChange={setIsAddingKnowledge}>
-                    <Button size="sm" onClick={handleOpenNewKnowledge} disabled={!selectedAssistantId}>
+                    <Button
+                      size="sm"
+                      onClick={handleOpenNewKnowledge}
+                      disabled={!selectedAssistantId}
+                    >
                       <Plus className="h-4 w-4 mr-2" /> Adicionar conhecimento
                     </Button>
                     <DialogContent className="max-w-xl">
                       <DialogHeader>
-                        <DialogTitle>{knowledgeFormId ? "Editar Conhecimento" : "Adicionar Conhecimento"}</DialogTitle>
+                        <DialogTitle>
+                          {knowledgeFormId ? "Editar Conhecimento" : "Adicionar Conhecimento"}
+                        </DialogTitle>
                       </DialogHeader>
                       <div className="grid gap-4 py-4">
                         <Field label="Título">
-                          <Input value={knowledgeFormTitle} onChange={(e) => setKnowledgeFormTitle(e.target.value)} />
+                          <Input
+                            value={knowledgeFormTitle}
+                            onChange={(e) => setKnowledgeFormTitle(e.target.value)}
+                          />
                         </Field>
                         <Field label="Tipo de conhecimento">
-                          <Select value={knowledgeFormType} onValueChange={(val: any) => setKnowledgeFormType(val)}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
+                          <Select
+                            value={knowledgeFormType}
+                            onValueChange={(val: any) => setKnowledgeFormType(val)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="TEXT">Texto manual</SelectItem>
                               <SelectItem value="URL">URL (Site)</SelectItem>
@@ -1246,31 +1974,53 @@ function NovoAgente() {
                         </Field>
                         {knowledgeFormType === "URL" && (
                           <Field label="URL">
-                            <Input placeholder="https://exemplo.com/faq" value={knowledgeFormUrl} onChange={(e) => setKnowledgeFormUrl(e.target.value)} />
+                            <Input
+                              placeholder="https://exemplo.com/faq"
+                              value={knowledgeFormUrl}
+                              onChange={(e) => setKnowledgeFormUrl(e.target.value)}
+                            />
                           </Field>
                         )}
                         <Field label="Conteúdo (Base para a IA ler)">
-                          <Textarea rows={6} value={knowledgeFormContent} onChange={(e) => setKnowledgeFormContent(e.target.value)} />
+                          <Textarea
+                            rows={6}
+                            value={knowledgeFormContent}
+                            onChange={(e) => setKnowledgeFormContent(e.target.value)}
+                          />
                         </Field>
                         {knowledgeFormId && (
-                           <div className="flex items-center gap-2 mt-2">
-                              <Checkbox 
-                                id="knowledge-active" 
-                                checked={knowledgeFormStatus === "ACTIVE"} 
-                                onCheckedChange={(c) => setKnowledgeFormStatus(c ? "ACTIVE" : "INACTIVE")} 
-                              />
-                              <Label htmlFor="knowledge-active">Este conhecimento está ativo e liberado para uso</Label>
-                           </div>
+                          <div className="flex items-center gap-2 mt-2">
+                            <Checkbox
+                              id="knowledge-active"
+                              checked={knowledgeFormStatus === "ACTIVE"}
+                              onCheckedChange={(c) =>
+                                setKnowledgeFormStatus(c ? "ACTIVE" : "INACTIVE")
+                              }
+                            />
+                            <Label htmlFor="knowledge-active">
+                              Este conhecimento está ativo e liberado para uso
+                            </Label>
+                          </div>
                         )}
                         <p className="text-xs text-muted-foreground mt-2 border-l-2 pl-3 border-amber-300">
-                           Este conteúdo ficará salvo na base de conhecimento do agente. A preparação para a IA ler e analisar o texto será feita na próxima etapa.
+                          Este conteúdo ficará salvo na base de conhecimento do agente. A preparação
+                          para a IA ler e analisar o texto será feita na próxima etapa.
                         </p>
                       </div>
                       <DialogFooter>
-                         <Button variant="outline" onClick={() => setIsAddingKnowledge(false)}>Cancelar</Button>
-                         <Button onClick={() => void handleSaveKnowledge()} disabled={knowledgeSaving || !knowledgeFormTitle.trim() || !knowledgeFormContent.trim()}>
-                            {knowledgeSaving ? "Salvando..." : "Salvar"}
-                         </Button>
+                        <Button variant="outline" onClick={() => setIsAddingKnowledge(false)}>
+                          Cancelar
+                        </Button>
+                        <Button
+                          onClick={() => void handleSaveKnowledge()}
+                          disabled={
+                            knowledgeSaving ||
+                            !knowledgeFormTitle.trim() ||
+                            !knowledgeFormContent.trim()
+                          }
+                        >
+                          {knowledgeSaving ? "Salvando..." : "Salvar"}
+                        </Button>
                       </DialogFooter>
                     </DialogContent>
                   </Dialog>
@@ -1288,42 +2038,79 @@ function NovoAgente() {
                     />
                   ) : (
                     knowledge.map((item) => (
-                      <div key={item.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border rounded-lg">
+                      <div
+                        key={item.id}
+                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border rounded-lg"
+                      >
                         <div className="flex-1 min-w-0">
-                          <div className="font-medium cursor-pointer hover:underline" onClick={() => handleOpenEditKnowledge(item)}>{item.title}</div>
+                          <div
+                            className="font-medium cursor-pointer hover:underline"
+                            onClick={() => handleOpenEditKnowledge(item)}
+                          >
+                            {item.title}
+                          </div>
                           <div className="flex items-center gap-2 mt-1">
                             <span className="text-xs px-2 py-0.5 bg-muted rounded-md border">
-                               {item.metadata?.type === "URL" ? "URL" : item.metadata?.type === "CONVERSATION" ? "Conversa de Exemplo" : "Texto Manual"}
+                              {item.metadata?.type === "URL"
+                                ? "URL"
+                                : item.metadata?.type === "CONVERSATION"
+                                  ? "Conversa de Exemplo"
+                                  : "Texto Manual"}
                             </span>
                             <span className="text-xs text-muted-foreground">
-                               Atualizado em {new Date(item.updatedAt).toLocaleDateString()}
+                              Atualizado em {new Date(item.updatedAt).toLocaleDateString()}
                             </span>
                             {item.processingStatus === "READY" && (
-                              <span className="text-xs px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-md">Pronto para IA</span>
+                              <span className="text-xs px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-md">
+                                Pronto para IA
+                              </span>
                             )}
                             {item.processingStatus === "PROCESSING" && (
-                              <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-800 rounded-md">Processando...</span>
+                              <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-800 rounded-md">
+                                Processando...
+                              </span>
                             )}
                             {item.processingStatus === "ERROR" && (
-                              <span className="text-xs px-2 py-0.5 bg-red-100 text-red-800 rounded-md" title={item.processingError || "Erro desconhecido"}>Erro</span>
+                              <span
+                                className="text-xs px-2 py-0.5 bg-red-100 text-red-800 rounded-md"
+                                title={item.processingError || "Erro desconhecido"}
+                              >
+                                Erro
+                              </span>
                             )}
                             {item.processingStatus === "DRAFT" && (
-                              <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-800 rounded-md">Pendente</span>
+                              <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-800 rounded-md">
+                                Pendente
+                              </span>
                             )}
                           </div>
                         </div>
                         <div className="flex items-center gap-3">
                           <StatusBadge status={item.status === "ACTIVE" ? "ativo" : "pausado"} />
-                          <Button 
-                            variant="secondary" 
-                            size="sm" 
+                          <Button
+                            variant="secondary"
+                            size="sm"
                             onClick={() => void handlePrepareForAI(item)}
-                            disabled={preparingKnowledgeId === item.id || item.status === "INACTIVE"}
+                            disabled={
+                              preparingKnowledgeId === item.id || item.status === "INACTIVE"
+                            }
                             title="A preparação organiza o conteúdo para que a IA encontre as informações durante o atendimento."
                           >
-                            {preparingKnowledgeId === item.id ? "Preparando..." : item.processingStatus === "ERROR" ? "Tentar Novamente" : item.processingStatus === "READY" ? "Atualizar preparação" : "Preparar conhecimento"}
+                            {preparingKnowledgeId === item.id
+                              ? "Preparando..."
+                              : item.processingStatus === "ERROR"
+                                ? "Tentar Novamente"
+                                : item.processingStatus === "READY"
+                                  ? "Atualizar preparação"
+                                  : "Preparar conhecimento"}
                           </Button>
-                          <Button variant="outline" size="sm" onClick={() => handleOpenEditKnowledge(item)}>Editar</Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleOpenEditKnowledge(item)}
+                          >
+                            Editar
+                          </Button>
                         </div>
                       </div>
                     ))
@@ -1343,26 +2130,30 @@ function NovoAgente() {
                 <CardHeader>
                   <CardTitle className="text-base">Testar busca no conhecimento</CardTitle>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Use este teste para ver se a IA encontra informações dentro dos conhecimentos preparados.
+                    Use este teste para ver se a IA encontra informações dentro dos conhecimentos
+                    preparados.
                   </p>
                 </CardHeader>
                 <CardContent className="p-6 pt-0 space-y-4">
                   {readyKnowledgeCount === 0 ? (
                     <div className="flex items-center gap-2 text-amber-600 bg-amber-50 p-3 rounded-lg border border-amber-200">
                       <AlertTriangle className="h-4 w-4 shrink-0" />
-                      <span className="text-sm font-medium">Você precisa ter pelo menos um conhecimento preparado (Pronto) para testar a busca.</span>
+                      <span className="text-sm font-medium">
+                        Você precisa ter pelo menos um conhecimento preparado (Pronto) para testar a
+                        busca.
+                      </span>
                     </div>
                   ) : (
                     <>
                       <div className="flex gap-2">
-                        <Input 
-                          placeholder="Digite uma pergunta para testar a busca..." 
+                        <Input
+                          placeholder="Digite uma pergunta para testar a busca..."
                           value={searchQuery}
                           onChange={(e) => setSearchQuery(e.target.value)}
                           onKeyDown={(e) => e.key === "Enter" && handleSearchKnowledge()}
                         />
-                        <Button 
-                          onClick={() => void handleSearchKnowledge()} 
+                        <Button
+                          onClick={() => void handleSearchKnowledge()}
                           disabled={isSearching || !searchQuery.trim()}
                         >
                           {isSearching ? "Buscando..." : "Buscar relevante"}
@@ -1379,10 +2170,13 @@ function NovoAgente() {
                         <div className="space-y-3 mt-4">
                           <div className="text-sm font-medium">Resultados encontrados:</div>
                           {searchResults.map((res, i) => (
-                            <div key={res.chunkId} className="p-3 border rounded-lg bg-muted/20 space-y-2">
+                            <div
+                              key={res.chunkId}
+                              className="p-3 border rounded-lg bg-muted/20 space-y-2"
+                            >
                               <div className="flex items-center justify-between">
                                 <div className="font-medium text-sm">
-                                  #{i+1} - {res.knowledgeTitle}
+                                  #{i + 1} - {res.knowledgeTitle}
                                 </div>
                                 <span className="text-xs px-2 py-0.5 bg-primary/10 text-primary rounded-md font-semibold">
                                   Score: {(res.score * 100).toFixed(1)}%
@@ -1428,34 +2222,113 @@ function NovoAgente() {
                 <CardHeader className="flex flex-row items-center justify-between">
                   <div>
                     <CardTitle className="text-base">Regras de Segurança e Gatilhos</CardTitle>
-                    <p className="text-sm text-muted-foreground mt-1">Configure limites de comportamento (Guardrails) e ações automáticas (Gatilhos).</p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Configure limites de comportamento (Guardrails) e ações automáticas
+                      (Gatilhos).
+                    </p>
                   </div>
-                  <Dialog open={isAddingSecurityRule} onOpenChange={setIsAddingSecurityRule}>
+                  <Dialog
+                    open={isAddingSecurityRule}
+                    onOpenChange={(open) => {
+                      setIsAddingSecurityRule(open);
+                      if (!open) {
+                        setEditingSecurityRule(null);
+                        setSecurityRuleForm(DEFAULT_SECURITY_RULE_FORM);
+                      }
+                    }}
+                  >
                     <DialogTrigger asChild>
-                      <Button size="sm"><Plus className="h-4 w-4 mr-2" /> Adicionar regra de segurança</Button>
+                      <Button
+                        size="sm"
+                        onClick={openCreateSecurityRule}
+                        disabled={!selectedAssistantId}
+                      >
+                        <Plus className="h-4 w-4 mr-2" /> Adicionar regra de segurança
+                      </Button>
                     </DialogTrigger>
                     <DialogContent>
                       <DialogHeader>
-                        <DialogTitle>Nova Regra de Segurança</DialogTitle>
+                        <DialogTitle>
+                          {editingSecurityRule
+                            ? "Editar Regra de Segurança"
+                            : "Nova Regra de Segurança"}
+                        </DialogTitle>
                       </DialogHeader>
                       <div className="space-y-4 py-4">
                         <Field label="Nome da regra">
-                          <Input placeholder="Ex: Não divulgar descontos" />
+                          <Input
+                            value={securityRuleForm.name}
+                            onChange={(event) =>
+                              setSecurityRuleForm((current) => ({
+                                ...current,
+                                name: event.target.value,
+                              }))
+                            }
+                            placeholder="Ex: Não divulgar descontos"
+                          />
                         </Field>
                         <Field label="Tipo da regra">
-                          <Select defaultValue="bloquear">
-                            <SelectTrigger><SelectValue /></SelectTrigger>
+                          <Select
+                            value={securityRuleForm.ruleType}
+                            onValueChange={(value) =>
+                              setSecurityRuleForm((current) => ({ ...current, ruleType: value }))
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="bloquear">Bloquear assunto</SelectItem>
-                              <SelectItem value="nao-inventar">Não inventar resposta</SelectItem>
-                              <SelectItem value="transferir">Transferir para humano</SelectItem>
+                              <SelectItem value="Bloquear assunto">Bloquear assunto</SelectItem>
+                              <SelectItem value="Não inventar resposta">
+                                Não inventar resposta
+                              </SelectItem>
+                              <SelectItem value="Escalar para humano">
+                                Escalar para humano
+                              </SelectItem>
                             </SelectContent>
                           </Select>
                         </Field>
+                        <Field label="Instrução da regra">
+                          <Textarea
+                            rows={5}
+                            value={securityRuleForm.instruction}
+                            onChange={(event) =>
+                              setSecurityRuleForm((current) => ({
+                                ...current,
+                                instruction: event.target.value,
+                              }))
+                            }
+                            placeholder="Descreva de forma objetiva o comportamento obrigatório do assistente."
+                          />
+                        </Field>
+                        <Field label="Ordem">
+                          <Input
+                            type="number"
+                            min={0}
+                            value={securityRuleForm.sortOrder}
+                            onChange={(event) =>
+                              setSecurityRuleForm((current) => ({
+                                ...current,
+                                sortOrder: Number(event.target.value || 0),
+                              }))
+                            }
+                          />
+                        </Field>
                       </div>
                       <DialogFooter>
-                        <Button variant="outline" onClick={() => setIsAddingSecurityRule(false)}>Cancelar</Button>
-                        <Button onClick={() => setIsAddingSecurityRule(false)}>Salvar regra</Button>
+                        <Button variant="outline" onClick={() => setIsAddingSecurityRule(false)}>
+                          Cancelar
+                        </Button>
+                        <Button
+                          onClick={() => void handleSaveSecurityRule()}
+                          disabled={
+                            Boolean(securityRuleSavingId) ||
+                            !securityRuleForm.name.trim() ||
+                            !securityRuleForm.instruction.trim()
+                          }
+                        >
+                          {securityRuleSavingId ? "Salvando..." : "Salvar regra"}
+                        </Button>
                       </DialogFooter>
                     </DialogContent>
                   </Dialog>
@@ -1467,23 +2340,82 @@ function NovoAgente() {
                       <AlertTriangle className="h-4 w-4 text-amber-500" />
                       Guardrails (Limites e Restrições)
                     </h3>
-                    {securityRules.filter(r => r.type !== 'transferir').map(rule => (
-                      <div key={rule.id} className="flex flex-col sm:flex-row gap-4 p-4 border rounded-lg">
-                        <div className="flex-1">
-                          <div className="font-medium flex items-center gap-2">
-                            {rule.name}
-                            <Badge variant="outline">{rule.type}</Badge>
-                          </div>
-                          <div className="text-sm text-muted-foreground mt-1">{rule.instruction}</div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <div className="text-xs font-medium">{rule.active ? 'Ativa' : 'Inativa'}</div>
-                          <Checkbox checked={rule.active} onCheckedChange={(c) => {
-                            setSecurityRules(prev => prev.map(r => r.id === rule.id ? { ...r, active: !!c } : r));
-                          }} />
-                        </div>
+                    {!selectedAssistantId ? (
+                      <div className="text-sm text-muted-foreground p-4 border border-dashed rounded-lg text-center">
+                        Salve ou selecione um assistente para gerenciar regras de segurança.
                       </div>
-                    ))}
+                    ) : securityRulesLoading ? (
+                      <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground p-4 border rounded-lg">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Carregando regras de segurança...
+                      </div>
+                    ) : securityRulesError ? (
+                      <div className="text-sm text-destructive p-4 border border-destructive/30 bg-destructive/5 rounded-lg">
+                        {securityRulesError}
+                      </div>
+                    ) : securityRules.length === 0 ? (
+                      <div className="text-sm text-muted-foreground p-4 border border-dashed rounded-lg text-center">
+                        Nenhuma regra de segurança cadastrada. Adicione guardrails para orientar o
+                        runtime da IA.
+                      </div>
+                    ) : (
+                      securityRules.map((rule) => {
+                        const isRuleActive = rule.status === "ACTIVE";
+                        const isBusy =
+                          securityRuleSavingId === rule.id || securityRuleDeletingId === rule.id;
+                        return (
+                          <div
+                            key={rule.id}
+                            className="flex flex-col sm:flex-row gap-4 p-4 border rounded-lg"
+                          >
+                            <div className="flex-1">
+                              <div className="font-medium flex items-center gap-2">
+                                {rule.name}
+                                <Badge variant="outline">{rule.ruleType}</Badge>
+                              </div>
+                              <div className="text-sm text-muted-foreground mt-1">
+                                {rule.instruction}
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="text-xs font-medium">
+                                {isRuleActive ? "Ativa" : "Inativa"}
+                              </div>
+                              <Checkbox
+                                checked={isRuleActive}
+                                disabled={isBusy}
+                                onCheckedChange={(checked) =>
+                                  void toggleSecurityRuleStatus(rule, Boolean(checked))
+                                }
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => openEditSecurityRule(rule)}
+                                disabled={isBusy}
+                              >
+                                Editar
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => void removeSecurityRule(rule)}
+                                disabled={isBusy}
+                              >
+                                {securityRuleDeletingId === rule.id ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4" />
+                                )}
+                                Excluir
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
 
                   {/* Gatilhos Section */}
@@ -1491,43 +2423,30 @@ function NovoAgente() {
                     <h3 className="text-sm font-semibold flex items-center gap-2">
                       <Sparkles className="h-4 w-4 text-blue-500" />
                       Gatilhos (Ações Automáticas)
-                      <Badge variant="secondary" className="text-[10px] uppercase">Em breve</Badge>
+                      <Badge variant="secondary" className="text-[10px] uppercase">
+                        Em breve
+                      </Badge>
                     </h3>
-                    <p className="text-xs text-muted-foreground mb-3">Defina comportamentos que disparam ações na plataforma, como agendar na agenda ou transferir o chat.</p>
-                    {securityRules.filter(r => r.type === 'transferir').map(rule => (
-                      <div key={rule.id} className="flex flex-col sm:flex-row gap-4 p-4 border rounded-lg bg-blue-50/50">
-                        <div className="flex-1">
-                          <div className="font-medium flex items-center gap-2">
-                            {rule.name}
-                            <Badge variant="outline" className="bg-blue-100 text-blue-800 border-blue-200">{rule.type}</Badge>
-                          </div>
-                          <div className="text-sm text-muted-foreground mt-1">{rule.instruction}</div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <div className="text-xs font-medium">{rule.active ? 'Ativa' : 'Inativa'}</div>
-                          <Checkbox checked={rule.active} onCheckedChange={(c) => {
-                            setSecurityRules(prev => prev.map(r => r.id === rule.id ? { ...r, active: !!c } : r));
-                          }} />
-                        </div>
-                      </div>
-                    ))}
-                    {securityRules.filter(r => r.type === 'transferir').length === 0 && (
-                      <div className="text-sm text-muted-foreground p-4 border border-dashed rounded-lg text-center">
-                        Nenhum gatilho configurado. Use o botão acima para adicionar.
-                      </div>
-                    )}
+                    <p className="text-xs text-muted-foreground mb-3">
+                      Gatilhos automáticos ainda não possuem backend nem runtime operacional neste
+                      MVP.
+                    </p>
+                    <div className="text-sm text-muted-foreground p-4 border border-dashed rounded-lg text-center">
+                      Em breve: ações automáticas como transferir chat, agendar ou disparar
+                      integrações.
+                    </div>
                   </div>
-                    
+
                   <div className="pt-4 border-t space-y-3">
                     <div className="text-sm font-medium">Filtros Nativos do Sistema</div>
                     <ToggleRow
-                      label="Não responder sem base de conhecimento"
-                      desc="Mantido no runtime determinístico do backend"
+                      label="Reduzir invenção de resposta"
+                      desc="Aplicado por instruções de prompt e fallback determinístico; não é um bloqueio absoluto para todos os casos."
                       defaultChecked
                     />
                     <ToggleRow
-                      label="Não chamar IA externa"
-                      desc="Nenhuma integração com provedores é feita no frontend"
+                      label="Provedores externos apenas no backend"
+                      desc="Quando habilitada, a IA externa é chamada somente pelo backend. O frontend nunca recebe tokens."
                       defaultChecked
                     />
                     <ToggleRow
@@ -1553,9 +2472,7 @@ function NovoAgente() {
                       </div>
                     ) : publicationSummary.length === 0 ? (
                       <div className="rounded-xl border border-dashed p-5">
-                        <div className="text-sm font-medium">
-                          Nenhum canal cadastrado.
-                        </div>
+                        <div className="text-sm font-medium">Nenhum canal cadastrado.</div>
                         <div className="mt-1 text-sm text-muted-foreground">
                           Cadastre um canal em Canais para publicar este assistente.
                         </div>
@@ -1571,7 +2488,10 @@ function NovoAgente() {
                               <div className="min-w-0">
                                 <div className="font-medium truncate">{channel.name}</div>
                                 <div className="text-xs text-muted-foreground">
-                                  {channel.metadataJson?.["channelType"] === "WHATSAPP" ? "WhatsApp" : "Chatwoot"} · Account {channel.accountId} · Inbox {channel.inboxId}
+                                  {channel.metadataJson?.["channelType"] === "WHATSAPP"
+                                    ? "WhatsApp"
+                                    : "Chatwoot"}{" "}
+                                  · Account {channel.accountId} · Inbox {channel.inboxId}
                                 </div>
                               </div>
                               <StatusBadge status={channel.isActive ? "ativo" : "pausado"} />
@@ -1598,7 +2518,8 @@ function NovoAgente() {
                                 checked={channel.linkedToCurrentAssistant}
                                 disabled={
                                   publicationSavingId === channel.id ||
-                                  (!channel.linkedToCurrentAssistant && channel.linkedToOtherAssistant)
+                                  (!channel.linkedToCurrentAssistant &&
+                                    channel.linkedToOtherAssistant)
                                 }
                                 onCheckedChange={(checked) =>
                                   void publishAssistantOnChannel(channel, checked)
@@ -1626,46 +2547,62 @@ function NovoAgente() {
                     {!instructions.trim() && (
                       <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
-                        <span className="text-sm font-medium">Você está usando o prompt padrão do sistema. Recomendamos personalizar as instruções.</span>
+                        <span className="text-sm font-medium">
+                          Você está usando o prompt padrão do sistema. Recomendamos personalizar as
+                          instruções.
+                        </span>
                       </div>
                     )}
                     {activeKnowledgeCount === 0 && (
                       <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
-                        <span className="text-sm font-medium">Nenhum conhecimento ativo foi adicionado. O agente responderá apenas com base no prompt.</span>
+                        <span className="text-sm font-medium">
+                          Nenhum conhecimento ativo foi adicionado. O agente responderá apenas com
+                          base no prompt.
+                        </span>
                       </div>
                     )}
                     {activeKnowledgeCount > 0 && readyKnowledgeCount === 0 && (
                       <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
-                        <span className="text-sm font-medium">O agente ainda não possui conhecimento preparado para IA. Ele responderá apenas com base no prompt.</span>
+                        <span className="text-sm font-medium">
+                          O agente ainda não possui conhecimento preparado para IA. Ele responderá
+                          apenas com base no prompt.
+                        </span>
                       </div>
                     )}
                     {draftKnowledgeCount > 0 && readyKnowledgeCount > 0 && (
                       <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
-                        <span className="text-sm font-medium">Existem conhecimentos ativos que ainda não foram preparados para IA.</span>
+                        <span className="text-sm font-medium">
+                          Existem conhecimentos ativos que ainda não foram preparados para IA.
+                        </span>
                       </div>
                     )}
                     {errorKnowledgeCount > 0 && (
                       <div className="flex items-center gap-2 text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 p-3 rounded-lg border border-red-200 dark:border-red-900/50">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
-                        <span className="text-sm font-medium">Alguns conhecimentos falharam na preparação. Revise antes de publicar.</span>
+                        <span className="text-sm font-medium">
+                          Alguns conhecimentos falharam na preparação. Revise antes de publicar.
+                        </span>
                       </div>
                     )}
-                    {knowledge.filter(k => k.status === "INACTIVE").length > 0 && (
+                    {knowledge.filter((k) => k.status === "INACTIVE").length > 0 && (
                       <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 p-3 rounded-lg border border-amber-200 dark:border-amber-900/50">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
-                        <span className="text-sm font-medium">Você tem conhecimentos inativos que não serão utilizados pela IA.</span>
+                        <span className="text-sm font-medium">
+                          Você tem conhecimentos inativos que não serão utilizados pela IA.
+                        </span>
                       </div>
                     )}
                     {readyKnowledgeCount > 0 && (
-                      <div className={`flex items-center gap-2 p-3 rounded-lg border ${ragEnabled ? 'text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/50 border-green-200 dark:border-green-900/50' : 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/50 border-blue-200 dark:border-blue-900/50'}`}>
+                      <div
+                        className={`flex items-center gap-2 p-3 rounded-lg border ${ragEnabled ? "text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/50 border-green-200 dark:border-green-900/50" : "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/50 border-blue-200 dark:border-blue-900/50"}`}
+                      >
                         <span className="text-sm font-medium">
                           {ragEnabled
                             ? "Os conhecimentos preparados estão ATIVOS para o atendimento real! A IA usará esses documentos para responder."
-                            : "Os conhecimentos preparados podem ser testados na aba Preview. A integração real com a IA está DESATIVADA."
-                          }
+                            : "Os conhecimentos preparados podem ser testados na aba Preview. A integração real com a IA está DESATIVADA."}
                         </span>
                       </div>
                     )}
@@ -1675,9 +2612,28 @@ function NovoAgente() {
                       <Summary label="Nome do Agente" value={name || "Não definido"} />
                       <Summary label="Status Planejado" value={isActive ? "Ativo" : "Inativo"} />
                       <Summary label="Endereço" value={businessAddress || "Não definido"} />
-                      <Summary label="Cidade / Região" value={businessCityRegion || "Não definido"} />
-                      <Summary 
-                        label="Link do Google Maps" 
+                      <Summary
+                        label="Cidade / Estado"
+                        value={
+                          [businessCity, businessState].filter(Boolean).join(" / ") ||
+                          businessCityRegion ||
+                          "Não definido"
+                        }
+                      />
+                      <Summary label="CEP" value={businessPostalCode || "Não definido"} />
+                      <Summary label="Fuso horário" value={timezone || "America/Sao_Paulo"} />
+                      <Summary label="Telefone" value={businessPhone || "Não definido"} />
+                      <Summary
+                        label="WhatsApp principal"
+                        value={businessWhatsapp || "Não definido"}
+                      />
+                      <Summary
+                        label="WhatsApp assistência"
+                        value={businessWhatsappSupport || "Não definido"}
+                      />
+                      <Summary label="Site" value={websiteUrl || "Não definido"} />
+                      <Summary
+                        label="Link do Google Maps"
                         value={
                           googleMapsUrl ? (
                             <div className="flex items-center gap-2">
@@ -1695,30 +2651,65 @@ function NovoAgente() {
                           ) : (
                             "Não"
                           )
-                        } 
+                        }
                       />
-                      <Summary label="Horário" value={aiAlwaysAvailable ? "Atende 24h" : "Respeita horário da empresa"} />
+                      <Summary
+                        label="IA fora do horário"
+                        value={
+                          aiAlwaysAvailable
+                            ? "Pode responder fora do horário"
+                            : "Não responde fora do horário"
+                        }
+                      />
                       <Summary label="Personalidade" value={personality || "Não definida"} />
                       <Summary label="Tom de voz" value={toneOfVoice || "Não definido"} />
                       <Summary label="Modelo da IA" value={model || "Padrão do sistema"} />
-                      <Summary label="Temperatura" value={`${temperature ?? 0.2} - ${getTemperatureDescription(temperature ?? 0.2)}`} />
-                      <Summary label="Buffer de mensagens" value={messageBufferEnabled ? `${messageBufferSeconds}s de espera` : "Desativado (Responde na hora)"} />
-                      <Summary label="Mensagem inicial" value={initialMessage.trim() ? "Configurada" : "Não configurada"} />
-                      <Summary label="Prompt Principal" value={instructions.trim() ? "Configurado" : "Padrão do sistema"} />
+                      <Summary
+                        label="Temperatura"
+                        value={`${temperature ?? 0.2} - ${getTemperatureDescription(temperature ?? 0.2)}`}
+                      />
+                      <Summary
+                        label="Buffer de mensagens"
+                        value={
+                          messageBufferEnabled
+                            ? `${messageBufferSeconds}s de espera`
+                            : "Desativado (Responde na hora)"
+                        }
+                      />
+                      <Summary
+                        label="Mensagem inicial"
+                        value={initialMessage.trim() ? "Configurada" : "Não configurada"}
+                      />
+                      <Summary
+                        label="Prompt Principal"
+                        value={instructions.trim() ? "Configurado" : "Padrão do sistema"}
+                      />
                       <Summary label="Mensagem fallback" value="Configurada" />
-                      <Summary label="Conhecimento Ativo" value={`${activeKnowledgeCount} itens (${readyKnowledgeCount} preparados)`} />
-                      <Summary label="Conhecimento no Atendimento Real" value={ragEnabled ? "Ativado" : "Desativado"} />
-                      <Summary label="Regras de Segurança" value={`${securityRules.filter(r => r.active).length} ativas`} />
+                      <Summary
+                        label="Conhecimento Ativo"
+                        value={`${activeKnowledgeCount} itens (${readyKnowledgeCount} preparados)`}
+                      />
+                      <Summary
+                        label="Conhecimento no Atendimento Real"
+                        value={ragEnabled ? "Ativado" : "Desativado"}
+                      />
+                      <Summary
+                        label="Regras de Segurança"
+                        value={`${securityRules.filter((r) => r.status === "ACTIVE").length} ativas`}
+                      />
                     </div>
 
                     <div className="pt-4 space-y-4 border-t">
                       <div className="flex items-center space-x-2">
-                        <Checkbox 
-                          id="confirm-review" 
-                          checked={isReviewConfirmed} 
-                          onCheckedChange={(c) => setIsReviewConfirmed(!!c)} 
+                        <Checkbox
+                          id="confirm-review"
+                          checked={isReviewConfirmed}
+                          onCheckedChange={(c) => setIsReviewConfirmed(!!c)}
                         />
-                        <Label htmlFor="confirm-review" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                        <Label
+                          htmlFor="confirm-review"
+                          className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                        >
                           Confirmo que revisei as alterações e desejo salvar este agente.
                         </Label>
                       </div>
@@ -1728,7 +2719,8 @@ function NovoAgente() {
                         onClick={() => void handleSave()}
                         disabled={saving || !name.trim() || !isReviewConfirmed}
                       >
-                        <Save className="h-4 w-4 mr-2" /> {saving ? "Salvando..." : "Confirmar e salvar alterações"}
+                        <Save className="h-4 w-4 mr-2" />{" "}
+                        {saving ? "Salvando..." : "Confirmar e salvar alterações"}
                       </Button>
                     </div>
                   </CardContent>
@@ -1750,7 +2742,7 @@ function NovoAgente() {
                           </div>
                         </div>
                       )}
-                      
+
                       <div className="flex flex-row-reverse gap-3">
                         <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center font-bold text-xs shrink-0">
                           VC
@@ -1759,7 +2751,7 @@ function NovoAgente() {
                           {previewQuestion}
                         </div>
                       </div>
-                      
+
                       {previewLoading && (
                         <div className="flex gap-3">
                           <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs shrink-0">
@@ -1767,8 +2759,14 @@ function NovoAgente() {
                           </div>
                           <div className="bg-primary/5 border rounded-lg p-3 text-sm flex items-center gap-2">
                             <span className="w-1.5 h-1.5 bg-primary/50 rounded-full animate-bounce"></span>
-                            <span className="w-1.5 h-1.5 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></span>
-                            <span className="w-1.5 h-1.5 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></span>
+                            <span
+                              className="w-1.5 h-1.5 bg-primary/50 rounded-full animate-bounce"
+                              style={{ animationDelay: "0.2s" }}
+                            ></span>
+                            <span
+                              className="w-1.5 h-1.5 bg-primary/50 rounded-full animate-bounce"
+                              style={{ animationDelay: "0.4s" }}
+                            ></span>
                           </div>
                         </div>
                       )}
@@ -1782,26 +2780,39 @@ function NovoAgente() {
                             <div>{previewResult.answer}</div>
                             {previewResult.sources.length > 0 && (
                               <div className="mt-3 pt-3 border-t text-xs">
-                                <div className="font-medium text-muted-foreground mb-1">Fontes manuais sugeridas:</div>
+                                <div className="font-medium text-muted-foreground mb-1">
+                                  Fontes manuais sugeridas:
+                                </div>
                                 {previewResult.sources.map((source) => (
-                                  <div key={source.id} className="truncate">• {source.title}</div>
+                                  <div key={source.id} className="truncate">
+                                    • {source.title}
+                                  </div>
                                 ))}
                               </div>
                             )}
-                            
+
                             {/* Bloco de Conhecimento RAG do Teste */}
                             {previewResult.ragEnabled && (
                               <div className="mt-3 pt-3 border-t text-xs">
                                 <div className="font-medium text-blue-600 mb-1 flex items-center gap-1">
                                   <Sparkles className="h-3 w-3" /> Conhecimentos usados neste teste:
                                 </div>
-                                {previewResult.usedKnowledge && previewResult.usedKnowledge.length > 0 ? (
+                                {previewResult.usedKnowledge &&
+                                previewResult.usedKnowledge.length > 0 ? (
                                   <div className="space-y-2 mt-2">
                                     {previewResult.usedKnowledge.map((k) => (
-                                      <div key={k.chunkId} className="bg-blue-50/50 p-2 rounded border border-blue-100">
+                                      <div
+                                        key={k.chunkId}
+                                        className="bg-blue-50/50 p-2 rounded border border-blue-100"
+                                      >
                                         <div className="flex justify-between items-start mb-1">
-                                          <div className="font-semibold text-blue-800 line-clamp-1">{k.title}</div>
-                                          <Badge variant="outline" className="text-[10px] py-0 px-1 shrink-0 bg-white">
+                                          <div className="font-semibold text-blue-800 line-clamp-1">
+                                            {k.title}
+                                          </div>
+                                          <Badge
+                                            variant="outline"
+                                            className="text-[10px] py-0 px-1 shrink-0 bg-white"
+                                          >
                                             Score: {(k.score * 100).toFixed(1)}%
                                           </Badge>
                                         </div>
@@ -1828,14 +2839,17 @@ function NovoAgente() {
 
                     <div className="space-y-3">
                       <Label className="text-xs">Faça uma pergunta para testar as respostas</Label>
-                      
+
                       <div className="flex items-center space-x-2 px-1">
-                        <Switch 
-                          id="use-rag-preview" 
-                          checked={usePreparedKnowledge} 
-                          onCheckedChange={setUsePreparedKnowledge} 
+                        <Switch
+                          id="use-rag-preview"
+                          checked={usePreparedKnowledge}
+                          onCheckedChange={setUsePreparedKnowledge}
                         />
-                        <Label htmlFor="use-rag-preview" className="text-xs text-muted-foreground cursor-pointer">
+                        <Label
+                          htmlFor="use-rag-preview"
+                          className="text-xs text-muted-foreground cursor-pointer"
+                        >
                           Usar conhecimento preparado neste teste
                         </Label>
                       </div>
@@ -1844,18 +2858,21 @@ function NovoAgente() {
                         <Input
                           value={previewQuestion}
                           onChange={(e) => setPreviewQuestion(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && void handlePreview()}
+                          onKeyDown={(e) => e.key === "Enter" && void handlePreview()}
                         />
-                        <Button 
+                        <Button
                           onClick={() => void handlePreview()}
                           disabled={!selectedAssistantId || previewLoading}
                           variant="secondary"
                         >
-                          <Sparkles className="h-4 w-4 mr-2" /> {previewLoading ? "Simulando..." : "Simular"}
+                          <Sparkles className="h-4 w-4 mr-2" />{" "}
+                          {previewLoading ? "Simulando..." : "Simular"}
                         </Button>
                       </div>
                       {!selectedAssistantId && (
-                         <p className="text-[10px] text-muted-foreground">Salve o agente primeiro para habilitar a simulação.</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          Salve o agente primeiro para habilitar a simulação.
+                        </p>
                       )}
                     </div>
                   </CardContent>
@@ -1868,7 +2885,6 @@ function NovoAgente() {
     </div>
   );
 }
-
 
 function ToggleRow({
   label,

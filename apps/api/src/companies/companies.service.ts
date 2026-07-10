@@ -5,7 +5,10 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { Prisma, Status } from "@prisma/client";
-import { COMPANY_ADMIN_ROLE_NAMES, DEFAULT_COMPANY_ROLE_PERMISSION_MAP } from "../auth/rbac.defaults";
+import {
+  COMPANY_ADMIN_ROLE_NAMES,
+  DEFAULT_COMPANY_ROLE_PERMISSION_MAP,
+} from "../auth/rbac.defaults";
 import { type AuthenticatedUser, type RequestTenant } from "../auth/auth.types";
 import { PrismaService } from "../database/prisma.service";
 import { CreateCompanyDto } from "./dto/create-company.dto";
@@ -18,6 +21,7 @@ const companySelect = {
   legalName: true,
   document: true,
   notes: true,
+  timezone: true,
   status: true,
   createdAt: true,
   updatedAt: true,
@@ -48,7 +52,9 @@ export type CurrentCompanyResponse = {
 export class CompaniesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async listAccessibleCompanies(input: { user: AuthenticatedUser }): Promise<CompaniesListResponse> {
+  async listAccessibleCompanies(input: {
+    user: AuthenticatedUser;
+  }): Promise<CompaniesListResponse> {
     const items = await this.prisma.company.findMany({
       where: {
         deletedAt: null,
@@ -142,6 +148,7 @@ export class CompaniesService {
           document,
           status: input.dto.status ?? Status.ACTIVE,
           notes: this.trimNullable(input.dto.notes),
+          timezone: this.trimNullable(input.dto.timezone) ?? "America/Sao_Paulo",
         },
         select: companySelect,
       });
@@ -193,7 +200,8 @@ export class CompaniesService {
       }
     }
 
-    const document = input.dto.document !== undefined ? this.sanitiseDocument(input.dto.document) : undefined;
+    const document =
+      input.dto.document !== undefined ? this.sanitiseDocument(input.dto.document) : undefined;
     if (document) {
       const duplicateDoc = await this.prisma.company.findFirst({
         where: {
@@ -220,6 +228,9 @@ export class CompaniesService {
             : {}),
           ...(document !== undefined ? { document } : {}),
           ...(input.dto.notes !== undefined ? { notes: this.trimNullable(input.dto.notes) } : {}),
+          ...(input.dto.timezone !== undefined
+            ? { timezone: this.trimNullable(input.dto.timezone) ?? "America/Sao_Paulo" }
+            : {}),
           ...(input.dto.status !== undefined ? { status: input.dto.status } : {}),
         },
         select: companySelect,
@@ -266,9 +277,7 @@ export class CompaniesService {
   }
 
   private async ensureDefaultRoles(tx: Prisma.TransactionClient, companyId: string): Promise<void> {
-    const permissionKeys = [
-      ...new Set(Object.values(DEFAULT_COMPANY_ROLE_PERMISSION_MAP).flat()),
-    ];
+    const permissionKeys = [...new Set(Object.values(DEFAULT_COMPANY_ROLE_PERMISSION_MAP).flat())];
 
     const permissions = await Promise.all(
       permissionKeys.map((key) =>
@@ -417,10 +426,7 @@ export class CompaniesService {
     return digitsOnly.length > 0 ? digitsOnly : trimmed;
   }
 
-  async deleteCompanySafely(input: {
-    companyId: string;
-    user: AuthenticatedUser;
-  }): Promise<void> {
+  async deleteCompanySafely(input: { companyId: string; user: AuthenticatedUser }): Promise<void> {
     this.assertStudioAdmin(input.user);
     this.assertCompanyAccess(input.user, input.companyId);
     await this.findCompanyOrThrow(input.companyId);

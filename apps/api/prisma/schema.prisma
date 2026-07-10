@@ -57,6 +57,7 @@ model Company {
   legalName String?
   document  String?
   notes     String?
+  timezone  String    @default("America/Sao_Paulo")
   status    Status    @default(ACTIVE)
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -75,6 +76,7 @@ model Company {
   assistantPreviewLogs          AssistantPreviewLog[]
   assistantRuntimeLogs          AssistantRuntimeLog[]
   assistantKnowledgeChunks      AssistantKnowledgeChunk[]
+  assistantSecurityRules        AssistantSecurityRule[]
   appInstallations              AppInstallation[]
   appCredentials                AppCredential[]
   appActionLogs                 AppActionLog[]
@@ -386,22 +388,30 @@ model UserRole {
 }
 
 model Assistant {
-  id                 String  @id @default(cuid())
-  companyId          String
-  name               String
-  description        String?
-  businessAddress    String?
-  businessCityRegion String?
-  weeklySchedule     Json?
-  aiAlwaysAvailable  Boolean @default(true)
-  initialMessage     String?
-  instructions       String?
-  personality        String?
-  toneOfVoice        String?
-  avoidPhrases       String?
-  googleMapsUrl      String?
-  latitude           Float?
-  longitude          Float?
+  id                      String  @id @default(cuid())
+  companyId               String
+  name                    String
+  description             String?
+  businessAddress         String?
+  businessCityRegion      String?
+  businessCity            String?
+  businessState           String?
+  businessPostalCode      String?
+  businessPhone           String?
+  businessWhatsapp        String?
+  businessWhatsappSupport String?
+  websiteUrl              String?
+  timezone                String?
+  weeklySchedule          Json?
+  aiAlwaysAvailable       Boolean @default(true)
+  initialMessage          String?
+  instructions            String?
+  personality             String?
+  toneOfVoice             String?
+  avoidPhrases            String?
+  googleMapsUrl           String?
+  latitude                Float?
+  longitude               Float?
 
   model             String?
   temperature       Float?
@@ -428,11 +438,34 @@ model Assistant {
   assistantConversationMessages AssistantConversationMessage[]
   behavior                      AssistantBehavior?
   flows                         AssistantFlow[]
+  securityRules                 AssistantSecurityRule[]
 
   @@index([companyId])
   @@index([status])
   @@index([updatedAt])
   @@map("assistants")
+}
+
+model AssistantSecurityRule {
+  id          String   @id @default(cuid())
+  companyId   String
+  assistantId String
+  name        String
+  ruleType    String
+  instruction String
+  status      Status   @default(ACTIVE)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  assistant Assistant @relation(fields: [assistantId], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+  @@index([assistantId])
+  @@index([companyId, assistantId, status])
+  @@index([companyId, assistantId, sortOrder])
+  @@map("assistant_security_rules")
 }
 
 model AssistantKnowledge {
