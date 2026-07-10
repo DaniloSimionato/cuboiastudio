@@ -11,7 +11,7 @@ import { t as Route$20 } from "../_app.apps.google-calendar-DetUkp2c.mjs";
 import { t as Route$21 } from "../_app.testes-CQDEMBx_.mjs";
 import { t as QueryClient } from "../_libs/tanstack__query-core.mjs";
 import { t as QueryClientProvider } from "../_libs/tanstack__react-query.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/router-DLeFUhnO.js
+//#region node_modules/.nitro/vite/services/ssr/assets/router-D2j07pS9.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_dev_runtime = require_jsx_dev_runtime();
 var styles_default = "/assets/styles-29_PmpyN.css";
@@ -284,7 +284,7 @@ var Route$12 = createFileRoute("/_app/variaveis")({
 	head: () => ({ meta: [{ title: "Variáveis · Cubo AI Studio" }] }),
 	component: lazyRouteComponent($$splitComponentImporter$12, "component")
 });
-var $$splitComponentImporter$11 = () => import("../_app.memoria-DBYXzc0x.mjs");
+var $$splitComponentImporter$11 = () => import("../_app.memoria-BbFZv5XN.mjs");
 var Route$11 = createFileRoute("/_app/memoria")({
 	head: () => ({ meta: [{ title: "Memória · Cubo AI Studio" }] }),
 	component: lazyRouteComponent($$splitComponentImporter$11, "component")
@@ -299,7 +299,7 @@ var Route$9 = createFileRoute("/_app/implantacao")({
 	head: () => ({ meta: [{ title: "Assistente de Implantação · Cubo AI Studio" }] }),
 	component: lazyRouteComponent($$splitComponentImporter$9, "component")
 });
-var $$splitComponentImporter$8 = () => import("../_app.flow-FTF9EN-l.mjs");
+var $$splitComponentImporter$8 = () => import("../_app.flow-BiaIu0SV.mjs");
 var Route$8 = createFileRoute("/_app/flow")({
 	head: () => ({ meta: [{ title: "Flow Builder · Cubo AI Studio" }] }),
 	component: lazyRouteComponent($$splitComponentImporter$8, "component")

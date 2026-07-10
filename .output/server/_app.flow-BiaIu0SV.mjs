@@ -11,9 +11,9 @@ import { a as SelectValue, i as SelectTrigger, n as SelectContent, r as SelectIt
 import { t as Label } from "./_ssr/label-BZdmkwq8.mjs";
 import { t as Switch } from "./_ssr/switch-Cit-Q60v.mjs";
 import { t as Textarea } from "./_ssr/textarea-CULRsq90.mjs";
-import "./_ssr/router-DLeFUhnO.mjs";
+import "./_ssr/router-D2j07pS9.mjs";
 import { a as ReactFlowProvider, c as useEdgesState, d as Position, i as MiniMap, l as useNodesState, n as Controls, o as addEdge, r as Handle, s as index, t as Background, u as MarkerType } from "./_libs/@xyflow/react+[...].mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/_app.flow-FTF9EN-l.js
+//#region node_modules/.nitro/vite/services/ssr/assets/_app.flow-BiaIu0SV.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_dev_runtime = require_jsx_dev_runtime();
 var _jsxFileName = "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.flow.tsx?tsr-split=component";

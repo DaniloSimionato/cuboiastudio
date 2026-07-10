@@ -1,4 +1,4 @@
-//#region node_modules/.nitro/vite/services/ssr/assets/_tanstack-start-manifest_v-CQRqOjnF.js
+//#region node_modules/.nitro/vite/services/ssr/assets/_tanstack-start-manifest_v-DRBRoAKK.js
 var tsrStartManifest = () => ({ routes: {
 	__root__: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/__root.tsx",
@@ -10,7 +10,7 @@ var tsrStartManifest = () => ({ routes: {
 		],
 		css: ["/assets/index-DtxX27Jz.css"],
 		preloads: [
-			"/assets/index-CJ9f03Dq.js",
+			"/assets/index-BTEK3thr.js",
 			"/assets/createLucideIcon-DywgXok4.js",
 			"/assets/jsx-runtime-DTMSM_Xs.js",
 			"/assets/link-Dk_PRq2c.js",
@@ -23,13 +23,13 @@ var tsrStartManifest = () => ({ routes: {
 		scripts: [{ attrs: {
 			type: "module",
 			async: !0,
-			src: "/assets/index-CJ9f03Dq.js"
+			src: "/assets/index-BTEK3thr.js"
 		} }]
 	},
 	"/": {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/index.tsx",
 		children: void 0,
-		preloads: ["/assets/routes-DvcPJafX.js"]
+		preloads: ["/assets/routes-Bos5XuUD.js"]
 	},
 	"/_app": {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.tsx",
@@ -53,12 +53,13 @@ var tsrStartManifest = () => ({ routes: {
 			"/_app/apps/"
 		],
 		preloads: [
-			"/assets/_app-BmKKkDz5.js",
+			"/assets/_app-BZ16q5AL.js",
 			"/assets/braces-COZouRcs.js",
 			"/assets/circle-play-DCt_1F4D.js",
 			"/assets/sparkles-BuDRn1EZ.js",
-			"/assets/brain-Ca_tZXxJ.js",
+			"/assets/book-open-B12KLvRs.js",
 			"/assets/bot-DDz_y0zQ.js",
+			"/assets/brain-Bk2qBbfw.js",
 			"/assets/building-2-C9bbghKQ.js",
 			"/assets/git-branch-Dy49n1hs.js",
 			"/assets/companiesService-CWNJHCg9.js",
@@ -75,7 +76,7 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/auth.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/auth-DL7OPhgG.js",
+			"/assets/auth-DMe3DyKN.js",
 			"/assets/sparkles-BuDRn1EZ.js",
 			"/assets/arrow-right-BfESIfXp.js"
 		]
@@ -84,7 +85,7 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/portal.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/portal-BOQ_o9c2.js",
+			"/assets/portal-CqYUx-gi.js",
 			"/assets/circle-check-FKc8U_V6.js",
 			"/assets/sparkles-BuDRn1EZ.js",
 			"/assets/user-round-PDDe3kRx.js",
@@ -97,7 +98,7 @@ var tsrStartManifest = () => ({ routes: {
 			"/assets/power-CPIYhD9f.js",
 			"/assets/shield-check-Dvtp2iIl.js",
 			"/assets/trash-2-CTrqgv5V.js",
-			"/assets/dialog-DQe8Wf-I.js",
+			"/assets/dialog-CeVZWQuS.js",
 			"/assets/apiClient-CIYxb1Ie.js",
 			"/assets/tabs-BxCTxrcX.js",
 			"/assets/table-BukJ8Vg5.js"
@@ -107,16 +108,16 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.canais.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.canais-CzYLYCew.js",
+			"/assets/_app.canais-BKzyxdR2.js",
 			"/assets/circle-check-FKc8U_V6.js",
-			"/assets/StatusBadge-DP_xFxj9.js",
+			"/assets/StatusBadge-BAfCxrUq.js",
 			"/assets/circle-DXndRQnW.js",
 			"/assets/pencil-BnkTgR0I.js",
 			"/assets/refresh-cw-CjdFUFqS.js",
 			"/assets/trash-2-CTrqgv5V.js",
 			"/assets/webhook-CNjiNS0Z.js",
-			"/assets/SecurityNotice-Bxdap5Vm.js",
-			"/assets/dialog-DQe8Wf-I.js",
+			"/assets/SecurityNotice-Bw5B_dDb.js",
+			"/assets/dialog-CeVZWQuS.js",
 			"/assets/backendAssistantsService-BEX4fz_r.js",
 			"/assets/chatwootSettingsService-FPJP96lg.js"
 		]
@@ -125,12 +126,12 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.configuracoes.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.configuracoes-CAt2CyfS.js",
+			"/assets/_app.configuracoes-Cd_uJypP.js",
 			"/assets/circle-check-FKc8U_V6.js",
 			"/assets/refresh-cw-CjdFUFqS.js",
 			"/assets/shield-check-Dvtp2iIl.js",
 			"/assets/trash-2-CTrqgv5V.js",
-			"/assets/SecurityNotice-Bxdap5Vm.js",
+			"/assets/SecurityNotice-Bw5B_dDb.js",
 			"/assets/apiClient-CIYxb1Ie.js"
 		]
 	},
@@ -138,8 +139,8 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.conhecimento.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.conhecimento-D55khTi9.js",
-			"/assets/StatusBadge-DP_xFxj9.js",
+			"/assets/_app.conhecimento-DZ--U4_F.js",
+			"/assets/StatusBadge-BAfCxrUq.js",
 			"/assets/file-text-Jfu7dDX4.js",
 			"/assets/pencil-BnkTgR0I.js",
 			"/assets/refresh-cw-CjdFUFqS.js",
@@ -153,7 +154,7 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.consumo.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.consumo-puYx9-Z4.js",
+			"/assets/_app.consumo-Dgchg8fb.js",
 			"/assets/dollar-sign-DqbSNfuO.js",
 			"/assets/user-check-lMpyQNor.js"
 		]
@@ -162,8 +163,8 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.dashboard.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.dashboard-BwaYgkyI.js",
-			"/assets/StatusBadge-DP_xFxj9.js",
+			"/assets/_app.dashboard-2XvAJQjs.js",
+			"/assets/StatusBadge-BAfCxrUq.js",
 			"/assets/dollar-sign-DqbSNfuO.js",
 			"/assets/message-square-npi41qXO.js",
 			"/assets/user-check-lMpyQNor.js",
@@ -176,12 +177,12 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.ferramentas.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.ferramentas-CieegjFK.js",
-			"/assets/StatusBadge-DP_xFxj9.js",
+			"/assets/_app.ferramentas-DI-T0GIS.js",
+			"/assets/StatusBadge-BAfCxrUq.js",
 			"/assets/copy-BWQumwdi.js",
 			"/assets/pencil-BnkTgR0I.js",
 			"/assets/trash-2-CTrqgv5V.js",
-			"/assets/SecurityNotice-Bxdap5Vm.js",
+			"/assets/SecurityNotice-Bw5B_dDb.js",
 			"/assets/toolsService-Fm2P_vqo.js",
 			"/assets/table-BukJ8Vg5.js"
 		]
@@ -190,7 +191,7 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.flow.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.flow-CcgvFRZY.js",
+			"/assets/_app.flow-4yCVoe-a.js",
 			"/assets/with-selector-jqZcrNPz.js",
 			"/assets/arrow-left-CPJ8uf8v.js",
 			"/assets/copy-BWQumwdi.js",
@@ -206,7 +207,7 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.implantacao.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.implantacao-CypG4vzk.js",
+			"/assets/_app.implantacao-f_fZwxMu.js",
 			"/assets/circle-check-FKc8U_V6.js",
 			"/assets/chevron-right-CZjS-FOL.js",
 			"/assets/send-ehGWcLoC.js"
@@ -216,10 +217,10 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.logs.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.logs-D6KF1TRm.js",
+			"/assets/_app.logs-ULSX-vDQ.js",
 			"/assets/eye-BleCar1m.js",
 			"/assets/refresh-cw-CjdFUFqS.js",
-			"/assets/dialog-DQe8Wf-I.js",
+			"/assets/dialog-CeVZWQuS.js",
 			"/assets/apiClient-CIYxb1Ie.js",
 			"/assets/table-BukJ8Vg5.js",
 			"/assets/conversations-DicjoLiB.js"
@@ -229,7 +230,7 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.memoria.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.memoria-pzq7ha_l.js",
+			"/assets/_app.memoria-B7Z82kox.js",
 			"/assets/pencil-BnkTgR0I.js",
 			"/assets/trash-2-CTrqgv5V.js",
 			"/assets/table-BukJ8Vg5.js",
@@ -240,14 +241,14 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.testes.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.testes-DY7Iv21c.js",
+			"/assets/_app.testes-CYIx90il.js",
 			"/assets/user-round-PDDe3kRx.js",
 			"/assets/file-text-Jfu7dDX4.js",
 			"/assets/message-square-npi41qXO.js",
 			"/assets/refresh-cw-CjdFUFqS.js",
 			"/assets/send-ehGWcLoC.js",
 			"/assets/trash-2-CTrqgv5V.js",
-			"/assets/dialog-DQe8Wf-I.js",
+			"/assets/dialog-CeVZWQuS.js",
 			"/assets/apiClient-CIYxb1Ie.js",
 			"/assets/backendAssistantsService-BEX4fz_r.js",
 			"/assets/conversations-DicjoLiB.js"
@@ -257,7 +258,7 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.variaveis.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.variaveis-D_VKGApL.js",
+			"/assets/_app.variaveis-D4jWqSae.js",
 			"/assets/table-BukJ8Vg5.js",
 			"/assets/mock-BERU3geM.js"
 		]
@@ -266,16 +267,16 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.agentes.novo.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.agentes.novo-C1EUTsRX.js",
+			"/assets/_app.agentes.novo-BoLkrQW3.js",
 			"/assets/arrow-left-CPJ8uf8v.js",
-			"/assets/StatusBadge-DP_xFxj9.js",
+			"/assets/StatusBadge-BAfCxrUq.js",
 			"/assets/eye-BleCar1m.js",
 			"/assets/link-2-zlMaZLzl.js",
 			"/assets/pause-lJslDJ7O.js",
 			"/assets/pencil-BnkTgR0I.js",
 			"/assets/save-C8GSNlDt.js",
 			"/assets/trash-2-CTrqgv5V.js",
-			"/assets/dialog-DQe8Wf-I.js",
+			"/assets/dialog-CeVZWQuS.js",
 			"/assets/apiClient-CIYxb1Ie.js",
 			"/assets/backendAssistantsService-BEX4fz_r.js",
 			"/assets/chatwootSettingsService-FPJP96lg.js",
@@ -286,13 +287,13 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.apps.custom-webhook.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.apps.custom-webhook-3B2YDreH.js",
+			"/assets/_app.apps.custom-webhook-DJZemNmu.js",
 			"/assets/arrow-left-CPJ8uf8v.js",
 			"/assets/pencil-BnkTgR0I.js",
 			"/assets/save-C8GSNlDt.js",
 			"/assets/trash-2-CTrqgv5V.js",
 			"/assets/webhook-CNjiNS0Z.js",
-			"/assets/dialog-DQe8Wf-I.js",
+			"/assets/dialog-CeVZWQuS.js",
 			"/assets/toolsService-Fm2P_vqo.js",
 			"/assets/table-BukJ8Vg5.js"
 		]
@@ -301,7 +302,7 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.apps.google-calendar.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.apps.google-calendar-2XzniBXr.js",
+			"/assets/_app.apps.google-calendar-BJMflmTa.js",
 			"/assets/arrow-left-CPJ8uf8v.js",
 			"/assets/copy-BWQumwdi.js",
 			"/assets/eye-off-CxEJ2uLz.js",
@@ -320,8 +321,8 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.agentes.index.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.agentes.index-K4aTk6Ur.js",
-			"/assets/StatusBadge-DP_xFxj9.js",
+			"/assets/_app.agentes.index-DqLK_tIn.js",
+			"/assets/StatusBadge-BAfCxrUq.js",
 			"/assets/pause-lJslDJ7O.js",
 			"/assets/pencil-BnkTgR0I.js",
 			"/assets/play-CRqnaONd.js",
@@ -334,7 +335,7 @@ var tsrStartManifest = () => ({ routes: {
 		filePath: "/Users/danilosimionato/Projetos/CuboIAStudio/src/routes/_app.apps.index.tsx",
 		children: void 0,
 		preloads: [
-			"/assets/_app.apps.index-ZUoAkkNG.js",
+			"/assets/_app.apps.index-BhCWiGS5.js",
 			"/assets/refresh-cw-CjdFUFqS.js",
 			"/assets/search-C6ahAHGB.js",
 			"/assets/apiClient-CIYxb1Ie.js",

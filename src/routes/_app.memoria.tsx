@@ -20,7 +20,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ShieldAlert, Pencil, Trash2 } from "lucide-react";
+import { ShieldAlert, Pencil, Trash2, Brain } from "lucide-react";
 import { memorias, clientes, clienteNome } from "@/data/mock";
 
 export const Route = createFileRoute("/_app/memoria")({

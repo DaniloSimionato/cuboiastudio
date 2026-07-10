@@ -4,7 +4,7 @@ import { t as require_jsx_dev_runtime } from "./_libs/react.mjs";
 import { t as cva } from "./_libs/class-variance-authority+clsx.mjs";
 import { t as cn } from "./_ssr/utils-C_uf36nf.mjs";
 import { t as Button } from "./_ssr/button-TeH4yfmP.mjs";
-import { P as Pencil, f as Trash2, y as ShieldAlert } from "./_libs/lucide-react.mjs";
+import { P as Pencil, f as Trash2, xt as Brain, y as ShieldAlert } from "./_libs/lucide-react.mjs";
 import { t as PageHeader } from "./_ssr/PageHeader-D4Y71euA.mjs";
 import { t as Badge } from "./_ssr/badge-CXFhyJYg.mjs";
 import { t as Input } from "./_ssr/input-B8Ml971c.mjs";
@@ -12,7 +12,7 @@ import { n as CardContent, t as Card } from "./_ssr/card-BW9s_OV3.mjs";
 import { a as SelectValue, i as SelectTrigger, n as SelectContent, r as SelectItem, t as Select } from "./_ssr/select-vCNF5d_j.mjs";
 import { a as TableHeader, i as TableHead, n as TableBody, o as TableRow, r as TableCell, t as Table } from "./_ssr/table-BVRpIYgP.mjs";
 import { a as memorias, n as clienteNome, r as clientes } from "./_ssr/mock-BZxrV1tF.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/_app.memoria-DBYXzc0x.js
+//#region node_modules/.nitro/vite/services/ssr/assets/_app.memoria-BbFZv5XN.js
 var import_react = /* @__PURE__ */ __toESM(require_react());
 var import_jsx_dev_runtime = require_jsx_dev_runtime();
 var _jsxFileName$1 = "/Users/danilosimionato/Projetos/CuboIAStudio/src/components/ui/alert.tsx";
