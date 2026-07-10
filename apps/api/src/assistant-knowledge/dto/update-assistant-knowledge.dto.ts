@@ -18,7 +18,7 @@ export class UpdateAssistantKnowledgeDto {
   @Transform(({ value }) => trimString(value))
   @IsString()
   @IsNotEmpty()
-  @MaxLength(5000)
+  @MaxLength(100000)
   content?: string;
 
   @IsOptional()
