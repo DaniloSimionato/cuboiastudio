@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Loader2, Plus, Pencil, Trash } from "lucide-react";
+import { Loader2, Plus, Pencil, Trash, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import { assistantFlowsService } from "../../services/assistant-flows/assistant-flows.service";
 import type {
@@ -20,8 +20,8 @@ import type {
   AssistantFlowCalendarToolContext,
   CreateAssistantFlowDto,
 } from "../../types/assistant-flow.types";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
 
 interface AssistantFlowsTabProps {
   assistantId: string | null;
@@ -83,7 +83,7 @@ function parseCalendarScopeForm(
 export function AssistantFlowsTab({ assistantId }: AssistantFlowsTabProps) {
   const [loading, setLoading] = useState(true);
   const [flows, setFlows] = useState<AssistantFlow[]>([]);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isEditingMode, setIsEditingMode] = useState(false);
   const [editingFlow, setEditingFlow] = useState<AssistantFlow | null>(null);
   const [calendarScopeForm, setCalendarScopeForm] =
     useState<CalendarScopeFormState>(EMPTY_CALENDAR_SCOPE_FORM);
@@ -170,7 +170,7 @@ export function AssistantFlowsTab({ assistantId }: AssistantFlowsTabProps) {
       requiresHuman: false,
       active: true,
     });
-    setIsModalOpen(true);
+    setIsEditingMode(true);
   };
 
   const handleOpenEdit = (flow: AssistantFlow) => {
@@ -196,7 +196,12 @@ export function AssistantFlowsTab({ assistantId }: AssistantFlowsTabProps) {
       requiresHuman: flow.requiresHuman,
       active: flow.active,
     });
-    setIsModalOpen(true);
+    setIsEditingMode(true);
+  };
+
+  const handleCancel = () => {
+    setIsEditingMode(false);
+    setEditingFlow(null);
   };
 
   const handleDelete = async (flowId: string) => {
@@ -232,7 +237,7 @@ export function AssistantFlowsTab({ assistantId }: AssistantFlowsTabProps) {
         await assistantFlowsService.create(assistantId, payload);
         toast.success("Fluxo criado");
       }
-      setIsModalOpen(false);
+      setIsEditingMode(false);
       loadFlows();
     } catch (error) {
       toast.error("Erro ao salvar fluxo");
@@ -260,6 +265,319 @@ export function AssistantFlowsTab({ assistantId }: AssistantFlowsTabProps) {
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
         </CardContent>
       </Card>
+    );
+  }
+
+  if (isEditingMode) {
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4">
+          <div className="flex items-center gap-3">
+            <Button variant="outline" size="sm" onClick={handleCancel}>
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Voltar
+            </Button>
+            <div>
+              <h3 className="text-xl font-semibold tracking-tight">
+                {editingFlow ? `Editar Fluxo: ${formData.name}` : "Novo Fluxo"}
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                Configure as regras, gatilhos de intenção e ações para este fluxo.
+              </p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-3">
+            <div className="flex items-center space-x-2 border rounded-lg px-3 py-1.5 bg-accent/5">
+              <Switch
+                id="header-flow-active"
+                checked={formData.active}
+                onCheckedChange={(c) => setFormData({ ...formData, active: c })}
+              />
+              <Label htmlFor="header-flow-active" className="text-sm font-medium cursor-pointer">
+                {formData.active ? "Fluxo Ativo" : "Fluxo Inativo"}
+              </Label>
+            </div>
+            <Button variant="outline" onClick={handleCancel}>
+              Cancelar
+            </Button>
+            <Button onClick={handleSave} disabled={saving}>
+              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Salvar
+            </Button>
+          </div>
+        </div>
+
+        <Card>
+          <CardContent className="p-6 space-y-6">
+            <div className="grid gap-6">
+              <div className="grid md:grid-cols-2 gap-4">
+                <Field label="Nome do Fluxo *">
+                  <Input
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    placeholder="Ex: Agendamento Padel"
+                  />
+                </Field>
+                <Field label="Prioridade">
+                  <Input
+                    type="number"
+                    value={formData.priority}
+                    onChange={(e) =>
+                      setFormData({ ...formData, priority: parseInt(e.target.value) || 0 })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Maior número = avaliado primeiro.
+                  </p>
+                </Field>
+              </div>
+
+              <Field label="Descrição Interna">
+                <Input
+                  value={formData.description || ""}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  placeholder="Ex: Utilizado para marcar quadras de padel."
+                />
+              </Field>
+
+              <div className="border-t pt-4">
+                <h4 className="font-semibold text-base mb-3 text-primary">Gatilhos de Intenção</h4>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <Field label="Palavras que ativam este fluxo">
+                    <Textarea
+                      value={parseJsonToLines(formData.triggerKeywords)}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          triggerKeywords: parseLinesToJson(e.target.value),
+                        })
+                      }
+                      placeholder="Ex:&#10;agendar&#10;marcar quadra"
+                      rows={5}
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Uma palavra ou frase curta por linha.
+                    </p>
+                  </Field>
+                  <Field label="Quando usar este fluxo?">
+                    <Textarea
+                      value={formData.triggerDescription || ""}
+                      onChange={(e) =>
+                        setFormData({ ...formData, triggerDescription: e.target.value })
+                      }
+                      placeholder="Ex: O cliente quer reservar um horário."
+                      rows={5}
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Usado pela IA caso as palavras-chave falhem.
+                    </p>
+                  </Field>
+                </div>
+              </div>
+
+              <div className="border-t pt-4">
+                <h4 className="font-semibold text-base mb-3 text-primary">Execução do Fluxo</h4>
+                <Field label="Regras deste fluxo">
+                  <Textarea
+                    value={formData.flowInstructions || ""}
+                    onChange={(e) => setFormData({ ...formData, flowInstructions: e.target.value })}
+                    placeholder="Instruções adicionais que serão somadas ao prompt principal quando este fluxo for ativado."
+                    rows={5}
+                  />
+                </Field>
+
+                <div className="grid md:grid-cols-2 gap-4 mt-4">
+                  <Field label="Ação Final">
+                    <Select
+                      value={formData.finalAction || "respond"}
+                      onValueChange={(val) => setFormData({ ...formData, finalAction: val })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecione" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="respond">A IA responde</SelectItem>
+                        <SelectItem value="fixed_message">Mensagem fixa</SelectItem>
+                        <SelectItem value="handoff">Encaminhar para humano</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {formData.finalAction === "respond" &&
+                        "Usa a IA normalmente com as regras e ferramentas permitidas."}
+                      {formData.finalAction === "fixed_message" &&
+                        "Responde exatamente o texto configurado, sem chamar LLM."}
+                      {formData.finalAction === "handoff" &&
+                        "Não deixa a IA tentar resolver sozinha."}
+                    </p>
+                  </Field>
+                  <Field label="Ativo">
+                    <div className="flex items-center space-x-2 h-10">
+                      <Switch
+                        checked={formData.active}
+                        onCheckedChange={(c) => setFormData({ ...formData, active: c })}
+                      />
+                      <span className="text-sm">Fluxo ativado</span>
+                    </div>
+                  </Field>
+                </div>
+              </div>
+
+              {formData.finalAction === "fixed_message" && (
+                <Field label="Mensagem Fixa">
+                  <Textarea
+                    value={formData.fixedMessage || ""}
+                    onChange={(e) => setFormData({ ...formData, fixedMessage: e.target.value })}
+                    placeholder="Mensagem exata a ser enviada ao cliente"
+                    rows={3}
+                  />
+                </Field>
+              )}
+
+              {formData.finalAction === "handoff" && (
+                <Field label="Time de Transbordo (ID Chatwoot)">
+                  <Input
+                    value={formData.handoffTeamId || ""}
+                    onChange={(e) => setFormData({ ...formData, handoffTeamId: e.target.value })}
+                    placeholder="ID numérico do time no Chatwoot"
+                  />
+                </Field>
+              )}
+
+              <div className="border-t pt-4">
+                <h4 className="font-semibold text-base mb-3 text-primary">Escopo da Agenda</h4>
+                <p className="text-xs text-muted-foreground mb-4">
+                  Use estes campos para obrigar as ferramentas de agenda a consultar apenas recursos
+                  compatíveis com este fluxo.
+                </p>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <Field label="Categoria/modalidade da agenda">
+                    <Input
+                      value={calendarScopeForm.category}
+                      onChange={(e) =>
+                        setCalendarScopeForm((current) => ({
+                          ...current,
+                          category: e.target.value,
+                        }))
+                      }
+                      placeholder="Ex: Padel, Beach Tennis, Restaurante"
+                    />
+                  </Field>
+                  <Field label="Tipo de recurso">
+                    <Input
+                      value={calendarScopeForm.resourceType}
+                      onChange={(e) =>
+                        setCalendarScopeForm((current) => ({
+                          ...current,
+                          resourceType: e.target.value,
+                        }))
+                      }
+                      placeholder="Ex: quadra, restaurante, aula"
+                    />
+                  </Field>
+                  <Field label="Atributo">
+                    <Input
+                      value={calendarScopeForm.attribute}
+                      onChange={(e) =>
+                        setCalendarScopeForm((current) => ({
+                          ...current,
+                          attribute: e.target.value,
+                        }))
+                      }
+                      placeholder="Ex: coberta, descoberta"
+                    />
+                  </Field>
+                  <Field label="Duração padrão em minutos">
+                    <Input
+                      type="number"
+                      min={5}
+                      step={5}
+                      value={calendarScopeForm.durationMinutes}
+                      onChange={(e) =>
+                        setCalendarScopeForm((current) => ({
+                          ...current,
+                          durationMinutes: e.target.value,
+                        }))
+                      }
+                      placeholder="Ex: 60 ou 120"
+                    />
+                  </Field>
+                </div>
+              </div>
+
+              <div className="border-t pt-4">
+                <h4 className="font-semibold text-base mb-3 text-primary">Configurações Adicionais</h4>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <Field label="Permitir Auto Responder">
+                    <div className="flex items-center space-x-2 h-10">
+                      <Switch
+                        checked={formData.autoRespond}
+                        onCheckedChange={(c) => setFormData({ ...formData, autoRespond: c })}
+                      />
+                      <span className="text-sm">Se desativado, pulará a LLM</span>
+                    </div>
+                  </Field>
+                  <Field label="Requer Humano">
+                    <div className="flex items-center space-x-2 h-10">
+                      <Switch
+                        checked={formData.requiresHuman}
+                        onCheckedChange={(c) => setFormData({ ...formData, requiresHuman: c })}
+                      />
+                      <span className="text-sm">Força bypass da LLM e transbordo</span>
+                    </div>
+                  </Field>
+                  <Field label="Ferramentas Permitidas">
+                    <Textarea
+                      value={parseJsonToLines(formData.allowedToolSlugs)}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          allowedToolSlugs: parseLinesToJson(e.target.value),
+                        })
+                      }
+                      placeholder="Ex:&#10;calendar_checkAvailability"
+                      rows={3}
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Uma ferramenta por linha. Vazio libera todas as globais.
+                    </p>
+                  </Field>
+                  <Field label="Escopo de Conhecimento (Tags)">
+                    <Textarea
+                      value={parseJsonToLines(formData.knowledgeScope)}
+                      onChange={(e) =>
+                        setFormData({ ...formData, knowledgeScope: parseLinesToJson(e.target.value) })
+                      }
+                      placeholder="Ex:&#10;financeiro&#10;padel"
+                      rows={3}
+                    />
+                  </Field>
+                  <Field label="Labels do Chatwoot">
+                    <Textarea
+                      value={parseJsonToLines(formData.chatwootLabels)}
+                      onChange={(e) =>
+                        setFormData({ ...formData, chatwootLabels: parseLinesToJson(e.target.value) })
+                      }
+                      placeholder="Ex:&#10;urgente&#10;atendimento-financeiro"
+                      rows={3}
+                    />
+                  </Field>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-6 border-t mt-6">
+              <Button variant="outline" onClick={handleCancel}>
+                Cancelar
+              </Button>
+              <Button onClick={handleSave} disabled={saving}>
+                {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Salvar
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
@@ -326,280 +644,6 @@ export function AssistantFlowsTab({ assistantId }: AssistantFlowsTabProps) {
           ))}
         </div>
       )}
-
-      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
-        <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{editingFlow ? "Editar Fluxo" : "Novo Fluxo"}</DialogTitle>
-          </DialogHeader>
-
-          <div className="grid gap-6 py-4">
-            <div className="grid md:grid-cols-2 gap-4">
-              <Field label="Nome do Fluxo *">
-                <Input
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="Ex: Agendamento Padel"
-                />
-              </Field>
-              <Field label="Prioridade">
-                <Input
-                  type="number"
-                  value={formData.priority}
-                  onChange={(e) =>
-                    setFormData({ ...formData, priority: parseInt(e.target.value) || 0 })
-                  }
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  Maior número = avaliado primeiro.
-                </p>
-              </Field>
-            </div>
-
-            <Field label="Descrição Interna">
-              <Input
-                value={formData.description || ""}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                placeholder="Ex: Utilizado para marcar quadras de padel."
-              />
-            </Field>
-
-            <div className="border-t pt-4">
-              <h4 className="font-medium mb-3">Gatilhos de Intenção</h4>
-              <div className="grid md:grid-cols-2 gap-4">
-                <Field label="Palavras que ativam este fluxo">
-                  <Textarea
-                    value={parseJsonToLines(formData.triggerKeywords)}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        triggerKeywords: parseLinesToJson(e.target.value),
-                      })
-                    }
-                    placeholder="Ex:&#10;agendar&#10;marcar quadra"
-                    rows={4}
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Uma palavra ou frase curta por linha.
-                  </p>
-                </Field>
-                <Field label="Quando usar este fluxo?">
-                  <Textarea
-                    value={formData.triggerDescription || ""}
-                    onChange={(e) =>
-                      setFormData({ ...formData, triggerDescription: e.target.value })
-                    }
-                    placeholder="Ex: O cliente quer reservar um horário."
-                    rows={4}
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Usado pela IA caso as palavras-chave falhem.
-                  </p>
-                </Field>
-              </div>
-            </div>
-
-            <div className="border-t pt-4">
-              <h4 className="font-medium mb-3">Execução do Fluxo</h4>
-              <Field label="Regras deste fluxo">
-                <Textarea
-                  value={formData.flowInstructions || ""}
-                  onChange={(e) => setFormData({ ...formData, flowInstructions: e.target.value })}
-                  placeholder="Instruções adicionais que serão somadas ao prompt principal quando este fluxo for ativado."
-                  rows={4}
-                />
-              </Field>
-
-              <div className="grid md:grid-cols-2 gap-4 mt-4">
-                <Field label="Ação Final">
-                  <Select
-                    value={formData.finalAction || "respond"}
-                    onValueChange={(val) => setFormData({ ...formData, finalAction: val })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Selecione" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="respond">A IA responde</SelectItem>
-                      <SelectItem value="fixed_message">Mensagem fixa</SelectItem>
-                      <SelectItem value="handoff">Encaminhar para humano</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {formData.finalAction === "respond" &&
-                      "Usa a IA normalmente com as regras e ferramentas permitidas."}
-                    {formData.finalAction === "fixed_message" &&
-                      "Responde exatamente o texto configurado, sem chamar LLM."}
-                    {formData.finalAction === "handoff" &&
-                      "Não deixa a IA tentar resolver sozinha."}
-                  </p>
-                </Field>
-                <Field label="Ativo">
-                  <div className="flex items-center space-x-2 h-10">
-                    <Switch
-                      checked={formData.active}
-                      onCheckedChange={(c) => setFormData({ ...formData, active: c })}
-                    />
-                    <span className="text-sm">Fluxo ativado</span>
-                  </div>
-                </Field>
-              </div>
-            </div>
-
-            {formData.finalAction === "fixed_message" && (
-              <Field label="Mensagem Fixa">
-                <Textarea
-                  value={formData.fixedMessage || ""}
-                  onChange={(e) => setFormData({ ...formData, fixedMessage: e.target.value })}
-                  placeholder="Mensagem exata a ser enviada ao cliente"
-                  rows={2}
-                />
-              </Field>
-            )}
-
-            {formData.finalAction === "handoff" && (
-              <Field label="Time de Transbordo (ID Chatwoot)">
-                <Input
-                  value={formData.handoffTeamId || ""}
-                  onChange={(e) => setFormData({ ...formData, handoffTeamId: e.target.value })}
-                  placeholder="ID numérico do time no Chatwoot"
-                />
-              </Field>
-            )}
-
-            <div className="border-t pt-4">
-              <h4 className="font-medium mb-3">Escopo da Agenda</h4>
-              <p className="text-xs text-muted-foreground mb-4">
-                Use estes campos para obrigar as ferramentas de agenda a consultar apenas recursos
-                compatíveis com este fluxo.
-              </p>
-              <div className="grid md:grid-cols-2 gap-4">
-                <Field label="Categoria/modalidade da agenda">
-                  <Input
-                    value={calendarScopeForm.category}
-                    onChange={(e) =>
-                      setCalendarScopeForm((current) => ({
-                        ...current,
-                        category: e.target.value,
-                      }))
-                    }
-                    placeholder="Ex: Padel, Beach Tennis, Restaurante"
-                  />
-                </Field>
-                <Field label="Tipo de recurso">
-                  <Input
-                    value={calendarScopeForm.resourceType}
-                    onChange={(e) =>
-                      setCalendarScopeForm((current) => ({
-                        ...current,
-                        resourceType: e.target.value,
-                      }))
-                    }
-                    placeholder="Ex: quadra, restaurante, aula"
-                  />
-                </Field>
-                <Field label="Atributo">
-                  <Input
-                    value={calendarScopeForm.attribute}
-                    onChange={(e) =>
-                      setCalendarScopeForm((current) => ({
-                        ...current,
-                        attribute: e.target.value,
-                      }))
-                    }
-                    placeholder="Ex: coberta, descoberta"
-                  />
-                </Field>
-                <Field label="Duração padrão em minutos">
-                  <Input
-                    type="number"
-                    min={5}
-                    step={5}
-                    value={calendarScopeForm.durationMinutes}
-                    onChange={(e) =>
-                      setCalendarScopeForm((current) => ({
-                        ...current,
-                        durationMinutes: e.target.value,
-                      }))
-                    }
-                    placeholder="Ex: 60 ou 120"
-                  />
-                </Field>
-              </div>
-            </div>
-
-            <div className="border-t pt-4">
-              <h4 className="font-medium mb-3">Configurações Adicionais</h4>
-              <div className="grid md:grid-cols-2 gap-4">
-                <Field label="Permitir Auto Responder">
-                  <div className="flex items-center space-x-2 h-10">
-                    <Switch
-                      checked={formData.autoRespond}
-                      onCheckedChange={(c) => setFormData({ ...formData, autoRespond: c })}
-                    />
-                    <span className="text-sm">Se desativado, pulará a LLM</span>
-                  </div>
-                </Field>
-                <Field label="Requer Humano">
-                  <div className="flex items-center space-x-2 h-10">
-                    <Switch
-                      checked={formData.requiresHuman}
-                      onCheckedChange={(c) => setFormData({ ...formData, requiresHuman: c })}
-                    />
-                    <span className="text-sm">Força bypass da LLM e transbordo</span>
-                  </div>
-                </Field>
-                <Field label="Ferramentas Permitidas">
-                  <Textarea
-                    value={parseJsonToLines(formData.allowedToolSlugs)}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        allowedToolSlugs: parseLinesToJson(e.target.value),
-                      })
-                    }
-                    placeholder="Ex:&#10;calendar_checkAvailability"
-                    rows={2}
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Uma ferramenta por linha. Vazio libera todas as globais.
-                  </p>
-                </Field>
-                <Field label="Escopo de Conhecimento (Tags)">
-                  <Textarea
-                    value={parseJsonToLines(formData.knowledgeScope)}
-                    onChange={(e) =>
-                      setFormData({ ...formData, knowledgeScope: parseLinesToJson(e.target.value) })
-                    }
-                    placeholder="Ex:&#10;financeiro&#10;padel"
-                    rows={2}
-                  />
-                </Field>
-                <Field label="Labels do Chatwoot">
-                  <Textarea
-                    value={parseJsonToLines(formData.chatwootLabels)}
-                    onChange={(e) =>
-                      setFormData({ ...formData, chatwootLabels: parseLinesToJson(e.target.value) })
-                    }
-                    placeholder="Ex:&#10;urgente&#10;atendimento-financeiro"
-                    rows={2}
-                  />
-                </Field>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-2 pt-4 border-t">
-            <Button variant="outline" onClick={() => setIsModalOpen(false)}>
-              Cancelar
-            </Button>
-            <Button onClick={handleSave} disabled={saving}>
-              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Salvar
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
