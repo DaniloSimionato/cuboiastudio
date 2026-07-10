@@ -16,7 +16,7 @@ export class UpdateAssistantDto {
   @Transform(({ value }) => trimString(value))
   @IsOptional()
   @IsString()
-  @MaxLength(500)
+  @MaxLength(2000)
   description?: string;
 
   @Transform(({ value }) => trimString(value))
