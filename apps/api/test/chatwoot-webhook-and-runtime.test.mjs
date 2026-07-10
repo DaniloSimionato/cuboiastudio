@@ -539,6 +539,10 @@ function createAssistantServiceDeps(overrides = {}) {
     model: "gpt-4o-mini",
     temperature: 0.2,
     status: "ACTIVE",
+    company: {
+      name: "Empresa Teste",
+      timezone: "America/Sao_Paulo",
+    },
   };
 
   const conversationRecord = {
@@ -599,6 +603,14 @@ function createAssistantServiceDeps(overrides = {}) {
   const prisma = {
     assistant: {
       findFirst: async () => assistantRecord,
+    },
+    appInstallation: {
+      findMany: async () => [],
+      findFirst: async () => null,
+    },
+    assistantToolConfig: {
+      findMany: async () => [],
+      findFirst: async () => null,
     },
     assistantConversation: {
       findFirst: async () => conversationRecord,

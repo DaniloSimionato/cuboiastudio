@@ -1,6 +1,6 @@
 import { r as __toESM } from "../../_runtime.mjs";
 import { u as require_react } from "../@floating-ui/react-dom+[...].mjs";
-import { h as require_jsx_runtime, m as createContextScope, p as useLayoutEffect2, u as Primitive } from "./react-accordion+[...].mjs";
+import { d as useLayoutEffect2, f as Primitive, h as require_jsx_runtime, m as createContextScope } from "./react-accordion+[...].mjs";
 //#region node_modules/@radix-ui/react-use-callback-ref/dist/index.mjs
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 function useCallbackRef(callback) {

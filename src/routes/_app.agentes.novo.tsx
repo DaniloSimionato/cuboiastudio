@@ -21,6 +21,7 @@ import {
   type AssistantBehaviorTabRef,
 } from "../components/assistant/AssistantBehaviorTab";
 import { AssistantFlowsTab } from "../components/assistant/AssistantFlowsTab";
+import { AssistantToolsTab } from "../components/assistant/AssistantToolsTab";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -2198,10 +2199,7 @@ function NovoAgente() {
             <TabsContent value="ferramentas">
               <Card>
                 <CardContent className="p-6">
-                  <EmptyState
-                    title="Ferramentas não conectadas nesta etapa"
-                    description="A demo atual foca em assistentes, conhecimento e runtime determinístico."
-                  />
+                  <AssistantToolsTab assistantId={selectedAssistantId} />
                 </CardContent>
               </Card>
             </TabsContent>

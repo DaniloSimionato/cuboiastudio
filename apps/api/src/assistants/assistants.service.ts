@@ -17,6 +17,7 @@ import { type PreviewAssistantDto } from "./dto/preview-assistant.dto";
 import { type RunAssistantDto } from "./dto/run-assistant.dto";
 import { type UpdateAssistantStatusDto } from "./dto/update-assistant-status.dto";
 import { type UpdateAssistantDto } from "./dto/update-assistant.dto";
+import { UpdateAssistantToolsDto } from "./dto/update-assistant-tools.dto";
 import {
   buildOfficialBusinessContext,
   isValidIanaTimezone,
@@ -990,5 +991,155 @@ export class AssistantsService {
     return {
       items: items.map(toPreviewLogItem),
     };
+  }
+
+  async findTools(input: {
+    id: string;
+    user: AuthenticatedUser;
+    tenant: RequestTenant;
+  }) {
+    if (input.user.companyId !== input.tenant.companyId) {
+      throw new ForbiddenException("Tenant context does not match the authenticated user.");
+    }
+
+    const assistant = await this.prisma.assistant.findFirst({
+      where: {
+        id: input.id,
+        companyId: input.tenant.companyId,
+      },
+    });
+    if (!assistant) {
+      throw new NotFoundException("Assistant not found.");
+    }
+
+    const installations = await this.prisma.appInstallation.findMany({
+      where: {
+        companyId: input.tenant.companyId,
+        status: "ACTIVE",
+      },
+      include: {
+        app: true,
+      },
+    });
+
+    const configs = await this.prisma.assistantToolConfig.findMany({
+      where: {
+        assistantId: assistant.id,
+      },
+    });
+
+    const configMap = new Map<string, typeof configs[number]>();
+    for (const c of configs) {
+      configMap.set(`${c.appId}:${c.toolName}`, c);
+    }
+
+    const resultList: any[] = [];
+
+    for (const inst of installations) {
+      const appSlug = inst.app.slug;
+      
+      if (appSlug === "google_calendar") {
+        const calendarTools = [
+          { name: "calendar_checkAvailability", label: "Consultar disponibilidade", desc: "Consultar horários livres nas agendas.", defaultPerm: "READ", defaultConf: false },
+          { name: "calendar_getBookingsByContact", label: "Consultar agendamentos", desc: "Listar agendamentos futuros do cliente pelo telefone.", defaultPerm: "READ", defaultConf: false },
+          { name: "calendar_createBooking", label: "Criar agendamento", desc: "Marcar um novo horário.", defaultPerm: "WRITE", defaultConf: true },
+          { name: "calendar_rescheduleBooking", label: "Remarcar agendamento", desc: "Mudar data ou horário de reserva existente.", defaultPerm: "WRITE", defaultConf: true },
+          { name: "calendar_cancelBooking", label: "Cancelar agendamento", desc: "Excluir reserva existente.", defaultPerm: "WRITE", defaultConf: true }
+        ];
+
+        for (const t of calendarTools) {
+          const key = `${inst.app.id}:${t.name}`;
+          const existing = configMap.get(key);
+          resultList.push({
+            appId: inst.app.id,
+            appSlug: inst.app.slug,
+            appName: inst.app.name,
+            toolName: t.name,
+            displayName: t.label,
+            description: t.desc,
+            enabled: existing ? existing.enabled : true,
+            permissionType: existing ? existing.permissionType : t.defaultPerm,
+            requiresConfirmation: existing ? existing.requiresConfirmation : t.defaultConf,
+          });
+        }
+      } else if (appSlug === "custom_webhook") {
+        const webhookActions = await this.prisma.customWebhookAction.findMany({
+          where: {
+            companyId: input.tenant.companyId,
+            installationId: inst.id,
+            active: true,
+          },
+        });
+
+        for (const action of webhookActions) {
+          const toolName = `webhook_${action.name}`;
+          const key = `${inst.app.id}:${toolName}`;
+          const existing = configMap.get(key);
+          resultList.push({
+            appId: inst.app.id,
+            appSlug: inst.app.slug,
+            appName: inst.app.name,
+            toolName: toolName,
+            displayName: action.displayName,
+            description: action.descriptionAdmin || action.descriptionAi || "Ação de webhook customizado.",
+            enabled: existing ? existing.enabled : true,
+            permissionType: existing ? existing.permissionType : action.permissionType,
+            requiresConfirmation: existing ? existing.requiresConfirmation : action.requiresConfirmation,
+          });
+        }
+      }
+    }
+
+    return { items: resultList };
+  }
+
+  async updateTools(input: {
+    id: string;
+    dto: UpdateAssistantToolsDto;
+    user: AuthenticatedUser;
+    tenant: RequestTenant;
+  }) {
+    if (input.user.companyId !== input.tenant.companyId) {
+      throw new ForbiddenException("Tenant context does not match the authenticated user.");
+    }
+
+    const assistant = await this.prisma.assistant.findFirst({
+      where: {
+        id: input.id,
+        companyId: input.tenant.companyId,
+      },
+    });
+    if (!assistant) {
+      throw new NotFoundException("Assistant not found.");
+    }
+
+    await this.prisma.$transaction(
+      input.dto.tools.map((t) =>
+        this.prisma.assistantToolConfig.upsert({
+          where: {
+            assistantId_appId_toolName: {
+              assistantId: assistant.id,
+              appId: t.appId,
+              toolName: t.toolName,
+            },
+          },
+          update: {
+            enabled: t.enabled,
+            permissionType: t.permissionType,
+            requiresConfirmation: t.requiresConfirmation,
+          },
+          create: {
+            assistantId: assistant.id,
+            appId: t.appId,
+            toolName: t.toolName,
+            enabled: t.enabled,
+            permissionType: t.permissionType,
+            requiresConfirmation: t.requiresConfirmation,
+          },
+        })
+      )
+    );
+
+    return { success: true };
   }
 }

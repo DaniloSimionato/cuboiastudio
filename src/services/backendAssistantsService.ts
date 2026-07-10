@@ -302,4 +302,15 @@ export const backendAssistantsService = {
       body: JSON.stringify({ query, topK }),
     });
   },
+
+  async getTools(assistantId: string): Promise<any> {
+    return apiFetch<any>(`/assistants/${assistantId}/tools`);
+  },
+
+  async updateTools(assistantId: string, tools: any[]): Promise<any> {
+    return apiFetch<any>(`/assistants/${assistantId}/tools`, {
+      method: "PATCH",
+      body: JSON.stringify({ tools }),
+    });
+  },
 };

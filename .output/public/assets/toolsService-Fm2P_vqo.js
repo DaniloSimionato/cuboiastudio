@@ -1,0 +1,1 @@
+import{n as e}from"./apiClient-CIYxb1Ie.js";var t={async list(){return e(`/webhook-actions`)},async create(t){return e(`/webhook-actions`,{method:`POST`,body:JSON.stringify(t)})},async update(t,n){return e(`/webhook-actions/${t}`,{method:`PATCH`,body:JSON.stringify(n)})},async delete(t){return e(`/webhook-actions/${t}`,{method:`DELETE`})}};export{t};

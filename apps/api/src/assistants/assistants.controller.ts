@@ -34,6 +34,7 @@ import { PreviewAssistantDto } from "./dto/preview-assistant.dto";
 import { RunAssistantDto } from "./dto/run-assistant.dto";
 import { UpdateAssistantStatusDto } from "./dto/update-assistant-status.dto";
 import { UpdateAssistantDto } from "./dto/update-assistant.dto";
+import { UpdateAssistantToolsDto } from "./dto/update-assistant-tools.dto";
 
 @ApiTags("assistants")
 @Controller("assistants")
@@ -840,5 +841,36 @@ export class AssistantsController {
     @Tenant() tenant: RequestTenant,
   ): Promise<UpdateAssistantResponse> {
     return this.assistantsService.update({ id, dto, user, tenant });
+  }
+
+  @Get(":id/tools")
+  @UseGuards(AuthGuard, PermissionsGuard)
+  @RequirePermissions("assistants:read")
+  @ApiOperation({ summary: "Get assistant tool configurations" })
+  @ApiHeader({ name: "x-dev-user-id", required: true })
+  @ApiHeader({ name: "x-dev-company-id", required: true })
+  @ApiHeader({ name: "x-dev-user-email", required: true })
+  async findTools(
+    @Param("id") id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Tenant() tenant: RequestTenant,
+  ) {
+    return this.assistantsService.findTools({ id, user, tenant });
+  }
+
+  @Patch(":id/tools")
+  @UseGuards(AuthGuard, PermissionsGuard)
+  @RequirePermissions("assistants:write")
+  @ApiOperation({ summary: "Update assistant tool configurations" })
+  @ApiHeader({ name: "x-dev-user-id", required: true })
+  @ApiHeader({ name: "x-dev-company-id", required: true })
+  @ApiHeader({ name: "x-dev-user-email", required: true })
+  async updateTools(
+    @Param("id") id: string,
+    @Body() dto: UpdateAssistantToolsDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Tenant() tenant: RequestTenant,
+  ) {
+    return this.assistantsService.updateTools({ id, dto, user, tenant });
   }
 }

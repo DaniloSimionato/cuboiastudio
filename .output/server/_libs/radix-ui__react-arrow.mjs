@@ -1,6 +1,6 @@
 import { r as __toESM } from "../_runtime.mjs";
 import { u as require_react } from "./@floating-ui/react-dom+[...].mjs";
-import { h as require_jsx_runtime, u as Primitive } from "./@radix-ui/react-accordion+[...].mjs";
+import { f as Primitive, h as require_jsx_runtime } from "./@radix-ui/react-accordion+[...].mjs";
 //#region node_modules/@radix-ui/react-arrow/dist/index.mjs
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 var import_jsx_runtime = require_jsx_runtime();

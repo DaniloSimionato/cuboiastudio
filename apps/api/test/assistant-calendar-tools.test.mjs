@@ -99,6 +99,10 @@ function createMockPrisma() {
         status: "ACTIVE",
         createdAt: now,
         updatedAt: now,
+        company: {
+          name: "Mock Company",
+          timezone: "America/Sao_Paulo",
+        },
       },
     ],
     conversations: [
@@ -342,6 +346,10 @@ function createMockPrisma() {
           state.assistants.find((a) => a.id === where.id && a.companyId === where.companyId) ?? null
         );
       },
+    },
+    assistantToolConfig: {
+      findMany: async () => [],
+      findFirst: async () => null,
     },
     assistantConversation: {
       findFirst: async ({ where }) => {

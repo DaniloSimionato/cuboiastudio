@@ -28,6 +28,7 @@ import { Route as AppCanaisRouteImport } from './routes/_app.canais'
 import { Route as AppAppsIndexRouteImport } from './routes/_app.apps.index'
 import { Route as AppAgentesIndexRouteImport } from './routes/_app.agentes.index'
 import { Route as AppAppsGoogleCalendarRouteImport } from './routes/_app.apps.google-calendar'
+import { Route as AppAppsCustomWebhookRouteImport } from './routes/_app.apps.custom-webhook'
 import { Route as AppAgentesNovoRouteImport } from './routes/_app.agentes.novo'
 
 const PortalRoute = PortalRouteImport.update({
@@ -124,6 +125,11 @@ const AppAppsGoogleCalendarRoute = AppAppsGoogleCalendarRouteImport.update({
   path: '/apps/google-calendar',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAppsCustomWebhookRoute = AppAppsCustomWebhookRouteImport.update({
+  id: '/apps/custom-webhook',
+  path: '/apps/custom-webhook',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppAgentesNovoRoute = AppAgentesNovoRouteImport.update({
   id: '/agentes/novo',
   path: '/agentes/novo',
@@ -147,6 +153,7 @@ export interface FileRoutesByFullPath {
   '/testes': typeof AppTestesRoute
   '/variaveis': typeof AppVariaveisRoute
   '/agentes/novo': typeof AppAgentesNovoRoute
+  '/apps/custom-webhook': typeof AppAppsCustomWebhookRoute
   '/apps/google-calendar': typeof AppAppsGoogleCalendarRoute
   '/agentes/': typeof AppAgentesIndexRoute
   '/apps/': typeof AppAppsIndexRoute
@@ -168,6 +175,7 @@ export interface FileRoutesByTo {
   '/testes': typeof AppTestesRoute
   '/variaveis': typeof AppVariaveisRoute
   '/agentes/novo': typeof AppAgentesNovoRoute
+  '/apps/custom-webhook': typeof AppAppsCustomWebhookRoute
   '/apps/google-calendar': typeof AppAppsGoogleCalendarRoute
   '/agentes': typeof AppAgentesIndexRoute
   '/apps': typeof AppAppsIndexRoute
@@ -191,6 +199,7 @@ export interface FileRoutesById {
   '/_app/testes': typeof AppTestesRoute
   '/_app/variaveis': typeof AppVariaveisRoute
   '/_app/agentes/novo': typeof AppAgentesNovoRoute
+  '/_app/apps/custom-webhook': typeof AppAppsCustomWebhookRoute
   '/_app/apps/google-calendar': typeof AppAppsGoogleCalendarRoute
   '/_app/agentes/': typeof AppAgentesIndexRoute
   '/_app/apps/': typeof AppAppsIndexRoute
@@ -214,6 +223,7 @@ export interface FileRouteTypes {
     | '/testes'
     | '/variaveis'
     | '/agentes/novo'
+    | '/apps/custom-webhook'
     | '/apps/google-calendar'
     | '/agentes/'
     | '/apps/'
@@ -235,6 +245,7 @@ export interface FileRouteTypes {
     | '/testes'
     | '/variaveis'
     | '/agentes/novo'
+    | '/apps/custom-webhook'
     | '/apps/google-calendar'
     | '/agentes'
     | '/apps'
@@ -257,6 +268,7 @@ export interface FileRouteTypes {
     | '/_app/testes'
     | '/_app/variaveis'
     | '/_app/agentes/novo'
+    | '/_app/apps/custom-webhook'
     | '/_app/apps/google-calendar'
     | '/_app/agentes/'
     | '/_app/apps/'
@@ -404,6 +416,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAppsGoogleCalendarRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/apps/custom-webhook': {
+      id: '/_app/apps/custom-webhook'
+      path: '/apps/custom-webhook'
+      fullPath: '/apps/custom-webhook'
+      preLoaderRoute: typeof AppAppsCustomWebhookRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/agentes/novo': {
       id: '/_app/agentes/novo'
       path: '/agentes/novo'
@@ -428,6 +447,7 @@ interface AppRouteChildren {
   AppTestesRoute: typeof AppTestesRoute
   AppVariaveisRoute: typeof AppVariaveisRoute
   AppAgentesNovoRoute: typeof AppAgentesNovoRoute
+  AppAppsCustomWebhookRoute: typeof AppAppsCustomWebhookRoute
   AppAppsGoogleCalendarRoute: typeof AppAppsGoogleCalendarRoute
   AppAgentesIndexRoute: typeof AppAgentesIndexRoute
   AppAppsIndexRoute: typeof AppAppsIndexRoute
@@ -447,6 +467,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppTestesRoute: AppTestesRoute,
   AppVariaveisRoute: AppVariaveisRoute,
   AppAgentesNovoRoute: AppAgentesNovoRoute,
+  AppAppsCustomWebhookRoute: AppAppsCustomWebhookRoute,
   AppAppsGoogleCalendarRoute: AppAppsGoogleCalendarRoute,
   AppAgentesIndexRoute: AppAgentesIndexRoute,
   AppAppsIndexRoute: AppAppsIndexRoute,

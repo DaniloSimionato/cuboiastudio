@@ -182,6 +182,28 @@ var CirclePlay = createLucideIcon("circle-play", [["path", {
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var CircleQuestionMark = createLucideIcon("circle-question-mark", [
+	["circle", {
+		cx: "12",
+		cy: "12",
+		r: "10",
+		key: "1mglay"
+	}],
+	["path", {
+		d: "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3",
+		key: "1u773s"
+	}],
+	["path", {
+		d: "M12 17h.01",
+		key: "p32p05"
+	}]
+]);
+/**
+* @license lucide-react v0.575.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var Funnel = createLucideIcon("funnel", [["path", {
 	d: "M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z",
 	key: "sc7q7i"
@@ -707,6 +729,24 @@ var Circle = createLucideIcon("circle", [["circle", {
 	cy: "12",
 	r: "10",
 	key: "1mglay"
+}]]);
+/**
+* @license lucide-react v0.575.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
+var Clipboard = createLucideIcon("clipboard", [["rect", {
+	width: "8",
+	height: "4",
+	x: "8",
+	y: "2",
+	rx: "1",
+	ry: "1",
+	key: "tgr4d6"
+}], ["path", {
+	d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2",
+	key: "116196"
 }]]);
 /**
 * @license lucide-react v0.575.0 - ISC
@@ -1455,6 +1495,19 @@ var Rocket = createLucideIcon("rocket", [
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var RotateCcw = createLucideIcon("rotate-ccw", [["path", {
+	d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
+	key: "1357e3"
+}], ["path", {
+	d: "M3 3v5h5",
+	key: "1xhq8a"
+}]]);
+/**
+* @license lucide-react v0.575.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var Save = createLucideIcon("save", [
 	["path", {
 		d: "M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
@@ -1596,6 +1649,16 @@ var ShieldCheck = createLucideIcon("shield-check", [["path", {
 }], ["path", {
 	d: "m9 12 2 2 4-4",
 	key: "dzmm74"
+}]]);
+/**
+* @license lucide-react v0.575.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
+var Shield = createLucideIcon("shield", [["path", {
+	d: "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+	key: "oel41y"
 }]]);
 /**
 * @license lucide-react v0.575.0 - ISC
@@ -1947,4 +2010,4 @@ var X = createLucideIcon("x", [["path", {
 	key: "d8bk6v"
 }]]);
 //#endregion
-export { FileText as $, Plus as A, Sparkles as At, MapPin as B, ScrollText as C, ArrowRight as Ct, Radio as D, UserRound as Dt, RefreshCw as E, Activity as Et, Network as F, CirclePlay as Ft, Inbox as G, LockKeyhole as H, Moon as I, CircleCheck as It, GitBranch as J, Image as K, Mic as L, ChartColumn as Lt, Pencil as M, LoaderCircle as Mt, PencilLine as N, Layers as Nt, Power as O, TriangleAlert as Ot, Pause as P, Funnel as Pt, FileUp as Q, MessageSquare as R, Braces as Rt, Search as S, ArrowUpRight as St, Rocket as T, ArrowLeft as Tt, Link2 as U, LogOut as V, LayoutDashboard as W, Flag as X, FolderOpen as Y, Film as Z, ShieldCheck as _, Building2 as _t, Users as a, Clock as at, Settings2 as b, BookOpen as bt, Upload as c, CircleOff as ct, Trash as d, ChevronUp as dt, Eye as et, Trash2 as f, ChevronRight as ft, SmilePlus as g, CalendarDays as gt, Store as h, Check as ht, Video as i, Coins as it, Play as j, SlidersVertical as jt, PowerOff as k, TestTubeDiagonal as kt, TrendingUp as l, ChevronsRight as lt, Sun as m, ChevronDown as mt, Wrench as n, DollarSign as nt, User as o, Clock3 as ot, Timer as p, ChevronLeft as pt, Globe as q, Webhook as r, Copy as rt, UserCheck as s, Circle as st, X as t, EyeOff as tt, TrendingDown as u, ChevronsLeft as ut, ShieldAlert as v, Brain as vt, Save as w, ArrowRightLeft as wt, Send as x, Blocks as xt, Settings as y, Bot as yt, MessageCircle as z };
+export { Film as $, Power as A, UserRound as At, MessageSquare as B, CircleCheck as Bt, Search as C, BookOpen as Ct, Rocket as D, ArrowRightLeft as Dt, RotateCcw as E, ArrowRight as Et, PencilLine as F, LoaderCircle as Ft, Link2 as G, MapPin as H, Braces as Ht, Pause as I, Layers as It, Image as J, LayoutDashboard as K, Network as L, Funnel as Lt, Plus as M, TestTubeDiagonal as Mt, Play as N, Sparkles as Nt, RefreshCw as O, ArrowLeft as Ot, Pencil as P, SlidersVertical as Pt, Flag as Q, Moon as R, CircleQuestionMark as Rt, Send as S, Bot as St, Save as T, ArrowUpRight as Tt, LogOut as U, MessageCircle as V, ChartColumn as Vt, LockKeyhole as W, GitBranch as X, Globe as Y, FolderOpen as Z, Shield as _, ChevronDown as _t, Users as a, Copy as at, Settings as b, Building2 as bt, Upload as c, Clock3 as ct, Trash as d, CircleOff as dt, FileUp as et, Trash2 as f, ChevronsRight as ft, SmilePlus as g, ChevronLeft as gt, Store as h, ChevronRight as ht, Video as i, DollarSign as it, PowerOff as j, TriangleAlert as jt, Radio as k, Activity as kt, TrendingUp as l, Clipboard as lt, Sun as m, ChevronUp as mt, Wrench as n, Eye as nt, User as o, Coins as ot, Timer as p, ChevronsLeft as pt, Inbox as q, Webhook as r, EyeOff as rt, UserCheck as s, Clock as st, X as t, FileText as tt, TrendingDown as u, Circle as ut, ShieldCheck as v, Check as vt, ScrollText as w, Blocks as wt, Settings2 as x, Brain as xt, ShieldAlert as y, CalendarDays as yt, Mic as z, CirclePlay as zt };

@@ -3,7 +3,7 @@ import { u as require_react } from "../_libs/@floating-ui/react-dom+[...].mjs";
 import { t as require_jsx_dev_runtime } from "../_libs/react.mjs";
 import { n as useAuth } from "./auth-DYnTR_ad.mjs";
 import { t as Button } from "./button-TeH4yfmP.mjs";
-import { At as Sparkles, Ct as ArrowRight, H as LockKeyhole } from "../_libs/lucide-react.mjs";
+import { Et as ArrowRight, Nt as Sparkles, W as LockKeyhole } from "../_libs/lucide-react.mjs";
 import { P as useNavigate } from "../_libs/@tanstack/react-router+[...].mjs";
 import { a as CardTitle, i as CardHeader, n as CardContent, r as CardDescription, t as Card } from "./card-BW9s_OV3.mjs";
 //#region node_modules/.nitro/vite/services/ssr/assets/auth-BORRdPIg.js

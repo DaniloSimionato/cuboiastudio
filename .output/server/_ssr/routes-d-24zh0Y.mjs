@@ -2,7 +2,7 @@ import { r as __toESM } from "../_runtime.mjs";
 import { u as require_react } from "../_libs/@floating-ui/react-dom+[...].mjs";
 import { t as require_jsx_dev_runtime } from "../_libs/react.mjs";
 import { n as useAuth } from "./auth-DYnTR_ad.mjs";
-import { Mt as LoaderCircle } from "../_libs/lucide-react.mjs";
+import { Ft as LoaderCircle } from "../_libs/lucide-react.mjs";
 import { P as useNavigate } from "../_libs/@tanstack/react-router+[...].mjs";
 //#region node_modules/.nitro/vite/services/ssr/assets/routes-d-24zh0Y.js
 var import_react = /* @__PURE__ */ __toESM(require_react());

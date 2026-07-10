@@ -379,6 +379,35 @@ async function ensureGoogleCalendarApp(): Promise<void> {
   });
 }
 
+async function ensureCustomWebhookApp(): Promise<void> {
+  await prisma.app.upsert({
+    where: {
+      slug: "custom_webhook",
+    },
+    update: {
+      name: "Webhook Personalizado",
+      description:
+        "Cadastre webhooks customizados de leitura e escrita para integrar sistemas externos (ERP, CRM) com a IA.",
+      category: "Automação",
+      icon: "webhook",
+      availability: "AVAILABLE",
+      status: Status.ACTIVE,
+      isFeatured: true,
+    },
+    create: {
+      slug: "custom_webhook",
+      name: "Webhook Personalizado",
+      description:
+        "Cadastre webhooks customizados de leitura e escrita para integrar sistemas externos (ERP, CRM) com a IA.",
+      category: "Automação",
+      icon: "webhook",
+      availability: "AVAILABLE",
+      status: Status.ACTIVE,
+      isFeatured: true,
+    },
+  });
+}
+
 async function ensureComingSoonApps(): Promise<void> {
   for (const app of COMING_SOON_APPS) {
     await prisma.app.upsert({
@@ -456,6 +485,7 @@ async function main(): Promise<void> {
   await ensureStudioAdmin(user.id, permissions);
   await ensureAssistant(company.id);
   await ensureGoogleCalendarApp();
+  await ensureCustomWebhookApp();
   await ensureComingSoonApps();
   await ensureDefaultClassifications(company.id);
 
@@ -463,7 +493,7 @@ async function main(): Promise<void> {
   console.log(`Company: ${company.id}`);
   console.log(`User: ${DEMO_IDS.user}`);
   console.log(`Assistant: ${DEMO_IDS.assistant}`);
-  console.log("App catalog: google_calendar + 22 coming soon apps");
+  console.log("App catalog: google_calendar + custom_webhook + 22 coming soon apps");
   console.log(`Roles: ${Object.values(DEMO_IDS.roles).join(", ")}`);
 }
 

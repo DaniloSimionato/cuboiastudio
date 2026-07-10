@@ -17,6 +17,65 @@ import { PrismaService } from "../database/prisma.service";
 import type { UpdateAppInstallationStatusDto } from "./dto/update-app-installation-status.dto";
 import type { CreateGoogleCalendarResourceDto } from "./dto/create-google-calendar-resource.dto";
 import type { UpdateGoogleCalendarResourceDto } from "./dto/update-google-calendar-resource.dto";
+import { CreateWebhookActionDto } from "./dto/create-webhook-action.dto";
+import { UpdateWebhookActionDto } from "./dto/update-webhook-action.dto";
+import { encryptData, decryptData, getOrMigrateWebhookCredentials } from "../common/encryption";
+
+function validateWebhookSlug(name: string) {
+  if (!name) {
+    throw new BadRequestException("O nome identificador da ação não pode ser vazio.");
+  }
+  if (name.length > 50) {
+    throw new BadRequestException("O nome identificador da ação não pode exceder 50 caracteres.");
+  }
+  if (!/^[a-z0-9_]+$/.test(name)) {
+    throw new BadRequestException("O identificador deve conter apenas letras minúsculas, números e sublinhados (_).");
+  }
+  if (name.startsWith("calendar_")) {
+    throw new BadRequestException("O prefixo 'calendar_' é reservado para ferramentas nativas.");
+  }
+  const reserved = ["webhook", "custom_webhook", "google_calendar", "google_agenda"];
+  if (reserved.includes(name)) {
+    throw new BadRequestException(`O nome identificador '${name}' é reservado e não pode ser utilizado.`);
+  }
+}
+
+function validateWebhookUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.username || parsed.password) {
+      throw new BadRequestException("Credenciais embutidas na URL não são permitidas.");
+    }
+  } catch (err) {
+    if (err instanceof BadRequestException) throw err;
+    throw new BadRequestException("URL fornecida é inválida.");
+  }
+}
+
+export function redactWebhookConfig(action: any) {
+  if (!action) return null;
+  const actionObj = { ...action };
+  if (actionObj.authConfig && actionObj.authType && actionObj.authType !== "NONE") {
+    try {
+      const decryptedStr = decryptData(actionObj.authConfig as any);
+      const auth = JSON.parse(decryptedStr);
+      const redactedAuth: Record<string, string> = {};
+      for (const [k, v] of Object.entries(auth)) {
+        if (k === "token" || k === "password" || k === "keyValue") {
+          redactedAuth[k] = "••••••••";
+        } else {
+          redactedAuth[k] = String(v);
+        }
+      }
+      actionObj.authConfig = redactedAuth;
+    } catch {
+      actionObj.authConfig = null;
+    }
+  } else {
+    actionObj.authConfig = null;
+  }
+  return actionObj;
+}
 
 const GOOGLE_CALENDAR_SLUG = "google_calendar";
 
@@ -1082,5 +1141,161 @@ export class AppsService {
     }
 
     return toInstallationResponse(deleted);
+  }
+
+  async listWebhookActions(companyId: string) {
+    const items = await this.prisma.customWebhookAction.findMany({
+      where: { companyId },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const migratedItems = [];
+    for (const item of items) {
+      if (item.authConfig && item.authType !== "NONE" && !(item.authConfig as any).encryptedData) {
+        const newConfig = await getOrMigrateWebhookCredentials(this.prisma, item.id, item.authType || "NONE", item.authConfig);
+        if (newConfig) {
+          item.authConfig = newConfig;
+        }
+      }
+      migratedItems.push(redactWebhookConfig(item));
+    }
+    return migratedItems;
+  }
+
+  async createWebhookAction(companyId: string, dto: CreateWebhookActionDto) {
+    const installation = await this.prisma.appInstallation.findFirst({
+      where: { id: dto.installationId, companyId },
+      include: { app: true },
+    });
+    if (!installation) {
+      throw new NotFoundException("Instalação do app não encontrada.");
+    }
+    if (installation.app.slug !== "custom_webhook") {
+      throw new BadRequestException("A instalação informada não é do app Webhook Personalizado.");
+    }
+
+    validateWebhookSlug(dto.name);
+    validateWebhookUrl(dto.url);
+
+    const methodUpper = dto.method.toUpperCase();
+    const resolvedPermissionType = ["GET", "HEAD"].includes(methodUpper) ? "READ" : "WRITE";
+    const resolvedRequiresConfirmation = resolvedPermissionType === "WRITE" ? (dto.requiresConfirmation ?? false) : false;
+
+    let authConfig: any = null;
+    if (dto.authType && dto.authType !== "NONE" && dto.authConfig) {
+      const authStr = typeof dto.authConfig === "string" ? dto.authConfig : JSON.stringify(dto.authConfig);
+      authConfig = encryptData(authStr);
+    }
+
+    try {
+      const created = await this.prisma.customWebhookAction.create({
+        data: {
+          companyId,
+          installationId: dto.installationId,
+          name: dto.name,
+          displayName: dto.displayName,
+          descriptionAdmin: dto.descriptionAdmin ?? null,
+          descriptionAi: dto.descriptionAi ?? null,
+          method: methodUpper,
+          url: dto.url,
+          headers: (dto.headers ?? null) as any,
+          authType: dto.authType ?? "NONE",
+          authConfig: (authConfig ?? null) as any,
+          bodyTemplate: dto.bodyTemplate ?? null,
+          parameterSchema: (dto.parameterSchema ?? null) as any,
+          timeoutMs: dto.timeoutMs ?? 5000,
+          permissionType: resolvedPermissionType,
+          requiresConfirmation: resolvedRequiresConfirmation,
+          responseFilter: (dto.responseFilter ?? null) as any,
+          active: dto.active ?? true,
+        },
+      });
+      return redactWebhookConfig(created);
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        throw new BadRequestException("Já existe uma ação com este nome identificador nesta empresa.");
+      }
+      throw err;
+    }
+  }
+
+  async updateWebhookAction(companyId: string, id: string, dto: UpdateWebhookActionDto) {
+    const existing = await this.prisma.customWebhookAction.findFirst({
+      where: { id, companyId },
+    });
+    if (!existing) {
+      throw new NotFoundException("Ação de webhook não encontrada.");
+    }
+
+    if (dto.url) {
+      validateWebhookUrl(dto.url);
+    }
+
+    const methodUpper = (dto.method || existing.method).toUpperCase();
+    const resolvedPermissionType = ["GET", "HEAD"].includes(methodUpper) ? "READ" : "WRITE";
+    const resolvedRequiresConfirmation = resolvedPermissionType === "WRITE" 
+      ? (dto.requiresConfirmation !== undefined ? dto.requiresConfirmation : existing.requiresConfirmation)
+      : false;
+
+    let authConfig = existing.authConfig;
+    const authType = dto.authType || existing.authType;
+    if (authType && authType !== "NONE") {
+      if (dto.authConfig) {
+        const authStr = typeof dto.authConfig === "string" ? dto.authConfig : JSON.stringify(dto.authConfig);
+        const containsMask = authStr.includes("••••••••") || authStr.includes("••••");
+        if (!containsMask) {
+          authConfig = encryptData(authStr);
+        }
+      }
+    } else {
+      authConfig = null;
+    }
+
+    const updated = await this.prisma.customWebhookAction.update({
+      where: { id },
+      data: {
+        displayName: dto.displayName,
+        descriptionAdmin: dto.descriptionAdmin,
+        descriptionAi: dto.descriptionAi,
+        method: methodUpper,
+        url: dto.url,
+        headers: (dto.headers ?? null) as any,
+        authType: dto.authType ?? null,
+        authConfig: (authConfig ?? null) as any,
+        bodyTemplate: dto.bodyTemplate,
+        parameterSchema: (dto.parameterSchema ?? null) as any,
+        timeoutMs: dto.timeoutMs,
+        permissionType: resolvedPermissionType,
+        requiresConfirmation: resolvedRequiresConfirmation,
+        responseFilter: (dto.responseFilter ?? null) as any,
+        active: dto.active,
+      },
+    });
+    return redactWebhookConfig(updated);
+  }
+
+  async deleteWebhookAction(companyId: string, id: string) {
+    const existing = await this.prisma.customWebhookAction.findFirst({
+      where: { id, companyId },
+    });
+    if (!existing) {
+      throw new NotFoundException("Ação de webhook não encontrada.");
+    }
+
+    const toolName = `webhook_${existing.name}`;
+    await this.prisma.assistantToolConfig.deleteMany({
+      where: {
+        toolName,
+        assistant: {
+          companyId,
+        },
+      },
+    });
+
+    await this.prisma.customWebhookAction.delete({
+      where: { id },
+    });
+
+    return { success: true };
   }
 }

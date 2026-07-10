@@ -51,6 +51,8 @@ import {
   type CalendarToolScope,
   type ScopedCalendarResource,
 } from "../apps/google-calendar/google-calendar-tool-scope";
+import { secureFetch, validateJsonSchema, validateJsonDepth } from "../common/security";
+import { decryptData, getOrMigrateWebhookCredentials } from "../common/encryption";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -1809,7 +1811,10 @@ export class AssistantConversationsService {
           const flowToolContext = this.resolveFlowToolContext(selectedFlow ?? null);
           const calendarScope = flowToolContext?.calendar ?? null;
 
-          let tools = calendarToolsActive ? this.getGoogleCalendarToolsDefinitions() : undefined;
+          let resolvedTools = await this.resolveAssistantTools({
+            companyId: input.tenant.companyId,
+            assistantId: input.assistantId,
+          });
 
           // Filtro de ferramentas (Phase 1.5)
           if (selectedFlow) {
@@ -1819,20 +1824,20 @@ export class AssistantConversationsService {
               finalAction === "handoff" ||
               selectedFlow.autoRespond === false
             ) {
-              tools = undefined; // Nenhuma ferramenta se for bypass
+              resolvedTools = []; // Nenhuma ferramenta se for bypass
             } else if (selectedFlow.allowedToolSlugs) {
               try {
                 const allowedSlugs = JSON.parse(selectedFlow.allowedToolSlugs);
-                if (Array.isArray(allowedSlugs) && allowedSlugs.length > 0) {
-                  tools = tools?.filter((t) => allowedSlugs.includes(t.function.name));
-                } else if (Array.isArray(allowedSlugs) && allowedSlugs.length === 0) {
-                  tools = undefined;
+                if (Array.isArray(allowedSlugs)) {
+                  resolvedTools = resolvedTools.filter((t) => allowedSlugs.includes(t.function.name));
                 }
               } catch (e) {
                 // Ignore invalid JSON
               }
             }
           }
+
+          let tools = resolvedTools.length > 0 ? resolvedTools : undefined;
 
           const resourcesContext = calendarToolsActive
             ? await this.getCalendarResourcesContext(input.tenant.companyId, calendarScope)
@@ -2014,6 +2019,7 @@ export class AssistantConversationsService {
                 try {
                   const preparedTool = await this.prepareToolExecution({
                     companyId: input.tenant.companyId,
+                    assistantId: input.assistantId,
                     selectedFlow: selectedFlow ?? null,
                     toolName,
                     args: toolArgs,
@@ -2021,12 +2027,41 @@ export class AssistantConversationsService {
                   const effectiveToolArgs = preparedTool.args;
                   Object.assign(contextMetadata, preparedTool.metadata);
 
-                  const isMutating = [
-                    "calendar_createBooking",
-                    "calendar_rescheduleBooking",
-                    "calendar_cancelBooking",
-                  ].includes(toolName);
-                  if (isMutating) {
+                  let requiresConfirmation = false;
+                  if (toolName.startsWith("webhook_")) {
+                    const actionName = toolName.replace("webhook_", "");
+                    const action = await this.prisma.customWebhookAction.findFirst({
+                      where: { companyId: input.tenant.companyId, name: actionName, active: true },
+                    });
+                    if (action) {
+                      const appInst = await this.prisma.appInstallation.findFirst({
+                        where: { companyId: input.tenant.companyId, app: { slug: "custom_webhook" } },
+                      });
+                      const override = appInst
+                        ? await this.prisma.assistantToolConfig.findFirst({
+                            where: { assistantId: input.assistantId, appId: appInst.appId, toolName },
+                          })
+                        : null;
+                      requiresConfirmation = override ? override.requiresConfirmation : action.requiresConfirmation;
+                    }
+                  } else {
+                    const isMutating = [
+                      "calendar_createBooking",
+                      "calendar_rescheduleBooking",
+                      "calendar_cancelBooking",
+                    ].includes(toolName);
+                    const appInst = await this.prisma.appInstallation.findFirst({
+                      where: { companyId: input.tenant.companyId, app: { slug: "google_calendar" } },
+                    });
+                    const override = appInst
+                      ? await this.prisma.assistantToolConfig.findFirst({
+                          where: { assistantId: input.assistantId, appId: appInst.appId, toolName },
+                        })
+                      : null;
+                    requiresConfirmation = override ? override.requiresConfirmation : isMutating;
+                  }
+
+                  if (requiresConfirmation) {
                     await this.logToolAction(input.tenant.companyId, "confirmation_required", {
                       toolName,
                       args: effectiveToolArgs,
@@ -2058,6 +2093,8 @@ export class AssistantConversationsService {
                         toolName,
                         effectiveToolArgs,
                         preparedTool.metadata,
+                        input.assistantId,
+                        selectedFlow,
                       );
                     }
                   } else {
@@ -2066,6 +2103,8 @@ export class AssistantConversationsService {
                       toolName,
                       effectiveToolArgs,
                       preparedTool.metadata,
+                      input.assistantId,
+                      selectedFlow,
                     );
                   }
                 } catch (err) {
@@ -2588,6 +2627,7 @@ export class AssistantConversationsService {
 
   private async prepareToolExecution(input: {
     companyId: string;
+    assistantId: string;
     selectedFlow: AssistantConversationRuntimeAssistantRecord["flows"][number] | null;
     toolName: string;
     args: Record<string, any>;
@@ -2804,67 +2844,324 @@ export class AssistantConversationsService {
     toolName: string,
     args: any,
     metadata: Record<string, any> = {},
+    assistantId?: string,
+    selectedFlow?: any,
   ): Promise<string> {
-    if (!this.calendarToolsService) {
-      throw new Error("Calendar tools service unavailable.");
+    const startedAt = Date.now();
+
+    // --- GATEKEEPER VALIDATION (Fase 2) ---
+    if (!assistantId) {
+      throw new Error("Erro de execução: assistente não informado.");
     }
 
-    const startedAt = Date.now();
-    await this.logToolAction(companyId, "tool_call_requested", {
-      toolName,
-      arguments: args,
-      ...metadata,
+    const assistant = await this.prisma.assistant.findFirst({
+      where: { id: assistantId, companyId },
     });
+    if (!assistant) {
+      throw new Error("Erro de execução: assistente inválido ou não pertencente a esta empresa.");
+    }
 
-    try {
-      let result: any;
-      if (toolName === "calendar_checkAvailability") {
-        result = await this.calendarToolsService.checkAvailability({
-          companyId,
-          dto: args,
-        });
-      } else if (toolName === "calendar_createBooking") {
-        result = await this.calendarToolsService.createBooking({
-          companyId,
-          dto: args,
-        });
-      } else if (toolName === "calendar_getBookingsByContact") {
-        result = await this.calendarToolsService.getBookingsByContact({
-          companyId,
-          query: args,
-        });
-      } else if (toolName === "calendar_rescheduleBooking") {
-        result = await this.calendarToolsService.rescheduleBooking({
-          companyId,
-          bookingId: args.bookingId,
-          dto: args,
-        });
-      } else if (toolName === "calendar_cancelBooking") {
-        result = await this.calendarToolsService.cancelBooking({
-          companyId,
-          bookingId: args.bookingId,
-          dto: args,
-        });
-      } else {
-        throw new Error(`Tool not found: ${toolName}`);
+    // Validate selectedFlow allowedToolSlugs
+    if (selectedFlow) {
+      const finalAction = selectedFlow.finalAction || "respond";
+      if (
+        finalAction === "fixed_message" ||
+        finalAction === "handoff" ||
+        selectedFlow.autoRespond === false
+      ) {
+        throw new Error("Erro de execução: ação não permitida neste fluxo.");
+      }
+      if (selectedFlow.allowedToolSlugs) {
+        try {
+          const allowedSlugs = JSON.parse(selectedFlow.allowedToolSlugs);
+          if (Array.isArray(allowedSlugs) && !allowedSlugs.includes(toolName)) {
+            throw new Error(`Erro de execução: a ferramenta '${toolName}' não está autorizada no fluxo atual.`);
+          }
+        } catch {
+          // Ignore invalid JSON in flow config but fail safe
+        }
+      }
+    }
+
+    let isWebhook = toolName.startsWith("webhook_");
+    let isCalendar = toolName.startsWith("calendar_");
+
+    if (!isWebhook && !isCalendar) {
+      throw new Error(`Erro de execução: tipo de ferramenta '${toolName}' não suportado.`);
+    }
+
+    if (isCalendar) {
+      // 1. Verify Google Calendar App is installed and active for company
+      const appInst = await this.prisma.appInstallation.findFirst({
+        where: { companyId, app: { slug: "google_calendar" }, status: "ACTIVE" },
+      });
+      if (!appInst) {
+        throw new Error("Erro de execução: extensão Google Agenda não está instalada ou ativa.");
       }
 
-      await this.logToolAction(companyId, "tool_call_completed", {
+      // 2. Verify tool configuration is enabled for assistant
+      const config = await this.prisma.assistantToolConfig.findFirst({
+        where: { assistantId, appId: appInst.appId, toolName },
+      });
+      if (config && !config.enabled) {
+        throw new Error(`Erro de execução: a ferramenta '${toolName}' está desabilitada para este assistente.`);
+      }
+
+      // 3. Verify calendar tools are active in environment
+      if (!this.calendarToolsService) {
+        throw new Error("Erro de execução: serviço de Google Agenda inativo no servidor.");
+      }
+
+      await this.logToolAction(companyId, "tool_call_requested", {
         toolName,
-        durationMs: Date.now() - startedAt,
+        arguments: args,
         ...metadata,
       });
-      return JSON.stringify(result);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : "Erro na chamada do Google Agenda.";
-      await this.logToolAction(
-        companyId,
-        "tool_call_failed",
-        { toolName, error: errMsg, ...metadata },
-        "ERROR",
-      );
-      throw err;
+
+      try {
+        let result: any;
+        if (toolName === "calendar_checkAvailability") {
+          result = await this.calendarToolsService.checkAvailability({
+            companyId,
+            dto: args,
+          });
+        } else if (toolName === "calendar_createBooking") {
+          result = await this.calendarToolsService.createBooking({
+            companyId,
+            dto: args,
+          });
+        } else if (toolName === "calendar_getBookingsByContact") {
+          result = await this.calendarToolsService.getBookingsByContact({
+            companyId,
+            query: args,
+          });
+        } else if (toolName === "calendar_rescheduleBooking") {
+          result = await this.calendarToolsService.rescheduleBooking({
+            companyId,
+            bookingId: args.bookingId,
+            dto: args,
+          });
+        } else if (toolName === "calendar_cancelBooking") {
+          result = await this.calendarToolsService.cancelBooking({
+            companyId,
+            bookingId: args.bookingId,
+            dto: args,
+          });
+        } else {
+          throw new Error(`Tool not found: ${toolName}`);
+        }
+
+        await this.logToolAction(companyId, "tool_call_completed", {
+          toolName,
+          durationMs: Date.now() - startedAt,
+          ...metadata,
+        });
+        return JSON.stringify(result);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : "Erro na chamada do Google Agenda.";
+        await this.logToolAction(
+          companyId,
+          "tool_call_failed",
+          { toolName, error: errMsg, ...metadata },
+          "ERROR",
+        );
+        throw err;
+      }
     }
+
+    if (isWebhook) {
+      const actionName = toolName.replace("webhook_", "");
+
+      // 1. Get Custom Webhook Action and check active status
+      const action = await this.prisma.customWebhookAction.findFirst({
+        where: { companyId, name: actionName, active: true },
+      });
+      if (!action) {
+        throw new Error(`Erro de execução: ação de webhook '${actionName}' não encontrada ou inativa.`);
+      }
+
+      if (action.authConfig && action.authType && action.authType !== "NONE" && !(action.authConfig as any).encryptedData) {
+        const migrated = await getOrMigrateWebhookCredentials(this.prisma, action.id, action.authType || "NONE", action.authConfig);
+        if (migrated) {
+          action.authConfig = migrated;
+        }
+      }
+
+      // 2. Verify custom_webhook App is installed and active for company
+      const appInst = await this.prisma.appInstallation.findFirst({
+        where: { id: action.installationId, companyId, app: { slug: "custom_webhook" }, status: "ACTIVE" },
+      });
+      if (!appInst) {
+        throw new Error("Erro de execução: extensão Webhook Personalizado não está ativa para esta ação.");
+      }
+
+      // 3. Verify tool configuration is enabled for assistant
+      const config = await this.prisma.assistantToolConfig.findFirst({
+        where: { assistantId, appId: appInst.appId, toolName },
+      });
+      if (config && !config.enabled) {
+        throw new Error(`Erro de execução: a ferramenta '${toolName}' está desabilitada para este assistente.`);
+      }
+
+      // 4. Log start
+      await this.logToolAction(companyId, "tool_call_requested", {
+        toolName,
+        arguments: args,
+        ...metadata,
+      });
+
+      try {
+        const params = args || {};
+
+        // Parse allowed parameters from schema to restrict placeholder injection
+        const allowedParams = new Set<string>();
+        if (action.parameterSchema) {
+          const paramSchema = typeof action.parameterSchema === "string" ? JSON.parse(action.parameterSchema) : action.parameterSchema;
+          if (paramSchema && paramSchema.properties) {
+            for (const key of Object.keys(paramSchema.properties)) {
+              allowedParams.add(key);
+            }
+          }
+          // Validate JSON Schema
+          try {
+            validateJsonDepth(params, 5); // Limit depth
+            validateJsonSchema(paramSchema, params);
+          } catch (valErr: any) {
+            throw new Error(`Validação de parâmetros falhou: ${valErr.message}`);
+          }
+        }
+
+        // Replace placeholders safely in URL
+        let url = action.url;
+        url = url.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
+          const trimKey = key.trim();
+          if (!allowedParams.has(trimKey)) {
+            throw new Error(`Placeholder '{{${trimKey}}}' não está declarado no schema de parâmetros.`);
+          }
+          return params[trimKey] !== undefined ? encodeURIComponent(String(params[trimKey])) : "";
+        });
+
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+        };
+
+        if (action.headers) {
+          const customHeaders = typeof action.headers === "string" ? JSON.parse(action.headers) : action.headers;
+          for (const [k, v] of Object.entries(customHeaders)) {
+            let headerVal = String(v);
+            headerVal = headerVal.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
+              const trimKey = key.trim();
+              if (!allowedParams.has(trimKey)) {
+                throw new Error(`Placeholder '{{${trimKey}}}' não está declarado no schema de parâmetros.`);
+              }
+              return params[trimKey] !== undefined ? String(params[trimKey]) : "";
+            });
+            headers[k] = headerVal;
+          }
+        }
+
+        // Decrypt authConfig credentials
+        if (action.authType && action.authType !== "NONE" && action.authConfig) {
+          const authConfigRaw = typeof action.authConfig === "string" ? JSON.parse(action.authConfig) : action.authConfig;
+          let auth = authConfigRaw;
+          if (authConfigRaw && authConfigRaw.encryptedData && authConfigRaw.iv && authConfigRaw.authTag) {
+            try {
+              const decryptedStr = decryptData(authConfigRaw);
+              auth = JSON.parse(decryptedStr);
+            } catch (decErr) {
+              this.logger.error("Failed to decrypt custom webhook action credentials", decErr);
+              throw new Error("Falha ao descriptografar credenciais do webhook.");
+            }
+          }
+
+          if (auth) {
+            if (action.authType === "BEARER" && auth.token) {
+              headers["Authorization"] = `Bearer ${auth.token}`;
+            } else if (action.authType === "BASIC" && auth.username && auth.password) {
+              const credentials = Buffer.from(`${auth.username}:${auth.password}`).toString("base64");
+              headers["Authorization"] = `Basic ${credentials}`;
+            } else if (action.authType === "API_KEY" && auth.keyName && auth.keyValue) {
+              headers[auth.keyName] = auth.keyValue;
+            }
+          }
+        }
+
+        let body: string | undefined = undefined;
+        if (["POST", "PUT", "PATCH", "DELETE"].includes(action.method.toUpperCase())) {
+          if (action.bodyTemplate) {
+            body = action.bodyTemplate.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
+              const trimKey = key.trim();
+              if (!allowedParams.has(trimKey)) {
+                throw new Error(`Placeholder '{{${trimKey}}}' não está declarado no schema de parâmetros.`);
+              }
+              return params[trimKey] !== undefined
+                ? typeof params[trimKey] === "object"
+                  ? JSON.stringify(params[trimKey])
+                  : String(params[trimKey])
+                : "";
+            });
+            // Validate JSON output
+            try {
+              JSON.parse(body);
+            } catch {
+              throw new Error("O corpo do request gerado a partir do template não é um JSON válido.");
+            }
+          } else {
+            body = JSON.stringify(params);
+          }
+        }
+
+        // Call the secureFetch client containing SSRF and resource limit controls
+        const { status: responseStatus, text: responseText } = await secureFetch(url, action.method, headers, body, action.timeoutMs || 5000);
+
+        let finalResult: any = responseText;
+        try {
+          const jsonRes = JSON.parse(responseText);
+          if (action.responseFilter) {
+            const filterKeys = typeof action.responseFilter === "string" ? JSON.parse(action.responseFilter) : action.responseFilter;
+            if (Array.isArray(filterKeys) && filterKeys.length > 0) {
+              const filtered: Record<string, any> = {};
+              for (const k of filterKeys) {
+                if (jsonRes[k] !== undefined) {
+                  filtered[k] = jsonRes[k];
+                }
+              }
+              finalResult = filtered;
+            } else {
+              finalResult = jsonRes;
+            }
+          } else {
+            finalResult = jsonRes;
+          }
+        } catch {
+          // Keep response text if not JSON
+        }
+
+        const durationMs = Date.now() - startedAt;
+
+        await this.logToolAction(companyId, "tool_call_completed", {
+          toolName,
+          durationMs,
+          url: url.split("?")[0], // Remove query parameters from logs
+          method: action.method,
+          status: responseStatus,
+          ...metadata,
+        });
+
+        return typeof finalResult === "string" ? finalResult : JSON.stringify(finalResult);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : "Erro na chamada do webhook.";
+        await this.logToolAction(
+          companyId,
+          "tool_call_failed",
+          { toolName, error: errMsg, ...metadata },
+          "ERROR",
+        );
+        throw err;
+      }
+    }
+
+    throw new Error(`Erro de execução: tipo de ferramenta '${toolName}' não suportado.`);
   }
 
   private sanitizeMetadata(metadata: any): any {
@@ -2897,8 +3194,11 @@ export class AssistantConversationsService {
     status: "SUCCESS" | "ERROR" = "SUCCESS",
   ): Promise<void> {
     try {
+      const toolName = metadata?.toolName || "";
+      const appSlug = toolName.startsWith("webhook_") ? "custom_webhook" : "google_calendar";
+
       const app = await this.prisma.app.findFirst({
-        where: { slug: "google_calendar" },
+        where: { slug: appSlug },
         select: { id: true },
       });
       if (!app) return;
@@ -2924,8 +3224,88 @@ export class AssistantConversationsService {
         },
       });
     } catch (err) {
-      this.logger.error("Failed to write safe log for Google Calendar tool", err);
+      this.logger.error("Failed to write safe log for app action", err);
     }
+  }
+
+  private async resolveAssistantTools(input: {
+    companyId: string;
+    assistantId: string;
+  }) {
+    const installations = await this.prisma.appInstallation.findMany({
+      where: {
+        companyId: input.companyId,
+        status: "ACTIVE",
+      },
+      include: {
+        app: true,
+      },
+    });
+
+    const configs = await this.prisma.assistantToolConfig.findMany({
+      where: {
+        assistantId: input.assistantId,
+      },
+    });
+
+    const configMap = new Map<string, typeof configs[number]>();
+    for (const c of configs) {
+      configMap.set(`${c.appId}:${c.toolName}`, c);
+    }
+
+    const resolvedTools: any[] = [];
+
+    for (const inst of installations) {
+      const appSlug = inst.app.slug;
+
+      if (appSlug === "google_calendar") {
+        const calendarActive = await this.areGoogleCalendarToolsAvailable(input.companyId);
+        if (calendarActive) {
+          const calendarDefinitions = this.getGoogleCalendarToolsDefinitions();
+          
+          for (const def of calendarDefinitions) {
+            const name = def.function.name;
+            const key = `${inst.app.id}:${name}`;
+            const config = configMap.get(key);
+
+            if (!config || config.enabled) {
+              resolvedTools.push(def);
+            }
+          }
+        }
+      } else if (appSlug === "custom_webhook") {
+        const webhookActions = await this.prisma.customWebhookAction.findMany({
+          where: {
+            companyId: input.companyId,
+            installationId: inst.id,
+            active: true,
+          },
+        });
+
+        for (const action of webhookActions) {
+          const toolName = `webhook_${action.name}`;
+          const key = `${inst.app.id}:${toolName}`;
+          const config = configMap.get(key);
+
+          if (!config || config.enabled) {
+            const paramSchema = action.parameterSchema
+              ? (typeof action.parameterSchema === "string" ? JSON.parse(action.parameterSchema) : action.parameterSchema)
+              : { type: "object", properties: {}, required: [] };
+
+            resolvedTools.push({
+              type: "function",
+              function: {
+                name: toolName,
+                description: action.descriptionAi || action.displayName || "Executa uma chamada de webhook externo.",
+                parameters: paramSchema,
+              },
+            });
+          }
+        }
+      }
+    }
+
+    return resolvedTools;
   }
 
   public async resumeConversation(input: {

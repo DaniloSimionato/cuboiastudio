@@ -9,9 +9,16 @@ import { GoogleCalendarClientService } from "./google-calendar/google-calendar-c
 import { GoogleCalendarController } from "./google-calendar/google-calendar.controller";
 import { GoogleCalendarOAuthService } from "./google-calendar/google-calendar-oauth.service";
 import { ResourceClassificationsController } from "./google-calendar/resource-classifications.controller";
+import { WebhookActionsController } from "./webhook-actions.controller";
 
 @Module({
-  controllers: [AppsController, AppInstallationsController, GoogleCalendarController, ResourceClassificationsController],
+  controllers: [
+    AppsController,
+    AppInstallationsController,
+    GoogleCalendarController,
+    ResourceClassificationsController,
+    WebhookActionsController,
+  ],
   providers: [
     AppsService,
     GoogleCalendarOAuthService,

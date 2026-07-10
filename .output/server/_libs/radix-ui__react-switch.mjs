@@ -1,6 +1,6 @@
 import { r as __toESM } from "../_runtime.mjs";
 import { u as require_react } from "./@floating-ui/react-dom+[...].mjs";
-import { b as useComposedRefs, f as useControllableState, h as require_jsx_runtime, m as createContextScope, u as Primitive } from "./@radix-ui/react-accordion+[...].mjs";
+import { b as useComposedRefs, c as useControllableState, f as Primitive, h as require_jsx_runtime, m as createContextScope } from "./@radix-ui/react-accordion+[...].mjs";
 import { t as composeEventHandlers } from "./radix-ui__primitive.mjs";
 import { i as useSize, r as usePrevious } from "./@radix-ui/react-checkbox+[...].mjs";
 //#region node_modules/@radix-ui/react-switch/dist/index.mjs

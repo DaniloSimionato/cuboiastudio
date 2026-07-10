@@ -1,6 +1,6 @@
 import { r as __toESM } from "../../_runtime.mjs";
 import { l as require_react_dom, u as require_react } from "../@floating-ui/react-dom+[...].mjs";
-import { _ as createSlot, b as useComposedRefs, d as dispatchDiscreteCustomEvent, f as useControllableState, h as require_jsx_runtime, m as createContextScope, o as Presence, p as useLayoutEffect2, s as useId, u as Primitive } from "./react-accordion+[...].mjs";
+import { _ as createSlot, b as useComposedRefs, c as useControllableState, d as useLayoutEffect2, f as Primitive, h as require_jsx_runtime, l as Presence, m as createContextScope, p as dispatchDiscreteCustomEvent, u as useId } from "./react-accordion+[...].mjs";
 import { t as composeEventHandlers } from "../radix-ui__primitive.mjs";
 import { i as useCallbackRef$1 } from "./react-avatar+[...].mjs";
 import { __assign, __rest, __spreadArray } from "tslib";
@@ -270,8 +270,22 @@ function handleAndDispatchCustomEvent(name, handler, detail, { discrete }) {
 	else target.dispatchEvent(event);
 }
 //#endregion
-//#region node_modules/@radix-ui/react-focus-guards/dist/index.mjs
+//#region node_modules/@radix-ui/react-portal/dist/index.mjs
 var import_react_dom = /* @__PURE__ */ __toESM(require_react_dom(), 1);
+var PORTAL_NAME$1 = "Portal";
+var Portal = import_react.forwardRef((props, forwardedRef) => {
+	const { container: containerProp, ...portalProps } = props;
+	const [mounted, setMounted] = import_react.useState(false);
+	useLayoutEffect2(() => setMounted(true), []);
+	const container = containerProp || mounted && globalThis?.document?.body;
+	return container ? import_react_dom.createPortal(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Primitive.div, {
+		...portalProps,
+		ref: forwardedRef
+	}), container) : null;
+});
+Portal.displayName = PORTAL_NAME$1;
+//#endregion
+//#region node_modules/@radix-ui/react-focus-guards/dist/index.mjs
 var count = 0;
 var guards = null;
 function useFocusGuards() {
@@ -493,20 +507,6 @@ function arrayRemove(array, item) {
 function removeLinks(items) {
 	return items.filter((item) => item.tagName !== "A");
 }
-//#endregion
-//#region node_modules/@radix-ui/react-portal/dist/index.mjs
-var PORTAL_NAME$1 = "Portal";
-var Portal = import_react.forwardRef((props, forwardedRef) => {
-	const { container: containerProp, ...portalProps } = props;
-	const [mounted, setMounted] = import_react.useState(false);
-	useLayoutEffect2(() => setMounted(true), []);
-	const container = containerProp || mounted && globalThis?.document?.body;
-	return container ? import_react_dom.createPortal(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Primitive.div, {
-		...portalProps,
-		ref: forwardedRef
-	}), container) : null;
-});
-Portal.displayName = PORTAL_NAME$1;
 //#endregion
 //#region node_modules/aria-hidden/dist/es2015/index.js
 var getDefaultParent = function(originalTarget) {
@@ -1530,4 +1530,4 @@ function getState(open) {
 	return open ? "open" : "closed";
 }
 //#endregion
-export { DialogOverlay as a, DialogTrigger as c, Portal as d, FocusScope as f, DialogDescription as i, ReactRemoveScroll as l, DismissableLayer as m, DialogClose as n, DialogPortal as o, useFocusGuards as p, DialogContent as r, DialogTitle as s, Dialog as t, hideOthers as u };
+export { DialogOverlay as a, DialogTrigger as c, FocusScope as d, useFocusGuards as f, DialogDescription as i, ReactRemoveScroll as l, DismissableLayer as m, DialogClose as n, DialogPortal as o, Portal as p, DialogContent as r, DialogTitle as s, Dialog as t, hideOthers as u };

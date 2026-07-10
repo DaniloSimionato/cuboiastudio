@@ -193,6 +193,23 @@ function createMockPrisma(state) {
             (!where.companyId || item.companyId === where.companyId) &&
             (!where.appId || item.appId === where.appId),
         ) ?? null,
+      findMany: async ({ where }) =>
+        state.installations
+          .filter(
+            (installation) =>
+              !where || !where.companyId || installation.companyId === where.companyId,
+          )
+          .map((inst) => {
+            const app = state.apps.find((a) => a.id === inst.appId);
+            return {
+              ...inst,
+              app,
+            };
+          }),
+    },
+    assistantToolConfig: {
+      findMany: async () => [],
+      findFirst: async () => null,
     },
     appCredential: {
       findFirst: async ({ where }) =>

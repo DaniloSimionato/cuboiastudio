@@ -85,6 +85,7 @@ model Company {
   reservableResourceTypes       ReservableResourceType[]
   reservableResourceCategories  ReservableResourceCategory[]
   reservableResourceAttributes  ReservableResourceAttribute[]
+  customWebhookActions          CustomWebhookAction[]
 
   @@index([status])
   @@index([deletedAt])
@@ -108,6 +109,7 @@ model App {
 
   installations AppInstallation[]
   actionLogs    AppActionLog[]
+  toolConfigs   AssistantToolConfig[]
 
   @@index([status])
   @@map("apps")
@@ -131,6 +133,7 @@ model AppInstallation {
   actionLogs              AppActionLog[]
   googleCalendarResources GoogleCalendarResource[]
   googleCalendarBookings  GoogleCalendarBooking[]
+  customWebhookActions    CustomWebhookAction[]
 
   @@index([companyId, appId])
   @@index([companyId])
@@ -439,6 +442,7 @@ model Assistant {
   behavior                      AssistantBehavior?
   flows                         AssistantFlow[]
   securityRules                 AssistantSecurityRule[]
+  toolConfigs                   AssistantToolConfig[]
 
   @@index([companyId])
   @@index([status])
@@ -853,4 +857,53 @@ model AssistantKnowledgeChunk {
   @@index([assistantId])
   @@index([knowledgeId])
   @@map("assistant_knowledge_chunks")
+}
+
+model AssistantToolConfig {
+  id                   String   @id @default(cuid())
+  assistantId          String
+  appId                String   // ID or slug of the app
+  toolName             String   // Name of the legacy or custom tool
+  enabled              Boolean  @default(true)
+  permissionType       String   @default("READ") // "READ" or "WRITE"
+  requiresConfirmation Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  assistant Assistant @relation(fields: [assistantId], references: [id], onDelete: Cascade)
+  app       App       @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@unique([assistantId, appId, toolName])
+  @@map("assistant_tool_configs")
+}
+
+model CustomWebhookAction {
+  id               String   @id @default(cuid())
+  companyId        String
+  installationId   String
+  name             String   // E.g., "consultar_estoque"
+  displayName      String   // E.g., "Consultar Estoque"
+  descriptionAdmin String?
+  descriptionAi    String?
+  method           String   @default("GET") // GET, POST, PUT, DELETE, PATCH
+  url              String
+  headers          Json?    // E.g., { "Content-Type": "application/json" }
+  authType         String?  // NONE, BEARER, API_KEY, BASIC
+  authConfig       Json?    // Sensitive credentials
+  bodyTemplate     String?  // parameterized JSON body
+  parameterSchema  Json?    // JSON Schema parameter definitions
+  timeoutMs        Int      @default(5000)
+  permissionType   String   @default("READ") // READ or WRITE
+  requiresConfirmation Boolean @default(false)
+  responseFilter   Json?    // Allowed response fields or paths
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  company      Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  installation AppInstallation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, name])
+  @@index([installationId])
+  @@map("custom_webhook_actions")
 }
