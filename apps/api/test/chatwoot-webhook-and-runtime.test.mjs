@@ -124,6 +124,7 @@ function createWebhookDeps(overrides = {}) {
           sizeBytes: 7,
           sourceUrl: "https://chatwoot.example.com/rails/active_storage/blobs/1",
           thumbUrl: null,
+          resolvedType: input.attachment.type,
           metadataJson: { kind: "downloaded" },
         }
       );
@@ -1729,6 +1730,52 @@ test("falha no download marca anexo como failed e mantém fallback honesto", asy
     calls.sendMessage[0].preparedAttachments?.[0]?.processingError ?? "",
     /download indisponível/,
   );
+});
+
+test("webhook do Chatwoot persiste mídia com tipo resolvido após download autenticado", async () => {
+  const { service, calls } = createWebhookDeps({
+    downloadResult: {
+      buffer: Buffer.from([1, 2, 3, 4]),
+      mimeType: "image/jpeg",
+      fileName: "foto.jpg",
+      sizeBytes: 4,
+      sourceUrl: "https://storage.examplecdn.com/signed/foto.jpg?sig=abc",
+      thumbUrl: null,
+      resolvedType: "image",
+      metadataJson: { kind: "downloaded", contentType: "image/jpeg" },
+    },
+  });
+
+  await service.processMessageCreated({
+    payload: createMessageCreatedPayload({
+      id: "message-top-level",
+      message: undefined,
+      content: "",
+      message_type: "incoming",
+      sender_type: "contact",
+      source_id: "source-top-level",
+      sender: {
+        id: "sender-1",
+        name: "João",
+        phone_number: "+5511999999999",
+        type: "contact",
+      },
+      attachments: [
+        {
+          file_url: "/rails/active_storage/blobs/redirect/abc/foto.jpg",
+          content_type: "application/octet-stream",
+          file_type: "image",
+        },
+      ],
+    }),
+    webhookSecret: "secret-123",
+  });
+
+  assert.equal(calls.downloader.length, 1);
+  assert.equal(calls.sendMessage.length, 1);
+  assert.equal(calls.sendMessage[0].preparedAttachments?.[0]?.type, "image");
+  assert.equal(calls.sendMessage[0].preparedAttachments?.[0]?.processingStatus, "pending");
+  assert.equal(calls.sendMessage[0].preparedAttachments?.[0]?.mimeType, "image/jpeg");
 });
 
 test("mensagem outgoing é ignorada para evitar loop", async () => {

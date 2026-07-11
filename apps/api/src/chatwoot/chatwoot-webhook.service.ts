@@ -543,7 +543,10 @@ export class ChatwootWebhookService {
         `Chatwoot attachment found${input.traceLabel}: file=${attachment.fileName} type=${attachment.type} mime=${attachment.mimeType}`,
       );
 
-      const pendingDownload = !attachment.dataUrl || Boolean(attachment.attachmentStoragePending);
+      const hasDownloadCandidate = Boolean(
+        attachment.dataUrl?.trim() || attachment.url?.trim() || attachment.thumbUrl?.trim(),
+      );
+      const pendingDownload = !hasDownloadCandidate && Boolean(attachment.attachmentStoragePending);
       if (pendingDownload) {
         const placeholder = await persistInboundAttachment({
           conversationId: input.conversationId,
@@ -591,7 +594,7 @@ export class ChatwootWebhookService {
           conversationId: input.conversationId,
           externalMessageId: input.externalMessageId,
           source: input.source,
-          type: attachment.type,
+          type: downloaded.resolvedType,
           fileName: downloaded.fileName,
           mimeType: downloaded.mimeType,
           size: downloaded.sizeBytes,
@@ -607,10 +610,15 @@ export class ChatwootWebhookService {
 
         records.push({
           ...record,
+          type: downloaded.resolvedType,
           sourceUrl: downloaded.sourceUrl,
           metadataJson: downloaded.metadataJson,
         });
       } catch (error) {
+        const errorCode =
+          error instanceof Error && "code" in error && typeof error.code === "string"
+            ? error.code
+            : "DOWNLOAD_FAILED";
         const placeholder = await persistInboundAttachment({
           conversationId: input.conversationId,
           externalMessageId: input.externalMessageId,
@@ -637,13 +645,14 @@ export class ChatwootWebhookService {
           interpretedSummary: "Anexo do Chatwoot não pôde ser baixado nesta tentativa.",
           metadataJson: {
             kind: "download-failed",
+            errorCode,
             originalFileName: attachment.fileName,
             originalMimeType: attachment.mimeType,
           },
         });
 
         this.logger.warn(
-          `Chatwoot attachment download failed${input.traceLabel}: file=${attachment.fileName} type=${attachment.type}`,
+          `Chatwoot attachment download failed${input.traceLabel}: file=${attachment.fileName} type=${attachment.type} errorCode=${errorCode}`,
         );
       }
     }

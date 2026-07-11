@@ -151,6 +151,104 @@ function pickFirstIdentifier(...values: unknown[]): string | null {
   return null;
 }
 
+function readLastArrayItem(value: unknown): Record<string, unknown> | null {
+  if (!Array.isArray(value) || value.length === 0) {
+    return null;
+  }
+
+  for (let index = value.length - 1; index >= 0; index -= 1) {
+    const item = readObject(value[index]);
+    if (item) {
+      return item;
+    }
+  }
+
+  return null;
+}
+
+function extractAttachments(raw: Record<string, unknown>, data: Record<string, unknown> | null, message: Record<string, unknown> | null) {
+  const conversation = readObject(raw.conversation) ?? readObject(data?.conversation) ?? null;
+  const contentAttributes = readObject(raw.content_attributes) ?? readObject(data?.content_attributes) ?? null;
+  const fallbackConversationMessage = readLastArrayItem(conversation?.messages);
+
+  return readArray(
+    message?.attachments ??
+      raw.attachments ??
+      data?.attachments ??
+      contentAttributes?.attachments ??
+      fallbackConversationMessage?.attachments,
+  );
+}
+
+function inferAttachmentFileName(item: ChatwootRawAttachment, index: number): string {
+  const directName = pickFirstString(item.file_name, item.filename, item.name, item.title, item.fileName);
+  if (directName) {
+    return directName;
+  }
+
+  const candidateUrl = pickFirstString(
+    item.file_url,
+    item.fileUrl,
+    item.download_url,
+    item.downloadUrl,
+    item.data_url,
+    item.dataUrl,
+    item.url,
+    item.thumb_url,
+    item.thumbUrl,
+  );
+
+  if (candidateUrl && !candidateUrl.startsWith("data:")) {
+    try {
+      const parsed = new URL(candidateUrl, "https://chatwoot.invalid");
+      const baseName = parsed.pathname.split("/").filter(Boolean).pop()?.trim();
+      if (baseName) {
+        return decodeURIComponent(baseName);
+      }
+    } catch {
+      // Ignore malformed attachment URLs and fallback to generated name.
+    }
+  }
+
+  const extension = pickFirstString(item.extension, item.file_extension);
+  if (extension) {
+    return `attachment-${index + 1}.${extension.replace(/^\./, "")}`;
+  }
+
+  return `attachment-${index + 1}`;
+}
+
+function inferAttachmentMimeType(item: ChatwootRawAttachment): string {
+  const directMime = pickFirstString(
+    item.mime_type,
+    item.content_type,
+    item.file_mime_type,
+    item.file_content_type,
+    item.mimeType,
+  );
+  if (directMime && directMime.includes("/")) {
+    return directMime;
+  }
+
+  const typeHint = pickFirstString(item.type, item.file_type, item.media_type, item.category)?.toLowerCase() ?? "";
+  if (typeHint.startsWith("image/") || typeHint.startsWith("audio/") || typeHint.startsWith("video/")) {
+    return typeHint;
+  }
+
+  switch (typeHint) {
+    case "image":
+      return "image/*";
+    case "audio":
+      return "audio/*";
+    case "video":
+      return "video/*";
+    case "gif":
+      return "image/gif";
+    default:
+      return "application/octet-stream";
+  }
+}
+
 export function summarizeChatwootPayloadStructure(payload: unknown) {
   const raw = readObject(payload) ?? {};
   const data = readObject(raw.data);
@@ -159,7 +257,7 @@ export function summarizeChatwootPayloadStructure(payload: unknown) {
   const account = readObject(raw.account) ?? readObject(data?.account) ?? null;
   const inbox = readObject(raw.inbox) ?? readObject(data?.inbox) ?? null;
   const messageConversation = readObject(message?.conversation);
-  const attachments = readArray(message?.attachments ?? raw.attachments ?? data?.attachments);
+  const attachments = extractAttachments(raw, data, message);
 
   return {
     event: readString(raw.event ?? raw.event_type ?? data?.event ?? data?.event_type),
@@ -184,11 +282,8 @@ export function summarizeChatwootPayloadStructure(payload: unknown) {
 }
 
 function normalizeAttachment(item: ChatwootRawAttachment, index: number): NormalizedChatwootAttachment {
-  const fileName =
-    pickFirstString(item.file_name, item.filename, item.name, item.title) ?? `attachment-${index + 1}`;
-  const mimeType =
-    pickFirstString(item.mime_type, item.content_type, item.type, item.file_mime_type) ??
-    "application/octet-stream";
+  const fileName = inferAttachmentFileName(item, index);
+  const mimeType = inferAttachmentMimeType(item);
   const type = resolveAttachmentType(mimeType, item);
 
   return {
@@ -197,8 +292,8 @@ function normalizeAttachment(item: ChatwootRawAttachment, index: number): Normal
     mimeType,
     size: toNumber(item.size) ?? toNumber(item.file_size),
     dataUrl: pickFirstString(item.data_url, item.dataUrl),
-    url: pickFirstString(item.url),
-    thumbUrl: pickFirstString(item.thumb_url, item.thumbUrl),
+    url: pickFirstString(item.file_url, item.fileUrl, item.download_url, item.downloadUrl, item.url),
+    thumbUrl: pickFirstString(item.thumb_url, item.thumbUrl, item.thumbnail_url, item.thumbnailUrl),
     attachmentStoragePending: readBoolean(item.attachment_storage_pending),
     caption: pickFirstString(item.caption, item.content),
     durationSeconds: toNumber(item.duration) ?? toNumber(item.duration_seconds),
@@ -209,10 +304,22 @@ function normalizeAttachment(item: ChatwootRawAttachment, index: number): Normal
 }
 
 function resolveAttachmentType(mimeType: string, item: ChatwootRawAttachment) {
-  const rawType = pickFirstString(item.type, item.category, item.message_type)?.toLowerCase();
+  const rawType = pickFirstString(item.type, item.file_type, item.media_type, item.category, item.message_type)?.toLowerCase();
 
   if (rawType === "image" || rawType === "document" || rawType === "audio" || rawType === "video" || rawType === "gif") {
     return rawType;
+  }
+
+  if (rawType?.startsWith("image/")) {
+    return rawType.includes("gif") ? "gif" : "image";
+  }
+
+  if (rawType?.startsWith("audio/")) {
+    return "audio";
+  }
+
+  if (rawType?.startsWith("video/")) {
+    return "video";
   }
 
   if (mimeType.startsWith("image/")) {
@@ -245,7 +352,7 @@ export function normalizeChatwootMessageCreatedPayload(
   const conversationInbox = readObject(conversation.inbox);
   const additionalAttributes = readObject(raw.additional_attributes) ?? readObject(data?.additional_attributes) ?? {};
   const payloadMeta = readObject(raw.meta) ?? readObject(data?.meta) ?? {};
-  const messageAttachments = readArray(message.attachments ?? raw.attachments ?? data?.attachments);
+  const messageAttachments = extractAttachments(raw, data, message);
   const conversationMeta = readObject(conversation.meta);
   const conversationMetaSender = normalizeSenderSummary(conversationMeta?.sender);
 

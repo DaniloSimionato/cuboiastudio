@@ -201,13 +201,21 @@ export class AttachmentInterpreterService {
     }
 
     if (isVideo(normalizedMime, input.fileName)) {
+      this.logger.log(
+        JSON.stringify({
+          event: "videoProcessingStarted",
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+          sizeBytes: input.size,
+        }),
+      );
       return {
         processingStatus: "failed",
         processingError: "Vídeo não suportado nesta versão do pipeline de anexos.",
         extractedText: null,
         interpretedSummary: "Vídeo recebido, mas ainda não há processamento multimodal de frames nesta versão.",
         transcript: null,
-        metadataJson: { kind: "video", supported: false },
+        metadataJson: { kind: "video", supported: false, errorCode: "VIDEO_PROCESSING_FAILED" },
       };
     }
 
@@ -242,6 +250,15 @@ export class AttachmentInterpreterService {
   }
 
   private async processAudio(input: AttachmentInterpreterInput): Promise<AttachmentInterpreterResult> {
+    this.logger.log(
+      JSON.stringify({
+        event: "audioTranscriptionStarted",
+        fileName: input.fileName,
+        mimeType: input.mimeType,
+        sizeBytes: input.size,
+      }),
+    );
+
     if (!this.provider?.isConfigured()) {
       return {
         processingStatus: "failed",
@@ -260,6 +277,15 @@ export class AttachmentInterpreterService {
         trimOrNull(result.interpretedSummary) ??
         (transcript ? `O usuário enviou um áudio. Transcrição: ${transcript}` : "O usuário enviou um áudio.");
 
+      this.logger.log(
+        JSON.stringify({
+          event: "mediaProviderCompleted",
+          mediaType: "audio",
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+        }),
+      );
+
       return {
         processingStatus: "completed",
         extractedText: transcript,
@@ -269,6 +295,15 @@ export class AttachmentInterpreterService {
         metadataJson: result.metadataJson ?? { kind: "audio" },
       };
     } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          event: "mediaProcessingFailed",
+          mediaType: "audio",
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+          errorCode: "TRANSCRIPTION_FAILED",
+        }),
+      );
       this.logger.warn(`Audio interpretation failed for ${input.fileName}: ${error instanceof Error ? error.message : String(error)}`);
       return {
         processingStatus: "failed",
@@ -282,6 +317,15 @@ export class AttachmentInterpreterService {
   }
 
   private async processImage(input: AttachmentInterpreterInput): Promise<AttachmentInterpreterResult> {
+    this.logger.log(
+      JSON.stringify({
+        event: "imageProcessingStarted",
+        fileName: input.fileName,
+        mimeType: input.mimeType,
+        sizeBytes: input.size,
+      }),
+    );
+
     if (!this.provider?.isConfigured()) {
       return {
         processingStatus: "failed",
@@ -302,6 +346,15 @@ export class AttachmentInterpreterService {
           ? `O usuário enviou uma imagem chamada ${input.fileName}. Texto detectado: ${extractedText}`
           : `O usuário enviou uma imagem chamada ${input.fileName}.`);
 
+      this.logger.log(
+        JSON.stringify({
+          event: "mediaProviderCompleted",
+          mediaType: "image",
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+        }),
+      );
+
       return {
         processingStatus: "completed",
         extractedText,
@@ -311,6 +364,15 @@ export class AttachmentInterpreterService {
         metadataJson: result.metadataJson ?? { kind: "image" },
       };
     } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          event: "mediaProcessingFailed",
+          mediaType: "image",
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+          errorCode: "VISION_FAILED",
+        }),
+      );
       this.logger.warn(`Image interpretation failed for ${input.fileName}: ${error instanceof Error ? error.message : String(error)}`);
       return {
         processingStatus: "failed",

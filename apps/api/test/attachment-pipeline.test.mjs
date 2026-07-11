@@ -519,6 +519,40 @@ test("normalizador do Chatwoot preserva anexos estruturados", () => {
   assert.equal(normalized.conversationMetaSender, "Cliente final");
 });
 
+test("normalizador do Chatwoot extrai attachment do topo e infere tipo real do arquivo", () => {
+  const normalized = normalizeChatwootMessageCreatedPayload({
+    id: "msg_top_1",
+    event: "message_created",
+    content: "",
+    message_type: "incoming",
+    inbox: { id: "inbox_1", identifier: "chatwoot-inbox" },
+    conversation: {
+      id: "conv_top_1",
+      meta: { title: "Conversa WhatsApp" },
+    },
+    sender: {
+      id: "contact_1",
+      name: "Maria",
+      phone_number: "+5511999999999",
+    },
+    attachments: [
+      {
+        file_type: "audio",
+        content_type: "application/octet-stream",
+        file_url: "/rails/active_storage/blobs/redirect/abc/voice-note.ogg",
+      },
+    ],
+  });
+
+  assert.equal(normalized.dto.attachments?.length, 1);
+  assert.equal(normalized.dto.attachments?.[0]?.type, "audio");
+  assert.equal(normalized.dto.attachments?.[0]?.fileName, "voice-note.ogg");
+  assert.equal(
+    normalized.dto.attachments?.[0]?.url,
+    "/rails/active_storage/blobs/redirect/abc/voice-note.ogg",
+  );
+});
+
 test("download de anexo do Chatwoot usa data_url e api_access_token", async () => {
   const service = new ChatwootAttachmentDownloaderService({
     get: (key) => {
@@ -555,6 +589,9 @@ test("download de anexo do Chatwoot usa data_url e api_access_token", async () =
   try {
     const result = await service.downloadAttachment({
       config: {
+        companyId: "company-1",
+        assistantId: "assistant-1",
+        baseUrl: "https://chatwoot.example.com",
         apiAccessToken: "user-api-token",
       },
       attachment: {
@@ -569,11 +606,86 @@ test("download de anexo do Chatwoot usa data_url e api_access_token", async () =
 
     assert.equal(fetchCalls.length, 1);
     assert.equal(fetchCalls[0].url, "https://chatwoot.example.com/attachments/1");
-    assert.equal(fetchCalls[0].init.redirect, "follow");
+    assert.equal(fetchCalls[0].init.redirect, "manual");
     assert.equal(fetchCalls[0].init.headers.api_access_token, "user-api-token");
     assert.equal(fetchCalls[0].init.headers.Authorization, undefined);
     assert.equal(result.sizeBytes, 4);
     assert.equal(result.sourceUrl, "https://chatwoot.example.com/attachments/1");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("download de anexo do Chatwoot resolve URL relativa e não vaza token em redirect externo", async () => {
+  const service = new ChatwootAttachmentDownloaderService({
+    get: (key) => {
+      if (key === "CHATWOOT_ATTACHMENT_DOWNLOAD_TIMEOUT_MS") {
+        return 5000;
+      }
+
+      return undefined;
+    },
+  });
+  const originalFetch = globalThis.fetch;
+  const fetchCalls = [];
+
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url, init });
+
+    if (String(url).includes("/rails/active_storage/blobs/redirect/abc")) {
+      return {
+        ok: false,
+        status: 302,
+        headers: {
+          get: (name) => (name === "location" ? "https://storage.examplecdn.com/signed/file.jpg?signature=abc" : null),
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      status: 200,
+      headers: {
+        get: (name) => {
+          if (name === "content-type") {
+            return "image/jpeg";
+          }
+          if (name === "content-length") {
+            return "4";
+          }
+          return null;
+        },
+      },
+      arrayBuffer: async () => Uint8Array.from([1, 2, 3, 4]).buffer,
+    };
+  };
+
+  try {
+    const result = await service.downloadAttachment({
+      config: {
+        companyId: "company-1",
+        assistantId: "assistant-1",
+        baseUrl: "https://chatwoot.example.com",
+        apiAccessToken: "user-api-token",
+      },
+      attachment: {
+        type: "document",
+        fileName: "image.jpg",
+        mimeType: "application/octet-stream",
+        dataUrl: null,
+        url: "/rails/active_storage/blobs/redirect/abc/image.jpg",
+        thumbUrl: null,
+      },
+    });
+
+    assert.equal(fetchCalls.length, 2);
+    assert.equal(fetchCalls[0].url, "https://chatwoot.example.com/rails/active_storage/blobs/redirect/abc/image.jpg");
+    assert.equal(fetchCalls[0].init.headers.api_access_token, "user-api-token");
+    assert.equal(fetchCalls[1].url, "https://storage.examplecdn.com/signed/file.jpg?signature=abc");
+    assert.equal(fetchCalls[1].init.headers.api_access_token, undefined);
+    assert.equal(result.resolvedType, "image");
+    assert.equal(result.mimeType, "image/jpeg");
+    assert.equal(result.sourceUrl, "https://storage.examplecdn.com/signed/file.jpg?signature=abc");
   } finally {
     globalThis.fetch = originalFetch;
   }
