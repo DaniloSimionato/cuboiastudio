@@ -3,5 +3,5 @@ studio-stage.cubochat.com.br {
 }
 
 api-stage.cubochat.com.br {
-    reverse_proxy api:3001
+    reverse_proxy api:3011
 }

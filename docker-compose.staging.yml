@@ -51,7 +51,7 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "127.0.0.1:3001:3001"
+      - "127.0.0.1:3011:3011"
 
   frontend:
     image: node:22-alpine
@@ -78,7 +78,7 @@ services:
       - ./.env.staging
     environment:
       PORT: 8080
-      API_TARGET: http://api:3001
+      API_TARGET: http://api:3011
       FRONTEND_TARGET: http://frontend:4173
     depends_on:
       - api
