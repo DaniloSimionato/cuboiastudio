@@ -24,6 +24,11 @@ export function isMultiNeedTriageMessage(message: string): boolean {
 
   const text = message.toLowerCase().trim();
 
+  // If the message contains explicit request for list, let's NOT treat it as multi-need triage
+  if (/\b(me\s+)?(envie|mande|passa|quero|lista|quais|tabela)\b.*\b(lista|serviços|opções|opcoes|catalogo|catálogo)\b/i.test(text)) {
+    return false;
+  }
+
   const greetings = [
     /\b(oi|ol[aá]|opa|salve|eae|co[eé])\b/g,
     /\b(bom\s+dia|boa\s+tarde|boa\s+noite)\b/g,
@@ -33,7 +38,7 @@ export function isMultiNeedTriageMessage(message: string): boolean {
     /\b(voc[eê]\s+pode\s+me\s+ajudar|pode\s+me\s+ajudar|como\s+podemos\s+fazer|o\s+que\s+podemos\s+fazer)\b/g
   ];
 
-  const cleanAndCheckSubstance = (clause: string): string => {
+  const cleanText = (clause: string): string => {
     let temp = clause.trim();
     for (const pattern of greetings) {
       temp = temp.replace(pattern, "");
@@ -41,10 +46,32 @@ export function isMultiNeedTriageMessage(message: string): boolean {
     return temp.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").replace(/\s+/g, " ").trim();
   };
 
+  const serviceKeywords = [
+    "formatar", "formatação", "formatacao",
+    "ssd", "disco", "hd",
+    "memória", "memoria", "ram",
+    "tela", "display", "visor", "touch",
+    "bateria", "carga", "carregador", "conector",
+    "teclado", "mouse", "trackpad",
+    "limpar", "limpeza",
+    "pasta térmica", "pasta termica",
+    "upgrade", "melhorar", "lento", "lentidão", "lentidao",
+    "consertar", "conserto", "arrumar", "reparo", "reparar",
+    "placa", "placa-mãe", "placa-mae", "fonte",
+    "sistema", "windows", "macos", "mac", "computador", "notebook", "pc",
+    "trocar", "troca", "substituir", "substituição", "substituicao"
+  ];
+
+  const hasServiceKeyword = (clause: string): boolean => {
+    const cleaned = cleanText(clause);
+    return serviceKeywords.some(keyword => cleaned.includes(keyword));
+  };
+
   const lines = text.split(/\n+/).map(l => l.trim()).filter(l => l.length > 0);
+
   const explicitListItems = lines.filter(line => /^[-*•]|^\d+[.)]/.test(line));
   if (explicitListItems.length >= 2) {
-    return true;
+    return explicitListItems.some(item => hasServiceKeyword(item));
   }
 
   let totalSubstantiveParts = 0;
@@ -57,8 +84,7 @@ export function isMultiNeedTriageMessage(message: string): boolean {
 
     let lineSubstantiveParts = 0;
     for (const part of parts) {
-      const cleanPart = cleanAndCheckSubstance(part);
-      if (cleanPart.length > 2 && !["com", "para", "uma", "uns", "dos", "das"].includes(cleanPart)) {
+      if (hasServiceKeyword(part)) {
         lineSubstantiveParts++;
       }
     }
@@ -331,7 +357,9 @@ export class PromptCompilerService {
     }
 
     // 8. This late anchor prevents flows, knowledge and old messages from turning triage into a catalog.
-    messages.push({ role: "system", content: buildTriageDecisionBlock(currentMessage) });
+    if (isMultiNeedTriageMessage(currentMessage)) {
+      messages.push({ role: "system", content: buildTriageDecisionBlock(currentMessage) });
+    }
 
     // 9. History is context only; it must not become a style example.
     if (historyMessages.length > 0) {

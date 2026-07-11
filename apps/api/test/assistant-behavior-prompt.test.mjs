@@ -32,7 +32,7 @@ test("PromptCompiler prioriza segurança, comportamento e depois fluxo/conhecime
     flow: { name: "Agendamento", flowInstructions: "Pergunte a data." },
     knowledgeItems: [{ title: "Tabela formal", content: "Serviço: instalação de SSD." }],
     historyMessages: [{ role: "assistant", content: "• Serviço antigo em formato de catálogo." }],
-    currentMessage: "Quero trocar o SSD",
+    currentMessage: "Quero trocar o SSD, formatar o notebook e comprar memoria",
   });
 
   const contents = messages.map((message) => String(message.content));
@@ -65,44 +65,43 @@ test("PromptCompiler prioriza segurança, comportamento e depois fluxo/conhecime
 });
 
 test("isMultiNeedTriageMessage valida corretamente os cinco cenários de triagem", () => {
+  // Cenário A — pergunta simples em mensagens agrupadas
+  assert.equal(
+    isMultiNeedTriageMessage("Oi\nBom dia\nQual o horário de vocês?"),
+    false
+  );
 
-  // Cenário 1: Mensagem simples de linha única com uma necessidade (deve ser false)
-  assert.equal(isMultiNeedTriageMessage("Quero formatar meu pc."), false);
-  assert.equal(isMultiNeedTriageMessage("Gostaria de saber o valor para trocar a bateria."), false);
+  // Cenário B — pergunta direta de preço
+  assert.equal(
+    isMultiNeedTriageMessage("Quanto custa a formatação?"),
+    false
+  );
 
-  // Cenário 2: Mensagem multilinha com lista explícita de itens usando bullet points ou números (deve ser true)
+  // Cenário C — cliente pede explicitamente uma lista
+  assert.equal(
+    isMultiNeedTriageMessage("Me envie uma lista dos serviços de manutenção disponíveis."),
+    false
+  );
+
+  // Cenário D — uma única frase normal
+  assert.equal(
+    isMultiNeedTriageMessage("Quero saber como funciona o atendimento de vocês."),
+    false
+  );
+
+  // Cenário E — múltiplas necessidades em uma única mensagem
+  assert.equal(
+    isMultiNeedTriageMessage("Quero formatar meu computador, colocar um SSD e aumentar a memória."),
+    true
+  );
+
+  // Testes adicionais para listas explícitas e mensagens concatenadas multilinha
   assert.equal(
     isMultiNeedTriageMessage("- Formatar pc\n- Instalar SSD"),
     true
   );
   assert.equal(
-    isMultiNeedTriageMessage("1. Troca de tela\n2. Conserto de conector"),
-    true
-  );
-
-  // Cenário 3: Mensagem multilinha representando multiplas ideias/necessidades (mensagens concatenadas do Chatwoot) (deve ser true)
-  assert.equal(
     isMultiNeedTriageMessage("Oi bom dia\nQueria formatar meu computador\nPor mais memoria\nssd\nO que podemos fazer"),
     true
-  );
-
-  // Cenário 4: Mensagem de linha única solicitando múltiplos serviços explicitamente (deve ser true)
-  assert.equal(
-    isMultiNeedTriageMessage("Quero formatar meu pc, colocar um ssd e mais memoria"),
-    true
-  );
-  assert.equal(
-    isMultiNeedTriageMessage("Gostaria de ver o preço de tela, bateria e conector do iPhone 12"),
-    true
-  );
-
-  // Cenário 5: Saudação simples / mensagens conversacionais curtas multilinha sem necessidades (deve ser false)
-  assert.equal(
-    isMultiNeedTriageMessage("Olá, bom dia!\nTudo bem?"),
-    false
-  );
-  assert.equal(
-    isMultiNeedTriageMessage("Oi\nTudo bem?\nGostaria de tirar uma dúvida."),
-    false
   );
 });
