@@ -1468,7 +1468,7 @@ export class AssistantConversationsService {
               processingError: persistedAttachment.processingError ?? null,
               metadataJson: persistedAttachment.metadataJson ?? null,
             }
-          : await this.attachmentInterpreterService.processAttachment(interpreterInput)
+          : await this.attachmentInterpreterService.processAttachment(interpreterInput, input.tenant.companyId)
         : {
             processingStatus: "completed" as const,
             extractedText: persistedAttachment.extractedText ?? null,

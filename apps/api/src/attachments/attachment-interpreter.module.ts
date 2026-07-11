@@ -2,6 +2,8 @@ import { Module } from "@nestjs/common";
 import { AttachmentInterpreterService } from "./attachment-interpreter.service";
 import { OpenAiAttachmentInterpreterProvider } from "./openai-attachment-interpreter.provider";
 import type { AttachmentInterpreterProvider } from "./attachment-interpreter.types";
+import { AiModule } from "../ai/ai.module";
+import { AiService } from "../ai/ai.service";
 
 export const ATTACHMENT_INTERPRETER_PROVIDER = Symbol("ATTACHMENT_INTERPRETER_PROVIDER");
 
@@ -18,6 +20,7 @@ function createAttachmentInterpreterProvider(): AttachmentInterpreterProvider | 
 }
 
 @Module({
+  imports: [AiModule],
   providers: [
     {
       provide: ATTACHMENT_INTERPRETER_PROVIDER,
@@ -25,9 +28,9 @@ function createAttachmentInterpreterProvider(): AttachmentInterpreterProvider | 
     },
     {
       provide: AttachmentInterpreterService,
-      useFactory: (provider: AttachmentInterpreterProvider | null) =>
-        new AttachmentInterpreterService(provider),
-      inject: [ATTACHMENT_INTERPRETER_PROVIDER],
+      useFactory: (provider: AttachmentInterpreterProvider | null, aiService: AiService) =>
+        new AttachmentInterpreterService(provider, aiService),
+      inject: [ATTACHMENT_INTERPRETER_PROVIDER, AiService],
     },
   ],
   exports: [AttachmentInterpreterService],

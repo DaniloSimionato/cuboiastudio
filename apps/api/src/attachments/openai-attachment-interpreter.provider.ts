@@ -6,13 +6,9 @@ import type {
   AttachmentInterpreterProvider,
 } from "./attachment-interpreter.types";
 
-const DEFAULT_VISION_MODEL = "gpt-5.5";
-const DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+const DEFAULT_VISION_MODEL = "gpt-4o-mini";
+const DEFAULT_TRANSCRIPTION_MODEL = "whisper-1";
 const MAX_TEXT_OUTPUT_LENGTH = 8000;
-
-type OpenAiLikeResponse = {
-  output_text?: string;
-};
 
 function truncateText(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength).trimEnd()}…`;
@@ -25,10 +21,6 @@ function stripCodeFence(value: string): string {
 function dataUrlFromFile(path: string, mimeType: string): string {
   const base64 = fs.readFileSync(path).toString("base64");
   return `data:${mimeType};base64,${base64}`;
-}
-
-function extractTextFromResponse(response: OpenAiLikeResponse): string {
-  return typeof response.output_text === "string" ? response.output_text.trim() : "";
 }
 
 function parseJsonBlock(value: string): Record<string, unknown> | null {
@@ -61,8 +53,20 @@ export class OpenAiAttachmentInterpreterProvider implements AttachmentInterprete
   private readonly visionModel: string;
   private readonly transcriptionModel: string;
 
-  constructor(apiKey: string, options?: { visionModel?: string; transcriptionModel?: string }) {
-    this.client = new OpenAI({ apiKey });
+  constructor(
+    apiKey: string,
+    options?: {
+      baseUrl?: string;
+      visionModel?: string;
+      transcriptionModel?: string;
+      timeoutMs?: number;
+    },
+  ) {
+    this.client = new OpenAI({
+      apiKey,
+      baseURL: options?.baseUrl?.trim() || undefined,
+      timeout: options?.timeoutMs ?? undefined,
+    });
     this.visionModel = options?.visionModel?.trim() || DEFAULT_VISION_MODEL;
     this.transcriptionModel = options?.transcriptionModel?.trim() || DEFAULT_TRANSCRIPTION_MODEL;
   }
@@ -96,30 +100,32 @@ export class OpenAiAttachmentInterpreterProvider implements AttachmentInterprete
   }
 
   async interpretImage(input: AttachmentInterpreterInput) {
-    const response = (await this.client.responses.create({
+    const response = await this.client.chat.completions.create({
       model: this.visionModel,
-      input: [
+      messages: [
         {
           role: "user",
           content: [
             {
-              type: "input_text",
+              type: "text",
               text: buildInstruction(
-                "Analise a imagem e extraia uma descrição objetiva e qualquer texto visível em OCR.",
+                "Analise a imagem e extraia uma descrição objetiva e qualquer texto visível em OCR. Retorne preferencialmente em formato JSON estruturado com os campos: extractedText e interpretedSummary.",
                 input,
               ),
             },
             {
-              type: "input_image",
-              image_url: input.dataUrl ?? dataUrlFromFile(input.storagePath, input.mimeType),
-              detail: "high",
+              type: "image_url",
+              image_url: {
+                url: input.dataUrl ?? dataUrlFromFile(input.storagePath, input.mimeType),
+                detail: "high",
+              },
             },
           ],
         },
       ],
-    })) as OpenAiLikeResponse;
+    });
 
-    const rawText = extractTextFromResponse(response);
+    const rawText = response.choices?.[0]?.message?.content ?? "";
     const parsed = parseJsonBlock(rawText);
     const extractedText = trimOrNull(parsed?.extractedText ?? parsed?.ocr ?? parsed?.text ?? null);
     const interpretedSummary =
@@ -168,27 +174,34 @@ export class OpenAiAttachmentInterpreterProvider implements AttachmentInterprete
     prompt: string,
     kind: "pdf" | "document" | "spreadsheet",
   ) {
-    const response = (await this.client.responses.create({
+    let fileContentPrompt = "";
+    try {
+      if (
+        input.mimeType.startsWith("text/") ||
+        input.fileName.endsWith(".csv") ||
+        input.fileName.endsWith(".txt") ||
+        input.fileName.endsWith(".json")
+      ) {
+        const text = fs.readFileSync(input.storagePath, "utf8");
+        fileContentPrompt = `\n\nConteúdo do arquivo:\n${text.slice(0, 10000)}`;
+      } else {
+        fileContentPrompt = `\n\n[Arquivo binário: ${input.fileName} (${input.mimeType}), tamanho: ${input.size} bytes]`;
+      }
+    } catch (e) {
+      fileContentPrompt = `\n\n[Erro ao ler arquivo: ${e instanceof Error ? e.message : String(e)}]`;
+    }
+
+    const response = await this.client.chat.completions.create({
       model: this.visionModel,
-      input: [
+      messages: [
         {
           role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: buildInstruction(prompt, input),
-            },
-            {
-              type: "input_file",
-              filename: input.fileName,
-              file_data: input.dataUrl ?? dataUrlFromFile(input.storagePath, input.mimeType),
-            },
-          ],
+          content: buildInstruction(prompt, input) + fileContentPrompt,
         },
       ],
-    })) as OpenAiLikeResponse;
+    });
 
-    const rawText = extractTextFromResponse(response);
+    const rawText = response.choices?.[0]?.message?.content ?? "";
     const parsed = parseJsonBlock(rawText);
     const extractedText = trimOrNull(parsed?.extractedText ?? parsed?.text ?? rawText ?? null);
     const interpretedSummary =

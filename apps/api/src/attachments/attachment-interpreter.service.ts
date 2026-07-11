@@ -8,6 +8,8 @@ import {
   type AttachmentInterpreterResult,
   type AttachmentProcessingDebug,
 } from "./attachment-interpreter.types";
+import { AiService } from "../ai/ai.service";
+import { OpenAiAttachmentInterpreterProvider } from "./openai-attachment-interpreter.provider";
 
 const MAX_INTERPRETED_TEXT_LENGTH = 8000;
 const MAX_LOCAL_TEXT_FILE_LENGTH = 12000;
@@ -183,21 +185,58 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function getHttpStatus(error: unknown): number | null {
+  if (!error) return null;
+  const err = error as any;
+  if (typeof err.status === "number") return err.status;
+  if (typeof err.statusCode === "number") return err.statusCode;
+  if (typeof err.response?.status === "number") return err.response.status;
+  return null;
+}
+
+function getErrorCode(error: unknown): string | null {
+  if (!error) return null;
+  const err = error as any;
+  return err.code || err.type || null;
+}
+
 @Injectable()
 export class AttachmentInterpreterService {
   private readonly logger = new Logger(AttachmentInterpreterService.name);
 
-  constructor(private readonly provider: AttachmentInterpreterProvider | null) {}
+  constructor(
+    private readonly provider: AttachmentInterpreterProvider | null,
+    private readonly aiService?: AiService,
+  ) {}
 
   get isProviderConfigured(): boolean {
     return Boolean(this.provider?.isConfigured());
   }
 
-  async processAttachment(input: AttachmentInterpreterInput): Promise<AttachmentInterpreterResult> {
+  private async resolveProvider(companyId?: string): Promise<AttachmentInterpreterProvider | null> {
+    if (companyId && this.aiService) {
+      try {
+        const config = await this.aiService.resolveRuntimeConfig(companyId);
+        if (config && config.apiKey) {
+          return new OpenAiAttachmentInterpreterProvider(config.apiKey, {
+            baseUrl: config.baseUrl,
+            visionModel: config.model,
+            transcriptionModel: "whisper-1",
+            timeoutMs: config.requestTimeoutMs,
+          });
+        }
+      } catch (e) {
+        this.logger.warn(`Failed to resolve company AI settings: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    return this.provider;
+  }
+
+  async processAttachment(input: AttachmentInterpreterInput, companyId?: string): Promise<AttachmentInterpreterResult> {
     const normalizedMime = input.mimeType.toLowerCase();
 
     if (isAudio(normalizedMime, input.fileName)) {
-      return this.processAudio(input);
+      return this.processAudio(input, companyId);
     }
 
     if (isVideo(normalizedMime, input.fileName)) {
@@ -220,23 +259,23 @@ export class AttachmentInterpreterService {
     }
 
     if (isPdf(normalizedMime, input.fileName)) {
-      return this.processPdf(input);
+      return this.processPdf(input, companyId);
     }
 
     if (isSpreadsheet(normalizedMime, input.fileName)) {
-      return this.processSpreadsheet(input);
+      return this.processSpreadsheet(input, companyId);
     }
 
     if (isBinaryDocument(normalizedMime, input.fileName)) {
-      return this.processDocument(input);
+      return this.processDocument(input, companyId);
     }
 
     if (isTextMimeType(normalizedMime, input.fileName) || isCsvLike(normalizedMime, input.fileName)) {
-      return this.processTextLike(input);
+      return this.processTextLike(input, companyId);
     }
 
     if (normalizedMime.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i.test(input.fileName)) {
-      return this.processImage(input);
+      return this.processImage(input, companyId);
     }
 
     return {
@@ -249,7 +288,8 @@ export class AttachmentInterpreterService {
     };
   }
 
-  private async processAudio(input: AttachmentInterpreterInput): Promise<AttachmentInterpreterResult> {
+  private async processAudio(input: AttachmentInterpreterInput, companyId?: string): Promise<AttachmentInterpreterResult> {
+    const startedAt = Date.now();
     this.logger.log(
       JSON.stringify({
         event: "audioTranscriptionStarted",
@@ -259,7 +299,22 @@ export class AttachmentInterpreterService {
       }),
     );
 
-    if (!this.provider?.isConfigured()) {
+    const providerToUse = await this.resolveProvider(companyId);
+    if (!providerToUse || !providerToUse.isConfigured()) {
+      const durationMs = Date.now() - startedAt;
+      this.logger.warn(
+        JSON.stringify({
+          event: "mediaProcessingFailed",
+          provider: "none",
+          model: "none",
+          endpoint: "transcription",
+          statusHttp: null,
+          errorCode: "PROVIDER_NOT_CONFIGURED",
+          mimeType: input.mimeType,
+          size: input.size,
+          durationMs,
+        }),
+      );
       return {
         processingStatus: "failed",
         processingError: "Provider de áudio não configurado.",
@@ -271,18 +326,23 @@ export class AttachmentInterpreterService {
     }
 
     try {
-      const result = await this.provider.transcribeAudio(input);
+      const result = await providerToUse.transcribeAudio(input);
       const transcript = trimOrNull(result.transcript);
       const interpretedSummary =
         trimOrNull(result.interpretedSummary) ??
         (transcript ? `O usuário enviou um áudio. Transcrição: ${transcript}` : "O usuário enviou um áudio.");
 
+      const durationMs = Date.now() - startedAt;
       this.logger.log(
         JSON.stringify({
-          event: "mediaProviderCompleted",
-          mediaType: "audio",
-          fileName: input.fileName,
+          event: "mediaProcessingCompleted",
+          provider: result.metadataJson?.provider || "openai",
+          model: result.metadataJson?.model || (providerToUse as any)["transcriptionModel"] || "unknown",
+          endpoint: "transcription",
+          statusHttp: 200,
           mimeType: input.mimeType,
+          size: input.size,
+          durationMs,
         }),
       );
 
@@ -295,16 +355,26 @@ export class AttachmentInterpreterService {
         metadataJson: result.metadataJson ?? { kind: "audio" },
       };
     } catch (error) {
+      const durationMs = Date.now() - startedAt;
+      const statusHttp = getHttpStatus(error);
+      const errorCode = getErrorCode(error) || "TRANSCRIPTION_FAILED";
+      const modelUsed = (providerToUse as any)["transcriptionModel"] || "unknown";
+
       this.logger.warn(
         JSON.stringify({
           event: "mediaProcessingFailed",
-          mediaType: "audio",
-          fileName: input.fileName,
+          provider: "openai",
+          model: modelUsed,
+          endpoint: "transcription",
+          statusHttp,
+          errorCode,
           mimeType: input.mimeType,
-          errorCode: "TRANSCRIPTION_FAILED",
+          size: input.size,
+          durationMs,
         }),
       );
       this.logger.warn(`Audio interpretation failed for ${input.fileName}: ${error instanceof Error ? error.message : String(error)}`);
+
       return {
         processingStatus: "failed",
         processingError: error instanceof Error ? truncateText(error.message, 500) : "Falha ao transcrever áudio.",
@@ -316,7 +386,8 @@ export class AttachmentInterpreterService {
     }
   }
 
-  private async processImage(input: AttachmentInterpreterInput): Promise<AttachmentInterpreterResult> {
+  private async processImage(input: AttachmentInterpreterInput, companyId?: string): Promise<AttachmentInterpreterResult> {
+    const startedAt = Date.now();
     this.logger.log(
       JSON.stringify({
         event: "imageProcessingStarted",
@@ -326,7 +397,22 @@ export class AttachmentInterpreterService {
       }),
     );
 
-    if (!this.provider?.isConfigured()) {
+    const providerToUse = await this.resolveProvider(companyId);
+    if (!providerToUse || !providerToUse.isConfigured()) {
+      const durationMs = Date.now() - startedAt;
+      this.logger.warn(
+        JSON.stringify({
+          event: "mediaProcessingFailed",
+          provider: "none",
+          model: "none",
+          endpoint: "vision",
+          statusHttp: null,
+          errorCode: "PROVIDER_NOT_CONFIGURED",
+          mimeType: input.mimeType,
+          size: input.size,
+          durationMs,
+        }),
+      );
       return {
         processingStatus: "failed",
         processingError: "Provider de visão não configurado.",
@@ -338,7 +424,7 @@ export class AttachmentInterpreterService {
     }
 
     try {
-      const result = await this.provider.interpretImage(input);
+      const result = await providerToUse.interpretImage(input);
       const extractedText = trimOrNull(result.extractedText);
       const interpretedSummary =
         trimOrNull(result.interpretedSummary) ??
@@ -346,12 +432,17 @@ export class AttachmentInterpreterService {
           ? `O usuário enviou uma imagem chamada ${input.fileName}. Texto detectado: ${extractedText}`
           : `O usuário enviou uma imagem chamada ${input.fileName}.`);
 
+      const durationMs = Date.now() - startedAt;
       this.logger.log(
         JSON.stringify({
-          event: "mediaProviderCompleted",
-          mediaType: "image",
-          fileName: input.fileName,
+          event: "mediaProcessingCompleted",
+          provider: result.metadataJson?.provider || "openai",
+          model: result.metadataJson?.model || (providerToUse as any)["visionModel"] || "unknown",
+          endpoint: "vision",
+          statusHttp: 200,
           mimeType: input.mimeType,
+          size: input.size,
+          durationMs,
         }),
       );
 
@@ -364,16 +455,26 @@ export class AttachmentInterpreterService {
         metadataJson: result.metadataJson ?? { kind: "image" },
       };
     } catch (error) {
+      const durationMs = Date.now() - startedAt;
+      const statusHttp = getHttpStatus(error);
+      const errorCode = getErrorCode(error) || "VISION_FAILED";
+      const modelUsed = (providerToUse as any)["visionModel"] || "unknown";
+
       this.logger.warn(
         JSON.stringify({
           event: "mediaProcessingFailed",
-          mediaType: "image",
-          fileName: input.fileName,
+          provider: "openai",
+          model: modelUsed,
+          endpoint: "vision",
+          statusHttp,
+          errorCode,
           mimeType: input.mimeType,
-          errorCode: "VISION_FAILED",
+          size: input.size,
+          durationMs,
         }),
       );
       this.logger.warn(`Image interpretation failed for ${input.fileName}: ${error instanceof Error ? error.message : String(error)}`);
+
       return {
         processingStatus: "failed",
         processingError: error instanceof Error ? truncateText(error.message, 500) : "Falha ao interpretar imagem.",
@@ -385,7 +486,7 @@ export class AttachmentInterpreterService {
     }
   }
 
-  private async processPdf(input: AttachmentInterpreterInput): Promise<AttachmentInterpreterResult> {
+  private async processPdf(input: AttachmentInterpreterInput, companyId?: string): Promise<AttachmentInterpreterResult> {
     try {
       const parser = new PDFParse({ data: await readFile(input.storagePath) });
       try {
@@ -423,7 +524,8 @@ export class AttachmentInterpreterService {
       );
     }
 
-    if (!this.provider?.isConfigured()) {
+    const providerToUse = await this.resolveProvider(companyId);
+    if (!providerToUse || !providerToUse.isConfigured()) {
       return {
         processingStatus: "failed",
         processingError: "PDF sem texto extraível localmente e provider não configurado.",
@@ -435,7 +537,7 @@ export class AttachmentInterpreterService {
     }
 
     try {
-      const result = await this.provider.extractPdfText(input);
+      const result = await providerToUse.extractPdfText(input);
       const extractedText = trimOrNull(result.extractedText);
       const interpretedSummary =
         trimOrNull(result.interpretedSummary) ??
@@ -466,8 +568,9 @@ export class AttachmentInterpreterService {
     }
   }
 
-  private async processSpreadsheet(input: AttachmentInterpreterInput): Promise<AttachmentInterpreterResult> {
-    if (!this.provider?.isConfigured()) {
+  private async processSpreadsheet(input: AttachmentInterpreterInput, companyId?: string): Promise<AttachmentInterpreterResult> {
+    const providerToUse = await this.resolveProvider(companyId);
+    if (!providerToUse || !providerToUse.isConfigured()) {
       return {
         processingStatus: "failed",
         processingError: "Provider de planilhas não configurado.",
@@ -479,7 +582,7 @@ export class AttachmentInterpreterService {
     }
 
     try {
-      const result = await this.provider.summarizeSpreadsheet(input);
+      const result = await providerToUse.summarizeSpreadsheet(input);
       const extractedText = trimOrNull(result.extractedText);
       const interpretedSummary =
         trimOrNull(result.interpretedSummary) ??
@@ -508,8 +611,9 @@ export class AttachmentInterpreterService {
     }
   }
 
-  private async processDocument(input: AttachmentInterpreterInput): Promise<AttachmentInterpreterResult> {
-    if (!this.provider?.isConfigured()) {
+  private async processDocument(input: AttachmentInterpreterInput, companyId?: string): Promise<AttachmentInterpreterResult> {
+    const providerToUse = await this.resolveProvider(companyId);
+    if (!providerToUse || !providerToUse.isConfigured()) {
       return {
         processingStatus: "failed",
         processingError: "Provider de documentos não configurado.",
@@ -521,7 +625,7 @@ export class AttachmentInterpreterService {
     }
 
     try {
-      const result = await this.provider.extractTextFile(input);
+      const result = await providerToUse.extractTextFile(input);
       return {
         processingStatus: "completed",
         extractedText: trimOrNull(result.extractedText),
@@ -546,13 +650,14 @@ export class AttachmentInterpreterService {
     }
   }
 
-  private async processTextLike(input: AttachmentInterpreterInput): Promise<AttachmentInterpreterResult> {
+  private async processTextLike(input: AttachmentInterpreterInput, companyId?: string): Promise<AttachmentInterpreterResult> {
     const raw = await readFile(input.storagePath, "utf8");
     const csvLike = isCsvLike(input.mimeType, input.fileName);
     const local = buildLocalTextFromFile(input.fileName, raw, csvLike);
     const extractedText = truncateText(local.extractedText, MAX_LOCAL_TEXT_FILE_LENGTH);
 
-    if (!this.provider?.isConfigured()) {
+    const providerToUse = await this.resolveProvider(companyId);
+    if (!providerToUse || !providerToUse.isConfigured()) {
       return {
         processingStatus: "completed",
         extractedText,
@@ -565,7 +670,7 @@ export class AttachmentInterpreterService {
 
     if (csvLike) {
       try {
-        const result = await this.provider.summarizeSpreadsheet(input);
+        const result = await providerToUse.summarizeSpreadsheet(input);
         return {
           processingStatus: "completed",
           extractedText: trimOrNull(result.extractedText) ?? extractedText,
@@ -603,9 +708,9 @@ export class AttachmentInterpreterService {
       };
     }
 
-    if (this.provider?.isConfigured()) {
+    if (providerToUse?.isConfigured()) {
       try {
-        const result = await this.provider.extractTextFile(input);
+        const result = await providerToUse.extractTextFile(input);
         return {
           processingStatus: "completed",
           extractedText: trimOrNull(result.extractedText) ?? extractedText,
