@@ -228,6 +228,8 @@ export class ChatwootWebhookService {
           bufferSeconds: assistantSettings.messageBufferSeconds,
           user,
           tenant,
+          requestId: input.requestId ?? null,
+          correlationId: input.correlationId ?? null,
         });
         return finish(bufferedResult);
       }
@@ -241,6 +243,8 @@ export class ChatwootWebhookService {
         dto: normalized.dto,
         user,
         tenant,
+        requestId: input.requestId ?? null,
+        correlationId: input.correlationId ?? null,
         preparedAttachments,
       });
 
@@ -289,6 +293,8 @@ export class ChatwootWebhookService {
     bufferSeconds: number;
     user: any;
     tenant: any;
+    requestId: string | null;
+    correlationId: string | null;
   }): Promise<ChatwootWebhookProcessResult> {
     const { conversationId, bufferSeconds } = input;
 
@@ -361,6 +367,8 @@ export class ChatwootWebhookService {
           dto: combinedDto,
           user: input.user,
           tenant: input.tenant,
+          requestId: input.requestId,
+          correlationId: input.correlationId,
           preparedAttachments: combinedAttachments,
         });
         await this.recordResponseSent(input.config.id);

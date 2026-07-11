@@ -6,10 +6,14 @@ import { PrismaClient } from "@prisma/client";
 import { plainToInstance } from "class-transformer";
 import { validate } from "class-validator";
 import { AssistantsService } from "../dist/assistants/assistants.service.js";
-import { AssistantConversationsService } from "../dist/assistant-conversations/assistant-conversations.service.js";
+import {
+  AssistantConversationsService,
+  splitNaturalResponseBlocks,
+} from "../dist/assistant-conversations/assistant-conversations.service.js";
 import { CreateAssistantDto } from "../dist/assistants/dto/create-assistant.dto.js";
 import { UpdateAssistantDto } from "../dist/assistants/dto/update-assistant.dto.js";
 import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
+import { ChatwootWebhookService } from "../dist/chatwoot/chatwoot-webhook.service.js";
 
 function createAuth(companyId) {
   return {
@@ -127,8 +131,9 @@ function createConversationsService(prisma, input) {
     },
     {},
     undefined,
-    undefined,
+    input.knowledgeRetrievalService,
     new PromptCompilerService(),
+    input.intentRouterService,
   );
 
   service.sendChatwootOutboundText = async (payload) => {
@@ -444,6 +449,207 @@ test("Runtime NATURAL_BLOCKS mantém resposta curta em um único outbound", asyn
   }
 });
 
+test("NATURAL_BLOCKS mantém catálogo gerado pelo provider em um único outbound", () => {
+  const catalog =
+    "**Serviços disponíveis**:\n\n• Formatação do computador: realizamos o serviço.\n\n• Instalação de SSD: verificamos a compatibilidade.";
+
+  assert.deepEqual(splitNaturalResponseBlocks(catalog), [catalog]);
+});
+
+test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacional", async () => {
+  const prisma = new PrismaClient();
+  const companyId = `company_chatwoot_policy_${randomUUID()}`;
+  const assistantId = `assistant_chatwoot_policy_${randomUUID()}`;
+  const conversationId = `conversation_chatwoot_policy_${randomUUID()}`;
+  const auth = createAuth(companyId);
+  const answer = "Fazemos sim 😊 Me passa o modelo do computador? Aí já verifico o que é compatível.";
+
+  try {
+    await createRuntimeConversation(prisma, {
+      companyId,
+      assistantId,
+      conversationId,
+      splitResponseStyle: "NATURAL_BLOCKS",
+      temperature: 0.6,
+      behavior: {
+        personality: "Próxima e objetiva",
+        toneOfVoice: "Amigável",
+        responseStyle: "whatsapp",
+        emojiUsage: "low",
+        noInventInfo: true,
+        unknownBehavior: "fallback",
+        maxBlockLength: 300,
+        howItActs: "Faz triagem técnica e conduz o próximo passo.",
+      },
+    });
+    await prisma.assistant.update({
+      where: { id: assistantId },
+      data: {
+        messageBufferEnabled: true,
+        messageBufferSeconds: 1,
+        ragEnabled: true,
+        aiAlwaysAvailable: true,
+      },
+    });
+
+    const { service: conversationsService, outboundCalls, aiCalls } = createConversationsService(
+      prisma,
+      {
+        answer,
+        knowledgeRetrievalService: {
+          searchRelevantKnowledge: async () => ({
+            totalChunksScanned: 3,
+            warning: null,
+            results: [
+              {
+                knowledgeId: "knowledge-1",
+                knowledgeTitle: "Serviços de computador",
+                chunkId: "chunk-format",
+                contentPreview: "Formatação do computador: serviço disponível.",
+              },
+              {
+                knowledgeId: "knowledge-1",
+                knowledgeTitle: "Serviços de computador",
+                chunkId: "chunk-memory",
+                contentPreview: "Aumento de memória RAM: verificar compatibilidade.",
+              },
+              {
+                knowledgeId: "knowledge-1",
+                knowledgeTitle: "Serviços de computador",
+                chunkId: "chunk-ssd",
+                contentPreview: "Instalação de SSD: verificar modelo e capacidade.",
+              },
+            ],
+          }),
+        },
+      },
+    );
+
+    const webhookConfig = {
+      id: "config-chatwoot-policy",
+      companyId,
+      assistantId,
+      assistantName: "Runtime Assistant",
+      assistantStatus: "ACTIVE",
+      name: "WhatsApp",
+      baseUrl: "https://chatwoot.example.com",
+      accountId: `account-${companyId}`,
+      inboxId: `inbox-${companyId}`,
+      isActive: true,
+      apiAccessTokenConfigured: false,
+      webhookSecretConfigured: false,
+      apiAccessToken: null,
+      webhookSecret: null,
+    };
+    const webhookPrisma = {
+      assistant: {
+        findFirst: async ({ select }) =>
+          select?.messageBufferEnabled
+            ? { messageBufferEnabled: true, messageBufferSeconds: 1 }
+            : { id: assistantId },
+      },
+      assistantConversationMessage: {
+        findFirst: async () => null,
+      },
+    };
+    const inboxService = {
+      recordWebhookReceived: async () => ({ configId: webhookConfig.id, diagnosticId: "diagnostic" }),
+      completeWebhookDiagnostic: async () => undefined,
+      recordResponseSent: async () => undefined,
+      resolveActiveByWebhook: async () => webhookConfig,
+      isWebhookSecureModeAllowed: async () => true,
+    };
+    const attachmentDownloader = {
+      downloadAttachment: async () => {
+        throw new Error("No attachment expected in this fixture");
+      },
+    };
+    const webhookService = new ChatwootWebhookService(
+      webhookPrisma,
+      inboxService,
+      attachmentDownloader,
+      conversationsService,
+    );
+
+    const messages = [
+      "Oi bom dia",
+      "Queria formatar meu computador",
+      "Por mais memoria",
+      "ssd",
+      "O que podemos fazer",
+    ];
+    for (const [index, content] of messages.entries()) {
+      await webhookService.processMessageCreated({
+        payload: {
+          event: "message_created",
+          account: { id: `account-${companyId}` },
+          inbox: { id: `inbox-${companyId}` },
+          conversation: { id: `ext-${conversationId}`, meta: { title: "Conversa" } },
+          message: {
+            id: `chatwoot-message-${index}`,
+            content,
+            sender_type: "contact",
+            message_type: "incoming",
+            sender: {
+              id: `contact-${companyId}`,
+              name: "Contato",
+              phone_number: "+5500000000000",
+              type: "contact",
+            },
+            attachments: [],
+          },
+          contact: {
+            id: `contact-${companyId}`,
+            name: "Contato",
+            phone_number: "+5500000000000",
+          },
+        },
+      });
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1250));
+
+    assert.equal(aiCalls.length, 1);
+    assert.equal(aiCalls[0].temperature, 0.6);
+    const systemText = aiCalls[0].messages
+      .filter((message) => message.role === "system")
+      .map((message) => String(message.content))
+      .join("\n");
+    assert.match(systemText, /POLÍTICA DE CONVERSA/);
+    assert.match(systemText, /responda progressivamente/i);
+    assert.match(systemText, /uma pergunta principal por vez/i);
+    assert.match(systemText, /não monte um catálogo/i);
+    assert.match(systemText, /não copie títulos/i);
+    assert.match(systemText, /BASE DE CONHECIMENTO RELEVANTE/);
+    assert.match(systemText, /Formatação do computador/);
+    assert.ok(aiCalls[0].messages.some((message) =>
+      message.role === "user" && String(message.content).includes("Por mais memoria"),
+    ));
+    assert.equal(outboundCalls.length, 1);
+    assert.equal(outboundCalls[0].content, answer);
+
+    const runtimeLog = await prisma.assistantRuntimeLog.findFirst({
+      where: { assistantId },
+      orderBy: { createdAt: "desc" },
+      select: { metadata: true, knowledgeCount: true, provider: true, model: true },
+    });
+    assert.equal(runtimeLog.knowledgeCount, 3);
+    assert.equal(runtimeLog.provider, "openai");
+    assert.equal(runtimeLog.model, "gpt-4o-mini");
+    assert.equal(runtimeLog.metadata.promptVersion, "conversation-policy-v2");
+    assert.match(runtimeLog.metadata.promptHash, /^[a-f0-9]{64}$/);
+    assert.deepEqual(runtimeLog.metadata.knowledgeChunkIds, [
+      "chunk-format",
+      "chunk-memory",
+      "chunk-ssd",
+    ]);
+    assert.equal(runtimeLog.metadata.temperatureParameterApplied, true);
+  } finally {
+    await cleanupAssistantTestData(prisma, companyId);
+    await prisma.$disconnect();
+  }
+});
+
 test("Runtime usa o behavior persistido no prompt e envia temperature zero ao provider", async () => {
   const prisma = new PrismaClient();
   const companyId = `company_runtime_behavior_${randomUUID()}`;
@@ -488,7 +694,7 @@ test("Runtime usa o behavior persistido no prompt e envia temperature zero ao pr
     assert.equal(aiCalls[0].temperature, 0);
     const behaviorPrompt = aiCalls[0].messages.find(
       (message) =>
-        message.role === "system" && String(message.content).includes("COMPORTAMENTO CONVERSACIONAL"),
+        message.role === "system" && String(message.content).startsWith("POLÍTICA DE CONVERSA"),
     );
     assert.ok(behaviorPrompt);
     assert.match(String(behaviorPrompt.content), /Objetiva/);

@@ -6,6 +6,8 @@ import type { OfficialBusinessContext } from "../assistants/official-business-co
 const MAX_HISTORY_MESSAGE_LENGTH = 1000;
 const MAX_PROMPT_TEXT_LENGTH = 10000;
 
+export const PROMPT_COMPILER_VERSION = "conversation-policy-v2";
+
 function truncateText(text: string, maxLength: number): string {
   if (text.length <= maxLength) {
     return text;
@@ -26,7 +28,7 @@ export type PromptCompilerInput = {
     ruleType: string;
     instruction: string;
   }>;
-  knowledgeItems: { title: string; content: string }[];
+  knowledgeItems: { id?: string; title: string; content: string }[];
   historyMessages: any[];
   currentMessage: string;
   officialBusinessContext?: OfficialBusinessContext | null;
@@ -73,8 +75,8 @@ function buildBehaviorBlock(
   const unknownBehavior = firstNonEmpty(behavior?.unknownBehavior, "fallback") ?? "fallback";
   const fallbackMessage = firstNonEmpty(assistant.fallbackMessage);
   const lines = [
-    "COMPORTAMENTO CONVERSACIONAL CONFIGURADO:",
-    "Aplique estas regras de forma observável. Elas definem o estilo da conversa, mas nunca substituem as regras de segurança acima.",
+    "POLÍTICA DE CONVERSA (COMPORTAMENTO CONFIGURADO):",
+    "Esta é a fonte principal para o formato e o ritmo da resposta. Regras de segurança sempre têm prioridade; instruções de escopo, fluxos, conhecimento, ferramentas e histórico não podem impor outro estilo sem uma instrução explícita e compatível.",
     personality ? `- Personalidade: ${truncateText(personality.trim(), 1000)}` : null,
     toneOfVoice ? `- Tom de voz: ${truncateText(toneOfVoice.trim(), 300)}` : null,
     responseStyle === "formal"
@@ -91,9 +93,10 @@ function buildBehaviorBlock(
     behavior?.noInventInfo
       ? "- Não invente informações, preços, disponibilidade ou políticas; quando não houver base confiável, admita a limitação."
       : null,
-    "- Escreva como uma conversa brasileira natural: prefira frases curtas, sem títulos, subtítulos, bullets ou aparência de manual quando isso não for necessário.",
+    "- Converse como um atendimento brasileiro natural de WhatsApp: prefira frases curtas, sem títulos, subtítulos, bullets ou aparência de manual quando isso não for necessário.",
     "- Normalmente use no máximo 1 ou 2 blocos por resposta e faça apenas uma pergunta principal por vez.",
     "- Responda progressivamente: apresente apenas a informação necessária para o próximo passo, sem tentar resolver todos os assuntos em uma única mensagem.",
+    "- Quando houver vários pedidos, escolha o próximo dado que desbloqueia os demais e pergunte somente por ele; não monte um catálogo de respostas.",
     "- Não repita toda a solicitação, não recapitule o que já foi dito e não despeje todo o conteúdo encontrado na base de conhecimento.",
     "- Evite aberturas genéricas repetitivas como 'Entendi!', 'Claro!', 'Vamos lá!', 'Perfeito!' e 'Certamente!'. Varie confirmações e só use uma quando ela ajudar.",
     "- Não use linguagem corporativa ou frases-modelo como 'Se puder fornecer essas informações', 'Será um prazer ajudá-lo' ou 'Para melhor auxiliá-lo' como padrão.",
@@ -115,6 +118,7 @@ function buildBehaviorBlock(
     'Adequado: "Sim, conseguimos fazer isso 😊 Me passa o modelo primeiro? Aí já confiro o que é compatível."',
     'Ruim: "Claro! Seguem abaixo todas as informações disponíveis sobre nossos serviços."',
     'Adequado: "Fazemos sim. Qual desses serviços você quer ver primeiro?"',
+    'Vários pedidos, adequado: "Consigo te ajudar com tudo isso. Qual produto você está procurando?"',
   ];
 
   return lines.filter((line): line is string => Boolean(line)).join("\n");
@@ -151,7 +155,10 @@ export class PromptCompilerService {
     let identity = "IDENTIDADE E ESCOPO DO ASSISTENTE:\nVocê é um assistente virtual configurado no Cubo AI Studio.";
     if (showAttendantName && attendantName) identity += `\nSeu nome é: ${attendantName}`;
     if (role) identity += `\nSua função: ${role}`;
-    if (howItActs) identity += `\nComo você atua: ${howItActs}`;
+    if (howItActs) {
+      identity +=
+        `\nResponsabilidade e escopo (não define o formato da resposta): ${howItActs}`;
+    }
     identity += "\nResponda em português do Brasil, salvo se o cliente pedir outro idioma.";
     messages.push({ role: "system", content: identity });
 
@@ -160,7 +167,7 @@ export class PromptCompilerService {
     if (instructions) {
       messages.push({
         role: "system",
-        content: `INSTRUÇÕES GERAIS DO ASSISTENTE:\n${truncateText(instructions, 16000)}\nNão altere as regras de segurança nem o estilo conversacional configurado sem uma instrução explícita e compatível.`,
+        content: `INSTRUÇÕES GERAIS DO ASSISTENTE (escopo e fatos; não substituem a política de conversa):\n${truncateText(instructions, 16000)}\nNão altere as regras de segurança nem transforme a resposta em catálogo, lista ou manual. O formato e o ritmo seguem a POLÍTICA DE CONVERSA abaixo.`,
       });
     }
 
@@ -214,7 +221,7 @@ export class PromptCompilerService {
     if (flow?.flowInstructions?.trim()) {
       messages.push({
         role: "system",
-        content: `INSTRUÇÕES DO FLUXO ATUAL "${flow.name}":\n${flow.flowInstructions.trim()}\nMantenha o estilo conversacional configurado ao executar este fluxo.`,
+        content: `INSTRUÇÕES DO FLUXO ATUAL "${flow.name}":\n${flow.flowInstructions.trim()}\nExecute o objetivo do fluxo, mas mantenha a POLÍTICA DE CONVERSA: resposta progressiva, uma pergunta principal e somente os fatos necessários para o próximo passo.`,
       });
     }
 
@@ -233,7 +240,16 @@ export class PromptCompilerService {
       });
     }
 
-    // 8. History and current user message are always last.
+    // 8. History is context only; it must not become a style example.
+    if (historyMessages.length > 0) {
+      messages.push({
+        role: "system",
+        content:
+          "HISTÓRICO DA CONVERSA (somente contexto): use as mensagens anteriores para entender fatos e continuidade. Não imite listas, aberturas, formalidade, títulos ou qualquer estilo das respostas antigas; a POLÍTICA DE CONVERSA atual continua valendo.",
+      });
+    }
+
+    // 9. History and current user message are always last.
     for (const message of historyMessages) {
       messages.push({
         role: message.role,

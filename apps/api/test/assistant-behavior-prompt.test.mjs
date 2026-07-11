@@ -31,13 +31,13 @@ test("PromptCompiler prioriza segurança, comportamento e depois fluxo/conhecime
     securityRules: [{ name: "Não inventar", ruleType: "safety", instruction: "Não invente fatos." }],
     flow: { name: "Agendamento", flowInstructions: "Pergunte a data." },
     knowledgeItems: [{ title: "Tabela formal", content: "Serviço: instalação de SSD." }],
-    historyMessages: [],
+    historyMessages: [{ role: "assistant", content: "• Serviço antigo em formato de catálogo." }],
     currentMessage: "Quero trocar o SSD",
   });
 
   const contents = messages.map((message) => String(message.content));
   const securityIndex = contents.findIndex((content) => content.includes("REGRAS DE SEGURANÇA"));
-  const behaviorIndex = contents.findIndex((content) => content.includes("COMPORTAMENTO CONVERSACIONAL"));
+  const behaviorIndex = contents.findIndex((content) => content.startsWith("POLÍTICA DE CONVERSA"));
   const flowIndex = contents.findIndex((content) => content.includes("INSTRUÇÕES DO FLUXO"));
   const knowledgeIndex = contents.findIndex((content) => content.includes("BASE DE CONHECIMENTO"));
 
@@ -46,8 +46,13 @@ test("PromptCompiler prioriza segurança, comportamento e depois fluxo/conhecime
   assert.ok(flowIndex > behaviorIndex);
   assert.ok(knowledgeIndex > flowIndex);
   assert.match(contents[behaviorIndex], /uma pergunta principal por vez/);
+  assert.match(contents[behaviorIndex], /responda progressivamente/i);
+  assert.match(contents[behaviorIndex], /não monte um catálogo/i);
   assert.match(contents[behaviorIndex], /Nunca diga que é humana/);
   assert.match(contents[behaviorIndex], /Não invente informações/);
   assert.match(contents[knowledgeIndex], /não como modelo de estilo/);
   assert.match(contents[behaviorIndex], /Blocos Naturais/);
+  const historyPolicyIndex = contents.findIndex((content) => content.includes("HISTÓRICO DA CONVERSA"));
+  assert.ok(historyPolicyIndex > knowledgeIndex);
+  assert.match(contents[historyPolicyIndex], /Não imite listas/);
 });

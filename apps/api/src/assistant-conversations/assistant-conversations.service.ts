@@ -6,6 +6,7 @@ import {
   Logger,
   NotFoundException,
 } from "@nestjs/common";
+import { createHash } from "node:crypto";
 import { ConversationChannelType, ConversationSource, Prisma, Status } from "@prisma/client";
 import type { AiResolvedRuntimeConfig } from "../ai/ai.types";
 import { AiService } from "../ai/ai.service";
@@ -39,7 +40,11 @@ import { CalendarToolsService } from "../apps/calendar-tools.service";
 import { ContactMemoriesService } from "../contact-memories/contact-memories.service";
 import { ContactMemoriesExtractionService } from "../contact-memories/contact-memories-extraction.service";
 import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
-import { PromptCompilerService } from "../prompt-compiler/prompt-compiler.service";
+import {
+  PROMPT_COMPILER_VERSION,
+  PromptCompilerService,
+} from "../prompt-compiler/prompt-compiler.service";
+import { modelSupportsTemperature } from "../ai/ai-runner";
 import { IntentRouterService } from "../intent-router/intent-router.service";
 import {
   AssistantSecurityRulesService,
@@ -110,6 +115,8 @@ export type AssistantConversationRuntime = {
   outcome: "success" | "fallback" | "needs_human" | "unknown" | "handoff";
   summary: string;
   context: {
+    requestId?: string | null;
+    correlationId?: string | null;
     historyMessagesUsed: number;
     historyLimit: number;
     initialMessageIncluded: boolean;
@@ -138,6 +145,18 @@ export type AssistantConversationRuntime = {
     officialDataSource?: string | null;
     outsideBusinessHours?: boolean | null;
     outsideBusinessHoursPolicy?: string | null;
+    promptVersion?: string | null;
+    promptHash?: string | null;
+    promptSections?: string[];
+    behaviorId?: string | null;
+    behaviorUpdatedAt?: Date | null;
+    assistantUpdatedAt?: Date | null;
+    behaviorResponseStyle?: string | null;
+    splitResponseStyle?: string | null;
+    temperature?: number | null;
+    temperatureParameterApplied?: boolean | null;
+    knowledgeChunkCount?: number;
+    knowledgeChunkIds?: string[];
   };
   logId?: string;
   reason?:
@@ -163,6 +182,60 @@ export type SendAssistantConversationMessageResponse = {
   assistantMessage: AssistantConversationMessageItem;
   runtime: AssistantConversationRuntime;
 };
+
+export function splitNaturalResponseBlocks(content: string): string[] {
+  const normalized = content.trim();
+  if (!normalized) return [];
+
+  const lines = normalized.split("\n");
+  const containsListStructure = lines.some((line) =>
+    /^\s*(?:[-*•]|\d+[.)])\s+/.test(line),
+  );
+  const containsMarkdownHeading = lines.some((line) =>
+    /^\s*(?:#{1,6}\s+|\*\*[^*]{2,80}\*\*\s*:?)\s*$/.test(line),
+  );
+
+  // Keep provider-generated catalogs in one outbound instead of fragmenting
+  // every item into an independent WhatsApp message.
+  if (containsListStructure || containsMarkdownHeading) return [normalized];
+
+  const blocks: string[] = [];
+  for (const rawBlock of normalized.split(/\n\n+/)) {
+    const block = rawBlock.trim();
+    if (!block) continue;
+    if (blocks.length > 0 && block.length < 50) {
+      blocks[blocks.length - 1] += `\n\n${block}`;
+    } else {
+      blocks.push(block);
+    }
+  }
+  return blocks;
+}
+
+function hashPromptMessages(messages: unknown[]): string {
+  return createHash("sha256").update(JSON.stringify(messages)).digest("hex");
+}
+
+function getPromptSectionLabels(messages: Array<{ role: string; content?: unknown }>): string[] {
+  return messages
+    .filter((message) => message.role === "system")
+    .map((message) => String(message.content ?? "").split("\n", 1)[0])
+    .map((firstLine) => {
+      if (firstLine.startsWith("REGRAS DE SEGURANÇA")) return "security";
+      if (firstLine.startsWith("IDENTIDADE E ESCOPO")) return "identity";
+      if (firstLine.startsWith("INSTRUÇÕES GERAIS")) return "assistant-instructions";
+      if (firstLine.startsWith("POLÍTICA DE CONVERSA")) return "behavior";
+      if (firstLine.startsWith("EXPRESSÕES A EVITAR")) return "avoid-phrases";
+      if (firstLine.startsWith("CONTEXTO OFICIAL")) return "official-context";
+      if (firstLine.startsWith("INSTRUÇÕES DO SISTEMA DE RESERVAS")) return "calendar";
+      if (firstLine.startsWith("MEMÓRIA")) return "memory";
+      if (firstLine.startsWith("MENSAGEM INICIAL")) return "initial-message";
+      if (firstLine.startsWith("INSTRUÇÕES DO FLUXO")) return "flow";
+      if (firstLine.startsWith("BASE DE CONHECIMENTO")) return "knowledge";
+      if (firstLine.startsWith("HISTÓRICO DA CONVERSA")) return "history-policy";
+      return "system-context";
+    });
+}
 
 const assistantConversationSafeSelect = {
   id: true,
@@ -236,6 +309,7 @@ const assistantConversationRuntimeAssistantSelect = {
   timezone: true,
   googleMapsUrl: true,
   status: true,
+  updatedAt: true,
   weeklySchedule: true,
   aiAlwaysAvailable: true,
   initialMessage: true,
@@ -1670,6 +1744,8 @@ export class AssistantConversationsService {
     dto: SendAssistantConversationMessageDto;
     user: AuthenticatedUser;
     tenant: RequestTenant;
+    requestId?: string | null;
+    correlationId?: string | null;
     preparedAttachments?: InboundAttachmentRecord[];
   }): Promise<SendAssistantConversationMessageResponse> {
     const runtimeStartedAt = Date.now();
@@ -2011,7 +2087,6 @@ export class AssistantConversationsService {
     }
 
     let knowledgeItems: { id: string; title: string; content: string }[] = [];
-    let ragContextBlock = "";
     let ragLogData: any = null;
 
     if (assistant.ragEnabled && this.assistantKnowledgeRetrievalService) {
@@ -2035,15 +2110,11 @@ export class AssistantConversationsService {
       };
 
       if (searchResult.results.length > 0) {
-        let block = "Conhecimentos relevantes encontrados:\n";
-        searchResult.results.forEach((res, i) => {
-          block += `[${i + 1}] Título: ${res.knowledgeTitle}\nTrecho: ${res.contentPreview}\n`;
-        });
-        block +=
-          "\nUse os conhecimentos acima apenas se forem relevantes para responder. Se a resposta não estiver nos conhecimentos nem nas instruções do agente, não invente.";
-        ragContextBlock = block;
-      } else {
-        ragContextBlock = "(Nenhum conhecimento relevante encontrado na base para esta pergunta.)";
+        knowledgeItems = searchResult.results.map((res) => ({
+          id: res.chunkId,
+          title: res.knowledgeTitle,
+          content: res.contentPreview,
+        }));
       }
 
       this.logger.log(
@@ -2097,9 +2168,7 @@ export class AssistantConversationsService {
       context: officialBusinessContext,
     });
 
-    const promptInstructions = assistant.ragEnabled
-      ? [assistant.instructions || "", ragContextBlock].filter(Boolean).join("\n\n---\n\n")
-      : assistant.instructions || "";
+    const promptInstructions = assistant.instructions || "";
     const safetyInstructionBlock = [
       assistant.safetyInstruction?.trim()
         ? `Regra legada de segurança:\n${assistant.safetyInstruction.trim()}`
@@ -2146,6 +2215,8 @@ export class AssistantConversationsService {
       };
     });
     const contextMetadata: Record<string, any> = {
+      requestId: input.requestId ?? input.dto.externalMessageId ?? null,
+      correlationId: input.correlationId ?? null,
       historyMessagesUsed: priorHistory.length,
       historyLimit: MAX_RUNTIME_HISTORY_MESSAGES,
       initialMessageIncluded: Boolean(assistant.initialMessage?.trim()),
@@ -2435,6 +2506,45 @@ export class AssistantConversationsService {
                       }
                     : null,
                 });
+
+            Object.assign(contextMetadata, {
+              promptVersion: PROMPT_COMPILER_VERSION,
+              promptHash: hashPromptMessages(promptMessages),
+              promptSections: getPromptSectionLabels(promptMessages),
+              behaviorId: assistant.behavior?.id ?? null,
+              behaviorUpdatedAt: assistant.behavior?.updatedAt ?? null,
+              assistantUpdatedAt: assistant.updatedAt,
+              behaviorResponseStyle: assistant.behavior?.responseStyle ?? null,
+              splitResponseStyle: assistant.splitResponseStyle ?? "SINGLE",
+              temperature,
+              temperatureParameterApplied: modelSupportsTemperature(resolvedModel.model),
+              knowledgeChunkCount: knowledgeItems.length,
+              knowledgeChunkIds: knowledgeItems.map((item) => item.id),
+            });
+
+            if (process.env.AI_RUNTIME_TRACE === "true") {
+              this.logger.log(
+                `[Assistant Runtime Trace] ${JSON.stringify({
+                  requestId: contextMetadata.requestId,
+                  correlationId: contextMetadata.correlationId,
+                  companyId: input.tenant.companyId,
+                  assistantId: assistant.id,
+                  behaviorId: contextMetadata.behaviorId,
+                  assistantUpdatedAt: contextMetadata.assistantUpdatedAt,
+                  behaviorUpdatedAt: contextMetadata.behaviorUpdatedAt,
+                  promptVersion: contextMetadata.promptVersion,
+                  promptHash: contextMetadata.promptHash,
+                  promptSections: contextMetadata.promptSections,
+                  selectedFlowId: selectedFlow?.id ?? null,
+                  knowledgeChunkCount: knowledgeItems.length,
+                  historyMessagesUsed: priorHistory.length,
+                  model: resolvedModel.model,
+                  provider: runtimeConfig.provider,
+                  temperature,
+                  temperatureParameterApplied: contextMetadata.temperatureParameterApplied,
+                })}`,
+              );
+            }
           }
 
           if (isDebugLogsEnabled && !toolCallsResolved) {
@@ -2770,6 +2880,20 @@ export class AssistantConversationsService {
             officialDataSource: runtime.context.officialDataSource,
             outsideBusinessHours: runtime.context.outsideBusinessHours,
             outsideBusinessHoursPolicy: runtime.context.outsideBusinessHoursPolicy,
+            requestId: runtime.context.requestId,
+            correlationId: runtime.context.correlationId,
+            promptVersion: runtime.context.promptVersion,
+            promptHash: runtime.context.promptHash,
+            promptSections: runtime.context.promptSections,
+            behaviorId: runtime.context.behaviorId,
+            behaviorUpdatedAt: runtime.context.behaviorUpdatedAt,
+            assistantUpdatedAt: runtime.context.assistantUpdatedAt,
+            behaviorResponseStyle: runtime.context.behaviorResponseStyle,
+            splitResponseStyle: runtime.context.splitResponseStyle,
+            temperature: runtime.context.temperature,
+            temperatureParameterApplied: runtime.context.temperatureParameterApplied,
+            knowledgeChunkCount: runtime.context.knowledgeChunkCount,
+            knowledgeChunkIds: runtime.context.knowledgeChunkIds,
           }),
         },
         select: {
@@ -2804,20 +2928,22 @@ export class AssistantConversationsService {
       let blocks = [assistantMessage.content];
 
       if (assistant.splitResponseStyle === "NATURAL_BLOCKS") {
-        const rawBlocks = assistantMessage.content
-          .split(/\n\n+/)
-          .map((b) => b.trim())
-          .filter((b) => b.length > 0);
+        blocks = splitNaturalResponseBlocks(assistantMessage.content);
+        if (blocks.length === 0) blocks = [assistantMessage.content];
+      }
 
-        blocks = [];
-        for (const rb of rawBlocks) {
-          if (blocks.length > 0 && rb.length < 50) {
-            // Se o bloco for muito pequeno, anexe ao bloco anterior para não mandar mensagens curtas sem sentido isoladas.
-            blocks[blocks.length - 1] += "\n\n" + rb;
-          } else {
-            blocks.push(rb);
-          }
-        }
+      if (process.env.AI_RUNTIME_TRACE === "true") {
+        this.logger.log(
+          `[Assistant Runtime Outbound Trace] ${JSON.stringify({
+            requestId: contextMetadata.requestId,
+            correlationId: contextMetadata.correlationId,
+            companyId: input.tenant.companyId,
+            assistantId: assistant.id,
+            splitResponseStyle: assistant.splitResponseStyle ?? "SINGLE",
+            rawResponseLength: assistantMessage.content.length,
+            outboundBlockCount: blocks.length,
+          })}`,
+        );
       }
 
       for (let i = 0; i < blocks.length; i++) {
