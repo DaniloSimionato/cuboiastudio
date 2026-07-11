@@ -3065,7 +3065,7 @@ export class AssistantConversationsService {
             }
           }
 
-          if (!runtime || runtime.mode !== "flow-bypass") {
+          if (!runtime || (runtime.mode !== "flow-bypass" && responseMode !== "TRIAGE_ONLY")) {
             answer = completion.answer;
             runtime = {
               ...runtime,
