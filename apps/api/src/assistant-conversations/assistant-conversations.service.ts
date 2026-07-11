@@ -41,6 +41,7 @@ import { ContactMemoriesExtractionService } from "../contact-memories/contact-me
 import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
 import {
   isMultiNeedTriageMessage,
+  isTriageResponseValid,
   PROMPT_COMPILER_VERSION,
   PromptCompilerService,
 } from "../prompt-compiler/prompt-compiler.service";
@@ -156,6 +157,12 @@ export type AssistantConversationRuntime = {
     temperature?: number | null;
     temperatureParameterApplied?: boolean | null;
     triageMode?: boolean;
+    triageValidationPassed?: boolean;
+    triageAttemptCount?: number;
+    responseMode?: string;
+    outboundBlockCountPlanned?: number;
+    outboundBlockCountSent?: number;
+    outboundBlockCount?: number;
     knowledgeLimit?: number;
     knowledgeChunkCount?: number;
     knowledgeChunkIds?: string[];
@@ -2567,8 +2574,130 @@ export class AssistantConversationsService {
             console.log("=== TEMPORARY DIAGNOSTIC LOGS: END ===\n");
           }
 
-          let loopCount = 0;
           let completion: any;
+          let triageValidationPassed = false;
+          let triageAttemptCount = 0;
+          let responseMode = "ai-runtime";
+
+          if (triageMode) {
+            responseMode = "TRIAGE_ONLY";
+            triageAttemptCount = 1;
+
+            const compiler = this.promptCompilerService ?? new PromptCompilerService();
+            promptMessages = compiler.compile({
+              assistant: {
+                ...assistant,
+                instructions: promptInstructions,
+              },
+              behavior: assistant.behavior,
+              flow: selectedFlow,
+              securityRules: activeSecurityRules,
+              knowledgeItems: [], // zero chunks in triage
+              historyMessages: [], // zero history in triage
+              currentMessage: interpretedMessage,
+              officialBusinessContext,
+              calendarContext: null,
+              memoryContextBlock,
+              triageMode: true,
+              isSecondAttempt: false,
+            });
+
+            // Update prompt metadata
+            Object.assign(contextMetadata, {
+              promptVersion: PROMPT_COMPILER_VERSION,
+              promptHash: hashPromptMessages(promptMessages),
+              promptSections: getPromptSectionLabels(promptMessages),
+            });
+
+            try {
+              completion = await this.aiService.generateChatCompletion({
+                companyId: input.tenant.companyId,
+                messages: promptMessages,
+                model: resolvedModel.model,
+                temperature,
+                tools: [], // zero tools in triage
+              });
+
+              if (completion && completion.answer && isTriageResponseValid(completion.answer)) {
+                triageValidationPassed = true;
+                answer = completion.answer;
+              }
+            } catch (err: any) {
+              this.logger.error(`Error in triage mode attempt 1: ${err.message}`, err.stack);
+            }
+
+            if (!triageValidationPassed) {
+              triageAttemptCount = 2;
+
+              promptMessages = compiler.compile({
+                assistant: {
+                  ...assistant,
+                  instructions: promptInstructions,
+                },
+                behavior: assistant.behavior,
+                flow: selectedFlow,
+                securityRules: activeSecurityRules,
+                knowledgeItems: [],
+                historyMessages: [],
+                currentMessage: interpretedMessage,
+                officialBusinessContext,
+                calendarContext: null,
+                memoryContextBlock,
+                triageMode: true,
+                isSecondAttempt: true,
+              });
+
+              // Update prompt metadata for second attempt
+              Object.assign(contextMetadata, {
+                promptVersion: PROMPT_COMPILER_VERSION,
+                promptHash: hashPromptMessages(promptMessages),
+                promptSections: getPromptSectionLabels(promptMessages),
+              });
+
+              try {
+                completion = await this.aiService.generateChatCompletion({
+                  companyId: input.tenant.companyId,
+                  messages: promptMessages,
+                  model: resolvedModel.model,
+                  temperature,
+                  tools: [], // zero tools in triage
+                });
+
+                if (completion && completion.answer && isTriageResponseValid(completion.answer)) {
+                  triageValidationPassed = true;
+                  answer = completion.answer;
+                }
+              } catch (err: any) {
+                this.logger.error(`Error in triage mode attempt 2: ${err.message}`, err.stack);
+              }
+            }
+
+            if (!triageValidationPassed) {
+              answer = "Consigo te ajudar com isso! Qual é o principal detalhe ou informação que você já consegue me passar?";
+            }
+
+            runtime = {
+              ...runtime,
+              mode: "ai-runtime",
+              fallback: !triageValidationPassed,
+              outcome: "success",
+              provider: completion?.provider ?? runtimeConfig.provider ?? null,
+              model: completion?.model ?? resolvedModel.model ?? null,
+              reason: undefined,
+              ragData: ragLogData,
+            };
+
+            Object.assign(contextMetadata, {
+              responseMode,
+              triageMode,
+              triageValidationPassed,
+              triageAttemptCount,
+            });
+
+            toolCallsResolved = true; // Bypasses normal loop
+          }
+
+          let loopCount = 0;
 
           while (loopCount < 5 && !toolCallsResolved) {
             completion = await this.aiService.generateChatCompletion({
@@ -2804,6 +2933,20 @@ export class AssistantConversationsService {
       }),
     };
 
+    let blocks = [answer];
+    if (source === "chatwoot") {
+      if (assistant.splitResponseStyle === "NATURAL_BLOCKS") {
+        blocks = splitNaturalResponseBlocks(answer);
+        if (blocks.length === 0) blocks = [answer];
+      }
+    }
+    const outboundBlockCountPlanned = blocks.length;
+    Object.assign(contextMetadata, {
+      outboundBlockCountPlanned,
+      outboundBlockCountSent: 0,
+      outboundBlockCount: 0,
+    });
+
     const { assistantMessage, runtimeLogId } = await this.prisma.$transaction(async (tx) => {
       const createdAssistantMessage = await tx.assistantConversationMessage.create({
         data: {
@@ -2883,6 +3026,13 @@ export class AssistantConversationsService {
             temperature: runtime.context.temperature,
             temperatureParameterApplied: runtime.context.temperatureParameterApplied,
             triageMode: runtime.context.triageMode,
+            triageValidationPassed: runtime.context.triageValidationPassed,
+            triageAttemptCount: runtime.context.triageAttemptCount,
+            responseMode: runtime.context.responseMode,
+            outboundBlockCountPlanned: runtime.context.outboundBlockCountPlanned,
+            outboundBlockCountSent: runtime.context.outboundBlockCountSent,
+            outboundBlockCount: runtime.context.outboundBlockCount,
+            knowledgeCount: runtime.ragData?.usedKnowledge?.length ?? knowledgeItems.length,
             knowledgeLimit: runtime.context.knowledgeLimit,
             knowledgeChunkCount: runtime.context.knowledgeChunkCount,
             knowledgeChunkIds: runtime.context.knowledgeChunkIds,
@@ -2917,13 +3067,6 @@ export class AssistantConversationsService {
     };
 
     if (source === "chatwoot") {
-      let blocks = [assistantMessage.content];
-
-      if (assistant.splitResponseStyle === "NATURAL_BLOCKS") {
-        blocks = splitNaturalResponseBlocks(assistantMessage.content);
-        if (blocks.length === 0) blocks = [assistantMessage.content];
-      }
-
       if (process.env.AI_RUNTIME_TRACE === "true") {
         this.logger.log(
           `[Assistant Runtime Outbound Trace] ${JSON.stringify({
@@ -2938,27 +3081,59 @@ export class AssistantConversationsService {
         );
       }
 
+      let blocksSent = 0;
       for (let i = 0; i < blocks.length; i++) {
         const block = blocks[i];
-        await this.sendChatwootOutboundText({
-          conversation: {
-            ...conversation,
-            sourceProvider: source,
-            externalConversationId:
-              input.dto.externalConversationId ?? conversation.externalConversationId,
-            externalContactId: input.dto.externalContactId ?? conversation.externalContactId,
-            externalInboxId: input.dto.externalInboxId ?? conversation.externalInboxId,
-            externalChannelId: input.dto.externalChannelId ?? conversation.externalChannelId,
-          },
-          assistantMessageId: assistantMessage.id,
-          assistantId: input.assistantId,
-          content: block,
-        });
+        try {
+          await this.sendChatwootOutboundText({
+            conversation: {
+              ...conversation,
+              sourceProvider: source,
+              externalConversationId:
+                input.dto.externalConversationId ?? conversation.externalConversationId,
+              externalContactId: input.dto.externalContactId ?? conversation.externalContactId,
+              externalInboxId: input.dto.externalInboxId ?? conversation.externalInboxId,
+              externalChannelId: input.dto.externalChannelId ?? conversation.externalChannelId,
+            },
+            assistantMessageId: assistantMessage.id,
+            assistantId: input.assistantId,
+            content: block,
+          });
+          blocksSent++;
+        } catch (err: any) {
+          this.logger.error(`Error sending Chatwoot block ${i}: ${err.message}`, err.stack);
+          break;
+        }
 
         // Adiciona um pequeno delay entre as mensagens fatiadas
         if (i < blocks.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, 1500));
         }
+      }
+
+      // Update runtime log metadata with sent blocks count!
+      try {
+        if (
+          this.prisma.assistantRuntimeLog &&
+          typeof this.prisma.assistantRuntimeLog.findUnique === "function" &&
+          typeof this.prisma.assistantRuntimeLog.update === "function"
+        ) {
+          const log = await this.prisma.assistantRuntimeLog.findUnique({ where: { id: runtimeLogId } });
+          if (log && log.metadata) {
+            const currentMeta = typeof log.metadata === "string" ? JSON.parse(log.metadata) : log.metadata;
+            const updatedMeta = {
+              ...currentMeta,
+              outboundBlockCountSent: blocksSent,
+              outboundBlockCount: blocksSent,
+            };
+            await this.prisma.assistantRuntimeLog.update({
+              where: { id: runtimeLogId },
+              data: { metadata: updatedMeta },
+            });
+          }
+        }
+      } catch (err: any) {
+        this.logger.error(`Failed to update outboundBlockCountSent: ${err.message}`);
       }
     }
 

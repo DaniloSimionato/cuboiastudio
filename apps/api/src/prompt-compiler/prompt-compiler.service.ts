@@ -106,6 +106,41 @@ export function isMultiNeedTriageMessage(message: string): boolean {
   return false;
 }
 
+export function isTriageResponseValid(response: string): boolean {
+  if (!response) return false;
+
+  const text = response.trim();
+
+  // 1. mais de uma pergunta
+  const questionMarks = (text.match(/\?/g) || []).length;
+  if (questionMarks > 1) return false;
+
+  // 2. lista numerada
+  if (/\b\d+[.)]\s+/i.test(text)) return false;
+
+  // 3. bullets / checklist
+  if (/[-*•]/.test(text) || /\[[ xX]\]/.test(text)) return false;
+
+  // 4. “vamos por partes”
+  if (/vamos\s+por\s+partes/i.test(text)) return false;
+
+  // 5. títulos / cabeçalhos / negritos em formato de título-chave
+  if (/^#+/m.test(text) || /\*\*.+?\*\*:/i.test(text)) return false;
+
+  // 6. três ou mais blocos (parágrafos)
+  const blocks = text.split(/\n+/).map(b => b.trim()).filter(b => b.length > 0);
+  if (blocks.length >= 3) return false;
+
+  // 7. preço antecipado ou moeda (R$, reais, valor, preço, custo)
+  if (/(r\$\s*\d+|\d+\s*reais|\b(valor(es)?|preço(s)?|custo(s)?|precos?)\b)/i.test(text)) return false;
+
+  // 8. explicação separada de cada solicitação (e.g. contendo múltiplos colons em linhas diferentes)
+  const colonsCount = (text.match(/:/g) || []).length;
+  if (colonsCount > 1) return false;
+
+  return true;
+}
+
 export type PromptCompilerInput = {
   assistant: Partial<Assistant>;
   behavior?: AssistantBehavior | null;
@@ -126,6 +161,8 @@ export type PromptCompilerInput = {
     resourcesContext?: string | null;
   } | null;
   memoryContextBlock?: string | null;
+  triageMode?: boolean;
+  isSecondAttempt?: boolean;
 };
 
 function buildSecurityBlock(
@@ -250,7 +287,77 @@ export class PromptCompilerService {
       officialBusinessContext,
       calendarContext,
       memoryContextBlock,
+      triageMode = false,
+      isSecondAttempt = false,
     } = input;
+
+    if (triageMode) {
+      const messages: AiChatCompletionMessage[] = [];
+
+      // 1. regras obrigatórias de segurança
+      const securityBlock = buildSecurityBlock(assistant, securityRules);
+      if (securityBlock) {
+        messages.push({ role: "system", content: securityBlock });
+      }
+
+      // 2. identidade básica do assistente e empresa
+      const attendantName = firstNonEmpty(behavior?.attendantName, assistant.name);
+      const showAttendantName = behavior?.showAttendantName ?? true;
+      let identity = "IDENTIDADE E ESCOPO DO ASSISTENTE:\nVocê é um assistente virtual configurado no Cubo AI Studio.";
+      if (showAttendantName && attendantName) identity += `\nSeu nome é: ${attendantName}`;
+      if (officialBusinessContext?.companyName) {
+        identity += `\nVocê atende em nome da empresa: ${officialBusinessContext.companyName}`;
+      }
+      identity += "\nResponda em português do Brasil, salvo se o cliente pedir outro idioma.";
+      messages.push({ role: "system", content: identity });
+
+      if (isSecondAttempt) {
+        const strictBlock = [
+          "CONTRATO CRÍTICO DE TRIAGEM (SEGUNDA TENTATIVA OBRIGATÓRIA):",
+          "A resposta anterior foi REJEITADA por não seguir as restrições.",
+          "Você DEVE responder com uma única frase amigável no WhatsApp e exatamente UMA pergunta no final.",
+          "REGRAS DE EXCLUSÃO ABSOLUTA:",
+          "- NÃO envie listas, marcadores, numeração ou checklists.",
+          "- NÃO inclua cabeçalhos, negritos com dois pontos ou títulos.",
+          "- NÃO fale de valores, preços, custos, orçamentos ou R$.",
+          "- NÃO use 'Vamos por partes' ou termos similares.",
+          "- NÃO explique nada separadamente.",
+        ].join("\n");
+        messages.push({ role: "system", content: strictBlock });
+      } else {
+        // 4. objetivo da triagem
+        const objectiveBlock = [
+          "OBJETIVO DA TRIAGEM:",
+          "Escolha a única pergunta de maior alavancagem para o próximo passo. Escolha a única pergunta que mais destrava o atendimento (um identificador, modelo, contexto, produto ou necessidade principal que destrave as demais respostas).",
+          "Não tente responder a cada serviço individualmente, não faça checklist, não faça múltiplas perguntas na mesma resposta e não use numeração ou listas.",
+        ].join("\n");
+        messages.push({ role: "system", content: objectiveBlock });
+
+        // 5. contrato da resposta
+        const contractBlock = [
+          "CONTRATO DA RESPOSTA OBRIGATÓRIO:",
+          "- Responda em no máximo duas frases.",
+          "- Contenha exatamente uma pergunta principal.",
+          "- Sem listas de qualquer tipo (sem bullets, sem numeração).",
+          "- Sem cabeçalhos ou títulos.",
+          "- Sem checklist.",
+          "- Sem usar a expressão \"Vamos por partes\".",
+          "- Sem explicar separadamente cada solicitação.",
+          "- Sem antecipar preço, prazo, orçamento ou compatibilidade de vários itens sem a informação principal.",
+          "- Utilize linguagem natural e amigável típica de WhatsApp.",
+        ].join("\n");
+        messages.push({ role: "system", content: contractBlock });
+      }
+
+      // 3. mensagem consolidada atual
+      messages.push({
+        role: "user",
+        content: truncateText(currentMessage, MAX_HISTORY_MESSAGE_LENGTH),
+      });
+
+      return messages;
+    }
+
     const messages: AiChatCompletionMessage[] = [];
 
     // 1. Security is first so later contextual content cannot redefine limits.
