@@ -1,9 +1,24 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { IsBoolean, IsInt, IsOptional, IsString, Max, Min } from "class-validator";
+import { Transform } from "class-transformer";
+import {
+  IsBoolean,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from "class-validator";
+
+const behaviorResponseStyles = ["whatsapp", "formal", "concise"] as const;
+const emojiUsageValues = ["none", "low", "moderate"] as const;
+const unknownBehaviorValues = ["fallback", "handoff", "search_base"] as const;
 
 export class UpsertAssistantBehaviorDto {
   @ApiPropertyOptional({ example: "Giovanna" })
   @IsString()
+  @MaxLength(120)
   @IsOptional()
   attendantName?: string | null;
 
@@ -14,36 +29,41 @@ export class UpsertAssistantBehaviorDto {
 
   @ApiPropertyOptional({ example: "Secretária virtual" })
   @IsString()
+  @MaxLength(200)
   @IsOptional()
   role?: string | null;
 
   @ApiPropertyOptional({ example: "Atende clientes e agenda horários." })
   @IsString()
+  @MaxLength(4000)
   @IsOptional()
   howItActs?: string | null;
 
   @ApiPropertyOptional({ example: "Educada e simpática" })
   @IsString()
+  @MaxLength(1000)
   @IsOptional()
   personality?: string | null;
 
   @ApiPropertyOptional({ example: "Profissional" })
   @IsString()
+  @MaxLength(100)
   @IsOptional()
   toneOfVoice?: string | null;
 
   @ApiPropertyOptional({ example: "whatsapp" })
-  @IsString()
+  @IsIn(behaviorResponseStyles)
   @IsOptional()
   responseStyle?: string | null;
 
   @ApiPropertyOptional({ example: "low" })
-  @IsString()
+  @IsIn(emojiUsageValues)
   @IsOptional()
   emojiUsage?: string | null;
 
   @ApiPropertyOptional({ example: "Olá! Como posso ajudar hoje?" })
   @IsString()
+  @MaxLength(2000)
   @IsOptional()
   greetingMessage?: string | null;
 
@@ -53,11 +73,12 @@ export class UpsertAssistantBehaviorDto {
   noInventInfo?: boolean;
 
   @ApiPropertyOptional({ example: "fallback" })
-  @IsString()
+  @IsIn(unknownBehaviorValues)
   @IsOptional()
   unknownBehavior?: string | null;
 
   @ApiPropertyOptional({ example: 300 })
+  @Transform(({ value }) => (typeof value === "string" && value.trim() !== "" ? Number(value) : value))
   @IsInt()
   @Min(50)
   @Max(2000)

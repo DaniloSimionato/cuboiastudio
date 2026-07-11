@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Put, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Headers, Param, Put, UseGuards } from "@nestjs/common";
 import { ApiOkResponse, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { AuthGuard } from "../auth/auth.guard";
 import { RequirePermissions } from "../auth/permissions.decorator";
@@ -31,7 +31,11 @@ export class AssistantBehaviorsController {
     @Tenant() tenant: RequestTenant,
     @Param("assistantId") assistantId: string,
     @Body() dto: UpsertAssistantBehaviorDto,
+    @Headers("x-request-id") requestId?: string,
+    @Headers("x-correlation-id") correlationId?: string,
   ) {
-    return this.assistantBehaviorsService.upsert(tenant.companyId, assistantId, dto);
+    return this.assistantBehaviorsService.upsert(tenant.companyId, assistantId, dto, {
+      requestId: requestId ?? correlationId,
+    });
   }
 }

@@ -1,4 +1,5 @@
 import { apiFetch } from "./apiClient";
+import type { AssistantBehaviorFormState } from "../types/assistant-behavior.types";
 import type {
   BackendAssistantListItem,
   BackendAssistantPreviewResponse,
@@ -115,6 +116,7 @@ export const backendAssistantsService = {
     conversationResetConfirmationMessage?: string | null;
     conversationResetPreserveMemories?: boolean;
     conversationResetSendInitialMessage?: boolean;
+    behavior?: AssistantBehaviorFormState;
   }): Promise<BackendAssistantResponse> {
     return apiFetch<BackendAssistantResponse>("/assistants", {
       method: "POST",
@@ -168,6 +170,7 @@ export const backendAssistantsService = {
       conversationResetConfirmationMessage?: string | null;
       conversationResetPreserveMemories?: boolean;
       conversationResetSendInitialMessage?: boolean;
+      behavior?: AssistantBehaviorFormState;
     },
   ): Promise<BackendAssistantResponse> {
     return apiFetch<BackendAssistantResponse>(`/assistants/${id}`, {

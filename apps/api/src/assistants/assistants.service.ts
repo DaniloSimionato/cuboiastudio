@@ -3,14 +3,16 @@ import {
   ForbiddenException,
   GatewayTimeoutException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
-import { ContactMemoryCategory, Prisma, Status } from "@prisma/client";
+import { ContactMemoryCategory, Prisma, Status, type AssistantBehavior as PrismaAssistantBehavior } from "@prisma/client";
 import { type AuthenticatedUser, type RequestTenant } from "../auth/auth.types";
 import { PrismaService } from "../database/prisma.service";
 import { buildDeterministicAssistantResponse } from "./assistant-runtime";
 import { AiService } from "../ai/ai.service";
 import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
+import { PromptCompilerService } from "../prompt-compiler/prompt-compiler.service";
 import { toAssistantRuntimeSources, type AssistantRuntimeSource } from "./assistant-runtime";
 import { type CreateAssistantDto } from "./dto/create-assistant.dto";
 import { type PreviewAssistantDto } from "./dto/preview-assistant.dto";
@@ -18,6 +20,7 @@ import { type RunAssistantDto } from "./dto/run-assistant.dto";
 import { type UpdateAssistantStatusDto } from "./dto/update-assistant-status.dto";
 import { type UpdateAssistantDto } from "./dto/update-assistant.dto";
 import { UpdateAssistantToolsDto } from "./dto/update-assistant-tools.dto";
+import { type UpsertAssistantBehaviorDto } from "../assistant-behaviors/dto/upsert-assistant-behavior.dto";
 import {
   buildOfficialBusinessContext,
   isValidIanaTimezone,
@@ -73,6 +76,7 @@ export type AssistantListItem = {
   messageBufferSeconds: number;
   splitResponseEnabled: boolean;
   splitResponseStyle: string | null;
+  behavior: PrismaAssistantBehavior | null;
   status: Status;
   createdAt: Date;
   updatedAt: Date;
@@ -189,6 +193,7 @@ const assistantSafeSelect = {
   messageBufferSeconds: true,
   splitResponseEnabled: true,
   splitResponseStyle: true,
+  behavior: true,
   status: true,
   createdAt: true,
   updatedAt: true,
@@ -218,9 +223,17 @@ const assistantPreviewAssistantSelect = {
   longitude: true,
   weeklySchedule: true,
   aiAlwaysAvailable: true,
+  initialMessage: true,
   instructions: true,
+  personality: true,
+  toneOfVoice: true,
+  avoidPhrases: true,
   model: true,
   temperature: true,
+  fallbackMessage: true,
+  safetyInstruction: true,
+  splitResponseStyle: true,
+  behavior: true,
   status: true,
   company: {
     select: {
@@ -313,6 +326,29 @@ function parseMemoryAllowedCategories(value: string | null): ContactMemoryCatego
   }
 }
 
+const assistantBehaviorFieldNames = [
+  "attendantName",
+  "showAttendantName",
+  "role",
+  "howItActs",
+  "personality",
+  "toneOfVoice",
+  "responseStyle",
+  "emojiUsage",
+  "greetingMessage",
+  "noInventInfo",
+  "unknownBehavior",
+  "maxBlockLength",
+] as const satisfies ReadonlyArray<keyof UpsertAssistantBehaviorDto>;
+
+function buildDefinedAssistantBehaviorData(dto: UpsertAssistantBehaviorDto): Record<string, unknown> {
+  return Object.fromEntries(
+    assistantBehaviorFieldNames
+      .filter((field) => dto[field] !== undefined)
+      .map((field) => [field, dto[field]]),
+  );
+}
+
 function toAssistantResponse(assistant: AssistantSafeRecord): AssistantListItem {
   return {
     id: assistant.id,
@@ -363,6 +399,7 @@ function toAssistantResponse(assistant: AssistantSafeRecord): AssistantListItem 
     messageBufferSeconds: assistant.messageBufferSeconds,
     splitResponseEnabled: assistant.splitResponseEnabled,
     splitResponseStyle: assistant.splitResponseStyle,
+    behavior: assistant.behavior,
     status: assistant.status,
     createdAt: assistant.createdAt,
     updatedAt: assistant.updatedAt,
@@ -382,10 +419,13 @@ function toPreviewLogItem(record: AssistantPreviewLogRecord): PreviewAssistantLo
 
 @Injectable()
 export class AssistantsService {
+  private readonly logger = new Logger(AssistantsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiService: AiService,
     private readonly retrievalService: AssistantKnowledgeRetrievalService,
+    private readonly promptCompilerService: PromptCompilerService,
   ) {}
 
   private validateOfficialBusinessFields(
@@ -537,6 +577,7 @@ export class AssistantsService {
     dto: CreateAssistantDto;
     user: AuthenticatedUser;
     tenant: RequestTenant;
+    requestId?: string;
   }): Promise<CreateAssistantResponse> {
     if (input.user.companyId !== input.tenant.companyId) {
       throw new ForbiddenException("Tenant context does not match the authenticated user.");
@@ -561,8 +602,9 @@ export class AssistantsService {
       input.dto.conversationResetKeywords = normalizedKeywords;
     }
 
-    const assistant = await this.prisma.assistant.create({
-      data: {
+    const assistant = await this.prisma.$transaction(async (tx) => {
+      const createdAssistant = await tx.assistant.create({
+        data: {
         companyId: input.tenant.companyId,
         name: input.dto.name,
         description: input.dto.description ?? null,
@@ -613,10 +655,46 @@ export class AssistantsService {
         messageBufferSeconds: input.dto.messageBufferSeconds ?? 6,
         splitResponseEnabled: input.dto.splitResponseEnabled ?? false,
         splitResponseStyle: input.dto.splitResponseStyle ?? null,
-        status: Status.ACTIVE,
-      },
-      select: assistantSafeSelect,
+          status: Status.ACTIVE,
+        },
+      });
+
+      if (input.dto.behavior) {
+        await tx.assistantBehavior.create({
+          data: {
+            assistantId: createdAssistant.id,
+            ...buildDefinedAssistantBehaviorData(input.dto.behavior),
+          } as Prisma.AssistantBehaviorUncheckedCreateInput,
+        });
+      }
+
+      return tx.assistant.findFirst({
+        where: {
+          id: createdAssistant.id,
+          companyId: input.tenant.companyId,
+        },
+        select: assistantSafeSelect,
+      });
     });
+
+    if (!assistant) {
+      throw new NotFoundException("Assistant not found after creation.");
+    }
+
+    if (input.dto.behavior) {
+      this.logger.log(
+        JSON.stringify({
+          operation: "create",
+          companyId: input.tenant.companyId,
+          assistantId: assistant.id,
+          changedFields: assistantBehaviorFieldNames,
+          source: "assistants-api",
+          requestId: input.requestId ?? null,
+          persistedAt: assistant.updatedAt.toISOString(),
+        }),
+        "assistant-behavior",
+      );
+    }
 
     return toAssistantResponse(assistant);
   }
@@ -650,6 +728,7 @@ export class AssistantsService {
     dto: UpdateAssistantDto;
     user: AuthenticatedUser;
     tenant: RequestTenant;
+    requestId?: string;
   }): Promise<UpdateAssistantResponse> {
     if (input.user.companyId !== input.tenant.companyId) {
       throw new ForbiddenException("Tenant context does not match the authenticated user.");
@@ -703,6 +782,7 @@ export class AssistantsService {
     const hasMessageBufferSeconds = hasField("messageBufferSeconds");
     const hasSplitResponseEnabled = hasField("splitResponseEnabled");
     const hasSplitResponseStyle = hasField("splitResponseStyle");
+    const hasBehavior = input.dto.behavior !== undefined;
 
     if (
       !hasName &&
@@ -751,7 +831,8 @@ export class AssistantsService {
       !hasMessageBufferEnabled &&
       !hasMessageBufferSeconds &&
       !hasSplitResponseEnabled &&
-      !hasSplitResponseStyle
+      !hasSplitResponseStyle &&
+      !hasBehavior
     ) {
       throw new BadRequestException("At least one editable field must be provided.");
     }
@@ -789,12 +870,20 @@ export class AssistantsService {
       throw new NotFoundException("Assistant not found.");
     }
 
-    await this.prisma.assistant.updateMany({
-      where: {
-        id: input.id,
-        companyId: input.tenant.companyId,
-      },
-      data: {
+    const behaviorToPersist: UpsertAssistantBehaviorDto = {
+      ...(input.dto.behavior ?? {}),
+      ...(hasPersonality ? { personality: input.dto.personality ?? null } : {}),
+      ...(hasToneOfVoice ? { toneOfVoice: input.dto.toneOfVoice ?? null } : {}),
+    };
+    const shouldPersistBehavior = hasBehavior || hasPersonality || hasToneOfVoice;
+
+    const updatedAssistant = await this.prisma.$transaction(async (tx) => {
+      await tx.assistant.updateMany({
+        where: {
+          id: input.id,
+          companyId: input.tenant.companyId,
+        },
+        data: {
         ...(hasName ? { name: input.dto.name } : {}),
         ...(hasDescription ? { description: input.dto.description ?? null } : {}),
         ...(hasBusinessAddress ? { businessAddress: input.dto.businessAddress ?? null } : {}),
@@ -890,19 +979,49 @@ export class AssistantsService {
         ...(hasConversationResetSendInitialMessage
           ? { conversationResetSendInitialMessage: input.dto.conversationResetSendInitialMessage ?? true }
           : {}),
-      },
-    });
+        },
+      });
 
-    const updatedAssistant = await this.prisma.assistant.findFirst({
-      where: {
-        id: input.id,
-        companyId: input.tenant.companyId,
-      },
-      select: assistantSafeSelect,
+      if (shouldPersistBehavior) {
+        await tx.assistantBehavior.upsert({
+          where: { assistantId: input.id },
+          update: buildDefinedAssistantBehaviorData(behaviorToPersist) as Prisma.AssistantBehaviorUpdateInput,
+          create: {
+            assistantId: input.id,
+            ...buildDefinedAssistantBehaviorData(behaviorToPersist),
+          } as Prisma.AssistantBehaviorUncheckedCreateInput,
+        });
+      }
+
+      return tx.assistant.findFirst({
+        where: {
+          id: input.id,
+          companyId: input.tenant.companyId,
+        },
+        select: assistantSafeSelect,
+      });
     });
 
     if (!updatedAssistant) {
       throw new NotFoundException("Assistant not found.");
+    }
+
+    if (shouldPersistBehavior) {
+      this.logger.log(
+        JSON.stringify({
+          operation: "update",
+          companyId: input.tenant.companyId,
+          assistantId: input.id,
+          changedFields: [
+            ...Object.keys(input.dto).filter((field) => field !== "behavior"),
+            ...Object.keys(behaviorToPersist).map((field) => `behavior.${field}`),
+          ],
+          source: "assistants-api",
+          requestId: input.requestId ?? null,
+          persistedAt: updatedAssistant.updatedAt.toISOString(),
+        }),
+        "assistant-behavior",
+      );
     }
 
     return toAssistantResponse(updatedAssistant);
@@ -981,21 +1100,12 @@ export class AssistantsService {
         tenant: input.tenant,
       });
 
-      // 3. Montar Contexto
-      let contextBlock = "";
+      // 3. Preserve the selected facts and compile the same behavior block used by runtime.
       let answer = "";
       const usedKnowledge: any[] = [];
 
       if (ragSearch.results.length > 0) {
-        contextBlock =
-          `\n\nConhecimentos relevantes encontrados:\n` +
-          ragSearch.results
-            .map((r, i) => `[${i + 1}] Título: ${r.knowledgeTitle}\nTrecho: ${r.contentPreview}`)
-            .join("\n\n") +
-          `\n\nUse essas informações apenas quando forem relevantes para responder. Se a resposta não estiver nos conhecimentos, não invente.`;
         usedKnowledge.push(...ragSearch.results);
-      } else {
-        contextBlock = `\n\n(Nenhum conhecimento relevante encontrado na base para esta pergunta.)`;
       }
 
       // 4. Chamar LLM Real (apenas se Provider configurado)
@@ -1027,21 +1137,22 @@ export class AssistantsService {
             weeklySchedule: assistant.weeklySchedule,
             aiAlwaysAvailable: assistant.aiAlwaysAvailable,
           });
-          const sysPrompt = [
-            officialContext.promptBlock,
-            assistant.instructions || "",
-            contextBlock,
-          ]
-            .filter(Boolean)
-            .join("\n\n---\n\n");
+          const promptMessages = this.promptCompilerService.compile({
+            assistant,
+            behavior: assistant.behavior,
+            knowledgeItems: ragSearch.results.map((result) => ({
+              title: result.knowledgeTitle,
+              content: result.contentPreview,
+            })),
+            historyMessages: [],
+            currentMessage: input.dto.question,
+            officialBusinessContext: officialContext,
+          });
           const completion = await this.aiService.generateChatCompletion({
             companyId: input.tenant.companyId,
             model: assistant.model || undefined,
-            temperature: assistant.temperature || 0.2,
-            messages: [
-              { role: "system", content: sysPrompt },
-              { role: "user", content: input.dto.question },
-            ],
+            temperature: assistant.temperature ?? 0.2,
+            messages: promptMessages,
           });
           answer = completion.answer;
         }

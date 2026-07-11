@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, Patch, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Headers, HttpCode, Param, Patch, Post, UseGuards } from "@nestjs/common";
 import {
   ApiBadRequestResponse,
   ApiBody,
@@ -316,8 +316,10 @@ export class AssistantsController {
     @Body() dto: CreateAssistantDto,
     @CurrentUser() user: AuthenticatedUser,
     @Tenant() tenant: RequestTenant,
+    @Headers("x-request-id") requestId?: string,
+    @Headers("x-correlation-id") correlationId?: string,
   ): Promise<CreateAssistantResponse> {
-    return this.assistantsService.create({ dto, user, tenant });
+    return this.assistantsService.create({ dto, user, tenant, requestId: requestId ?? correlationId });
   }
 
   @Post(":id/preview")
@@ -839,8 +841,16 @@ export class AssistantsController {
     @Body() dto: UpdateAssistantDto,
     @CurrentUser() user: AuthenticatedUser,
     @Tenant() tenant: RequestTenant,
+    @Headers("x-request-id") requestId?: string,
+    @Headers("x-correlation-id") correlationId?: string,
   ): Promise<UpdateAssistantResponse> {
-    return this.assistantsService.update({ id, dto, user, tenant });
+    return this.assistantsService.update({
+      id,
+      dto,
+      user,
+      tenant,
+      requestId: requestId ?? correlationId,
+    });
   }
 
   @Get(":id/tools")

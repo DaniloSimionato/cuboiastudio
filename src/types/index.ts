@@ -2,6 +2,8 @@
 // IMPORTANTE: nenhum campo desta camada carrega segredos em claro.
 // Tokens, API keys e webhook secrets vivem APENAS no backend.
 
+import type { AssistantBehavior } from "./assistant-behavior.types";
+
 export type Status = "ativo" | "pausado" | "rascunho" | "erro" | "pendente" | "indexando";
 
 export type ConversationStatus = "resolvido" | "transferido" | "erro" | "em andamento";
@@ -542,6 +544,7 @@ export interface BackendAssistantListItem {
   messageBufferSeconds: number;
   splitResponseEnabled: boolean;
   splitResponseStyle: SplitResponseStyle | null;
+  behavior?: AssistantBehavior | null;
   status: BackendStatus;
   createdAt: string;
   updatedAt: string;

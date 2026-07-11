@@ -19,7 +19,6 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import {
   AssistantBehaviorTab,
-  type AssistantBehaviorTabRef,
 } from "../components/assistant/AssistantBehaviorTab";
 import { AssistantFlowsTab } from "../components/assistant/AssistantFlowsTab";
 import { AssistantToolsTab } from "../components/assistant/AssistantToolsTab";
@@ -71,6 +70,15 @@ import type {
 } from "@/types";
 import { currentCompanyService } from "@/services/currentCompanyService";
 import { toast } from "sonner";
+import {
+  DEFAULT_ASSISTANT_BEHAVIOR,
+  type AssistantBehaviorFormState,
+} from "../types/assistant-behavior.types";
+import {
+  buildAssistantBehaviorPayload,
+  isAssistantBehaviorDirty,
+  normalizeAssistantBehavior,
+} from "../lib/assistant-behavior-form";
 import { filterOperationalAssistants, resolveOperationalAssistantId } from "@/lib/assistants";
 import {
   BUSINESS_DAYS,
@@ -148,14 +156,17 @@ export const Route = createFileRoute("/_app/agentes/novo")({
 
 function NovoAgente() {
   const search = Route.useSearch();
-  const behaviorTabRef = useRef<AssistantBehaviorTabRef>(null);
+  const assistantLoadRequestRef = useRef(0);
 
   const [company, setCompany] = useState<CurrentCompanyResponse["company"] | null>(null);
   const [assistants, setAssistants] = useState<BackendAssistantListItem[]>([]);
   const [publicationChannels, setPublicationChannels] = useState<ChatwootInboxConfigItem[]>([]);
   const [selectedAssistantId, setSelectedAssistantId] = useState<string>(search.assistantId ?? "");
   const [loading, setLoading] = useState(true);
+  const [hydratingAssistant, setHydratingAssistant] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [activeTab, setActiveTab] = useState("info");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -214,6 +225,8 @@ function NovoAgente() {
   const [usePreparedKnowledge, setUsePreparedKnowledge] = useState(false);
   const [previewResult, setPreviewResult] = useState<BackendAssistantPreviewResponse | null>(null);
   const [publicationSavingId, setPublicationSavingId] = useState<string | null>(null);
+  const [behavior, setBehavior] = useState<AssistantBehaviorFormState>(DEFAULT_ASSISTANT_BEHAVIOR);
+  const [behaviorLoading, setBehaviorLoading] = useState(false);
 
   const [noAnswerMessage, setNoAnswerMessage] = useState("");
   const [securityInstructions, setSecurityInstructions] = useState("");
@@ -296,6 +309,11 @@ function NovoAgente() {
       memoryConfidenceThreshold,
       memoryTempDefaultDays,
       memorySharedAcrossAssistants,
+      conversationResetEnabled,
+      conversationResetKeywordsRaw,
+      conversationResetConfirmationMessage,
+      conversationResetPreserveMemories,
+      conversationResetSendInitialMessage,
       status,
       instructions,
       personality,
@@ -309,6 +327,7 @@ function NovoAgente() {
       temperature,
       noAnswerMessage,
       securityInstructions,
+      behavior,
     }),
     [
       name,
@@ -337,6 +356,11 @@ function NovoAgente() {
       memoryConfidenceThreshold,
       memoryTempDefaultDays,
       memorySharedAcrossAssistants,
+      conversationResetEnabled,
+      conversationResetKeywordsRaw,
+      conversationResetConfirmationMessage,
+      conversationResetPreserveMemories,
+      conversationResetSendInitialMessage,
       status,
       instructions,
       personality,
@@ -350,14 +374,34 @@ function NovoAgente() {
       temperature,
       noAnswerMessage,
       securityInstructions,
+      behavior,
     ],
   );
 
   const [initialFormData, setInitialFormData] = useState<any>(currentFormData);
   const isDirty = useMemo(
-    () => JSON.stringify(currentFormData) !== JSON.stringify(initialFormData),
-    [currentFormData, initialFormData],
+    () =>
+      !hydratingAssistant && JSON.stringify(currentFormData) !== JSON.stringify(initialFormData),
+    [currentFormData, initialFormData, hydratingAssistant],
   );
+  const behaviorIsDirty = useMemo(
+    () => isAssistantBehaviorDirty(behavior, initialFormData.behavior ?? DEFAULT_ASSISTANT_BEHAVIOR),
+    [behavior, initialFormData.behavior],
+  );
+
+  useEffect(() => {
+    if (!isDirty) {
+      return;
+    }
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [isDirty]);
   const businessHoursErrors = useMemo(
     () => validateBusinessHoursSchedule(weeklySchedule),
     [weeklySchedule],
@@ -404,17 +448,19 @@ function NovoAgente() {
     );
   };
 
-  const loadKnowledge = async (assistantId: string) => {
+  const loadKnowledge = async (assistantId: string, requestId?: number) => {
     if (!assistantId) {
       setKnowledge([]);
       return;
     }
 
     const items = await backendAssistantsService.knowledgeList(assistantId);
-    setKnowledge(items);
+    if (requestId === undefined || requestId === assistantLoadRequestRef.current) {
+      setKnowledge(items);
+    }
   };
 
-  const loadSecurityRules = async (assistantId: string) => {
+  const loadSecurityRules = async (assistantId: string, requestId?: number) => {
     if (!assistantId) {
       setSecurityRules([]);
       setSecurityRulesError(null);
@@ -425,13 +471,19 @@ function NovoAgente() {
     setSecurityRulesError(null);
     try {
       const items = await backendAssistantsService.securityRulesList(assistantId);
-      setSecurityRules(items);
+      if (requestId === undefined || requestId === assistantLoadRequestRef.current) {
+        setSecurityRules(items);
+      }
     } catch (err) {
-      setSecurityRulesError(
-        err instanceof Error ? err.message : "Não foi possível carregar as regras de segurança.",
-      );
+      if (requestId === undefined || requestId === assistantLoadRequestRef.current) {
+        setSecurityRulesError(
+          err instanceof Error ? err.message : "Não foi possível carregar as regras de segurança.",
+        );
+      }
     } finally {
-      setSecurityRulesLoading(false);
+      if (requestId === undefined || requestId === assistantLoadRequestRef.current) {
+        setSecurityRulesLoading(false);
+      }
     }
   };
 
@@ -468,6 +520,8 @@ function NovoAgente() {
         );
         setSelectedAssistantId(initialAssistantId);
         if (!initialAssistantId) {
+          setBehavior(DEFAULT_ASSISTANT_BEHAVIOR);
+          setBehaviorLoading(false);
           setName("");
           setDescription("");
           setBusinessAddress("");
@@ -516,6 +570,19 @@ function NovoAgente() {
             aiAlwaysAvailable: true,
             initialMessage: "",
             ragEnabled: false,
+            memoryEnabled: false,
+            memoryPrePromptEnabled: true,
+            memoryExtractionEnabled: true,
+            memoryAllowedCategories: ["IDENTITY", "PREFERENCE", "BUSINESS_CONTEXT", "TEMPORARY_CONTEXT"],
+            memoryConfidenceThreshold: 0.7,
+            memoryTempDefaultDays: 7,
+            memorySharedAcrossAssistants: true,
+            conversationResetEnabled: false,
+            conversationResetKeywordsRaw: "reset",
+            conversationResetConfirmationMessage:
+              "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
+            conversationResetPreserveMemories: true,
+            conversationResetSendInitialMessage: true,
             status: "ACTIVE",
             instructions:
               "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
@@ -530,6 +597,7 @@ function NovoAgente() {
             temperature: null,
             noAnswerMessage: "",
             securityInstructions: "",
+            behavior: DEFAULT_ASSISTANT_BEHAVIOR,
           });
         }
       } catch (err) {
@@ -586,16 +654,26 @@ function NovoAgente() {
   };
 
   useEffect(() => {
+    const requestId = ++assistantLoadRequestRef.current;
+
     if (!selectedAssistantId) {
       setKnowledge([]);
       setSecurityRules([]);
       setSecurityRulesError(null);
+      setBehavior(DEFAULT_ASSISTANT_BEHAVIOR);
+      setBehaviorLoading(false);
+      setHydratingAssistant(false);
       return;
     }
 
+    setHydratingAssistant(true);
+    setBehaviorLoading(true);
     void (async () => {
       try {
         const assistant = await backendAssistantsService.get(selectedAssistantId);
+        if (requestId !== assistantLoadRequestRef.current) {
+          return;
+        }
         setName(assistant.name);
         setDescription(assistant.description ?? "");
         setBusinessAddress(assistant.businessAddress ?? "");
@@ -622,7 +700,8 @@ function NovoAgente() {
         );
         setWeeklySchedule(normalizeBusinessHoursSchedule(assistant.weeklySchedule));
         setAiAlwaysAvailable(assistant.aiAlwaysAvailable ?? true);
-        setInitialMessage(assistant.initialMessage ?? "");
+        setBehavior(normalizeAssistantBehavior(assistant.behavior));
+        setInitialMessage(assistant.initialMessage ?? assistant.behavior?.greetingMessage ?? "");
         setInstructions(
           assistant.instructions ??
             "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
@@ -666,8 +745,8 @@ function NovoAgente() {
         setSplitResponseEnabled(assistant.splitResponseEnabled ?? false);
         setSplitResponseStyle(normalizeSplitResponseStyle(assistant.splitResponseStyle));
         setStatus(assistant.status);
-        await loadKnowledge(selectedAssistantId);
-        await loadSecurityRules(selectedAssistantId);
+        await loadKnowledge(selectedAssistantId, requestId);
+        await loadSecurityRules(selectedAssistantId, requestId);
 
         setInitialFormData({
           name: assistant.name,
@@ -693,7 +772,7 @@ function NovoAgente() {
               : "",
           weeklySchedule: normalizeBusinessHoursSchedule(assistant.weeklySchedule),
           aiAlwaysAvailable: assistant.aiAlwaysAvailable ?? true,
-          initialMessage: assistant.initialMessage ?? "",
+          initialMessage: assistant.initialMessage ?? assistant.behavior?.greetingMessage ?? "",
           instructions:
             assistant.instructions ??
             "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
@@ -704,6 +783,7 @@ function NovoAgente() {
           temperature: assistant.temperature ?? null,
           noAnswerMessage: assistant.fallbackMessage ?? "",
           securityInstructions: assistant.safetyInstruction ?? "",
+          behavior: normalizeAssistantBehavior(assistant.behavior),
           ragEnabled: assistant.ragEnabled ?? false,
           memoryEnabled: assistant.memoryEnabled ?? false,
           memoryPrePromptEnabled: assistant.memoryPrePromptEnabled ?? true,
@@ -719,7 +799,9 @@ function NovoAgente() {
           memoryTempDefaultDays: assistant.memoryTempDefaultDays ?? 7,
           memorySharedAcrossAssistants: assistant.memorySharedAcrossAssistants ?? true,
           conversationResetEnabled: assistant.conversationResetEnabled ?? false,
-          conversationResetKeywords: assistant.conversationResetKeywords ?? ["reset"],
+          conversationResetKeywordsRaw: Array.isArray(assistant.conversationResetKeywords)
+            ? assistant.conversationResetKeywords.join(", ")
+            : "reset",
           conversationResetConfirmationMessage: assistant.conversationResetConfirmationMessage ?? "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
           conversationResetPreserveMemories: assistant.conversationResetPreserveMemories ?? true,
           conversationResetSendInitialMessage: assistant.conversationResetSendInitialMessage ?? true,
@@ -730,13 +812,29 @@ function NovoAgente() {
           status: assistant.status,
         });
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Não foi possível carregar o assistente.");
+        if (requestId === assistantLoadRequestRef.current) {
+          setError(err instanceof Error ? err.message : "Não foi possível carregar o assistente.");
+        }
+      } finally {
+        if (requestId === assistantLoadRequestRef.current) {
+          setBehaviorLoading(false);
+          setHydratingAssistant(false);
+        }
       }
     })();
   }, [selectedAssistantId, company?.timezone]);
 
   const handleCreateNew = () => {
+    if (isDirty && !window.confirm("Existem alterações não salvas. Deseja descartá-las?")) {
+      return;
+    }
+
+    assistantLoadRequestRef.current += 1;
     setSelectedAssistantId("");
+    setSaveState("idle");
+    setBehavior(DEFAULT_ASSISTANT_BEHAVIOR);
+    setBehaviorLoading(false);
+    setHydratingAssistant(false);
     setName("");
     setDescription("");
     setBusinessAddress("");
@@ -819,7 +917,7 @@ function NovoAgente() {
       memoryTempDefaultDays: 7,
       memorySharedAcrossAssistants: true,
       conversationResetEnabled: false,
-      conversationResetKeywords: ["reset"],
+      conversationResetKeywordsRaw: "reset",
       conversationResetConfirmationMessage: "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
       conversationResetPreserveMemories: true,
       conversationResetSendInitialMessage: true,
@@ -837,6 +935,7 @@ function NovoAgente() {
       temperature: null,
       noAnswerMessage: "",
       securityInstructions: "",
+      behavior: DEFAULT_ASSISTANT_BEHAVIOR,
     });
   };
 
@@ -985,10 +1084,17 @@ function NovoAgente() {
     }
 
     setSaving(true);
+    setSaveState("saving");
     try {
       const payloadLatitude = latitude.trim() ? parseFloat(latitude) : null;
       const payloadLongitude = longitude.trim() ? parseFloat(longitude) : null;
       const payloadCityRegion = buildCityRegion(businessCity, businessState, businessCityRegion);
+      const behaviorPayload = buildAssistantBehaviorPayload(
+        behavior,
+        initialMessage,
+        personality,
+        toneOfVoice,
+      );
 
       if (selectedAssistantId) {
         const updated = await backendAssistantsService.update(selectedAssistantId, {
@@ -1038,6 +1144,7 @@ function NovoAgente() {
           conversationResetConfirmationMessage: conversationResetConfirmationMessage.trim() || null,
           conversationResetPreserveMemories,
           conversationResetSendInitialMessage,
+          behavior: behaviorPayload,
         });
         setAssistants((items) => items.map((item) => (item.id === updated.id ? updated : item)));
         setName(updated.name);
@@ -1065,7 +1172,8 @@ function NovoAgente() {
         );
         setWeeklySchedule(normalizeBusinessHoursSchedule(updated.weeklySchedule));
         setAiAlwaysAvailable(updated.aiAlwaysAvailable ?? true);
-        setInitialMessage(updated.initialMessage ?? "");
+        setBehavior(normalizeAssistantBehavior(updated.behavior));
+        setInitialMessage(updated.initialMessage ?? updated.behavior?.greetingMessage ?? "");
         setInstructions(
           updated.instructions ??
             "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
@@ -1142,7 +1250,7 @@ function NovoAgente() {
               : "",
           weeklySchedule: normalizeBusinessHoursSchedule(updated.weeklySchedule),
           aiAlwaysAvailable: updated.aiAlwaysAvailable ?? true,
-          initialMessage: updated.initialMessage ?? "",
+          initialMessage: updated.initialMessage ?? updated.behavior?.greetingMessage ?? "",
           instructions: updated.instructions ?? "",
           personality: updated.personality ?? "",
           toneOfVoice: updated.toneOfVoice ?? "",
@@ -1151,6 +1259,7 @@ function NovoAgente() {
           temperature: updated.temperature ?? null,
           noAnswerMessage: updated.fallbackMessage ?? "",
           securityInstructions: updated.safetyInstruction ?? "",
+          behavior: normalizeAssistantBehavior(updated.behavior),
           ragEnabled: updated.ragEnabled ?? false,
           memoryEnabled: updated.memoryEnabled ?? false,
           memoryPrePromptEnabled: updated.memoryPrePromptEnabled ?? true,
@@ -1166,7 +1275,9 @@ function NovoAgente() {
           memoryTempDefaultDays: updated.memoryTempDefaultDays ?? 7,
           memorySharedAcrossAssistants: updated.memorySharedAcrossAssistants ?? true,
           conversationResetEnabled: updated.conversationResetEnabled ?? false,
-          conversationResetKeywords: updated.conversationResetKeywords ?? ["reset"],
+          conversationResetKeywordsRaw: Array.isArray(updated.conversationResetKeywords)
+            ? updated.conversationResetKeywords.join(", ")
+            : "reset",
           conversationResetConfirmationMessage:
             updated.conversationResetConfirmationMessage ??
             "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
@@ -1179,8 +1290,6 @@ function NovoAgente() {
           splitResponseStyle: normalizeSplitResponseStyle(updated.splitResponseStyle),
           status: status,
         });
-
-        await behaviorTabRef.current?.saveBehavior(selectedAssistantId);
 
         toast.success("Agente salvo com sucesso.");
       } else {
@@ -1231,6 +1340,7 @@ function NovoAgente() {
           conversationResetConfirmationMessage: conversationResetConfirmationMessage.trim() || null,
           conversationResetPreserveMemories,
           conversationResetSendInitialMessage,
+          behavior: behaviorPayload,
         });
         setAssistants((items) => [created, ...items]);
         setSelectedAssistantId(created.id);
@@ -1258,7 +1368,8 @@ function NovoAgente() {
             : "",
         );
         setWeeklySchedule(normalizeBusinessHoursSchedule(created.weeklySchedule));
-        setInitialMessage(created.initialMessage ?? "");
+        setBehavior(normalizeAssistantBehavior(created.behavior));
+        setInitialMessage(created.initialMessage ?? created.behavior?.greetingMessage ?? "");
         setInstructions(created.instructions ?? "");
         setModel(created.model ?? "");
         setTemperature(created.temperature ?? null);
@@ -1318,7 +1429,7 @@ function NovoAgente() {
               : "",
           weeklySchedule: normalizeBusinessHoursSchedule(created.weeklySchedule),
           aiAlwaysAvailable: created.aiAlwaysAvailable ?? true,
-          initialMessage: created.initialMessage ?? "",
+          initialMessage: created.initialMessage ?? created.behavior?.greetingMessage ?? "",
           instructions: created.instructions ?? "",
           personality: created.personality ?? "",
           toneOfVoice: created.toneOfVoice ?? "",
@@ -1327,6 +1438,7 @@ function NovoAgente() {
           temperature: created.temperature ?? null,
           noAnswerMessage: created.fallbackMessage ?? "",
           securityInstructions: created.safetyInstruction ?? "",
+          behavior: normalizeAssistantBehavior(created.behavior),
           ragEnabled: created.ragEnabled ?? false,
           memoryEnabled: created.memoryEnabled ?? false,
           memoryPrePromptEnabled: created.memoryPrePromptEnabled ?? true,
@@ -1342,7 +1454,9 @@ function NovoAgente() {
           memoryTempDefaultDays: created.memoryTempDefaultDays ?? 7,
           memorySharedAcrossAssistants: created.memorySharedAcrossAssistants ?? true,
           conversationResetEnabled: created.conversationResetEnabled ?? false,
-          conversationResetKeywords: created.conversationResetKeywords ?? ["reset"],
+          conversationResetKeywordsRaw: Array.isArray(created.conversationResetKeywords)
+            ? created.conversationResetKeywords.join(", ")
+            : "reset",
           conversationResetConfirmationMessage: created.conversationResetConfirmationMessage ?? "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
           conversationResetPreserveMemories: created.conversationResetPreserveMemories ?? true,
           conversationResetSendInitialMessage: created.conversationResetSendInitialMessage ?? true,
@@ -1353,13 +1467,13 @@ function NovoAgente() {
           status: created.status,
         });
 
-        await behaviorTabRef.current?.saveBehavior(created.id);
-
         toast.success("Agente criado com sucesso.");
       }
+      setSaveState("saved");
       setIsReviewConfirmed(false);
     } catch (err) {
       console.error(err);
+      setSaveState("error");
       toast.error("Não foi possível salvar o agente. Tente novamente.");
     } finally {
       setSaving(false);
@@ -1529,7 +1643,14 @@ function NovoAgente() {
         actions={
           <div className="flex items-center gap-2">
             <Button variant="outline" asChild size="sm">
-              <Link to="/agentes">
+              <Link
+                to="/agentes"
+                onClick={(event) => {
+                  if (isDirty && !window.confirm("Existem alterações não salvas. Deseja descartá-las?")) {
+                    event.preventDefault();
+                  }
+                }}
+              >
                 <ArrowLeft className="h-4 w-4 mr-1" /> Voltar
               </Link>
             </Button>
@@ -1550,7 +1671,22 @@ function NovoAgente() {
                 </Button>
               </div>
             )}
-            <Button onClick={() => void handleSave()} disabled={saving || !name.trim()} size="sm">
+            <span className="text-xs text-muted-foreground hidden md:inline">
+              {saveState === "saving"
+                ? "Salvando..."
+                : saveState === "error"
+                  ? "Erro ao salvar"
+                  : isDirty
+                    ? "Alterações não salvas"
+                    : saveState === "saved"
+                      ? "Alterações salvas"
+                      : "Sincronizado"}
+            </span>
+            <Button
+              onClick={() => void handleSave()}
+              disabled={saving || !name.trim() || (Boolean(selectedAssistantId) && !isDirty)}
+              size="sm"
+            >
               <Save className="h-4 w-4 mr-1" />{" "}
               {saving ? "Salvando..." : selectedAssistantId ? "Salvar" : "Criar"}
             </Button>
@@ -1576,7 +1712,10 @@ function NovoAgente() {
                   onValueChange={(value) => {
                     if (value === "new") {
                       handleCreateNew();
-                    } else {
+                    } else if (
+                      !isDirty ||
+                      window.confirm("Existem alterações não salvas. Deseja descartá-las?")
+                    ) {
                       setSelectedAssistantId(value);
                     }
                   }}
@@ -1597,7 +1736,14 @@ function NovoAgente() {
             </CardContent>
           </Card>
 
-          <Tabs defaultValue="info">
+          <Tabs
+            value={activeTab}
+            onValueChange={(nextTab) => {
+              if (!isDirty || window.confirm("Existem alterações não salvas. Deseja descartá-las?")) {
+                setActiveTab(nextTab);
+              }
+            }}
+          >
             <TabsList className="mb-4 flex-wrap h-auto">
               <TabsTrigger value="info">Informações</TabsTrigger>
               <TabsTrigger value="comportamento">Comportamento</TabsTrigger>
@@ -1913,12 +2059,12 @@ function NovoAgente() {
                           <Slider
                             value={[temperature ?? 0.2]}
                             min={0}
-                            max={1}
+                            max={2}
                             step={0.1}
                             onValueChange={(vals) => setTemperature(vals[0])}
                           />
                           <div className="flex justify-between text-xs text-muted-foreground">
-                            <span>{temperature ?? 0.2}</span>
+                            <span>{temperature === null ? "Padrão do sistema (0.2)" : temperature}</span>
                             <span>{getTemperatureDescription(temperature ?? 0.2)}</span>
                           </div>
                         </div>
@@ -2052,7 +2198,15 @@ function NovoAgente() {
                   </CardContent>
                 </Card>
 
-                <AssistantBehaviorTab assistantId={selectedAssistantId} ref={behaviorTabRef} />
+                <AssistantBehaviorTab
+                  assistantId={selectedAssistantId}
+                  behavior={behavior}
+                  loading={behaviorLoading}
+                  saving={saving}
+                  dirty={behaviorIsDirty}
+                  onChange={setBehavior}
+                  onSave={handleSave}
+                />
               </div>
             </TabsContent>
 
@@ -3150,7 +3304,7 @@ function NovoAgente() {
                       <Summary label="Modelo da IA" value={model || "Padrão do sistema"} />
                       <Summary
                         label="Temperatura"
-                        value={`${temperature ?? 0.2} - ${getTemperatureDescription(temperature ?? 0.2)}`}
+                          value={`${temperature === null ? "Padrão do sistema (0.2)" : temperature} - ${getTemperatureDescription(temperature ?? 0.2)}`}
                       />
                       <Summary
                         label="Buffer de mensagens"

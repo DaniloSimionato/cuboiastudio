@@ -9,6 +9,7 @@ import { AssistantsService } from "../dist/assistants/assistants.service.js";
 import { AssistantConversationsService } from "../dist/assistant-conversations/assistant-conversations.service.js";
 import { CreateAssistantDto } from "../dist/assistants/dto/create-assistant.dto.js";
 import { UpdateAssistantDto } from "../dist/assistants/dto/update-assistant.dto.js";
+import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
 
 function createAuth(companyId) {
   return {
@@ -125,6 +126,9 @@ function createConversationsService(prisma, input) {
       buildRuntimeInputText: ({ rawText }) => rawText ?? "",
     },
     {},
+    undefined,
+    undefined,
+    new PromptCompilerService(),
   );
 
   service.sendChatwootOutboundText = async (payload) => {
@@ -151,6 +155,8 @@ async function createRuntimeConversation(prisma, input) {
       splitResponseEnabled: true,
       splitResponseStyle: input.splitResponseStyle,
       model: "gpt-4o-mini",
+      temperature: input.temperature ?? null,
+      ...(input.behavior ? { behavior: { create: input.behavior } } : {}),
     },
   });
 
@@ -432,6 +438,61 @@ test("Runtime NATURAL_BLOCKS mantém resposta curta em um único outbound", asyn
 
     assert.equal(outboundCalls.length, 1);
     assert.equal(outboundCalls[0].content, "Resposta curta.");
+  } finally {
+    await cleanupAssistantTestData(prisma, companyId);
+    await prisma.$disconnect();
+  }
+});
+
+test("Runtime usa o behavior persistido no prompt e envia temperature zero ao provider", async () => {
+  const prisma = new PrismaClient();
+  const companyId = `company_runtime_behavior_${randomUUID()}`;
+  const assistantId = `assistant_runtime_behavior_${randomUUID()}`;
+  const conversationId = `conversation_runtime_behavior_${randomUUID()}`;
+  const auth = createAuth(companyId);
+
+  try {
+    await createRuntimeConversation(prisma, {
+      companyId,
+      assistantId,
+      conversationId,
+      splitResponseStyle: "SINGLE",
+      temperature: 0,
+      behavior: {
+        personality: "Objetiva",
+        toneOfVoice: "Natural",
+        responseStyle: "whatsapp",
+        showAttendantName: true,
+        noInventInfo: true,
+        emojiUsage: "low",
+        unknownBehavior: "fallback",
+      },
+    });
+
+    const { service, aiCalls } = createConversationsService(prisma, { answer: "Resposta natural." });
+    await service.sendMessage({
+      assistantId,
+      conversationId,
+      dto: {
+        message: "Quero uma resposta",
+        source: "chatwoot",
+        externalAccountId: `account-${companyId}`,
+        externalConversationId: `ext-${conversationId}`,
+        externalContactId: `contact-${companyId}`,
+        externalInboxId: `inbox-${companyId}`,
+      },
+      ...auth,
+    });
+
+    assert.equal(aiCalls.length, 1);
+    assert.equal(aiCalls[0].temperature, 0);
+    const behaviorPrompt = aiCalls[0].messages.find(
+      (message) =>
+        message.role === "system" && String(message.content).includes("COMPORTAMENTO CONVERSACIONAL"),
+    );
+    assert.ok(behaviorPrompt);
+    assert.match(String(behaviorPrompt.content), /Objetiva/);
+    assert.match(String(behaviorPrompt.content), /uma pergunta principal por vez/);
   } finally {
     await cleanupAssistantTestData(prisma, companyId);
     await prisma.$disconnect();

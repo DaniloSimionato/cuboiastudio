@@ -16,3 +16,34 @@ export interface AssistantBehavior {
   createdAt: string;
   updatedAt: string;
 }
+
+export type AssistantBehaviorFormState = Pick<
+  AssistantBehavior,
+  | "attendantName"
+  | "showAttendantName"
+  | "role"
+  | "howItActs"
+  | "personality"
+  | "toneOfVoice"
+  | "responseStyle"
+  | "emojiUsage"
+  | "greetingMessage"
+  | "noInventInfo"
+  | "unknownBehavior"
+  | "maxBlockLength"
+>;
+
+export const DEFAULT_ASSISTANT_BEHAVIOR: AssistantBehaviorFormState = {
+  attendantName: "",
+  showAttendantName: true,
+  role: "",
+  howItActs: "",
+  personality: "",
+  toneOfVoice: "",
+  responseStyle: "whatsapp",
+  emojiUsage: "low",
+  greetingMessage: "",
+  noInventInfo: true,
+  unknownBehavior: "fallback",
+  maxBlockLength: 300,
+};

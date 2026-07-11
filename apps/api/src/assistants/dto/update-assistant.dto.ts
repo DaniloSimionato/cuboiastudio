@@ -1,8 +1,9 @@
-import { Transform } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 import {
   IsArray,
   IsEnum,
   IsIn,
+  IsInt,
   IsNumber,
   IsNotEmpty,
   IsOptional,
@@ -12,8 +13,10 @@ import {
   Min,
   IsBoolean,
   IsUrl,
+  ValidateNested,
 } from "class-validator";
 import { ContactMemoryCategory } from "@prisma/client";
+import { UpsertAssistantBehaviorDto } from "../../assistant-behaviors/dto/upsert-assistant-behavior.dto";
 
 function trimString(value: unknown): unknown {
   return typeof value === "string" ? value.trim() : value;
@@ -22,6 +25,11 @@ function trimString(value: unknown): unknown {
 const splitResponseStyleValues = ["SINGLE", "NATURAL_BLOCKS"] as const;
 
 export class UpdateAssistantDto {
+  @Type(() => UpsertAssistantBehaviorDto)
+  @ValidateNested()
+  @IsOptional()
+  behavior?: UpsertAssistantBehaviorDto;
+
   @Transform(({ value }) => trimString(value))
   @IsOptional()
   @IsString()
@@ -291,7 +299,14 @@ export class UpdateAssistantDto {
   messageBufferEnabled?: boolean;
 
   @IsOptional()
-  @IsNumber()
+  @Transform(({ value }) => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed === "" ? undefined : Number(trimmed);
+    }
+    return value;
+  })
+  @IsInt()
   @Min(3)
   @Max(20)
   messageBufferSeconds?: number;
