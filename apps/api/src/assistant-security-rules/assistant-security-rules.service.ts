@@ -168,7 +168,7 @@ export class AssistantSecurityRulesService {
     await this.resolveAssistantOrThrow(input);
 
     const hasField = (field: keyof UpdateAssistantSecurityRuleDto) =>
-      Object.prototype.hasOwnProperty.call(input.dto, field);
+      (input.dto as unknown as Record<string, unknown>)[field] !== undefined;
     const hasName = hasField("name");
     const hasRuleType = hasField("ruleType");
     const hasInstruction = hasField("instruction");

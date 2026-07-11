@@ -3448,6 +3448,18 @@ export class AssistantConversationsService {
           `Erro de execução: a ferramenta '${toolName}' está desabilitada para este assistente.`,
         );
       }
+      if (
+        config?.permissionType === "READ" &&
+        [
+          "calendar_createBooking",
+          "calendar_rescheduleBooking",
+          "calendar_cancelBooking",
+        ].includes(toolName)
+      ) {
+        throw new Error(
+          `Erro de execução: a ferramenta '${toolName}' exige permissão de escrita para este assistente.`,
+        );
+      }
 
       // 3. Verify calendar tools are active in environment
       if (!this.calendarToolsService) {
@@ -3563,6 +3575,12 @@ export class AssistantConversationsService {
       if (config && !config.enabled) {
         throw new Error(
           `Erro de execução: a ferramenta '${toolName}' está desabilitada para este assistente.`,
+        );
+      }
+      const effectivePermissionType = config?.permissionType ?? action.permissionType;
+      if (effectivePermissionType === "READ" && !["GET", "HEAD"].includes(action.method)) {
+        throw new Error(
+          `Erro de execução: o webhook '${actionName}' exige permissão de escrita para este assistente.`,
         );
       }
 

@@ -133,40 +133,42 @@ export class AssistantFlowsService {
     dto: UpdateAssistantFlowDto,
   ): Prisma.AssistantFlowUncheckedUpdateInput {
     const data: Prisma.AssistantFlowUncheckedUpdateInput = {};
+    const hasField = (field: string) =>
+      (dto as unknown as Record<string, unknown>)[field] !== undefined;
 
-    if (Object.prototype.hasOwnProperty.call(dto, "name")) data.name = dto.name;
-    if (Object.prototype.hasOwnProperty.call(dto, "description"))
+    if (hasField("name")) data.name = dto.name;
+    if (hasField("description"))
       data.description = dto.description;
-    if (Object.prototype.hasOwnProperty.call(dto, "priority")) data.priority = dto.priority;
-    if (Object.prototype.hasOwnProperty.call(dto, "triggerKeywords"))
+    if (hasField("priority")) data.priority = dto.priority;
+    if (hasField("triggerKeywords"))
       data.triggerKeywords = dto.triggerKeywords;
-    if (Object.prototype.hasOwnProperty.call(dto, "triggerDescription"))
+    if (hasField("triggerDescription"))
       data.triggerDescription = dto.triggerDescription;
-    if (Object.prototype.hasOwnProperty.call(dto, "triggerExamples"))
+    if (hasField("triggerExamples"))
       data.triggerExamples = dto.triggerExamples;
-    if (Object.prototype.hasOwnProperty.call(dto, "flowInstructions"))
+    if (hasField("flowInstructions"))
       data.flowInstructions = dto.flowInstructions;
-    if (Object.prototype.hasOwnProperty.call(dto, "allowedToolSlugs"))
+    if (hasField("allowedToolSlugs"))
       data.allowedToolSlugs = dto.allowedToolSlugs;
-    if (Object.prototype.hasOwnProperty.call(dto, "knowledgeScope"))
+    if (hasField("knowledgeScope"))
       data.knowledgeScope = dto.knowledgeScope;
-    if (Object.prototype.hasOwnProperty.call(dto, "finalAction"))
+    if (hasField("finalAction"))
       data.finalAction = dto.finalAction;
-    if (Object.prototype.hasOwnProperty.call(dto, "fixedMessage"))
+    if (hasField("fixedMessage"))
       data.fixedMessage = dto.fixedMessage;
-    if (Object.prototype.hasOwnProperty.call(dto, "handoffTeamId"))
+    if (hasField("handoffTeamId"))
       data.handoffTeamId = dto.handoffTeamId;
-    if (Object.prototype.hasOwnProperty.call(dto, "handoffTeamName"))
+    if (hasField("handoffTeamName"))
       data.handoffTeamName = dto.handoffTeamName;
-    if (Object.prototype.hasOwnProperty.call(dto, "chatwootLabels"))
+    if (hasField("chatwootLabels"))
       data.chatwootLabels = dto.chatwootLabels;
-    if (Object.prototype.hasOwnProperty.call(dto, "autoRespond"))
+    if (hasField("autoRespond"))
       data.autoRespond = dto.autoRespond;
-    if (Object.prototype.hasOwnProperty.call(dto, "requiresHuman"))
+    if (hasField("requiresHuman"))
       data.requiresHuman = dto.requiresHuman;
-    if (Object.prototype.hasOwnProperty.call(dto, "active")) data.active = dto.active;
+    if (hasField("active")) data.active = dto.active;
 
-    if (Object.prototype.hasOwnProperty.call(dto, "toolContext")) {
+    if (hasField("toolContext")) {
       data.toolContext = dto.toolContext
         ? (dto.toolContext as unknown as Prisma.InputJsonValue)
         : Prisma.JsonNull;

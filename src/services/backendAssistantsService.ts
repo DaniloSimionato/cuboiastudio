@@ -107,6 +107,10 @@ export const backendAssistantsService = {
     memoryConfidenceThreshold?: number | null;
     memoryTempDefaultDays?: number | null;
     memorySharedAcrossAssistants?: boolean;
+    semanticMemoryEnabled?: boolean;
+    semanticMemoryThreshold?: number | null;
+    semanticMemoryMaxCandidates?: number | null;
+    semanticMemoryMaxResults?: number | null;
     messageBufferEnabled?: boolean;
     messageBufferSeconds?: number;
     splitResponseEnabled?: boolean;
@@ -161,6 +165,10 @@ export const backendAssistantsService = {
       memoryConfidenceThreshold?: number | null;
       memoryTempDefaultDays?: number | null;
       memorySharedAcrossAssistants?: boolean;
+      semanticMemoryEnabled?: boolean;
+      semanticMemoryThreshold?: number | null;
+      semanticMemoryMaxCandidates?: number | null;
+      semanticMemoryMaxResults?: number | null;
       messageBufferEnabled?: boolean;
       messageBufferSeconds?: number;
       splitResponseEnabled?: boolean;

@@ -82,7 +82,9 @@ export async function runOpenAiCompatibleChatCompletion(
   const payload = {
     model,
     messages,
-    temperature: typeof input.temperature === "number" ? input.temperature : 0.2,
+    ...(modelSupportsTemperature(model)
+      ? { temperature: typeof input.temperature === "number" ? input.temperature : 0.2 }
+      : {}),
     ...(input.tools ? { tools: input.tools } : {}),
   };
   const url = buildChatCompletionsUrl(config.baseUrl);
@@ -141,6 +143,15 @@ export async function runOpenAiCompatibleChatCompletion(
   } finally {
     clearTimeout(timeoutHandle);
   }
+}
+
+export function modelSupportsTemperature(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+
+  return !/^(o1|o3|o4|gpt-5)([-.:]|$)/.test(normalized);
 }
 
 function normalizeMessages(messages: AiChatCompletionMessage[]): any[] {

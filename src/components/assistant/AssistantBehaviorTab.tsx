@@ -153,8 +153,38 @@ export function AssistantBehaviorTab({
               <SelectContent>
                 <SelectItem value="fallback">Responder mensagem padrão (Fallback)</SelectItem>
                 <SelectItem value="handoff">Transferir para humano (Handoff)</SelectItem>
+                <SelectItem value="search_base">Consultar a base antes de responder</SelectItem>
               </SelectContent>
             </Select>
+          </Field>
+        </div>
+
+        <div className="grid gap-4 border-t pt-4 md:grid-cols-2">
+          <Field label="Não inventar informações">
+            <div className="flex items-center gap-2 pt-2">
+              <Switch
+                checked={behavior.noInventInfo}
+                onCheckedChange={(checked) => update("noInventInfo", checked)}
+              />
+              <span className="text-sm text-muted-foreground">
+                Exigir base confiável para fatos, preços e disponibilidade.
+              </span>
+            </div>
+          </Field>
+          <Field label="Limite de caracteres por bloco">
+            <Input
+              type="number"
+              min={100}
+              max={2000}
+              step={50}
+              value={behavior.maxBlockLength ?? 300}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                if (Number.isFinite(value)) {
+                  update("maxBlockLength", value);
+                }
+              }}
+            />
           </Field>
         </div>
 

@@ -540,6 +540,10 @@ export interface BackendAssistantListItem {
   memoryConfidenceThreshold: number;
   memoryTempDefaultDays: number;
   memorySharedAcrossAssistants: boolean;
+  semanticMemoryEnabled: boolean;
+  semanticMemoryThreshold: number;
+  semanticMemoryMaxCandidates: number;
+  semanticMemoryMaxResults: number;
   messageBufferEnabled: boolean;
   messageBufferSeconds: number;
   splitResponseEnabled: boolean;

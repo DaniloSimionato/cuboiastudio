@@ -88,6 +88,9 @@ function buildBehaviorBlock(
     behavior?.maxBlockLength
       ? `- Limite técnico de bloco: ${behavior.maxBlockLength} caracteres; corte apenas em pontos naturais e nunca no meio de uma URL.`
       : null,
+    behavior?.noInventInfo
+      ? "- Não invente informações, preços, disponibilidade ou políticas; quando não houver base confiável, admita a limitação."
+      : null,
     "- Escreva como uma conversa brasileira natural: prefira frases curtas, sem títulos, subtítulos, bullets ou aparência de manual quando isso não for necessário.",
     "- Normalmente use no máximo 1 ou 2 blocos por resposta e faça apenas uma pergunta principal por vez.",
     "- Responda progressivamente: apresente apenas a informação necessária para o próximo passo, sem tentar resolver todos os assuntos em uma única mensagem.",

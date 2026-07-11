@@ -47,6 +47,7 @@ test("PromptCompiler prioriza segurança, comportamento e depois fluxo/conhecime
   assert.ok(knowledgeIndex > flowIndex);
   assert.match(contents[behaviorIndex], /uma pergunta principal por vez/);
   assert.match(contents[behaviorIndex], /Nunca diga que é humana/);
+  assert.match(contents[behaviorIndex], /Não invente informações/);
   assert.match(contents[knowledgeIndex], /não como modelo de estilo/);
   assert.match(contents[behaviorIndex], /Blocos Naturais/);
 });

@@ -8,8 +8,6 @@ export function normalizeAssistantBehavior(
   value: Partial<AssistantBehavior> | null | undefined,
 ): AssistantBehaviorFormState {
   return {
-    ...DEFAULT_ASSISTANT_BEHAVIOR,
-    ...value,
     attendantName: value?.attendantName ?? "",
     role: value?.role ?? "",
     howItActs: value?.howItActs ?? "",

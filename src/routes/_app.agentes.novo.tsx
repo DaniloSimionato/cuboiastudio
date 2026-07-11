@@ -79,6 +79,17 @@ import {
   isAssistantBehaviorDirty,
   normalizeAssistantBehavior,
 } from "../lib/assistant-behavior-form";
+import {
+  assistantFormSnapshotsEqual,
+  canonicalizeAssistantFormSnapshot,
+} from "../lib/assistant-form-snapshot";
+import {
+  getTemperatureLevel,
+  modelSupportsTemperature,
+  RECOMMENDED_WHATSAPP_TEMPERATURE,
+  SYSTEM_DEFAULT_TEMPERATURE,
+  TEMPERATURE_LEVELS,
+} from "../lib/temperature";
 import { filterOperationalAssistants, resolveOperationalAssistantId } from "@/lib/assistants";
 import {
   BUSINESS_DAYS,
@@ -187,6 +198,7 @@ function NovoAgente() {
   const [weeklySchedule, setWeeklySchedule] = useState<BusinessHoursSchedule>(
     createDefaultBusinessHoursSchedule(),
   );
+  const [expandedBusinessDay, setExpandedBusinessDay] = useState<BusinessDayKey | null>(null);
   const [aiAlwaysAvailable, setAiAlwaysAvailable] = useState(true);
   const [initialMessage, setInitialMessage] = useState("");
   const [ragEnabled, setRagEnabled] = useState(false);
@@ -199,6 +211,10 @@ function NovoAgente() {
   const [memoryConfidenceThreshold, setMemoryConfidenceThreshold] = useState(0.7);
   const [memoryTempDefaultDays, setMemoryTempDefaultDays] = useState(7);
   const [memorySharedAcrossAssistants, setMemorySharedAcrossAssistants] = useState(true);
+  const [semanticMemoryEnabled, setSemanticMemoryEnabled] = useState(false);
+  const [semanticMemoryThreshold, setSemanticMemoryThreshold] = useState(0.7);
+  const [semanticMemoryMaxCandidates, setSemanticMemoryMaxCandidates] = useState(20);
+  const [semanticMemoryMaxResults, setSemanticMemoryMaxResults] = useState(10);
   const [conversationResetEnabled, setConversationResetEnabled] = useState(false);
   const [conversationResetKeywordsRaw, setConversationResetKeywordsRaw] = useState("reset");
   const [conversationResetConfirmationMessage, setConversationResetConfirmationMessage] = useState(
@@ -309,6 +325,10 @@ function NovoAgente() {
       memoryConfidenceThreshold,
       memoryTempDefaultDays,
       memorySharedAcrossAssistants,
+      semanticMemoryEnabled,
+      semanticMemoryThreshold,
+      semanticMemoryMaxCandidates,
+      semanticMemoryMaxResults,
       conversationResetEnabled,
       conversationResetKeywordsRaw,
       conversationResetConfirmationMessage,
@@ -356,6 +376,10 @@ function NovoAgente() {
       memoryConfidenceThreshold,
       memoryTempDefaultDays,
       memorySharedAcrossAssistants,
+      semanticMemoryEnabled,
+      semanticMemoryThreshold,
+      semanticMemoryMaxCandidates,
+      semanticMemoryMaxResults,
       conversationResetEnabled,
       conversationResetKeywordsRaw,
       conversationResetConfirmationMessage,
@@ -378,15 +402,26 @@ function NovoAgente() {
     ],
   );
 
-  const [initialFormData, setInitialFormData] = useState<any>(currentFormData);
+  const [initialFormData, setRawInitialFormData] = useState<Record<string, unknown> | null>(null);
+  const setInitialFormData = (value: Record<string, unknown> | null) => {
+    setRawInitialFormData(value ? canonicalizeAssistantFormSnapshot(value) : null);
+  };
   const isDirty = useMemo(
     () =>
-      !hydratingAssistant && JSON.stringify(currentFormData) !== JSON.stringify(initialFormData),
-    [currentFormData, initialFormData, hydratingAssistant],
+      !loading &&
+      !hydratingAssistant &&
+      initialFormData !== null &&
+      !assistantFormSnapshotsEqual(currentFormData, initialFormData),
+    [currentFormData, initialFormData, hydratingAssistant, loading],
   );
   const behaviorIsDirty = useMemo(
-    () => isAssistantBehaviorDirty(behavior, initialFormData.behavior ?? DEFAULT_ASSISTANT_BEHAVIOR),
-    [behavior, initialFormData.behavior],
+    () =>
+      initialFormData !== null &&
+      isAssistantBehaviorDirty(
+        behavior,
+        (initialFormData.behavior as AssistantBehaviorFormState) ?? DEFAULT_ASSISTANT_BEHAVIOR,
+      ),
+    [behavior, initialFormData],
   );
 
   useEffect(() => {
@@ -419,6 +454,7 @@ function NovoAgente() {
 
   const toggleDayOpen = (day: BusinessDayKey, open: boolean) => {
     updateDayIntervals(day, open ? [{ start: "08:00", end: "18:00" }] : []);
+    setExpandedBusinessDay(open ? day : null);
   };
 
   const addDayInterval = (day: BusinessDayKey) => {
@@ -497,6 +533,9 @@ function NovoAgente() {
 
     async function load() {
       setLoading(true);
+      setHydratingAssistant(true);
+      setInitialFormData(null);
+      setExpandedBusinessDay(null);
       setError(null);
 
       try {
@@ -577,6 +616,10 @@ function NovoAgente() {
             memoryConfidenceThreshold: 0.7,
             memoryTempDefaultDays: 7,
             memorySharedAcrossAssistants: true,
+            semanticMemoryEnabled: false,
+            semanticMemoryThreshold: 0.7,
+            semanticMemoryMaxCandidates: 20,
+            semanticMemoryMaxResults: 10,
             conversationResetEnabled: false,
             conversationResetKeywordsRaw: "reset",
             conversationResetConfirmationMessage:
@@ -599,9 +642,11 @@ function NovoAgente() {
             securityInstructions: "",
             behavior: DEFAULT_ASSISTANT_BEHAVIOR,
           });
+          setHydratingAssistant(false);
         }
       } catch (err) {
         if (!cancelled) {
+          setHydratingAssistant(false);
           setError(err instanceof Error ? err.message : "Não foi possível carregar o backend.");
         }
       } finally {
@@ -662,11 +707,14 @@ function NovoAgente() {
       setSecurityRulesError(null);
       setBehavior(DEFAULT_ASSISTANT_BEHAVIOR);
       setBehaviorLoading(false);
+      setExpandedBusinessDay(null);
       setHydratingAssistant(false);
       return;
     }
 
+    setInitialFormData(null);
     setHydratingAssistant(true);
+    setExpandedBusinessDay(null);
     setBehaviorLoading(true);
     void (async () => {
       try {
@@ -686,7 +734,7 @@ function NovoAgente() {
         setBusinessWhatsapp(assistant.businessWhatsapp ?? "");
         setBusinessWhatsappSupport(assistant.businessWhatsappSupport ?? "");
         setWebsiteUrl(assistant.websiteUrl ?? "");
-        setTimezone(assistant.timezone ?? company?.timezone ?? "America/Sao_Paulo");
+        setTimezone(assistant.timezone ?? "America/Sao_Paulo");
         setGoogleMapsUrl(assistant.googleMapsUrl ?? "");
         setLatitude(
           assistant.latitude !== null && assistant.latitude !== undefined
@@ -728,6 +776,10 @@ function NovoAgente() {
         setMemoryConfidenceThreshold(assistant.memoryConfidenceThreshold ?? 0.7);
         setMemoryTempDefaultDays(assistant.memoryTempDefaultDays ?? 7);
         setMemorySharedAcrossAssistants(assistant.memorySharedAcrossAssistants ?? true);
+        setSemanticMemoryEnabled(assistant.semanticMemoryEnabled ?? false);
+        setSemanticMemoryThreshold(assistant.semanticMemoryThreshold ?? 0.7);
+        setSemanticMemoryMaxCandidates(assistant.semanticMemoryMaxCandidates ?? 20);
+        setSemanticMemoryMaxResults(assistant.semanticMemoryMaxResults ?? 10);
         setConversationResetEnabled(assistant.conversationResetEnabled ?? false);
         setConversationResetKeywordsRaw(
           Array.isArray(assistant.conversationResetKeywords)
@@ -760,7 +812,7 @@ function NovoAgente() {
           businessWhatsapp: assistant.businessWhatsapp ?? "",
           businessWhatsappSupport: assistant.businessWhatsappSupport ?? "",
           websiteUrl: assistant.websiteUrl ?? "",
-          timezone: assistant.timezone ?? company?.timezone ?? "America/Sao_Paulo",
+          timezone: assistant.timezone ?? "America/Sao_Paulo",
           googleMapsUrl: assistant.googleMapsUrl ?? "",
           latitude:
             assistant.latitude !== null && assistant.latitude !== undefined
@@ -798,6 +850,10 @@ function NovoAgente() {
           memoryConfidenceThreshold: assistant.memoryConfidenceThreshold ?? 0.7,
           memoryTempDefaultDays: assistant.memoryTempDefaultDays ?? 7,
           memorySharedAcrossAssistants: assistant.memorySharedAcrossAssistants ?? true,
+          semanticMemoryEnabled: assistant.semanticMemoryEnabled ?? false,
+          semanticMemoryThreshold: assistant.semanticMemoryThreshold ?? 0.7,
+          semanticMemoryMaxCandidates: assistant.semanticMemoryMaxCandidates ?? 20,
+          semanticMemoryMaxResults: assistant.semanticMemoryMaxResults ?? 10,
           conversationResetEnabled: assistant.conversationResetEnabled ?? false,
           conversationResetKeywordsRaw: Array.isArray(assistant.conversationResetKeywords)
             ? assistant.conversationResetKeywords.join(", ")
@@ -813,6 +869,7 @@ function NovoAgente() {
         });
       } catch (err) {
         if (requestId === assistantLoadRequestRef.current) {
+          setInitialFormData(null);
           setError(err instanceof Error ? err.message : "Não foi possível carregar o assistente.");
         }
       } finally {
@@ -822,7 +879,7 @@ function NovoAgente() {
         }
       }
     })();
-  }, [selectedAssistantId, company?.timezone]);
+  }, [selectedAssistantId]);
 
   const handleCreateNew = () => {
     if (isDirty && !window.confirm("Existem alterações não salvas. Deseja descartá-las?")) {
@@ -835,6 +892,7 @@ function NovoAgente() {
     setBehavior(DEFAULT_ASSISTANT_BEHAVIOR);
     setBehaviorLoading(false);
     setHydratingAssistant(false);
+    setExpandedBusinessDay(null);
     setName("");
     setDescription("");
     setBusinessAddress("");
@@ -858,9 +916,17 @@ function NovoAgente() {
     setMemoryPrePromptEnabled(true);
     setMemoryExtractionEnabled(true);
     setMemoryAllowedCategories(["IDENTITY", "PREFERENCE", "BUSINESS_CONTEXT", "TEMPORARY_CONTEXT"]);
-    setMemoryConfidenceThreshold(0.7);
-    setMemoryTempDefaultDays(7);
-    setMemorySharedAcrossAssistants(true);
+          setMemoryConfidenceThreshold(0.7);
+          setMemoryTempDefaultDays(7);
+          setMemorySharedAcrossAssistants(true);
+          setSemanticMemoryEnabled(false);
+          setSemanticMemoryThreshold(0.7);
+          setSemanticMemoryMaxCandidates(20);
+          setSemanticMemoryMaxResults(10);
+    setSemanticMemoryEnabled(false);
+    setSemanticMemoryThreshold(0.7);
+    setSemanticMemoryMaxCandidates(20);
+    setSemanticMemoryMaxResults(10);
     setConversationResetEnabled(false);
     setConversationResetKeywordsRaw("reset");
     setConversationResetConfirmationMessage(
@@ -913,9 +979,13 @@ function NovoAgente() {
       memoryPrePromptEnabled: true,
       memoryExtractionEnabled: true,
       memoryAllowedCategories: ["IDENTITY", "PREFERENCE", "BUSINESS_CONTEXT", "TEMPORARY_CONTEXT"],
-      memoryConfidenceThreshold: 0.7,
-      memoryTempDefaultDays: 7,
-      memorySharedAcrossAssistants: true,
+          memoryConfidenceThreshold: 0.7,
+          memoryTempDefaultDays: 7,
+          memorySharedAcrossAssistants: true,
+          semanticMemoryEnabled: false,
+          semanticMemoryThreshold: 0.7,
+          semanticMemoryMaxCandidates: 20,
+          semanticMemoryMaxResults: 10,
       conversationResetEnabled: false,
       conversationResetKeywordsRaw: "reset",
       conversationResetConfirmationMessage: "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
@@ -1132,6 +1202,10 @@ function NovoAgente() {
           memoryConfidenceThreshold,
           memoryTempDefaultDays,
           memorySharedAcrossAssistants,
+          semanticMemoryEnabled,
+          semanticMemoryThreshold,
+          semanticMemoryMaxCandidates,
+          semanticMemoryMaxResults,
           messageBufferEnabled,
           messageBufferSeconds,
           splitResponseEnabled,
@@ -1151,8 +1225,9 @@ function NovoAgente() {
         setDescription(updated.description ?? "");
         setBusinessAddress(updated.businessAddress ?? "");
         setBusinessCityRegion(updated.businessCityRegion ?? "");
-        setBusinessCity(updated.businessCity ?? "");
-        setBusinessState(updated.businessState ?? "");
+        const updatedCityRegion = splitCityRegion(updated.businessCityRegion);
+        setBusinessCity(updated.businessCity ?? updatedCityRegion.city);
+        setBusinessState(updated.businessState ?? updatedCityRegion.state);
         setBusinessPostalCode(updated.businessPostalCode ?? "");
         setBusinessPhone(updated.businessPhone ?? "");
         setBusinessWhatsapp(updated.businessWhatsapp ?? "");
@@ -1200,6 +1275,10 @@ function NovoAgente() {
         setMemoryConfidenceThreshold(updated.memoryConfidenceThreshold ?? 0.7);
         setMemoryTempDefaultDays(updated.memoryTempDefaultDays ?? 7);
         setMemorySharedAcrossAssistants(updated.memorySharedAcrossAssistants ?? true);
+        setSemanticMemoryEnabled(updated.semanticMemoryEnabled ?? false);
+        setSemanticMemoryThreshold(updated.semanticMemoryThreshold ?? 0.7);
+        setSemanticMemoryMaxCandidates(updated.semanticMemoryMaxCandidates ?? 20);
+        setSemanticMemoryMaxResults(updated.semanticMemoryMaxResults ?? 10);
         setConversationResetEnabled(updated.conversationResetEnabled ?? false);
         setConversationResetKeywordsRaw(
           Array.isArray(updated.conversationResetKeywords)
@@ -1231,8 +1310,8 @@ function NovoAgente() {
           description: updated.description ?? "",
           businessAddress: updated.businessAddress ?? "",
           businessCityRegion: updated.businessCityRegion ?? "",
-          businessCity: updated.businessCity ?? "",
-          businessState: updated.businessState ?? "",
+          businessCity: updated.businessCity ?? updatedCityRegion.city,
+          businessState: updated.businessState ?? updatedCityRegion.state,
           businessPostalCode: updated.businessPostalCode ?? "",
           businessPhone: updated.businessPhone ?? "",
           businessWhatsapp: updated.businessWhatsapp ?? "",
@@ -1251,7 +1330,9 @@ function NovoAgente() {
           weeklySchedule: normalizeBusinessHoursSchedule(updated.weeklySchedule),
           aiAlwaysAvailable: updated.aiAlwaysAvailable ?? true,
           initialMessage: updated.initialMessage ?? updated.behavior?.greetingMessage ?? "",
-          instructions: updated.instructions ?? "",
+          instructions:
+            updated.instructions ??
+            "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
           personality: updated.personality ?? "",
           toneOfVoice: updated.toneOfVoice ?? "",
           avoidPhrases: updated.avoidPhrases ?? "",
@@ -1274,6 +1355,10 @@ function NovoAgente() {
           memoryConfidenceThreshold: updated.memoryConfidenceThreshold ?? 0.7,
           memoryTempDefaultDays: updated.memoryTempDefaultDays ?? 7,
           memorySharedAcrossAssistants: updated.memorySharedAcrossAssistants ?? true,
+          semanticMemoryEnabled: updated.semanticMemoryEnabled ?? false,
+          semanticMemoryThreshold: updated.semanticMemoryThreshold ?? 0.7,
+          semanticMemoryMaxCandidates: updated.semanticMemoryMaxCandidates ?? 20,
+          semanticMemoryMaxResults: updated.semanticMemoryMaxResults ?? 10,
           conversationResetEnabled: updated.conversationResetEnabled ?? false,
           conversationResetKeywordsRaw: Array.isArray(updated.conversationResetKeywords)
             ? updated.conversationResetKeywords.join(", ")
@@ -1328,6 +1413,10 @@ function NovoAgente() {
           memoryConfidenceThreshold,
           memoryTempDefaultDays,
           memorySharedAcrossAssistants,
+          semanticMemoryEnabled,
+          semanticMemoryThreshold,
+          semanticMemoryMaxCandidates,
+          semanticMemoryMaxResults,
           messageBufferEnabled,
           messageBufferSeconds,
           splitResponseEnabled,
@@ -1348,8 +1437,9 @@ function NovoAgente() {
         setDescription(created.description ?? "");
         setBusinessAddress(created.businessAddress ?? "");
         setBusinessCityRegion(created.businessCityRegion ?? "");
-        setBusinessCity(created.businessCity ?? "");
-        setBusinessState(created.businessState ?? "");
+        const createdCityRegion = splitCityRegion(created.businessCityRegion);
+        setBusinessCity(created.businessCity ?? createdCityRegion.city);
+        setBusinessState(created.businessState ?? createdCityRegion.state);
         setBusinessPostalCode(created.businessPostalCode ?? "");
         setBusinessPhone(created.businessPhone ?? "");
         setBusinessWhatsapp(created.businessWhatsapp ?? "");
@@ -1368,9 +1458,16 @@ function NovoAgente() {
             : "",
         );
         setWeeklySchedule(normalizeBusinessHoursSchedule(created.weeklySchedule));
+        setAiAlwaysAvailable(created.aiAlwaysAvailable ?? true);
         setBehavior(normalizeAssistantBehavior(created.behavior));
         setInitialMessage(created.initialMessage ?? created.behavior?.greetingMessage ?? "");
-        setInstructions(created.instructions ?? "");
+        setInstructions(
+          created.instructions ??
+            "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
+        );
+        setPersonality(created.personality ?? "");
+        setToneOfVoice(created.toneOfVoice ?? "");
+        setAvoidPhrases(created.avoidPhrases ?? "");
         setModel(created.model ?? "");
         setTemperature(created.temperature ?? null);
         setNoAnswerMessage(created.fallbackMessage ?? "");
@@ -1390,6 +1487,10 @@ function NovoAgente() {
         setMemoryConfidenceThreshold(created.memoryConfidenceThreshold ?? 0.7);
         setMemoryTempDefaultDays(created.memoryTempDefaultDays ?? 7);
         setMemorySharedAcrossAssistants(created.memorySharedAcrossAssistants ?? true);
+        setSemanticMemoryEnabled(created.semanticMemoryEnabled ?? false);
+        setSemanticMemoryThreshold(created.semanticMemoryThreshold ?? 0.7);
+        setSemanticMemoryMaxCandidates(created.semanticMemoryMaxCandidates ?? 20);
+        setSemanticMemoryMaxResults(created.semanticMemoryMaxResults ?? 10);
         setConversationResetEnabled(created.conversationResetEnabled ?? false);
         setConversationResetKeywordsRaw(
           Array.isArray(created.conversationResetKeywords)
@@ -1402,6 +1503,10 @@ function NovoAgente() {
         );
         setConversationResetPreserveMemories(created.conversationResetPreserveMemories ?? true);
         setConversationResetSendInitialMessage(created.conversationResetSendInitialMessage ?? true);
+        setMessageBufferEnabled(created.messageBufferEnabled ?? true);
+        setMessageBufferSeconds(created.messageBufferSeconds ?? 6);
+        setSplitResponseEnabled(created.splitResponseEnabled ?? false);
+        setSplitResponseStyle(normalizeSplitResponseStyle(created.splitResponseStyle));
         setStatus(created.status);
         await loadKnowledge(created.id);
 
@@ -1410,14 +1515,14 @@ function NovoAgente() {
           description: created.description ?? "",
           businessAddress: created.businessAddress ?? "",
           businessCityRegion: created.businessCityRegion ?? "",
-          businessCity: created.businessCity ?? "",
-          businessState: created.businessState ?? "",
+          businessCity: created.businessCity ?? createdCityRegion.city,
+          businessState: created.businessState ?? createdCityRegion.state,
           businessPostalCode: created.businessPostalCode ?? "",
           businessPhone: created.businessPhone ?? "",
           businessWhatsapp: created.businessWhatsapp ?? "",
           businessWhatsappSupport: created.businessWhatsappSupport ?? "",
           websiteUrl: created.websiteUrl ?? "",
-          timezone: created.timezone ?? company?.timezone ?? "America/Sao_Paulo",
+          timezone: created.timezone ?? "America/Sao_Paulo",
           googleMapsUrl: created.googleMapsUrl ?? "",
           latitude:
             created.latitude !== null && created.latitude !== undefined
@@ -1430,7 +1535,9 @@ function NovoAgente() {
           weeklySchedule: normalizeBusinessHoursSchedule(created.weeklySchedule),
           aiAlwaysAvailable: created.aiAlwaysAvailable ?? true,
           initialMessage: created.initialMessage ?? created.behavior?.greetingMessage ?? "",
-          instructions: created.instructions ?? "",
+          instructions:
+            created.instructions ??
+            "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
           personality: created.personality ?? "",
           toneOfVoice: created.toneOfVoice ?? "",
           avoidPhrases: created.avoidPhrases ?? "",
@@ -1453,6 +1560,10 @@ function NovoAgente() {
           memoryConfidenceThreshold: created.memoryConfidenceThreshold ?? 0.7,
           memoryTempDefaultDays: created.memoryTempDefaultDays ?? 7,
           memorySharedAcrossAssistants: created.memorySharedAcrossAssistants ?? true,
+          semanticMemoryEnabled: created.semanticMemoryEnabled ?? false,
+          semanticMemoryThreshold: created.semanticMemoryThreshold ?? 0.7,
+          semanticMemoryMaxCandidates: created.semanticMemoryMaxCandidates ?? 20,
+          semanticMemoryMaxResults: created.semanticMemoryMaxResults ?? 10,
           conversationResetEnabled: created.conversationResetEnabled ?? false,
           conversationResetKeywordsRaw: Array.isArray(created.conversationResetKeywords)
             ? created.conversationResetKeywords.join(", ")
@@ -1489,6 +1600,11 @@ function NovoAgente() {
     const updated = await backendAssistantsService.updateStatus(selectedAssistantId, nextStatus);
     setStatus(updated.status);
     setAssistants((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+    setRawInitialFormData((current) =>
+      current
+        ? canonicalizeAssistantFormSnapshot({ ...current, status: updated.status })
+        : current,
+    );
   };
 
   const handlePreview = async () => {
@@ -1510,14 +1626,9 @@ function NovoAgente() {
   };
 
   const isActive = status === "ACTIVE";
-
-  const getTemperatureDescription = (temp: number | null) => {
-    if (temp === null) return "Padrão do sistema";
-    if (temp <= 0.2) return "Mais objetiva, segura e direta";
-    if (temp <= 0.5) return "Equilibrada";
-    if (temp <= 0.8) return "Mais criativa e flexível";
-    return "Muito criativa, com maior risco de fugir do padrão";
-  };
+  const temperatureValue = temperature ?? SYSTEM_DEFAULT_TEMPERATURE;
+  const temperatureLevel = getTemperatureLevel(temperatureValue);
+  const temperatureSupported = modelSupportsTemperature(model);
 
   const handleOpenNewKnowledge = () => {
     setKnowledgeFormId(null);
@@ -1929,21 +2040,34 @@ function NovoAgente() {
                       />
                     </div>
 
-                    <div className="grid gap-4">
+                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                       {BUSINESS_DAYS.map((day) => {
                         const intervals = weeklySchedule[day.id] ?? [];
                         const isOpen = intervals.length > 0;
+                        const isExpanded = expandedBusinessDay === day.id;
+                        const intervalSummary = isOpen
+                          ? intervals.map((interval) => `${interval.start}-${interval.end}`).join(" · ")
+                          : "Sem atendimento";
 
                         return (
-                          <div key={day.id} className="rounded-lg border bg-card p-4 space-y-3">
-                            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                              <div>
+                          <div
+                            key={day.id}
+                            className="flex min-h-44 flex-col rounded-lg border bg-card p-4 shadow-sm"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <button
+                                type="button"
+                                className="min-w-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                onClick={() =>
+                                  setExpandedBusinessDay(isExpanded ? null : day.id)
+                                }
+                              >
                                 <div className="font-medium">{day.label}</div>
                                 <div className="text-xs text-muted-foreground">
                                   {isOpen ? "Aberto" : "Fechado"}
                                 </div>
-                              </div>
-                              <div className="flex items-center gap-3">
+                              </button>
+                              <div className="flex shrink-0 items-center gap-2">
                                 <Label htmlFor={`open-${day.id}`} className="text-sm">
                                   Aberto
                                 </Label>
@@ -1955,7 +2079,31 @@ function NovoAgente() {
                               </div>
                             </div>
 
-                            {isOpen && (
+                            <div className="mt-4 flex flex-1 flex-col justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-medium">{intervalSummary}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {isOpen && intervals.length > 1
+                                    ? "Inclui intervalo de almoço"
+                                    : isOpen
+                                      ? "Atendimento contínuo"
+                                      : "Ative o dia para configurar horários"}
+                                </p>
+                              </div>
+                              {isOpen && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="w-full"
+                                  onClick={() => setExpandedBusinessDay(isExpanded ? null : day.id)}
+                                >
+                                  {isExpanded ? "Recolher horários" : "Editar horários"}
+                                </Button>
+                              )}
+                            </div>
+
+                            {isOpen && isExpanded && (
                               <div className="space-y-3">
                                 <div className="flex flex-wrap gap-2">
                                   <Button
@@ -2055,18 +2203,72 @@ function NovoAgente() {
                         />
                       </Field>
                       <Field label="Criatividade da resposta (Temperatura)">
-                        <div className="space-y-3 pt-2">
+                        <div className="space-y-4 rounded-lg border bg-secondary/10 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-semibold">
+                                {temperatureValue.toFixed(1)} · {temperatureLevel.name}
+                              </p>
+                              <p className="text-sm text-muted-foreground">
+                                {temperatureLevel.description}
+                              </p>
+                            </div>
+                            <Input
+                              aria-label="Valor da temperatura"
+                              className="w-20 text-center"
+                              type="number"
+                              min={0}
+                              max={2}
+                              step={0.1}
+                              value={temperatureValue.toFixed(1)}
+                              disabled={!temperatureSupported}
+                              onChange={(event) => {
+                                const value = Number(event.target.value);
+                                if (Number.isFinite(value)) {
+                                  setTemperature(Math.min(2, Math.max(0, value)));
+                                }
+                              }}
+                            />
+                          </div>
                           <Slider
-                            value={[temperature ?? 0.2]}
+                            aria-label="Temperatura da resposta"
+                            value={[temperatureValue]}
                             min={0}
                             max={2}
                             step={0.1}
+                            disabled={!temperatureSupported}
                             onValueChange={(vals) => setTemperature(vals[0])}
                           />
-                          <div className="flex justify-between text-xs text-muted-foreground">
-                            <span>{temperature === null ? "Padrão do sistema (0.2)" : temperature}</span>
-                            <span>{getTemperatureDescription(temperature ?? 0.2)}</span>
+                          <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+                            {TEMPERATURE_LEVELS.map((level) => (
+                              <Button
+                                key={level.value}
+                                type="button"
+                                size="sm"
+                                variant={temperatureValue === level.value ? "default" : "outline"}
+                                disabled={!temperatureSupported}
+                                onClick={() => setTemperature(level.value)}
+                                title={`${level.name}: ${level.description} ${level.risk}`}
+                              >
+                                {level.value.toFixed(1)}
+                              </Button>
+                            ))}
                           </div>
+                          <p className="text-xs text-muted-foreground">
+                            {temperature === null
+                              ? `Padrão do sistema: ${SYSTEM_DEFAULT_TEMPERATURE.toFixed(1)}. Recomendado para WhatsApp: ${RECOMMENDED_WHATSAPP_TEMPERATURE.toFixed(1)}. A temperatura não é o único fator de humanização.`
+                              : `Risco: ${temperatureLevel.risk}`}
+                          </p>
+                          {temperatureValue > 1 && (
+                            <p className="text-xs font-medium text-amber-700">
+                              Valores acima de 1.0 são aceitos por alguns providers, mas têm maior risco de variação.
+                            </p>
+                          )}
+                          {!temperatureSupported && (
+                            <p className="text-xs font-medium text-amber-700">
+                              O modelo selecionado não aceita temperatura. O parâmetro não será enviado ao provider.
+                            </p>
+                          )}
                         </div>
                       </Field>
                       <Field label="Tom de voz">
@@ -2675,6 +2877,57 @@ function NovoAgente() {
                           disabled={!memoryEnabled}
                         />
                       </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border bg-card p-4 space-y-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <Label className="text-base font-semibold cursor-pointer">
+                          Busca semântica
+                        </Label>
+                        <p className="text-sm text-muted-foreground">
+                          Recupera memórias por significado, além dos filtros estruturados.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={semanticMemoryEnabled}
+                        onCheckedChange={setSemanticMemoryEnabled}
+                        disabled={!memoryEnabled}
+                      />
+                    </div>
+                    <div className="grid gap-5 md:grid-cols-3">
+                      <div className="space-y-2">
+                        <Label>Limiar semântico: {semanticMemoryThreshold.toFixed(2)}</Label>
+                        <Slider
+                          value={[semanticMemoryThreshold]}
+                          min={0}
+                          max={1}
+                          step={0.05}
+                          disabled={!memoryEnabled || !semanticMemoryEnabled}
+                          onValueChange={(values) => setSemanticMemoryThreshold(values[0] ?? 0.7)}
+                        />
+                      </div>
+                      <Field label="Candidatos analisados">
+                        <Input
+                          type="number"
+                          min={1}
+                          max={100}
+                          value={semanticMemoryMaxCandidates}
+                          disabled={!memoryEnabled || !semanticMemoryEnabled}
+                          onChange={(event) => setSemanticMemoryMaxCandidates(Number(event.target.value) || 1)}
+                        />
+                      </Field>
+                      <Field label="Memórias no prompt">
+                        <Input
+                          type="number"
+                          min={1}
+                          max={100}
+                          value={semanticMemoryMaxResults}
+                          disabled={!memoryEnabled || !semanticMemoryEnabled}
+                          onChange={(event) => setSemanticMemoryMaxResults(Number(event.target.value) || 1)}
+                        />
+                      </Field>
                     </div>
                   </div>
 
@@ -3304,7 +3557,7 @@ function NovoAgente() {
                       <Summary label="Modelo da IA" value={model || "Padrão do sistema"} />
                       <Summary
                         label="Temperatura"
-                          value={`${temperature === null ? "Padrão do sistema (0.2)" : temperature} - ${getTemperatureDescription(temperature ?? 0.2)}`}
+                        value={`${temperatureValue.toFixed(1)} - ${temperatureLevel.name}`}
                       />
                       <Summary
                         label="Buffer de mensagens"
@@ -3342,6 +3595,10 @@ function NovoAgente() {
                       <Summary
                         label="Extração Automática"
                         value={memoryExtractionEnabled ? "Ativada" : "Desativada"}
+                      />
+                      <Summary
+                        label="Busca Semântica"
+                        value={semanticMemoryEnabled ? `Ativada (${semanticMemoryMaxResults} no prompt)` : "Desativada"}
                       />
                       <Summary
                         label="Categorias de Memória"
