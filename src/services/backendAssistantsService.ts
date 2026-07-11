@@ -6,6 +6,7 @@ import type {
   BackendAssistantRunResponse,
   BackendStatus,
   AssistantSecurityRuleItem,
+  SplitResponseStyle,
 } from "@/types";
 
 type AssistantsListResponse = {
@@ -108,7 +109,12 @@ export const backendAssistantsService = {
     messageBufferEnabled?: boolean;
     messageBufferSeconds?: number;
     splitResponseEnabled?: boolean;
-    splitResponseStyle?: string | null;
+    splitResponseStyle?: SplitResponseStyle | null;
+    conversationResetEnabled?: boolean;
+    conversationResetKeywords?: string[];
+    conversationResetConfirmationMessage?: string | null;
+    conversationResetPreserveMemories?: boolean;
+    conversationResetSendInitialMessage?: boolean;
   }): Promise<BackendAssistantResponse> {
     return apiFetch<BackendAssistantResponse>("/assistants", {
       method: "POST",
@@ -156,7 +162,12 @@ export const backendAssistantsService = {
       messageBufferEnabled?: boolean;
       messageBufferSeconds?: number;
       splitResponseEnabled?: boolean;
-      splitResponseStyle?: string | null;
+      splitResponseStyle?: SplitResponseStyle | null;
+      conversationResetEnabled?: boolean;
+      conversationResetKeywords?: string[];
+      conversationResetConfirmationMessage?: string | null;
+      conversationResetPreserveMemories?: boolean;
+      conversationResetSendInitialMessage?: boolean;
     },
   ): Promise<BackendAssistantResponse> {
     return apiFetch<BackendAssistantResponse>(`/assistants/${id}`, {

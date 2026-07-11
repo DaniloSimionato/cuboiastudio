@@ -2,6 +2,7 @@ import { Transform } from "class-transformer";
 import {
   IsArray,
   IsEnum,
+  IsIn,
   IsNumber,
   IsNotEmpty,
   IsOptional,
@@ -17,6 +18,8 @@ import { ContactMemoryCategory } from "@prisma/client";
 function trimString(value: unknown): unknown {
   return typeof value === "string" ? value.trim() : value;
 }
+
+const splitResponseStyleValues = ["SINGLE", "NATURAL_BLOCKS"] as const;
 
 export class CreateAssistantDto {
   @Transform(({ value }) => trimString(value))
@@ -298,7 +301,31 @@ export class CreateAssistantDto {
 
   @Transform(({ value }) => trimString(value))
   @IsOptional()
+  @IsIn(splitResponseStyleValues)
   @IsString()
   @MaxLength(50)
   splitResponseStyle?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  conversationResetEnabled?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  conversationResetKeywords?: string[];
+
+  @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  conversationResetConfirmationMessage?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  conversationResetPreserveMemories?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  conversationResetSendInitialMessage?: boolean;
 }

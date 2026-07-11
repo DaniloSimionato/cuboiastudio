@@ -11,11 +11,12 @@ import {
   Plus,
   Loader2,
   Trash2,
+  RefreshCw,
 } from "lucide-react";
 
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import {
   AssistantBehaviorTab,
   type AssistantBehaviorTabRef,
@@ -66,6 +67,7 @@ import type {
   ChatwootInboxConfigItem,
   AssistantSecurityRuleItem,
   ContactMemoryCategory,
+  SplitResponseStyle,
 } from "@/types";
 import { currentCompanyService } from "@/services/currentCompanyService";
 import { toast } from "sonner";
@@ -106,6 +108,14 @@ const MEMORY_CATEGORY_OPTIONS: Array<{ value: ContactMemoryCategory; label: stri
   { value: "RELATIONSHIP_SUMMARY", label: "Resumo de Relacionamento" },
   { value: "TEMPORARY_CONTEXT", label: "Contexto Temporário" },
 ];
+
+const DEFAULT_SPLIT_RESPONSE_STYLE: SplitResponseStyle = "SINGLE";
+
+function normalizeSplitResponseStyle(
+  value: SplitResponseStyle | string | null | undefined,
+): SplitResponseStyle {
+  return value === "NATURAL_BLOCKS" ? "NATURAL_BLOCKS" : "SINGLE";
+}
 
 function splitCityRegion(value: string | null | undefined): { city: string; state: string } {
   const text = value?.trim() ?? "";
@@ -178,6 +188,13 @@ function NovoAgente() {
   const [memoryConfidenceThreshold, setMemoryConfidenceThreshold] = useState(0.7);
   const [memoryTempDefaultDays, setMemoryTempDefaultDays] = useState(7);
   const [memorySharedAcrossAssistants, setMemorySharedAcrossAssistants] = useState(true);
+  const [conversationResetEnabled, setConversationResetEnabled] = useState(false);
+  const [conversationResetKeywordsRaw, setConversationResetKeywordsRaw] = useState("reset");
+  const [conversationResetConfirmationMessage, setConversationResetConfirmationMessage] = useState(
+    "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
+  );
+  const [conversationResetPreserveMemories, setConversationResetPreserveMemories] = useState(true);
+  const [conversationResetSendInitialMessage, setConversationResetSendInitialMessage] = useState(true);
   const [status, setStatus] = useState<"ACTIVE" | "INACTIVE">("ACTIVE");
   const [instructions, setInstructions] = useState(
     "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
@@ -188,7 +205,8 @@ function NovoAgente() {
   const [messageBufferEnabled, setMessageBufferEnabled] = useState(true);
   const [messageBufferSeconds, setMessageBufferSeconds] = useState(6);
   const [splitResponseEnabled, setSplitResponseEnabled] = useState(false);
-  const [splitResponseStyle, setSplitResponseStyle] = useState("");
+  const [splitResponseStyle, setSplitResponseStyle] =
+    useState<SplitResponseStyle>(DEFAULT_SPLIT_RESPONSE_STYLE);
   const [model, setModel] = useState("");
   const [temperature, setTemperature] = useState<number | null>(null);
   const [knowledge, setKnowledge] = useState<BackendAssistantKnowledgeItem[]>([]);
@@ -473,7 +491,7 @@ function NovoAgente() {
           setMessageBufferEnabled(true);
           setMessageBufferSeconds(6);
           setSplitResponseEnabled(false);
-          setSplitResponseStyle("");
+          setSplitResponseStyle(DEFAULT_SPLIT_RESPONSE_STYLE);
           setStatus("ACTIVE");
           setRagEnabled(false);
           setKnowledge([]);
@@ -507,7 +525,7 @@ function NovoAgente() {
             messageBufferEnabled: true,
             messageBufferSeconds: 6,
             splitResponseEnabled: false,
-            splitResponseStyle: "",
+            splitResponseStyle: DEFAULT_SPLIT_RESPONSE_STYLE,
             model: "",
             temperature: null,
             noAnswerMessage: "",
@@ -631,10 +649,22 @@ function NovoAgente() {
         setMemoryConfidenceThreshold(assistant.memoryConfidenceThreshold ?? 0.7);
         setMemoryTempDefaultDays(assistant.memoryTempDefaultDays ?? 7);
         setMemorySharedAcrossAssistants(assistant.memorySharedAcrossAssistants ?? true);
+        setConversationResetEnabled(assistant.conversationResetEnabled ?? false);
+        setConversationResetKeywordsRaw(
+          Array.isArray(assistant.conversationResetKeywords)
+            ? assistant.conversationResetKeywords.join(", ")
+            : "reset",
+        );
+        setConversationResetConfirmationMessage(
+          assistant.conversationResetConfirmationMessage ??
+            "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
+        );
+        setConversationResetPreserveMemories(assistant.conversationResetPreserveMemories ?? true);
+        setConversationResetSendInitialMessage(assistant.conversationResetSendInitialMessage ?? true);
         setMessageBufferEnabled(assistant.messageBufferEnabled ?? true);
         setMessageBufferSeconds(assistant.messageBufferSeconds ?? 6);
         setSplitResponseEnabled(assistant.splitResponseEnabled ?? false);
-        setSplitResponseStyle(assistant.splitResponseStyle ?? "");
+        setSplitResponseStyle(normalizeSplitResponseStyle(assistant.splitResponseStyle));
         setStatus(assistant.status);
         await loadKnowledge(selectedAssistantId);
         await loadSecurityRules(selectedAssistantId);
@@ -688,10 +718,15 @@ function NovoAgente() {
           memoryConfidenceThreshold: assistant.memoryConfidenceThreshold ?? 0.7,
           memoryTempDefaultDays: assistant.memoryTempDefaultDays ?? 7,
           memorySharedAcrossAssistants: assistant.memorySharedAcrossAssistants ?? true,
+          conversationResetEnabled: assistant.conversationResetEnabled ?? false,
+          conversationResetKeywords: assistant.conversationResetKeywords ?? ["reset"],
+          conversationResetConfirmationMessage: assistant.conversationResetConfirmationMessage ?? "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
+          conversationResetPreserveMemories: assistant.conversationResetPreserveMemories ?? true,
+          conversationResetSendInitialMessage: assistant.conversationResetSendInitialMessage ?? true,
           messageBufferEnabled: assistant.messageBufferEnabled ?? true,
           messageBufferSeconds: assistant.messageBufferSeconds ?? 6,
           splitResponseEnabled: assistant.splitResponseEnabled ?? false,
-          splitResponseStyle: assistant.splitResponseStyle ?? "",
+          splitResponseStyle: normalizeSplitResponseStyle(assistant.splitResponseStyle),
           status: assistant.status,
         });
       } catch (err) {
@@ -728,6 +763,13 @@ function NovoAgente() {
     setMemoryConfidenceThreshold(0.7);
     setMemoryTempDefaultDays(7);
     setMemorySharedAcrossAssistants(true);
+    setConversationResetEnabled(false);
+    setConversationResetKeywordsRaw("reset");
+    setConversationResetConfirmationMessage(
+      "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
+    );
+    setConversationResetPreserveMemories(true);
+    setConversationResetSendInitialMessage(true);
     setInstructions(
       "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
     );
@@ -737,7 +779,7 @@ function NovoAgente() {
     setMessageBufferEnabled(true);
     setMessageBufferSeconds(6);
     setSplitResponseEnabled(false);
-    setSplitResponseStyle("");
+    setSplitResponseStyle(DEFAULT_SPLIT_RESPONSE_STYLE);
     setModel("");
     setTemperature(null);
     setStatus("ACTIVE");
@@ -776,6 +818,11 @@ function NovoAgente() {
       memoryConfidenceThreshold: 0.7,
       memoryTempDefaultDays: 7,
       memorySharedAcrossAssistants: true,
+      conversationResetEnabled: false,
+      conversationResetKeywords: ["reset"],
+      conversationResetConfirmationMessage: "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
+      conversationResetPreserveMemories: true,
+      conversationResetSendInitialMessage: true,
       status: "ACTIVE",
       instructions:
         "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
@@ -785,7 +832,7 @@ function NovoAgente() {
       messageBufferEnabled: true,
       messageBufferSeconds: 6,
       splitResponseEnabled: false,
-      splitResponseStyle: "",
+      splitResponseStyle: DEFAULT_SPLIT_RESPONSE_STYLE,
       model: "",
       temperature: null,
       noAnswerMessage: "",
@@ -982,7 +1029,15 @@ function NovoAgente() {
           messageBufferEnabled,
           messageBufferSeconds,
           splitResponseEnabled,
-          splitResponseStyle: splitResponseStyle.trim() || null,
+          splitResponseStyle,
+          conversationResetEnabled,
+          conversationResetKeywords: conversationResetKeywordsRaw
+            .split(",")
+            .map((kw) => kw.trim())
+            .filter(Boolean),
+          conversationResetConfirmationMessage: conversationResetConfirmationMessage.trim() || null,
+          conversationResetPreserveMemories,
+          conversationResetSendInitialMessage,
         });
         setAssistants((items) => items.map((item) => (item.id === updated.id ? updated : item)));
         setName(updated.name);
@@ -1037,10 +1092,22 @@ function NovoAgente() {
         setMemoryConfidenceThreshold(updated.memoryConfidenceThreshold ?? 0.7);
         setMemoryTempDefaultDays(updated.memoryTempDefaultDays ?? 7);
         setMemorySharedAcrossAssistants(updated.memorySharedAcrossAssistants ?? true);
+        setConversationResetEnabled(updated.conversationResetEnabled ?? false);
+        setConversationResetKeywordsRaw(
+          Array.isArray(updated.conversationResetKeywords)
+            ? updated.conversationResetKeywords.join(", ")
+            : "reset",
+        );
+        setConversationResetConfirmationMessage(
+          updated.conversationResetConfirmationMessage ??
+            "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
+        );
+        setConversationResetPreserveMemories(updated.conversationResetPreserveMemories ?? true);
+        setConversationResetSendInitialMessage(updated.conversationResetSendInitialMessage ?? true);
         setMessageBufferEnabled(updated.messageBufferEnabled ?? true);
         setMessageBufferSeconds(updated.messageBufferSeconds ?? 6);
         setSplitResponseEnabled(updated.splitResponseEnabled ?? false);
-        setSplitResponseStyle(updated.splitResponseStyle ?? "");
+        setSplitResponseStyle(normalizeSplitResponseStyle(updated.splitResponseStyle));
         if (updated.status !== status) {
           const updatedStatus = await backendAssistantsService.updateStatus(
             selectedAssistantId,
@@ -1098,10 +1165,18 @@ function NovoAgente() {
           memoryConfidenceThreshold: updated.memoryConfidenceThreshold ?? 0.7,
           memoryTempDefaultDays: updated.memoryTempDefaultDays ?? 7,
           memorySharedAcrossAssistants: updated.memorySharedAcrossAssistants ?? true,
+          conversationResetEnabled: updated.conversationResetEnabled ?? false,
+          conversationResetKeywords: updated.conversationResetKeywords ?? ["reset"],
+          conversationResetConfirmationMessage:
+            updated.conversationResetConfirmationMessage ??
+            "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
+          conversationResetPreserveMemories: updated.conversationResetPreserveMemories ?? true,
+          conversationResetSendInitialMessage:
+            updated.conversationResetSendInitialMessage ?? true,
           messageBufferEnabled: updated.messageBufferEnabled ?? true,
           messageBufferSeconds: updated.messageBufferSeconds ?? 6,
           splitResponseEnabled: updated.splitResponseEnabled ?? false,
-          splitResponseStyle: updated.splitResponseStyle ?? "",
+          splitResponseStyle: normalizeSplitResponseStyle(updated.splitResponseStyle),
           status: status,
         });
 
@@ -1147,7 +1222,15 @@ function NovoAgente() {
           messageBufferEnabled,
           messageBufferSeconds,
           splitResponseEnabled,
-          splitResponseStyle: splitResponseStyle.trim() || null,
+          splitResponseStyle,
+          conversationResetEnabled,
+          conversationResetKeywords: conversationResetKeywordsRaw
+            .split(",")
+            .map((kw) => kw.trim())
+            .filter(Boolean),
+          conversationResetConfirmationMessage: conversationResetConfirmationMessage.trim() || null,
+          conversationResetPreserveMemories,
+          conversationResetSendInitialMessage,
         });
         setAssistants((items) => [created, ...items]);
         setSelectedAssistantId(created.id);
@@ -1196,6 +1279,18 @@ function NovoAgente() {
         setMemoryConfidenceThreshold(created.memoryConfidenceThreshold ?? 0.7);
         setMemoryTempDefaultDays(created.memoryTempDefaultDays ?? 7);
         setMemorySharedAcrossAssistants(created.memorySharedAcrossAssistants ?? true);
+        setConversationResetEnabled(created.conversationResetEnabled ?? false);
+        setConversationResetKeywordsRaw(
+          Array.isArray(created.conversationResetKeywords)
+            ? created.conversationResetKeywords.join(", ")
+            : "reset",
+        );
+        setConversationResetConfirmationMessage(
+          created.conversationResetConfirmationMessage ??
+            "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
+        );
+        setConversationResetPreserveMemories(created.conversationResetPreserveMemories ?? true);
+        setConversationResetSendInitialMessage(created.conversationResetSendInitialMessage ?? true);
         setStatus(created.status);
         await loadKnowledge(created.id);
 
@@ -1246,10 +1341,15 @@ function NovoAgente() {
           memoryConfidenceThreshold: created.memoryConfidenceThreshold ?? 0.7,
           memoryTempDefaultDays: created.memoryTempDefaultDays ?? 7,
           memorySharedAcrossAssistants: created.memorySharedAcrossAssistants ?? true,
+          conversationResetEnabled: created.conversationResetEnabled ?? false,
+          conversationResetKeywords: created.conversationResetKeywords ?? ["reset"],
+          conversationResetConfirmationMessage: created.conversationResetConfirmationMessage ?? "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
+          conversationResetPreserveMemories: created.conversationResetPreserveMemories ?? true,
+          conversationResetSendInitialMessage: created.conversationResetSendInitialMessage ?? true,
           messageBufferEnabled: created.messageBufferEnabled ?? true,
           messageBufferSeconds: created.messageBufferSeconds ?? 6,
           splitResponseEnabled: created.splitResponseEnabled ?? false,
-          splitResponseStyle: created.splitResponseStyle ?? "",
+          splitResponseStyle: normalizeSplitResponseStyle(created.splitResponseStyle),
           status: created.status,
         });
 
@@ -1885,8 +1985,10 @@ function NovoAgente() {
                           </Field>
                           <Field label="Estilo da resposta">
                             <Select
-                              value={splitResponseStyle || "SINGLE"}
-                              onValueChange={(val) => setSplitResponseStyle(val)}
+                              value={splitResponseStyle}
+                              onValueChange={(val) =>
+                                setSplitResponseStyle(normalizeSplitResponseStyle(val))
+                              }
                             >
                               <SelectTrigger>
                                 <SelectValue placeholder="Selecione o estilo" />
@@ -2499,6 +2601,102 @@ function NovoAgente() {
                       </div>
                     </div>
                   </div>
+                </CardContent>
+              </Card>
+
+              <Card className="mt-6">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <RefreshCw className="h-5 w-5 text-indigo-500" />
+                    <span>Reinício de atendimento (Session Reset)</span>
+                  </CardTitle>
+                  <CardDescription>
+                    Permite que o cliente reinicie o atendimento atual ao enviar uma palavra-chave configurada.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="flex items-start gap-4 rounded-xl border p-4">
+                    <Switch
+                      id="conversationResetEnabled"
+                      checked={conversationResetEnabled}
+                      onCheckedChange={setConversationResetEnabled}
+                    />
+                    <div className="space-y-1">
+                      <Label htmlFor="conversationResetEnabled" className="font-semibold text-base">
+                        Ativar comando de reinício
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        Se ativado, o sistema interceptará mensagens contendo exclusivamente uma das palavras configuradas para resetar a sessão de atendimento.
+                      </p>
+                    </div>
+                  </div>
+
+                  {conversationResetEnabled && (
+                    <div className="space-y-6">
+                      <div className="space-y-2">
+                        <Label htmlFor="conversationResetKeywords" className="font-semibold text-base">
+                          Palavras-chave de reinício
+                        </Label>
+                        <Input
+                          id="conversationResetKeywords"
+                          placeholder="Ex: reset, reiniciar, começar de novo"
+                          value={conversationResetKeywordsRaw}
+                          onChange={(e) => setConversationResetKeywordsRaw(e.target.value)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Palavras separadas por vírgula. O reinício só é ativado se o cliente enviar exatamente um desses termos (sem texto adicional).
+                        </p>
+                      </div>
+
+                      <div className="flex items-start gap-4 rounded-xl border p-4">
+                        <Switch
+                          id="conversationResetPreserveMemories"
+                          checked={conversationResetPreserveMemories}
+                          onCheckedChange={setConversationResetPreserveMemories}
+                        />
+                        <div className="space-y-1">
+                          <Label htmlFor="conversationResetPreserveMemories" className="font-semibold text-base">
+                            Preservar memórias importantes
+                          </Label>
+                          <p className="text-xs text-muted-foreground">
+                            Extrai memórias estruturadas da conversa encerrada e as preserva para o próximo ciclo de atendimento, limpando apenas o contexto temporário.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-start gap-4 rounded-xl border p-4">
+                        <Switch
+                          id="conversationResetSendInitialMessage"
+                          checked={conversationResetSendInitialMessage}
+                          onCheckedChange={setConversationResetSendInitialMessage}
+                        />
+                        <div className="space-y-1">
+                          <Label htmlFor="conversationResetSendInitialMessage" className="font-semibold text-base">
+                            Enviar saudação inicial
+                          </Label>
+                          <p className="text-xs text-muted-foreground">
+                            Concatena a mensagem inicial cadastrada do agente logo após a mensagem de confirmação de reset.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="conversationResetConfirmationMessage" className="font-semibold text-base">
+                          Mensagem de confirmação de reinício
+                        </Label>
+                        <Textarea
+                          id="conversationResetConfirmationMessage"
+                          placeholder="Digite a mensagem de confirmação de reinício..."
+                          rows={4}
+                          value={conversationResetConfirmationMessage}
+                          onChange={(e) => setConversationResetConfirmationMessage(e.target.value)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Resposta que será enviada ao contato informando que a sessão foi reiniciada.
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>

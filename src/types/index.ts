@@ -12,6 +12,7 @@ export type BackendStatus = "ACTIVE" | "INACTIVE";
 export type AppInstallationStatus = "ACTIVE" | "INACTIVE" | "ERROR";
 export type BackendConversationSource = "UNKNOWN" | "MANUAL_TEST" | "CHATWOOT" | "SMOKE" | "SYSTEM";
 export type BackendConversationChannelType = "UNKNOWN" | "WHATSAPP" | "INSTAGRAM" | "WEBCHAT";
+export type SplitResponseStyle = "SINGLE" | "NATURAL_BLOCKS";
 export type ContactMemoryCategory =
   | "IDENTITY"
   | "PREFERENCE"
@@ -525,6 +526,11 @@ export interface BackendAssistantListItem {
   fallbackMessage: string | null;
   safetyInstruction: string | null;
   ragEnabled: boolean;
+  conversationResetEnabled: boolean;
+  conversationResetKeywords: string[];
+  conversationResetConfirmationMessage: string | null;
+  conversationResetPreserveMemories: boolean;
+  conversationResetSendInitialMessage: boolean;
   memoryEnabled: boolean;
   memoryPrePromptEnabled: boolean;
   memoryExtractionEnabled: boolean;
@@ -535,7 +541,7 @@ export interface BackendAssistantListItem {
   messageBufferEnabled: boolean;
   messageBufferSeconds: number;
   splitResponseEnabled: boolean;
-  splitResponseStyle: string | null;
+  splitResponseStyle: SplitResponseStyle | null;
   status: BackendStatus;
   createdAt: string;
   updatedAt: string;

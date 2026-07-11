@@ -90,6 +90,7 @@ export type AssistantConversationMessageItem = {
   attachments?: InboundAttachmentRecord[];
   sources?: AssistantRuntimeSource[];
   mode?: string;
+  contextVersion?: number;
   createdAt: Date;
 };
 
@@ -145,7 +146,9 @@ export type AssistantConversationRuntime = {
     | "ai-model-not-configured"
     | "ai-provider-auth-error"
     | "ai-provider-quota-error"
-    | "ai-provider-error";
+    | "ai-provider-error"
+    | "conversation-reset-executed"
+    | "conversation-reset-executed-duplicate";
   warning?: string;
   ragData?: any;
 };
@@ -176,6 +179,7 @@ const assistantConversationSafeSelect = {
   pausedByHuman: true,
   lastMessageAt: true,
   status: true,
+  currentContextVersion: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.AssistantConversationSelect;
@@ -195,6 +199,7 @@ const assistantConversationMessageSafeSelect = {
   attachments: true,
   sources: true,
   mode: true,
+  contextVersion: true,
   createdAt: true,
 } satisfies Prisma.AssistantConversationMessageSelect;
 
@@ -238,6 +243,11 @@ const assistantConversationRuntimeAssistantSelect = {
   model: true,
   temperature: true,
   ragEnabled: true,
+  conversationResetEnabled: true,
+  conversationResetKeywords: true,
+  conversationResetConfirmationMessage: true,
+  conversationResetPreserveMemories: true,
+  conversationResetSendInitialMessage: true,
   fallbackMessage: true,
   safetyInstruction: true,
   avoidPhrases: true,
@@ -386,6 +396,9 @@ function toConversationMessageItem(
       : {}),
     ...(message.sources !== null ? { sources: toAssistantRuntimeSources(message.sources) } : {}),
     ...(message.mode !== null ? { mode: message.mode } : {}),
+    ...(message.contextVersion !== undefined && message.contextVersion !== null
+      ? { contextVersion: message.contextVersion }
+      : {}),
     createdAt: message.createdAt,
   };
 }
@@ -1331,6 +1344,326 @@ export class AssistantConversationsService {
     };
   }
 
+  private async checkAndExecuteReset(input: {
+    assistant: AssistantConversationRuntimeAssistantRecord;
+    conversation: AssistantConversationSafeRecord;
+    dto: SendAssistantConversationMessageDto;
+    tenant: RequestTenant;
+    user: AuthenticatedUser;
+    runtimeStartedAt: number;
+    preparedAttachments?: InboundAttachmentRecord[];
+  }): Promise<SendAssistantConversationMessageResponse | null> {
+    const rawMessage = input.dto.message;
+    if (!rawMessage || typeof rawMessage !== "string") {
+      return null;
+    }
+
+    if (!input.assistant.conversationResetEnabled) {
+      return null;
+    }
+
+    // Only text: sem attachments / media
+    const hasAttachments =
+      (input.preparedAttachments && input.preparedAttachments.length > 0) ||
+      (input.dto.attachments && input.dto.attachments.length > 0);
+    if (hasAttachments) {
+      return null;
+    }
+
+    // Normalization
+    const normalizedMessage = rawMessage.normalize("NFKC").trim().toLowerCase();
+
+    // Check exact keyword match
+    const keywords = (input.assistant.conversationResetKeywords as string[]) || ["reset"];
+    const matchedKeyword = keywords.find((kw) => kw.normalize("NFKC").trim().toLowerCase() === normalizedMessage);
+    if (!matchedKeyword) {
+      return null;
+    }
+
+    // Idempotency: using the ID of the message received from Chatwoot/tests
+    if (input.dto.externalMessageId) {
+      const existingRequest = await this.prisma.assistantConversationMessage.findFirst({
+        where: {
+          companyId: input.tenant.companyId,
+          conversationId: input.conversation.id,
+          externalMessageId: input.dto.externalMessageId,
+          mode: "reset-request",
+        },
+      });
+
+      if (existingRequest) {
+        const existingReply = await this.prisma.assistantConversationMessage.findFirst({
+          where: {
+            companyId: input.tenant.companyId,
+            conversationId: input.conversation.id,
+            mode: "reset-reply",
+            contextVersion: (existingRequest.contextVersion ?? 1) + 1,
+          },
+        });
+
+        if (existingReply) {
+          return {
+            conversationId: input.conversation.id,
+            userMessage: toConversationMessageItem(existingRequest),
+            assistantMessage: toConversationMessageItem(existingReply),
+            runtime: {
+              mode: "deterministic-runtime",
+              assistant: {
+                id: input.assistant.id,
+                name: input.assistant.name,
+              },
+              temperature: input.assistant.temperature ?? 0.7,
+              temperatureSource: "assistant",
+              configurationSource: "tenant-settings",
+              fallback: false,
+              outcome: "success",
+              reason: "conversation-reset-executed-duplicate",
+              summary: "Conversation reset executed (duplicate request)",
+              context: {
+                historyMessagesUsed: 0,
+                resetExecuted: true,
+              } as any,
+            },
+          };
+        }
+      }
+    }
+
+    // 1. Persistir a mensagem de reset com identificação especial (mode: "reset-request")
+    const currentVersion = input.conversation.currentContextVersion ?? 1;
+    const userMessage = await this.prisma.assistantConversationMessage.create({
+      data: {
+        companyId: input.tenant.companyId,
+        assistantId: input.assistant.id,
+        conversationId: input.conversation.id,
+        role: "user",
+        content: rawMessage,
+        source: input.dto.source ?? "manual",
+        messageType: input.dto.messageType ?? "text",
+        externalMessageId: input.dto.externalMessageId ?? null,
+        contextVersion: currentVersion,
+        mode: "reset-request",
+      },
+    });
+
+    // 2. Buscar as mensagens da sessão que está sendo encerrada para extração de memória
+    const sessionMessages = await this.prisma.assistantConversationMessage.findMany({
+      where: {
+        companyId: input.tenant.companyId,
+        conversationId: input.conversation.id,
+        contextVersion: currentVersion,
+      },
+      orderBy: { createdAt: "asc" },
+    });
+
+    // Excluir a mensagem de reset-request
+    const messagesToExtract = sessionMessages.filter((m) => m.mode !== "reset-request");
+
+    let extractionStatus = "COMPLETED";
+    let extractedCount = 0;
+    let contactMemoryProfileId: string | null = null;
+
+    if (
+      input.assistant.memoryEnabled &&
+      this.contactMemoriesService
+    ) {
+      try {
+        const profile = await this.contactMemoriesService.findOrCreateProfile({
+          companyId: input.tenant.companyId,
+          channelType: input.conversation.channelType,
+          externalAccountId: input.conversation.externalAccountId,
+          externalContactId: input.conversation.externalContactId,
+          externalInboxId: input.conversation.externalInboxId,
+          chatwootContactId: input.conversation.externalContactId ?? input.conversation.externalAccountId,
+          phoneNormalized: input.dto.externalSenderPhone,
+          displayName: input.dto.externalSenderName,
+          assistantId: input.assistant.id,
+          sharedAcrossAssistants: input.assistant.memorySharedAcrossAssistants,
+        });
+
+        contactMemoryProfileId = profile.id;
+
+        if (
+          input.assistant.memoryExtractionEnabled &&
+          input.assistant.conversationResetPreserveMemories &&
+          this.contactMemoriesExtractionService &&
+          messagesToExtract.length > 0
+        ) {
+          const lastUserMsgIndex = [...messagesToExtract].reverse().findIndex((m) => m.role === "user");
+          if (lastUserMsgIndex !== -1) {
+            const actualIndex = messagesToExtract.length - 1 - lastUserMsgIndex;
+            const currentMsg = messagesToExtract[actualIndex];
+            const priorMsgs = messagesToExtract.slice(0, actualIndex);
+
+            let categories;
+            try {
+              categories = input.assistant.memoryAllowedCategories
+                ? JSON.parse(input.assistant.memoryAllowedCategories)
+                : undefined;
+            } catch (e) {}
+
+            const existingMemories = await this.contactMemoriesService.getActiveMemories({
+              profileId: profile.id,
+              companyId: input.tenant.companyId,
+              confidenceThreshold: input.assistant.memoryConfidenceThreshold,
+              categories,
+            });
+
+            // Timeout de 5s para não bloquear o reset
+            const extResult = await Promise.race([
+              this.contactMemoriesExtractionService.extractMemories({
+                companyId: input.tenant.companyId,
+                assistantId: input.assistant.id,
+                profileId: profile.id,
+                currentMessage: currentMsg.content,
+                recentMessages: priorMsgs.map((m) => ({ role: m.role, content: m.content })),
+                existingMemories,
+                sourceConversationId: input.conversation.id,
+                sourceMessageId: currentMsg.id,
+                allowedCategories: categories,
+                tempDefaultDays: input.assistant.memoryTempDefaultDays,
+              }),
+              new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Timeout de extração de memória")), 5000)),
+            ]);
+
+            extractedCount = extResult.extracted?.length ?? 0;
+          }
+        }
+      } catch (err: any) {
+        this.logger.error(`Erro na extração de memória antes de reset: ${err.message}`, err.stack);
+        extractionStatus = "ERROR";
+      }
+    }
+
+    // 3. Encerrar a sessão anterior no banco
+    await this.prisma.assistantConversationSession.create({
+      data: {
+        companyId: input.tenant.companyId,
+        assistantId: input.assistant.id,
+        conversationId: input.conversation.id,
+        contextVersion: currentVersion,
+        status: "RESET",
+        endedAt: new Date(),
+        resetReason: "user_command",
+        resetMessageId: userMessage.id,
+        memoryExtractionStatus: extractionStatus,
+        summary: `Session reset by command. Extracted ${extractedCount} memories.`,
+      },
+    });
+
+    // 4. Limpar apenas contexto temporário pertencente a este perfil/conversa.
+    if (contactMemoryProfileId) {
+      await this.prisma.contactMemoryItem.deleteMany({
+        where: {
+          companyId: input.tenant.companyId,
+          profileId: contactMemoryProfileId,
+          category: "TEMPORARY_CONTEXT",
+          OR: [
+            { sourceConversationId: null },
+            { sourceConversationId: input.conversation.id },
+          ],
+        },
+      });
+    }
+
+    // 5. Incrementar contextVersion e criar nova sessão ativa
+    const newContextVersion = currentVersion + 1;
+    await this.prisma.assistantConversation.update({
+      where: { id: input.conversation.id },
+      data: { currentContextVersion: newContextVersion },
+    });
+
+    await this.prisma.assistantConversationSession.create({
+      data: {
+        companyId: input.tenant.companyId,
+        assistantId: input.assistant.id,
+        conversationId: input.conversation.id,
+        contextVersion: newContextVersion,
+        status: "ACTIVE",
+        startedAt: new Date(),
+      },
+    });
+
+    // 6. Enviar confirmação e saudação inicial se configurado
+    let replyContent = input.assistant.conversationResetConfirmationMessage;
+    if (input.assistant.conversationResetSendInitialMessage && input.assistant.initialMessage?.trim()) {
+      replyContent = `${input.assistant.conversationResetConfirmationMessage}\n\n${input.assistant.initialMessage.trim()}`;
+    }
+
+    const replyAssistantMessage = await this.prisma.assistantConversationMessage.create({
+      data: {
+        companyId: input.tenant.companyId,
+        assistantId: input.assistant.id,
+        conversationId: input.conversation.id,
+        role: "assistant",
+        content: replyContent,
+        source: input.dto.source ?? "manual",
+        contextVersion: newContextVersion,
+        mode: "reset-reply",
+      },
+    });
+
+    if (input.dto.source === "chatwoot") {
+      await this.sendChatwootOutboundText({
+        conversation: {
+          ...input.conversation,
+          sourceProvider: input.dto.source,
+          externalConversationId:
+            input.dto.externalConversationId ?? input.conversation.externalConversationId,
+          externalContactId: input.dto.externalContactId ?? input.conversation.externalContactId,
+          externalInboxId: input.dto.externalInboxId ?? input.conversation.externalInboxId,
+          externalChannelId: input.dto.externalChannelId ?? input.conversation.externalChannelId,
+        },
+        assistantMessageId: replyAssistantMessage.id,
+        assistantId: input.assistant.id,
+        content: replyContent,
+      });
+    }
+
+    // 7. Registrar log estruturado
+    this.logger.log(
+      JSON.stringify({
+        event: "CONVERSATION_SESSION_RESET",
+        requestId: input.dto.externalMessageId ?? null,
+        companyId: input.tenant.companyId,
+        assistantId: input.assistant.id,
+        conversationId: input.conversation.id,
+        contactId: contactMemoryProfileId ?? null,
+        oldContextVersion: currentVersion,
+        newContextVersion,
+        resetMessageId: userMessage.id,
+        keywordMatched: matchedKeyword,
+        memoryExtractionStatus: extractionStatus,
+        temporaryStatesCleared: true,
+        durationMs: Date.now() - input.runtimeStartedAt,
+      }),
+    );
+
+    return {
+      conversationId: input.conversation.id,
+      userMessage: toConversationMessageItem(userMessage),
+      assistantMessage: toConversationMessageItem(replyAssistantMessage),
+      runtime: {
+        mode: "deterministic-runtime",
+        assistant: {
+          id: input.assistant.id,
+          name: input.assistant.name,
+        },
+        temperature: input.assistant.temperature ?? 0.7,
+        temperatureSource: "assistant",
+        configurationSource: "tenant-settings",
+        fallback: false,
+        outcome: "success",
+        reason: "conversation-reset-executed",
+        summary: "Conversation reset executed successfully",
+        context: {
+          historyMessagesUsed: 0,
+          resetExecuted: true,
+        } as any,
+      },
+    };
+  }
+
   async sendMessage(input: {
     assistantId: string;
     conversationId: string;
@@ -1352,6 +1685,20 @@ export class AssistantConversationsService {
       user: input.user,
       tenant: input.tenant,
     });
+
+    const isReset = await this.checkAndExecuteReset({
+      assistant,
+      conversation,
+      dto: input.dto,
+      tenant: input.tenant,
+      user: input.user,
+      runtimeStartedAt,
+      preparedAttachments: input.preparedAttachments,
+    });
+
+    if (isReset) {
+      return isReset;
+    }
 
     const source = input.dto.source ?? "manual";
     const attachmentSource: InboundMessageSource = source === "chatwoot" ? "chatwoot" : "tests";
@@ -1398,6 +1745,7 @@ export class AssistantConversationsService {
           source,
           messageType: input.dto.messageType ?? null,
           externalMessageId: input.dto.externalMessageId ?? null,
+          contextVersion: conversation.currentContextVersion ?? 1,
           externalPayload: this.toSerializableJsonValue({
             source,
             message: input.dto.message ?? null,
@@ -1776,6 +2124,7 @@ export class AssistantConversationsService {
         assistantId: input.assistantId,
         conversationId: input.conversationId,
         companyId: input.tenant.companyId,
+        contextVersion: conversation.currentContextVersion ?? 1,
       },
       select: assistantConversationMessageSafeSelect,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -2148,6 +2497,7 @@ export class AssistantConversationsService {
                     tool_calls: completion.toolCalls,
                   }),
                   mode: "ai-runtime",
+                  contextVersion: conversation.currentContextVersion ?? 1,
                 },
               });
 
@@ -2303,6 +2653,7 @@ export class AssistantConversationsService {
                       name: toolName,
                     }),
                     mode: "ai-runtime",
+                    contextVersion: conversation.currentContextVersion ?? 1,
                   },
                 });
               }
@@ -2363,6 +2714,7 @@ export class AssistantConversationsService {
           content: answer,
           sources,
           mode: runtime.mode,
+          contextVersion: conversation.currentContextVersion ?? 1,
         },
         select: assistantConversationMessageSafeSelect,
       });

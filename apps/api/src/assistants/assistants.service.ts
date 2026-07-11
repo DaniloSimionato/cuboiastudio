@@ -53,6 +53,11 @@ export type AssistantListItem = {
   fallbackMessage: string | null;
   safetyInstruction: string | null;
   ragEnabled: boolean;
+  conversationResetEnabled: boolean;
+  conversationResetKeywords: string[];
+  conversationResetConfirmationMessage: string | null;
+  conversationResetPreserveMemories: boolean;
+  conversationResetSendInitialMessage: boolean;
   memoryEnabled: boolean;
   memoryPrePromptEnabled: boolean;
   memoryExtractionEnabled: boolean;
@@ -164,6 +169,11 @@ const assistantSafeSelect = {
   fallbackMessage: true,
   safetyInstruction: true,
   ragEnabled: true,
+  conversationResetEnabled: true,
+  conversationResetKeywords: true,
+  conversationResetConfirmationMessage: true,
+  conversationResetPreserveMemories: true,
+  conversationResetSendInitialMessage: true,
   memoryEnabled: true,
   memoryPrePromptEnabled: true,
   memoryExtractionEnabled: true,
@@ -333,6 +343,11 @@ function toAssistantResponse(assistant: AssistantSafeRecord): AssistantListItem 
     fallbackMessage: assistant.fallbackMessage,
     safetyInstruction: assistant.safetyInstruction,
     ragEnabled: assistant.ragEnabled,
+    conversationResetEnabled: assistant.conversationResetEnabled,
+    conversationResetKeywords: assistant.conversationResetKeywords,
+    conversationResetConfirmationMessage: assistant.conversationResetConfirmationMessage,
+    conversationResetPreserveMemories: assistant.conversationResetPreserveMemories,
+    conversationResetSendInitialMessage: assistant.conversationResetSendInitialMessage,
     memoryEnabled: assistant.memoryEnabled,
     memoryPrePromptEnabled: assistant.memoryPrePromptEnabled,
     memoryExtractionEnabled: assistant.memoryExtractionEnabled,
@@ -529,6 +544,23 @@ export class AssistantsService {
 
     this.validateOfficialBusinessFields(input.dto);
 
+    if (input.dto.conversationResetKeywords) {
+      const normalizedKeywords: string[] = [];
+      for (const kw of input.dto.conversationResetKeywords) {
+        const normalized = kw.normalize("NFKC").trim().toLowerCase();
+        if (!normalized) {
+          throw new BadRequestException("As palavras-chave não podem ser vazias.");
+        }
+        if (normalized.length < 2) {
+          throw new BadRequestException("As palavras-chave devem ter pelo menos 2 caracteres.");
+        }
+        if (!normalizedKeywords.includes(normalized)) {
+          normalizedKeywords.push(normalized);
+        }
+      }
+      input.dto.conversationResetKeywords = normalizedKeywords;
+    }
+
     const assistant = await this.prisma.assistant.create({
       data: {
         companyId: input.tenant.companyId,
@@ -559,6 +591,11 @@ export class AssistantsService {
         fallbackMessage: input.dto.fallbackMessage ?? null,
         safetyInstruction: input.dto.safetyInstruction ?? null,
         ragEnabled: input.dto.ragEnabled ?? false,
+        conversationResetEnabled: input.dto.conversationResetEnabled ?? false,
+        conversationResetKeywords: input.dto.conversationResetKeywords ?? ["reset"],
+        conversationResetConfirmationMessage: input.dto.conversationResetConfirmationMessage ?? "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
+        conversationResetPreserveMemories: input.dto.conversationResetPreserveMemories ?? true,
+        conversationResetSendInitialMessage: input.dto.conversationResetSendInitialMessage ?? true,
         memoryEnabled: input.dto.memoryEnabled ?? false,
         memoryPrePromptEnabled: input.dto.memoryPrePromptEnabled ?? true,
         memoryExtractionEnabled: input.dto.memoryExtractionEnabled ?? true,
@@ -618,8 +655,7 @@ export class AssistantsService {
       throw new ForbiddenException("Tenant context does not match the authenticated user.");
     }
 
-    const hasField = (field: keyof UpdateAssistantDto) =>
-      Object.prototype.hasOwnProperty.call(input.dto, field);
+    const hasField = (field: keyof UpdateAssistantDto) => input.dto[field] !== undefined;
     const hasName = typeof input.dto.name === "string";
     const hasDescription = hasField("description");
     const hasBusinessAddress = hasField("businessAddress");
@@ -647,6 +683,11 @@ export class AssistantsService {
     const hasFallbackMessage = hasField("fallbackMessage");
     const hasSafetyInstruction = hasField("safetyInstruction");
     const hasRagEnabled = hasField("ragEnabled");
+    const hasConversationResetEnabled = hasField("conversationResetEnabled");
+    const hasConversationResetKeywords = hasField("conversationResetKeywords");
+    const hasConversationResetConfirmationMessage = hasField("conversationResetConfirmationMessage");
+    const hasConversationResetPreserveMemories = hasField("conversationResetPreserveMemories");
+    const hasConversationResetSendInitialMessage = hasField("conversationResetSendInitialMessage");
     const hasMemoryEnabled = hasField("memoryEnabled");
     const hasMemoryPrePromptEnabled = hasField("memoryPrePromptEnabled");
     const hasMemoryExtractionEnabled = hasField("memoryExtractionEnabled");
@@ -691,6 +732,11 @@ export class AssistantsService {
       !hasFallbackMessage &&
       !hasSafetyInstruction &&
       !hasRagEnabled &&
+      !hasConversationResetEnabled &&
+      !hasConversationResetKeywords &&
+      !hasConversationResetConfirmationMessage &&
+      !hasConversationResetPreserveMemories &&
+      !hasConversationResetSendInitialMessage &&
       !hasMemoryEnabled &&
       !hasMemoryPrePromptEnabled &&
       !hasMemoryExtractionEnabled &&
@@ -711,6 +757,23 @@ export class AssistantsService {
     }
 
     this.validateOfficialBusinessFields(input.dto);
+
+    if (hasConversationResetKeywords && input.dto.conversationResetKeywords) {
+      const normalizedKeywords: string[] = [];
+      for (const kw of input.dto.conversationResetKeywords) {
+        const normalized = kw.normalize("NFKC").trim().toLowerCase();
+        if (!normalized) {
+          throw new BadRequestException("As palavras-chave não podem ser vazias.");
+        }
+        if (normalized.length < 2) {
+          throw new BadRequestException("As palavras-chave devem ter pelo menos 2 caracteres.");
+        }
+        if (!normalizedKeywords.includes(normalized)) {
+          normalizedKeywords.push(normalized);
+        }
+      }
+      input.dto.conversationResetKeywords = normalizedKeywords;
+    }
 
     const assistant = await this.prisma.assistant.findFirst({
       where: {
@@ -811,6 +874,21 @@ export class AssistantsService {
           : {}),
         ...(hasSplitResponseStyle
           ? { splitResponseStyle: input.dto.splitResponseStyle ?? null }
+          : {}),
+        ...(hasConversationResetEnabled
+          ? { conversationResetEnabled: input.dto.conversationResetEnabled ?? false }
+          : {}),
+        ...(hasConversationResetKeywords
+          ? { conversationResetKeywords: input.dto.conversationResetKeywords ?? ["reset"] }
+          : {}),
+        ...(hasConversationResetConfirmationMessage
+          ? { conversationResetConfirmationMessage: input.dto.conversationResetConfirmationMessage ?? "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?" }
+          : {}),
+        ...(hasConversationResetPreserveMemories
+          ? { conversationResetPreserveMemories: input.dto.conversationResetPreserveMemories ?? true }
+          : {}),
+        ...(hasConversationResetSendInitialMessage
+          ? { conversationResetSendInitialMessage: input.dto.conversationResetSendInitialMessage ?? true }
           : {}),
       },
     });
