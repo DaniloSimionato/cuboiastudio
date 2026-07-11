@@ -16,6 +16,8 @@ build/
 .next/
 out/
 coverage/
+.output/
+.vinxi/
 
 # prisma/local db
 *.db

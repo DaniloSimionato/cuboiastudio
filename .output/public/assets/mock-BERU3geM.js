@@ -1,1 +1,0 @@
-var e=[],t=[],n=[],r=[],i=[],a=t=>e.find(e=>e.id===t)?.nome??`-`,o=e=>t.find(t=>t.id===e)?.nome??`-`;export{r as a,n as i,a as n,i as o,e as r,o as t};
