@@ -86,6 +86,7 @@ export async function runOpenAiCompatibleChatCompletion(
       ? { temperature: typeof input.temperature === "number" ? input.temperature : 0.2 }
       : {}),
     ...(input.tools ? { tools: input.tools } : {}),
+    ...(input.response_format ? { response_format: input.response_format } : {}),
   };
   const url = buildChatCompletionsUrl(config.baseUrl);
   const startedAt = Date.now();

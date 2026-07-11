@@ -15,6 +15,7 @@ import type { AttachmentInterpreterInput } from "../attachments/attachment-inter
 import { type AuthenticatedUser, type RequestTenant } from "../auth/auth.types";
 import { ChatwootInboxConfigService } from "../chatwoot/chatwoot-inbox-config.service";
 import { PrismaService } from "../database/prisma.service";
+import { CacheService } from "../cache/cache.service";
 import {
   persistInboundAttachment,
   type InboundAttachmentInput,
@@ -44,6 +45,7 @@ import {
   isTriageResponseValid,
   PROMPT_COMPILER_VERSION,
   PromptCompilerService,
+  TriageState,
 } from "../prompt-compiler/prompt-compiler.service";
 import { modelSupportsTemperature } from "../ai/ai-runner";
 import { IntentRouterService } from "../intent-router/intent-router.service";
@@ -163,6 +165,12 @@ export type AssistantConversationRuntime = {
     outboundBlockCountPlanned?: number;
     outboundBlockCountSent?: number;
     outboundBlockCount?: number;
+    triageStateActive?: boolean;
+    triageRequestedDetail?: string;
+    triageResolved?: boolean;
+    triageContinuation?: boolean;
+    schedulingExplicitlyRequested?: boolean;
+    validationFailureReason?: string;
     knowledgeLimit?: number;
     knowledgeChunkCount?: number;
     knowledgeChunkIds?: string[];
@@ -502,6 +510,7 @@ export class AssistantConversationsService {
     private readonly assistantSecurityRulesService?: AssistantSecurityRulesService,
     private readonly contactMemoriesService?: ContactMemoriesService,
     private readonly contactMemoriesExtractionService?: ContactMemoriesExtractionService,
+    private readonly cacheService?: CacheService,
   ) {}
 
   private assertTenantContext(input: { user: AuthenticatedUser; tenant: RequestTenant }): void {
@@ -1634,6 +1643,16 @@ export class AssistantConversationsService {
       },
     });
 
+    // Limpar triage state do cache no reset de conversa
+    if (this.cacheService) {
+      const triageCacheKey = `triage:${input.tenant.companyId}:${input.conversation.id}`;
+      try {
+        await this.cacheService.set(triageCacheKey, null, 1);
+      } catch (err: any) {
+        this.logger.warn(`Failed to clear triage cache on reset: ${err.message}`);
+      }
+    }
+
     // 4. Limpar apenas contexto temporário pertencente a este perfil/conversa.
     if (contactMemoryProfileId) {
       await this.prisma.contactMemoryItem.deleteMany({
@@ -2095,7 +2114,44 @@ export class AssistantConversationsService {
       }
     }
 
-    const triageMode = isMultiNeedTriageMessage(interpretedMessage);
+    let triageMode = isMultiNeedTriageMessage(interpretedMessage);
+    const triageCacheKey = `triage:${input.tenant.companyId}:${conversation.id}`;
+    let loadedTriageState: TriageState | null = null;
+
+    if (this.cacheService) {
+      try {
+        loadedTriageState = await this.cacheService.get<TriageState>(triageCacheKey);
+      } catch (err: any) {
+        this.logger.warn(`Failed to read triage state cache: ${err.message}`);
+      }
+    }
+
+    let shouldClearTriage = false;
+    let triageContinuation = false;
+
+    if (loadedTriageState && loadedTriageState.active && loadedTriageState.expiresAt > Date.now()) {
+      const isPriceQuery = /(quanto\s+fica|quanto\s+custa|valores?|preços?|custos?|precos?|tabela)/i.test(interpretedMessage);
+      const isScheduleQuery = /(agendar|agendamento|marcar|horário|horario|reserva|agenda)/i.test(interpretedMessage);
+      const isListQuery = /\b(me\s+)?(envie|mande|passa|quero|lista|quais|tabela)\b.*\b(lista|serviços|opções|opcoes|catalogo|catálogo)\b/i.test(interpretedMessage);
+      const isHandoffQuery = /(humano|atendente|atendimento\s+humano|falar\s+com\s+alguém)/i.test(interpretedMessage);
+
+      if (isPriceQuery || isScheduleQuery || isListQuery || isHandoffQuery) {
+        shouldClearTriage = true;
+      } else {
+        triageMode = true;
+        triageContinuation = true;
+      }
+    }
+
+    if (shouldClearTriage && this.cacheService) {
+      try {
+        await this.cacheService.set(triageCacheKey, null, 1);
+        loadedTriageState = null;
+      } catch (err: any) {
+        this.logger.warn(`Failed to clear triage state: ${err.message}`);
+      }
+    }
+
     const knowledgeLimit = triageMode ? 2 : 5;
     let knowledgeItems: { id: string; title: string; content: string }[] = [];
     let ragLogData: any = null;
@@ -2451,6 +2507,14 @@ export class AssistantConversationsService {
               // Skip LLM
               toolCallsResolved = true;
             } else if (finalAction === "handoff" || selectedFlow.requiresHuman || !autoRespond) {
+              if (this.cacheService) {
+                const triageCacheKey = `triage:${input.tenant.companyId}:${conversation.id}`;
+                try {
+                  await this.cacheService.set(triageCacheKey, null, 1);
+                } catch (err: any) {
+                  this.logger.warn(`Failed to clear triage cache on handoff: ${err.message}`);
+                }
+              }
               Object.assign(contextMetadata, {
                 finalAction,
                 llmSkipped: true,
@@ -2578,6 +2642,9 @@ export class AssistantConversationsService {
           let triageValidationPassed = false;
           let triageAttemptCount = 0;
           let responseMode = "ai-runtime";
+          let triageResolved = false;
+          let triageContinuationLogged = triageContinuation;
+          let schedulingExplicitlyRequested = false;
 
           if (triageMode) {
             responseMode = "TRIAGE_ONLY";
@@ -2600,6 +2667,7 @@ export class AssistantConversationsService {
               memoryContextBlock,
               triageMode: true,
               isSecondAttempt: false,
+              triageState: loadedTriageState,
             });
 
             // Update prompt metadata
@@ -2616,16 +2684,39 @@ export class AssistantConversationsService {
                 model: resolvedModel.model,
                 temperature,
                 tools: [], // zero tools in triage
+                response_format: { type: "json_object" },
               });
 
               if (completion && completion.answer && isTriageResponseValid(completion.answer)) {
-                triageValidationPassed = true;
-                answer = completion.answer;
+                const parsed = JSON.parse(completion.answer.replace(/^```json\s*/i, "").replace(/\s*```$/, ""));
+                if (parsed.triageResolved) {
+                  triageResolved = true;
+                  triageValidationPassed = true;
+                  answer = parsed.message;
+                } else {
+                  triageValidationPassed = true;
+                  answer = parsed.message;
+                  // Persist triage state
+                  if (this.cacheService) {
+                    const triageState: TriageState = {
+                      active: true,
+                      startedAt: loadedTriageState?.startedAt ?? new Date().toISOString(),
+                      sourceMessageId: userMessage.id,
+                      requestedDetail: parsed.requestedDetail ?? "",
+                      lastQuestion: parsed.message ?? "",
+                      attemptCount: triageAttemptCount,
+                      resolved: false,
+                      expiresAt: loadedTriageState?.expiresAt ?? (Date.now() + 3600000),
+                    };
+                    await this.cacheService.set(triageCacheKey, triageState, 3600);
+                  }
+                }
               }
             } catch (err: any) {
               this.logger.error(`Error in triage mode attempt 1: ${err.message}`, err.stack);
             }
 
+            // Attempt 2
             if (!triageValidationPassed) {
               triageAttemptCount = 2;
 
@@ -2645,6 +2736,7 @@ export class AssistantConversationsService {
                 memoryContextBlock,
                 triageMode: true,
                 isSecondAttempt: true,
+                triageState: loadedTriageState,
               });
 
               // Update prompt metadata for second attempt
@@ -2661,40 +2753,120 @@ export class AssistantConversationsService {
                   model: resolvedModel.model,
                   temperature,
                   tools: [], // zero tools in triage
+                  response_format: { type: "json_object" },
                 });
 
                 if (completion && completion.answer && isTriageResponseValid(completion.answer)) {
-                  triageValidationPassed = true;
-                  answer = completion.answer;
+                  const parsed = JSON.parse(completion.answer.replace(/^```json\s*/i, "").replace(/\s*```$/, ""));
+                  if (parsed.triageResolved) {
+                    triageResolved = true;
+                    triageValidationPassed = true;
+                    answer = parsed.message;
+                  } else {
+                    triageValidationPassed = true;
+                    answer = parsed.message;
+                    // Persist triage state
+                    if (this.cacheService) {
+                      const triageState: TriageState = {
+                        active: true,
+                        startedAt: loadedTriageState?.startedAt ?? new Date().toISOString(),
+                        sourceMessageId: userMessage.id,
+                        requestedDetail: parsed.requestedDetail ?? "",
+                        lastQuestion: parsed.message ?? "",
+                        attemptCount: triageAttemptCount,
+                        resolved: false,
+                        expiresAt: loadedTriageState?.expiresAt ?? (Date.now() + 3600000),
+                      };
+                      await this.cacheService.set(triageCacheKey, triageState, 3600);
+                    }
+                  }
                 }
               } catch (err: any) {
                 this.logger.error(`Error in triage mode attempt 2: ${err.message}`, err.stack);
               }
             }
 
+            // Fallback genérico se falhar
             if (!triageValidationPassed) {
               answer = "Consigo te ajudar com isso! Qual é o principal detalhe ou informação que você já consegue me passar?";
+              if (this.cacheService) {
+                const triageState: TriageState = {
+                  active: true,
+                  startedAt: loadedTriageState?.startedAt ?? new Date().toISOString(),
+                  sourceMessageId: userMessage.id,
+                  requestedDetail: loadedTriageState?.requestedDetail ?? "informações básicas",
+                  lastQuestion: answer,
+                  attemptCount: triageAttemptCount,
+                  resolved: false,
+                  expiresAt: loadedTriageState?.expiresAt ?? (Date.now() + 3600000),
+                };
+                await this.cacheService.set(triageCacheKey, triageState, 3600);
+              }
             }
 
-            runtime = {
-              ...runtime,
-              mode: "ai-runtime",
-              fallback: !triageValidationPassed,
-              outcome: "success",
-              provider: completion?.provider ?? runtimeConfig.provider ?? null,
-              model: completion?.model ?? resolvedModel.model ?? null,
-              reason: undefined,
-              ragData: ragLogData,
-            };
+            // Se a triagem foi resolvida com sucesso
+            if (triageResolved) {
+              // Limpa o cache
+              if (this.cacheService) {
+                try {
+                  await this.cacheService.set(triageCacheKey, null, 1);
+                } catch (err: any) {
+                  this.logger.warn(`Failed to clear triage cache: ${err.message}`);
+                }
+              }
 
-            Object.assign(contextMetadata, {
-              responseMode,
-              triageMode,
-              triageValidationPassed,
-              triageAttemptCount,
-            });
+              triageMode = false;
 
-            toolCallsResolved = true; // Bypasses normal loop
+              runtime = {
+                ...runtime,
+                mode: "ai-runtime",
+                fallback: false,
+                outcome: "success",
+                provider: completion?.provider ?? runtimeConfig.provider ?? null,
+                model: completion?.model ?? resolvedModel.model ?? null,
+                reason: undefined,
+                ragData: ragLogData,
+              };
+
+              Object.assign(contextMetadata, {
+                responseMode: "TRIAGE_ONLY",
+                triageMode: true,
+                triageStateActive: false,
+                triageResolved: true,
+                triageContinuation: triageContinuationLogged,
+                triageAttemptCount,
+                schedulingExplicitlyRequested,
+                triageValidationPassed: true,
+              });
+
+              toolCallsResolved = true; // Bypasses normal loop
+            } else {
+              // Mapeamento normal para triage persistente
+              runtime = {
+                ...runtime,
+                mode: "ai-runtime",
+                fallback: !triageValidationPassed,
+                outcome: "success",
+                provider: completion?.provider ?? runtimeConfig.provider ?? null,
+                model: completion?.model ?? resolvedModel.model ?? null,
+                reason: undefined,
+                ragData: ragLogData,
+              };
+
+              Object.assign(contextMetadata, {
+                responseMode,
+                triageMode: true,
+                triageStateActive: true,
+                triageRequestedDetail: loadedTriageState?.requestedDetail ?? "",
+                triageResolved: false,
+                triageContinuation: triageContinuationLogged,
+                triageAttemptCount,
+                schedulingExplicitlyRequested,
+                triageValidationPassed,
+              });
+
+              toolCallsResolved = true; // Bypasses normal loop
+            }
           }
 
           let loopCount = 0;
@@ -3029,6 +3201,12 @@ export class AssistantConversationsService {
             triageValidationPassed: runtime.context.triageValidationPassed,
             triageAttemptCount: runtime.context.triageAttemptCount,
             responseMode: runtime.context.responseMode,
+            triageStateActive: runtime.context.triageStateActive,
+            triageRequestedDetail: runtime.context.triageRequestedDetail,
+            triageResolved: runtime.context.triageResolved,
+            triageContinuation: runtime.context.triageContinuation,
+            schedulingExplicitlyRequested: runtime.context.schedulingExplicitlyRequested,
+            validationFailureReason: runtime.context.validationFailureReason,
             outboundBlockCountPlanned: runtime.context.outboundBlockCountPlanned,
             outboundBlockCountSent: runtime.context.outboundBlockCountSent,
             outboundBlockCount: runtime.context.outboundBlockCount,

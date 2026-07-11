@@ -42,6 +42,7 @@ export interface AiChatCompletionInput {
   model?: string;
   companyId?: string;
   tools?: any[];
+  response_format?: any;
 }
 
 export interface AiChatCompletionResult {

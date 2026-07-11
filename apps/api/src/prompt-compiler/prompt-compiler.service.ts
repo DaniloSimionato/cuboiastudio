@@ -111,35 +111,79 @@ export function isTriageResponseValid(response: string): boolean {
 
   const text = response.trim();
 
+  let parsed: any = null;
+  try {
+    const cleanJson = text.replace(/^```json\s*/i, "").replace(/\s*```$/, "").trim();
+    parsed = JSON.parse(cleanJson);
+  } catch (e) {
+    return false;
+  }
+
+  if (!parsed || typeof parsed !== "object") return false;
+
+  const message: string = typeof parsed.message === "string" ? parsed.message.trim() : "";
+  if (!message) return false;
+
+  if (parsed.action !== "ASK_NEXT_DETAIL") return false;
+  if (typeof parsed.triageResolved !== "boolean") return false;
+  if (typeof parsed.suggestScheduling !== "boolean") return false;
+
+  if (!parsed.triageResolved) {
+    if (typeof parsed.requestedDetail !== "string" || !parsed.requestedDetail.trim()) {
+      return false;
+    }
+  }
+
+  if (parsed.suggestScheduling === true) return false;
+
+  // Bloquear agendamento prematuro na própria mensagem
+  if (
+    /(agendar|agendamento|marcar\s+horário|reserva|agenda|equipe|human[oa])/i.test(message) &&
+    !parsed.triageResolved
+  ) {
+    return false;
+  }
+
   // 1. mais de uma pergunta
-  const questionMarks = (text.match(/\?/g) || []).length;
+  const questionMarks = (message.match(/\?/g) || []).length;
   if (questionMarks > 1) return false;
 
   // 2. lista numerada
-  if (/\b\d+[.)]\s+/i.test(text)) return false;
+  if (/\b\d+[.)]\s+/i.test(message)) return false;
 
   // 3. bullets / checklist
-  if (/[-*•]/.test(text) || /\[[ xX]\]/.test(text)) return false;
+  if (/[-*•]/.test(message) || /\[[ xX]\]/.test(message)) return false;
 
   // 4. “vamos por partes”
-  if (/vamos\s+por\s+partes/i.test(text)) return false;
+  if (/vamos\s+por\s+partes/i.test(message)) return false;
 
   // 5. títulos / cabeçalhos / negritos em formato de título-chave
-  if (/^#+/m.test(text) || /\*\*.+?\*\*:/i.test(text)) return false;
+  if (/^#+/m.test(message) || /\*\*.+?\*\*:/i.test(message)) return false;
 
   // 6. três ou mais blocos (parágrafos)
-  const blocks = text.split(/\n+/).map(b => b.trim()).filter(b => b.length > 0);
+  const blocks = message.split(/\n+/).map((b: string) => b.trim()).filter((b: string) => b.length > 0);
   if (blocks.length >= 3) return false;
 
   // 7. preço antecipado ou moeda (R$, reais, valor, preço, custo)
-  if (/(r\$\s*\d+|\d+\s*reais|\b(valor(es)?|preço(s)?|custo(s)?|precos?)\b)/i.test(text)) return false;
+  if (/(r\$\s*\d+|\d+\s*reais|\b(valor(es)?|preço(s)?|custo(s)?|precos?)\b)/i.test(message)) return false;
 
   // 8. explicação separada de cada solicitação (e.g. contendo múltiplos colons em linhas diferentes)
-  const colonsCount = (text.match(/:/g) || []).length;
+  const colonsCount = (message.match(/:/g) || []).length;
   if (colonsCount > 1) return false;
 
   return true;
 }
+
+export type TriageState = {
+  active: boolean;
+  startedAt: string;
+  sourceMessageId: string;
+  requestedDetail: string;
+  lastQuestion?: string;
+  attemptCount: number;
+  resolved: boolean;
+  expiresAt: number;
+};
 
 export type PromptCompilerInput = {
   assistant: Partial<Assistant>;
@@ -163,6 +207,7 @@ export type PromptCompilerInput = {
   memoryContextBlock?: string | null;
   triageMode?: boolean;
   isSecondAttempt?: boolean;
+  triageState?: TriageState | null;
 };
 
 function buildSecurityBlock(
@@ -289,6 +334,7 @@ export class PromptCompilerService {
       memoryContextBlock,
       triageMode = false,
       isSecondAttempt = false,
+      triageState = null,
     } = input;
 
     if (triageMode) {
@@ -311,6 +357,20 @@ export class PromptCompilerService {
       identity += "\nResponda em português do Brasil, salvo se o cliente pedir outro idioma.";
       messages.push({ role: "system", content: identity });
 
+      // Formato JSON estruturado
+      const jsonFormatBlock = [
+        "FORMATO DE SAÍDA OBRIGATÓRIO (JSON):",
+        "Você DEVE retornar EXCLUSIVAMENTE um objeto JSON válido (sem tags ```json) no seguinte formato:",
+        "{",
+        "  \"message\": \"<sua resposta amigável de WhatsApp, com no máximo duas frases e exatamente uma pergunta principal>\",",
+        "  \"action\": \"ASK_NEXT_DETAIL\",",
+        "  \"requestedDetail\": \"<descrição curta do detalhe/dado único solicitado, ex: 'modelo do equipamento'>\",",
+        "  \"suggestScheduling\": false,",
+        "  \"triageResolved\": <true se o cliente respondeu ao detalhe solicitado anteriormente ou se as informações já bastam para o fluxo normal; false caso contrário>",
+        "}",
+      ].join("\n");
+      messages.push({ role: "system", content: jsonFormatBlock });
+
       if (isSecondAttempt) {
         const strictBlock = [
           "CONTRATO CRÍTICO DE TRIAGEM (SEGUNDA TENTATIVA OBRIGATÓRIA):",
@@ -322,6 +382,7 @@ export class PromptCompilerService {
           "- NÃO fale de valores, preços, custos, orçamentos ou R$.",
           "- NÃO use 'Vamos por partes' ou termos similares.",
           "- NÃO explique nada separadamente.",
+          "- NÃO sugira ou mencione agendamento ou atendimento humano.",
         ].join("\n");
         messages.push({ role: "system", content: strictBlock });
       } else {
@@ -345,8 +406,28 @@ export class PromptCompilerService {
           "- Sem explicar separadamente cada solicitação.",
           "- Sem antecipar preço, prazo, orçamento ou compatibilidade de vários itens sem a informação principal.",
           "- Utilize linguagem natural e amigável típica de WhatsApp.",
+          "- NÃO sugira agendamento de horário, não mencione ligar ou marcar reuniões, e não passe contatos de equipe nesta etapa.",
         ].join("\n");
         messages.push({ role: "system", content: contractBlock });
+      }
+
+      if (triageState && triageState.active) {
+        const historyBlock = [
+          "HISTÓRICO E ESTADO DE TRIAGEM ANTERIOR:",
+          `- Último detalhe solicitado: "${triageState.requestedDetail || "Nenhum"}"`,
+          `- Pergunta de triagem anterior: "${triageState.lastQuestion || "Nenhuma"}"`,
+          "",
+          "INSTRUÇÕES DE ANÁLISE:",
+          "1. Avalie se a nova mensagem do usuário responde à pergunta anterior ou fornece o detalhe solicitado.",
+          "   - Se o usuário forneceu a informação desejada (ou se você já tem dados suficientes das necessidades dele), defina \"triageResolved\": true.",
+          "   - Se o usuário NÃO respondeu (ex: questionou por que agendar, mudou de assunto sem dar o detalhe, etc.), defina \"triageResolved\": false.",
+          "2. Se o cliente estiver questionando a resposta anterior (ex: reclamando de sugestão de agendamento prematuro ou reset de catálogo):",
+          "   - Reconheça amigavelmente a correção dele na sua \"message\" (ex: \"Você tem razão, podemos falar por aqui mesmo!\").",
+          "   - NÃO sugira agendamento nem envie listas.",
+          "   - Continue solicitando apenas o detalhe anterior.",
+          "3. Em NENHUMA circunstância sugira agendamento, pergunte sobre agendar, ofereça links de agendamento ou encaminhe para equipe. Mantenha \"suggestScheduling\": false.",
+        ].join("\n");
+        messages.push({ role: "system", content: historyBlock });
       }
 
       // 3. mensagem consolidada atual

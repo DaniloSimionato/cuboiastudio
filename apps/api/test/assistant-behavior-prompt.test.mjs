@@ -107,42 +107,45 @@ test("isMultiNeedTriageMessage valida corretamente os cinco cenários de triagem
 });
 
 test("isTriageResponseValid valida as regras de formatação estrutural", () => {
+  const wrap = (msg, action = "ASK_NEXT_DETAIL", detail = "modelo", suggest = false, resolved = false) =>
+    JSON.stringify({ message: msg, action, requestedDetail: detail, suggestScheduling: suggest, triageResolved: resolved });
+
   // Resposta válida comum
-  assert.equal(isTriageResponseValid("Fazemos sim 😊 Qual é o modelo do computador? Com isso já verifico o que é compatível."), true);
+  assert.equal(isTriageResponseValid(wrap("Fazemos sim 😊 Qual é o modelo do computador? Com isso já verifico o que é compatível.")), true);
 
   // Resposta válida com pontuação natural (um único dois-pontos)
-  assert.equal(isTriageResponseValid("Olá, podemos agendar sim: qual o melhor dia para você?"), true);
+  assert.equal(isTriageResponseValid(wrap("Olá, podemos fazer sim: qual o modelo do seu equipamento?")), true);
 
   // Inválido: mais de uma pergunta
-  assert.equal(isTriageResponseValid("Olá! Qual o modelo do pc? E qual SSD você quer?"), false);
+  assert.equal(isTriageResponseValid(wrap("Olá! Qual o modelo do pc? E qual SSD você quer?")), false);
 
   // Inválido: lista numerada
-  assert.equal(isTriageResponseValid("Vou te ajudar: \n1. Formatar\n2. Trocar SSD"), false);
+  assert.equal(isTriageResponseValid(wrap("Vou te ajudar: \n1. Formatar\n2. Trocar SSD")), false);
 
   // Inválido: marcadores / bullets
-  assert.equal(isTriageResponseValid("Temos as seguintes opções: \n- Formatação\n- SSD"), false);
+  assert.equal(isTriageResponseValid(wrap("Temos as seguintes opções: \n- Formatação\n- SSD")), false);
 
   // Inválido: checklist markdown
-  assert.equal(isTriageResponseValid("[ ] SSD\n[ ] Memória"), false);
+  assert.equal(isTriageResponseValid(wrap("[ ] SSD\n[ ] Memória")), false);
 
   // Inválido: cabeçalhos/títulos
-  assert.equal(isTriageResponseValid("### Triagem\nQual o modelo do seu pc?"), false);
+  assert.equal(isTriageResponseValid(wrap("### Triagem\nQual o modelo do seu pc?")), false);
 
   // Inválido: negritos terminados com dois-pontos como título-chave
-  assert.equal(isTriageResponseValid("**SSD**: 240GB ou 480GB?"), false);
+  assert.equal(isTriageResponseValid(wrap("**SSD**: 240GB ou 480GB?")), false);
 
   // Inválido: "vamos por partes"
-  assert.equal(isTriageResponseValid("Vamos por partes. Qual o seu nome?"), false);
+  assert.equal(isTriageResponseValid(wrap("Vamos por partes. Qual o seu nome?")), false);
 
   // Inválido: preço / moedas / valores
-  assert.equal(isTriageResponseValid("A formatação custa R$ 150. Qual o modelo do notebook?"), false);
-  assert.equal(isTriageResponseValid("O valor fica 300 reais. Qual a marca do pc?"), false);
+  assert.equal(isTriageResponseValid(wrap("A formatação custa R$ 150. Qual o modelo do notebook?")), false);
+  assert.equal(isTriageResponseValid(wrap("O valor fica 300 reais. Qual a marca do pc?")), false);
 
   // Inválido: 3 ou mais blocos (parágrafos)
-  assert.equal(isTriageResponseValid("Oi bom dia.\n\nPodemos fazer sim.\n\nQual o modelo?"), false);
+  assert.equal(isTriageResponseValid(wrap("Oi bom dia.\n\nPodemos fazer sim.\n\nQual o modelo?")), false);
 
   // Inválido: múltiplos dois-pontos (indica explicações de serviços separadas)
-  assert.equal(isTriageResponseValid("Opção A: formatar. Opção B: trocar SSD. Qual prefere?"), false);
+  assert.equal(isTriageResponseValid(wrap("Opção A: formatar. Opção B: trocar SSD. Qual prefere?")), false);
 });
 
 test("PromptCompilerService em modo TRIAGE_ONLY compila apenas o prompt mínimo", () => {
