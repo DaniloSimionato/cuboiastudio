@@ -6,7 +6,7 @@ import type { OfficialBusinessContext } from "../assistants/official-business-co
 const MAX_HISTORY_MESSAGE_LENGTH = 1000;
 const MAX_PROMPT_TEXT_LENGTH = 10000;
 
-export const PROMPT_COMPILER_VERSION = "conversation-policy-v2";
+export const PROMPT_COMPILER_VERSION = "conversation-policy-v3";
 
 function truncateText(text: string, maxLength: number): string {
   if (text.length <= maxLength) {
@@ -17,6 +17,67 @@ function truncateText(text: string, maxLength: number): string {
 
 function firstNonEmpty(...values: Array<string | null | undefined>): string | null {
   return values.find((value) => typeof value === "string" && value.trim().length > 0)?.trim() ?? null;
+}
+
+export function isMultiNeedTriageMessage(message: string): boolean {
+  if (!message) return false;
+
+  const text = message.toLowerCase().trim();
+
+  const greetings = [
+    /\b(oi|ol[aá]|opa|salve|eae|co[eé])\b/g,
+    /\b(bom\s+dia|boa\s+tarde|boa\s+noite)\b/g,
+    /\b(tudo\s+bem|tudo\s+bom|como\s+vai|tudo\s+certinho|tudo\s+certo)\b/g,
+    /\b(por\s+favor|por\s+gentileza)\b/g,
+    /\b(gostaria\s+de\s+saber|gostaria\s+de\s+tirar\s+uma\s+d[uú]vida|gostaria\s+de\s+uma\s+informa[cç][aã]o)\b/g,
+    /\b(voc[eê]\s+pode\s+me\s+ajudar|pode\s+me\s+ajudar|como\s+podemos\s+fazer|o\s+que\s+podemos\s+fazer)\b/g
+  ];
+
+  const cleanAndCheckSubstance = (clause: string): string => {
+    let temp = clause.trim();
+    for (const pattern of greetings) {
+      temp = temp.replace(pattern, "");
+    }
+    return temp.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").replace(/\s+/g, " ").trim();
+  };
+
+  const lines = text.split(/\n+/).map(l => l.trim()).filter(l => l.length > 0);
+  const explicitListItems = lines.filter(line => /^[-*•]|^\d+[.)]/.test(line));
+  if (explicitListItems.length >= 2) {
+    return true;
+  }
+
+  let totalSubstantiveParts = 0;
+  const substantiveLines: string[] = [];
+
+  for (const line of lines) {
+    const parts = line.split(/[,;\n]|\b(?:e|ou)\b/i)
+      .map(p => p ? p.trim() : "")
+      .filter(p => p.length > 0);
+
+    let lineSubstantiveParts = 0;
+    for (const part of parts) {
+      const cleanPart = cleanAndCheckSubstance(part);
+      if (cleanPart.length > 2 && !["com", "para", "uma", "uns", "dos", "das"].includes(cleanPart)) {
+        lineSubstantiveParts++;
+      }
+    }
+
+    if (lineSubstantiveParts > 0) {
+      substantiveLines.push(line);
+      totalSubstantiveParts += lineSubstantiveParts;
+    }
+  }
+
+  if (substantiveLines.length >= 2) {
+    return true;
+  }
+
+  if (totalSubstantiveParts >= 2) {
+    return true;
+  }
+
+  return false;
 }
 
 export type PromptCompilerInput = {
@@ -96,7 +157,9 @@ function buildBehaviorBlock(
     "- Converse como um atendimento brasileiro natural de WhatsApp: prefira frases curtas, sem títulos, subtítulos, bullets ou aparência de manual quando isso não for necessário.",
     "- Normalmente use no máximo 1 ou 2 blocos por resposta e faça apenas uma pergunta principal por vez.",
     "- Responda progressivamente: apresente apenas a informação necessária para o próximo passo, sem tentar resolver todos os assuntos em uma única mensagem.",
-    "- Quando houver vários pedidos, escolha o próximo dado que desbloqueia os demais e pergunte somente por ele; não monte um catálogo de respostas.",
+    "- Quando houver vários pedidos, trate a resposta como triagem: escolha o próximo dado que desbloqueia os demais e pergunte somente por ele; não responda cada item separadamente e não monte um catálogo.",
+    "- Não use 'Vamos por partes' como abertura padrão. Em triagem, não use numeração, checklist, títulos ou uma lista para cobrir todos os pedidos.",
+    "- Não ofereça mini-orçamentos, preços, prazos ou compatibilidades item a item antes de obter a informação principal que orienta o atendimento.",
     "- Não repita toda a solicitação, não recapitule o que já foi dito e não despeje todo o conteúdo encontrado na base de conhecimento.",
     "- Evite aberturas genéricas repetitivas como 'Entendi!', 'Claro!', 'Vamos lá!', 'Perfeito!' e 'Certamente!'. Varie confirmações e só use uma quando ela ajudar.",
     "- Não use linguagem corporativa ou frases-modelo como 'Se puder fornecer essas informações', 'Será um prazer ajudá-lo' ou 'Para melhor auxiliá-lo' como padrão.",
@@ -118,10 +181,33 @@ function buildBehaviorBlock(
     'Adequado: "Sim, conseguimos fazer isso 😊 Me passa o modelo primeiro? Aí já confiro o que é compatível."',
     'Ruim: "Claro! Seguem abaixo todas as informações disponíveis sobre nossos serviços."',
     'Adequado: "Fazemos sim. Qual desses serviços você quer ver primeiro?"',
-    'Vários pedidos, adequado: "Consigo te ajudar com tudo isso. Qual produto você está procurando?"',
+    'Ruim: "Vamos por partes: 1. Serviço A... 2. Serviço B... 3. Serviço C..."',
+    'Adequado para vários pedidos: "Consigo te ajudar com tudo isso. Qual produto ou equipamento você quer analisar primeiro?"',
+    'Ruim: "Formatamos, trocamos SSD e fazemos upgrade de memória. O valor inicial é..."',
+    'Adequado: "Fazemos sim. Qual é o modelo do equipamento?"',
+    'Ruim: "Para melhor auxiliá-lo, preciso que informe..."',
+    'Adequado: "Me fala o modelo dele? Com isso já consigo seguir."',
   ];
 
   return lines.filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function buildTriageDecisionBlock(currentMessage: string): string {
+  const multiNeed = isMultiNeedTriageMessage(currentMessage);
+  const currentMessageRule = multiNeed
+    ? "A mensagem atual reúne múltiplos fragmentos ou necessidades. Você DEVE tratá-la como triagem, não como uma solicitação para responder todos os itens."
+    : "Antes de responder, avalie se o cliente reuniu várias necessidades. Se reuniu, trate a resposta como triagem.";
+
+  return [
+    "DECISÃO DE TRIAGEM OBRIGATÓRIA PARA A RESPOSTA ATUAL:",
+    currentMessageRule,
+    "- Escolha a única pergunta de maior alavancagem para o próximo passo: um identificador, modelo, contexto, produto ou necessidade principal que destrave as demais respostas.",
+    "- Confirme somente o essencial e faça uma pergunta principal. Explique detalhes extras apenas quando forem pedidos ou necessários depois dessa resposta.",
+    "- Não responda cada serviço, não faça checklist, não use numeração e não use 'Vamos por partes'.",
+    "- Não antecipe preço, prazo, orçamento ou compatibilidade de vários itens sem a informação principal.",
+    'Inadequado: "Vamos por partes: 1. Serviço A... 2. Serviço B... 3. Serviço C..."',
+    'Adequado: "Consigo te ajudar com tudo isso. Me passa o modelo do equipamento primeiro?"',
+  ].join("\n");
 }
 
 @Injectable()
@@ -155,10 +241,6 @@ export class PromptCompilerService {
     let identity = "IDENTIDADE E ESCOPO DO ASSISTENTE:\nVocê é um assistente virtual configurado no Cubo AI Studio.";
     if (showAttendantName && attendantName) identity += `\nSeu nome é: ${attendantName}`;
     if (role) identity += `\nSua função: ${role}`;
-    if (howItActs) {
-      identity +=
-        `\nResponsabilidade e escopo (não define o formato da resposta): ${howItActs}`;
-    }
     identity += "\nResponda em português do Brasil, salvo se o cliente pedir outro idioma.";
     messages.push({ role: "system", content: identity });
 
@@ -173,6 +255,14 @@ export class PromptCompilerService {
 
     // 4. Behavior is deliberately before flows, retrieved knowledge and tool output.
     messages.push({ role: "system", content: buildBehaviorBlock(assistant, behavior) });
+
+    if (howItActs) {
+      messages.push({
+        role: "system",
+        content:
+          `ESCOPO OPERACIONAL (contexto de responsabilidade; não é um roteiro de resposta):\n${truncateText(howItActs, 4000)}\nUse este texto apenas para entender capacidades e limites. Ignore qualquer ordem implícita de listar opções, explicar tudo, coletar vários dados, responder item a item ou concluir todo o atendimento na mesma mensagem. A DECISÃO DE TRIAGEM prevalece sobre este escopo.`,
+      });
+    }
 
     const avoidPhrases = assistant.avoidPhrases?.trim();
     if (avoidPhrases) {
@@ -240,7 +330,10 @@ export class PromptCompilerService {
       });
     }
 
-    // 8. History is context only; it must not become a style example.
+    // 8. This late anchor prevents flows, knowledge and old messages from turning triage into a catalog.
+    messages.push({ role: "system", content: buildTriageDecisionBlock(currentMessage) });
+
+    // 9. History is context only; it must not become a style example.
     if (historyMessages.length > 0) {
       messages.push({
         role: "system",
@@ -249,7 +342,7 @@ export class PromptCompilerService {
       });
     }
 
-    // 9. History and current user message are always last.
+    // 10. History and current user message are always last.
     for (const message of historyMessages) {
       messages.push({
         role: message.role,

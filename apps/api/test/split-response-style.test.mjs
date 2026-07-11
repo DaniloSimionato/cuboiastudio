@@ -461,8 +461,10 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
   const companyId = `company_chatwoot_policy_${randomUUID()}`;
   const assistantId = `assistant_chatwoot_policy_${randomUUID()}`;
   const conversationId = `conversation_chatwoot_policy_${randomUUID()}`;
+  const flowId = `flow_chatwoot_policy_${randomUUID()}`;
   const auth = createAuth(companyId);
   const answer = "Fazemos sim 😊 Me passa o modelo do computador? Aí já verifico o que é compatível.";
+  const ragCalls = [];
 
   try {
     await createRuntimeConversation(prisma, {
@@ -479,7 +481,8 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
         noInventInfo: true,
         unknownBehavior: "fallback",
         maxBlockLength: 300,
-        howItActs: "Faz triagem técnica e conduz o próximo passo.",
+        howItActs:
+          "Identifica o equipamento, consulta serviços, preços e prazos, coleta todas as informações necessárias e orienta cada opção.",
       },
     });
     await prisma.assistant.update({
@@ -491,16 +494,26 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
         aiAlwaysAvailable: true,
       },
     });
+    await prisma.assistantFlow.create({
+      data: {
+        id: flowId,
+        assistantId,
+        name: "Fluxo com escopo amplo",
+        priority: 100,
+        flowInstructions:
+          "Explique cada serviço, colete todos os dados necessários e apresente todas as opções disponíveis.",
+        active: true,
+      },
+    });
 
     const { service: conversationsService, outboundCalls, aiCalls } = createConversationsService(
       prisma,
       {
         answer,
         knowledgeRetrievalService: {
-          searchRelevantKnowledge: async () => ({
-            totalChunksScanned: 3,
-            warning: null,
-            results: [
+          searchRelevantKnowledge: async ({ topK }) => {
+            ragCalls.push({ topK });
+            const results = [
               {
                 knowledgeId: "knowledge-1",
                 knowledgeTitle: "Serviços de computador",
@@ -519,7 +532,20 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
                 chunkId: "chunk-ssd",
                 contentPreview: "Instalação de SSD: verificar modelo e capacidade.",
               },
-            ],
+            ].slice(0, topK);
+            return {
+              totalChunksScanned: 3,
+              warning: null,
+              results,
+            };
+          },
+        },
+        intentRouterService: {
+          route: async () => ({
+            flowId,
+            flowName: "Fluxo com escopo amplo",
+            confidence: 1,
+            reason: "fixture",
           }),
         },
       },
@@ -611,6 +637,7 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
 
     assert.equal(aiCalls.length, 1);
     assert.equal(aiCalls[0].temperature, 0.6);
+    assert.deepEqual(ragCalls, [{ topK: 2 }]);
     const systemText = aiCalls[0].messages
       .filter((message) => message.role === "system")
       .map((message) => String(message.content))
@@ -619,9 +646,20 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
     assert.match(systemText, /responda progressivamente/i);
     assert.match(systemText, /uma pergunta principal por vez/i);
     assert.match(systemText, /não monte um catálogo/i);
+    assert.match(systemText, /DECISÃO DE TRIAGEM OBRIGATÓRIA/);
+    assert.match(systemText, /não responda cada serviço/i);
+    assert.match(systemText, /Não use 'Vamos por partes'/);
+    assert.match(systemText, /mini-orçamentos/i);
+    assert.match(systemText, /ESCOPO OPERACIONAL/);
+    assert.match(systemText, /não é um roteiro de resposta/i);
+    assert.ok(
+      systemText.indexOf("INSTRUÇÕES DO FLUXO") <
+        systemText.indexOf("DECISÃO DE TRIAGEM OBRIGATÓRIA"),
+    );
     assert.match(systemText, /não copie títulos/i);
     assert.match(systemText, /BASE DE CONHECIMENTO RELEVANTE/);
     assert.match(systemText, /Formatação do computador/);
+    assert.doesNotMatch(systemText, /Instalação de SSD: verificar modelo/i);
     assert.ok(aiCalls[0].messages.some((message) =>
       message.role === "user" && String(message.content).includes("Por mais memoria"),
     ));
@@ -633,17 +671,78 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
       orderBy: { createdAt: "desc" },
       select: { metadata: true, knowledgeCount: true, provider: true, model: true },
     });
-    assert.equal(runtimeLog.knowledgeCount, 3);
+    assert.equal(runtimeLog.knowledgeCount, 2);
     assert.equal(runtimeLog.provider, "openai");
     assert.equal(runtimeLog.model, "gpt-4o-mini");
-    assert.equal(runtimeLog.metadata.promptVersion, "conversation-policy-v2");
+    assert.equal(runtimeLog.metadata.promptVersion, "conversation-policy-v3");
     assert.match(runtimeLog.metadata.promptHash, /^[a-f0-9]{64}$/);
-    assert.deepEqual(runtimeLog.metadata.knowledgeChunkIds, [
-      "chunk-format",
-      "chunk-memory",
-      "chunk-ssd",
-    ]);
+    assert.deepEqual(runtimeLog.metadata.knowledgeChunkIds, ["chunk-format", "chunk-memory"]);
     assert.equal(runtimeLog.metadata.temperatureParameterApplied, true);
+    assert.equal(runtimeLog.metadata.triageMode, true);
+    assert.equal(runtimeLog.metadata.knowledgeLimit, 2);
+  } finally {
+    await cleanupAssistantTestData(prisma, companyId);
+    await prisma.$disconnect();
+  }
+});
+
+test("Contrato de triagem evidencia saída em checklist como inadequada sem mascarar o outbound", async () => {
+  const prisma = new PrismaClient();
+  const companyId = `company_runtime_bad_catalog_${randomUUID()}`;
+  const assistantId = `assistant_runtime_bad_catalog_${randomUUID()}`;
+  const conversationId = `conversation_runtime_bad_catalog_${randomUUID()}`;
+  const auth = createAuth(companyId);
+  const badAnswer =
+    "Vamos por partes:\n\n1. Formatação: realizamos o serviço.\n\n2. SSD: verificamos a instalação.\n\n3. Memória: verificamos a compatibilidade.\n\nSe puder me passar essas informações, ficarei feliz em ajudar!";
+
+  try {
+    await createRuntimeConversation(prisma, {
+      companyId,
+      assistantId,
+      conversationId,
+      splitResponseStyle: "NATURAL_BLOCKS",
+      temperature: 0.6,
+      behavior: {
+        personality: "Próxima e objetiva",
+        toneOfVoice: "Amigável",
+        responseStyle: "whatsapp",
+        emojiUsage: "low",
+        noInventInfo: true,
+        unknownBehavior: "fallback",
+        maxBlockLength: 300,
+        howItActs: "Coleta informações e orienta sobre todas as opções disponíveis.",
+      },
+    });
+
+    const { service, outboundCalls, aiCalls } = createConversationsService(prisma, {
+      answer: badAnswer,
+    });
+    await service.sendMessage({
+      assistantId,
+      conversationId,
+      dto: {
+        message: "Oi bom dia\nQueria formatar meu pc\nPor um ssd\nMais memoria\nComo podemos fazer",
+        source: "chatwoot",
+        externalAccountId: `account-${companyId}`,
+        externalConversationId: `ext-${conversationId}`,
+        externalContactId: `contact-${companyId}`,
+        externalInboxId: `inbox-${companyId}`,
+      },
+      ...auth,
+    });
+
+    const policy = aiCalls[0].messages.find(
+      (message) =>
+        message.role === "system" && String(message.content).startsWith("DECISÃO DE TRIAGEM"),
+    );
+    assert.ok(policy);
+    assert.match(String(policy.content), /não responda cada serviço/i);
+    assert.match(String(policy.content), /não use 'Vamos por partes'/i);
+    assert.match(String(policy.content), /não use numeração/i);
+    assert.match(badAnswer, /^Vamos por partes:/i);
+    assert.match(badAnswer, /\n\n1\./);
+    assert.equal(outboundCalls.length, 1);
+    assert.equal(outboundCalls[0].content, badAnswer);
   } finally {
     await cleanupAssistantTestData(prisma, companyId);
     await prisma.$disconnect();

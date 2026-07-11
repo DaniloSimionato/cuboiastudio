@@ -25,7 +25,6 @@ import {
 } from "./inbound-message";
 import {
   buildDeterministicAssistantResponse,
-  buildConversationPromptMessages,
   toAssistantRuntimeSources,
   type AssistantRuntimeSource,
 } from "../assistants/assistant-runtime";
@@ -41,6 +40,7 @@ import { ContactMemoriesService } from "../contact-memories/contact-memories.ser
 import { ContactMemoriesExtractionService } from "../contact-memories/contact-memories-extraction.service";
 import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
 import {
+  isMultiNeedTriageMessage,
   PROMPT_COMPILER_VERSION,
   PromptCompilerService,
 } from "../prompt-compiler/prompt-compiler.service";
@@ -155,6 +155,8 @@ export type AssistantConversationRuntime = {
     splitResponseStyle?: string | null;
     temperature?: number | null;
     temperatureParameterApplied?: boolean | null;
+    triageMode?: boolean;
+    knowledgeLimit?: number;
     knowledgeChunkCount?: number;
     knowledgeChunkIds?: string[];
   };
@@ -2086,6 +2088,8 @@ export class AssistantConversationsService {
       }
     }
 
+    const triageMode = isMultiNeedTriageMessage(interpretedMessage);
+    const knowledgeLimit = triageMode ? 2 : 5;
     let knowledgeItems: { id: string; title: string; content: string }[] = [];
     let ragLogData: any = null;
 
@@ -2094,11 +2098,12 @@ export class AssistantConversationsService {
         tenant: input.tenant,
         assistantId: input.assistantId,
         query: interpretedMessage,
-        topK: 5,
+        topK: knowledgeLimit,
       });
 
       ragLogData = {
         ragEnabled: true,
+        requestedTopK: knowledgeLimit,
         totalChunksScanned: searchResult.totalChunksScanned,
         warning: searchResult.warning,
         usedKnowledge: searchResult.results.map((r) => ({
@@ -2129,7 +2134,7 @@ export class AssistantConversationsService {
         },
         select: assistantConversationKnowledgeSelect,
         orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-        take: 5,
+        take: knowledgeLimit,
       });
     }
 
@@ -2217,6 +2222,8 @@ export class AssistantConversationsService {
     const contextMetadata: Record<string, any> = {
       requestId: input.requestId ?? input.dto.externalMessageId ?? null,
       correlationId: input.correlationId ?? null,
+      triageMode,
+      knowledgeLimit,
       historyMessagesUsed: priorHistory.length,
       historyLimit: MAX_RUNTIME_HISTORY_MESSAGES,
       initialMessageIncluded: Boolean(assistant.initialMessage?.trim()),
@@ -2461,51 +2468,30 @@ export class AssistantConversationsService {
 
           let promptMessages: any[] = [];
           if (!toolCallsResolved) {
-            // 2. Build Prompt using PromptCompiler
-            promptMessages = this.promptCompilerService
-              ? this.promptCompilerService.compile({
-                  assistant: {
-                    ...assistant,
-                    instructions: promptInstructions,
-                  },
-                  behavior: assistant.behavior,
-                  flow: selectedFlow,
-                  securityRules: activeSecurityRules,
-                  knowledgeItems,
-                  historyMessages: priorHistory,
-                  currentMessage: interpretedMessage,
-                  officialBusinessContext,
-                  calendarContext: calendarToolsActive
-                    ? {
-                        conversationId: conversation.id,
-                        contactPhone,
-                        resourcesContext,
-                        serverTime,
-                      }
-                    : null,
-                  memoryContextBlock,
-                })
-              : buildConversationPromptMessages({
-                  assistantName: assistant.name,
-                  assistantDescription: assistant.description ?? null,
-                  initialMessage: assistant.initialMessage ?? null,
-                  instructions: promptInstructions,
-                  safetyInstruction: assistant.safetyInstruction ?? null,
-                  securityRules: activeSecurityRules,
-                  avoidPhrases: assistant.avoidPhrases ?? null,
-                  knowledgeItems,
-                  historyMessages: priorHistory,
-                  currentMessage: interpretedMessage,
-                  officialBusinessContext,
-                  calendarContext: calendarToolsActive
-                    ? {
-                        conversationId: conversation.id,
-                        contactPhone,
-                        resourcesContext,
-                        serverTime,
-                      }
-                    : null,
-                });
+            // Every Chatwoot path uses the same compiler, even if dependency injection is absent.
+            const compiler = this.promptCompilerService ?? new PromptCompilerService();
+            promptMessages = compiler.compile({
+              assistant: {
+                ...assistant,
+                instructions: promptInstructions,
+              },
+              behavior: assistant.behavior,
+              flow: selectedFlow,
+              securityRules: activeSecurityRules,
+              knowledgeItems,
+              historyMessages: priorHistory,
+              currentMessage: interpretedMessage,
+              officialBusinessContext,
+              calendarContext: calendarToolsActive
+                ? {
+                    conversationId: conversation.id,
+                    contactPhone,
+                    resourcesContext,
+                    serverTime,
+                  }
+                : null,
+              memoryContextBlock,
+            });
 
             Object.assign(contextMetadata, {
               promptVersion: PROMPT_COMPILER_VERSION,
@@ -2518,6 +2504,8 @@ export class AssistantConversationsService {
               splitResponseStyle: assistant.splitResponseStyle ?? "SINGLE",
               temperature,
               temperatureParameterApplied: modelSupportsTemperature(resolvedModel.model),
+              triageMode,
+              knowledgeLimit,
               knowledgeChunkCount: knowledgeItems.length,
               knowledgeChunkIds: knowledgeItems.map((item) => item.id),
             });
@@ -2536,6 +2524,8 @@ export class AssistantConversationsService {
                   promptHash: contextMetadata.promptHash,
                   promptSections: contextMetadata.promptSections,
                   selectedFlowId: selectedFlow?.id ?? null,
+                  triageMode,
+                  knowledgeLimit,
                   knowledgeChunkCount: knowledgeItems.length,
                   historyMessagesUsed: priorHistory.length,
                   model: resolvedModel.model,
@@ -2892,6 +2882,8 @@ export class AssistantConversationsService {
             splitResponseStyle: runtime.context.splitResponseStyle,
             temperature: runtime.context.temperature,
             temperatureParameterApplied: runtime.context.temperatureParameterApplied,
+            triageMode: runtime.context.triageMode,
+            knowledgeLimit: runtime.context.knowledgeLimit,
             knowledgeChunkCount: runtime.context.knowledgeChunkCount,
             knowledgeChunkIds: runtime.context.knowledgeChunkIds,
           }),

@@ -12,7 +12,10 @@ import { PrismaService } from "../database/prisma.service";
 import { buildDeterministicAssistantResponse } from "./assistant-runtime";
 import { AiService } from "../ai/ai.service";
 import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
-import { PromptCompilerService } from "../prompt-compiler/prompt-compiler.service";
+import {
+  isMultiNeedTriageMessage,
+  PromptCompilerService,
+} from "../prompt-compiler/prompt-compiler.service";
 import { toAssistantRuntimeSources, type AssistantRuntimeSource } from "./assistant-runtime";
 import { type CreateAssistantDto } from "./dto/create-assistant.dto";
 import { type PreviewAssistantDto } from "./dto/preview-assistant.dto";
@@ -1091,11 +1094,12 @@ export class AssistantsService {
       if (!assistant) throw new NotFoundException("Assistant not found.");
 
       // 2. Buscar RAG Chunks
+      const knowledgeLimit = isMultiNeedTriageMessage(input.dto.question) ? 2 : 5;
       const ragSearch = await this.retrievalService.searchRelevantKnowledge({
         assistantId: assistant.id,
         companyId: input.tenant.companyId,
         query: input.dto.question,
-        topK: 5,
+        topK: knowledgeLimit,
         user: input.user,
         tenant: input.tenant,
       });
