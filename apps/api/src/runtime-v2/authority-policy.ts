@@ -51,6 +51,21 @@ export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = {
     authorizedSourceTypes: ["OFFICIAL_CONTEXT", "KNOWLEDGE", "TOOL"],
     required: true,
   },
+  availability: {
+    category: "availability",
+    authorizedSourceTypes: ["OFFICIAL_CONTEXT", "TOOL"],
+    required: true,
+  },
+  booking: {
+    category: "booking",
+    authorizedSourceTypes: ["TOOL"],
+    required: true,
+  },
+  exceptionRequest: {
+    category: "exceptionRequest",
+    authorizedSourceTypes: ["OFFICIAL_CONTEXT", "TOOL"],
+    required: true,
+  },
   commercialPolicy: {
     category: "commercialPolicy",
     authorizedSourceTypes: ["OFFICIAL_CONTEXT", "TOOL"],

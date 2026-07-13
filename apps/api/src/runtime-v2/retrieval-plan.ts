@@ -17,13 +17,18 @@ export function buildRetrievalPlan(input: {
         Boolean(item),
       )
     : [];
+  const toolCapabilitiesNeeded = [
+    ...(categories.includes("availability") ? ["availability"] : []),
+    ...(categories.includes("booking") ? ["booking"] : []),
+    ...(categories.includes("exceptionRequest") ? ["human_confirmation"] : []),
+  ];
 
   return {
     includeContactIdentity: isGreeting || understanding.isShortConfirmation,
     memoryTopics,
     knowledgeQueries: categories.length > 0 ? [understanding.turnIntent] : [],
     officialFactCategories: categories,
-    toolCapabilitiesNeeded: [],
+    toolCapabilitiesNeeded,
     reasons: [
       ...(isGreeting ? ["IDENTITY_ONLY_FOR_GREETING"] : []),
       ...(explicitTopic ? ["EXPLICIT_PREVIOUS_TOPIC_REFERENCE"] : []),

@@ -45,6 +45,8 @@ export type RuntimeV2ShadowSnapshot = {
     prompt: string;
     fieldKey?: string;
     sourceMessageId?: string;
+    contextVersion?: number;
+    askedAt?: Date;
   } | null;
   usefulHistory?: UsefulHistoryMessage[];
   audioMessage?: boolean;
@@ -233,8 +235,28 @@ export class RuntimeV2ShadowOrchestrator {
         ),
     );
 
-    if (!state.lastRelevantQuestion && snapshot.lastRelevantQuestion) {
-      state = { ...state, lastRelevantQuestion: snapshot.lastRelevantQuestion };
+    const snapshotQuestion = snapshot.lastRelevantQuestion;
+    if (
+      !state.lastRelevantQuestion &&
+      snapshotQuestion?.contextVersion === snapshot.scope.contextVersion &&
+      snapshotQuestion.askedAt instanceof Date &&
+      snapshotQuestion.askedAt >= state.sessionStartedAt
+    ) {
+      state = {
+        ...state,
+        lastRelevantQuestion: {
+          key: snapshotQuestion.key,
+          prompt: snapshotQuestion.prompt,
+          ...(snapshotQuestion.fieldKey ? { fieldKey: snapshotQuestion.fieldKey } : {}),
+          ...(snapshotQuestion.sourceMessageId
+            ? { sourceMessageId: snapshotQuestion.sourceMessageId }
+            : {}),
+          contextVersion: snapshot.scope.contextVersion,
+          askedAt: snapshotQuestion.askedAt,
+        },
+        lastRelevantQuestionMessageId: snapshotQuestion.sourceMessageId ?? null,
+        lastRelevantQuestionContextVersion: snapshot.scope.contextVersion,
+      };
     }
 
     const beforeState = state;
@@ -242,7 +264,12 @@ export class RuntimeV2ShadowOrchestrator {
     const understanding = understandTurn({
       message: snapshot.currentMessage,
       messageId: snapshot.internalMessageId,
-      lastRelevantQuestion: state.lastRelevantQuestion ?? snapshot.lastRelevantQuestion ?? null,
+      contextVersion: snapshot.scope.contextVersion,
+      now,
+      lastRelevantQuestion:
+        state.lastRelevantQuestion?.contextVersion === snapshot.scope.contextVersion
+          ? state.lastRelevantQuestion
+          : null,
       existingObjective: state.objective,
     });
 
@@ -311,6 +338,7 @@ export class RuntimeV2ShadowOrchestrator {
       understanding,
       retrievalPlan,
       authorityCategoriesRequested: understanding.requestedInformationCategories,
+      authorityCategoriesAvailable: responsePlan.claimsAllowed.map((claim) => claim.category),
       authorityCategoriesMissing: responsePlan.factsMissing,
       responsePlanAction: responsePlan.action,
       repeatedQuestionDetected: validation.repeatedQuestionDetected,
@@ -365,7 +393,9 @@ export class RuntimeV2ShadowOrchestrator {
     const understanding = understandTurn({
       message: snapshot.currentMessage,
       messageId: snapshot.internalMessageId,
-      lastRelevantQuestion: snapshot.lastRelevantQuestion ?? null,
+      contextVersion: snapshot.scope.contextVersion,
+      now: this.now(),
+      lastRelevantQuestion: null,
     });
     const retrievalPlan = buildRetrievalPlan({ understanding, state: fallbackState });
     const responsePlan = buildResponsePlan({
@@ -383,6 +413,7 @@ export class RuntimeV2ShadowOrchestrator {
       understanding,
       retrievalPlan,
       authorityCategoriesRequested: understanding.requestedInformationCategories,
+      authorityCategoriesAvailable: responsePlan.claimsAllowed.map((claim) => claim.category),
       authorityCategoriesMissing: responsePlan.factsMissing,
       responsePlanAction: responsePlan.action,
       repeatedQuestionDetected: false,

@@ -76,6 +76,11 @@ test("integração allowlisted registra somente manifesto sanitizado", async () 
   assert.equal(metadata.providerCalled, false);
   assert.equal(metadata.toolCalls, 0);
   assert.equal(metadata.outboundSent, false);
+  assert.equal(metadata.responsePlanAction, "ANSWER");
+  assert.equal(metadata.validationResult, "PASS");
+  assert.equal(metadata.repeatedQuestionDetected, false);
+  assert.deepEqual(metadata.authorityConflictCategories, []);
+  assert.deepEqual(metadata.v1ToolsExposed, []);
   assert.equal(JSON.stringify(metadata).includes("token=secret"), false);
   assert.equal(JSON.stringify(metadata).includes("cliente@example.com"), false);
   assert.equal(JSON.stringify(metadata).includes("67999999999"), false);

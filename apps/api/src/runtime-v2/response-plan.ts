@@ -34,6 +34,9 @@ export function buildResponsePlan(input: {
         "businessHours",
         "address",
         "serviceAvailability",
+        "availability",
+        "booking",
+        "exceptionRequest",
         "commercialPolicy",
       ].includes(category),
     );

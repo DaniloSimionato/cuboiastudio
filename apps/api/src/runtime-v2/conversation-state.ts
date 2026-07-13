@@ -18,6 +18,8 @@ export function createEmptyConversationState(
     schemaVersion: CONVERSATION_STATE_VERSION,
     revision: 0,
     ...scope,
+    sessionStartedAt: now,
+    firstMessageId: null,
     lastProcessedMessageId: null,
     lastProcessedExternalMessageId: null,
     createdAt: now,
@@ -29,6 +31,8 @@ export function createEmptyConversationState(
     answeredQuestions: [],
     pendingFields: [],
     lastRelevantQuestion: null,
+    lastRelevantQuestionMessageId: null,
+    lastRelevantQuestionContextVersion: null,
     lastValidNextStep: null,
     selectedIntent: null,
     selectedFlowId: null,
@@ -125,6 +129,7 @@ function assertStateIdentity(state: ConversationState): void {
 export function serializeConversationState(state: ConversationState): SerializedConversationState {
   assertStateIdentity(state);
   assertIsoDate(state.createdAt, "createdAt");
+  assertIsoDate(state.sessionStartedAt, "sessionStartedAt");
   assertIsoDate(state.updatedAt, "updatedAt");
   if (state.expiresAt !== null) {
     assertIsoDate(state.expiresAt, "expiresAt");
@@ -133,6 +138,7 @@ export function serializeConversationState(state: ConversationState): Serialized
   const serializable = toJsonValue(
     {
       ...state,
+      sessionStartedAt: state.sessionStartedAt.toISOString(),
       createdAt: state.createdAt.toISOString(),
       updatedAt: state.updatedAt.toISOString(),
       expiresAt: state.expiresAt?.toISOString() ?? null,
@@ -159,6 +165,19 @@ export function deserializeConversationState(input: unknown): ConversationState 
   const value = input as Record<string, unknown>;
   const state = {
     ...value,
+    firstMessageId: value.firstMessageId === undefined ? null : value.firstMessageId,
+    lastRelevantQuestionMessageId:
+      value.lastRelevantQuestionMessageId === undefined
+        ? null
+        : value.lastRelevantQuestionMessageId,
+    lastRelevantQuestionContextVersion:
+      value.lastRelevantQuestionContextVersion === undefined
+        ? null
+        : value.lastRelevantQuestionContextVersion,
+    sessionStartedAt:
+      value.sessionStartedAt === undefined
+        ? parseDate(value.createdAt, "createdAt")
+        : parseDate(value.sessionStartedAt, "sessionStartedAt"),
     createdAt: parseDate(value.createdAt, "createdAt"),
     updatedAt: parseDate(value.updatedAt, "updatedAt"),
     expiresAt: value.expiresAt === null ? null : parseDate(value.expiresAt, "expiresAt"),
@@ -176,6 +195,34 @@ export function deserializeConversationState(input: unknown): ConversationState 
   ) {
     throw new Error("lastProcessedExternalMessageId must be a string or null");
   }
+  if (state.firstMessageId !== null && typeof state.firstMessageId !== "string") {
+    throw new Error("firstMessageId must be a string or null");
+  }
+  if (
+    state.lastRelevantQuestionMessageId !== null &&
+    typeof state.lastRelevantQuestionMessageId !== "string"
+  ) {
+    throw new Error("lastRelevantQuestionMessageId must be a string or null");
+  }
+  if (
+    state.lastRelevantQuestionContextVersion !== null &&
+    (!Number.isInteger(state.lastRelevantQuestionContextVersion) ||
+      state.lastRelevantQuestionContextVersion < 0)
+  ) {
+    throw new Error("lastRelevantQuestionContextVersion must be a non-negative integer or null");
+  }
+  if (state.lastRelevantQuestion) {
+    const question = state.lastRelevantQuestion as unknown as Record<string, unknown>;
+    if (
+      question.contextVersion !== state.contextVersion ||
+      typeof question.askedAt !== "string" ||
+      typeof question.sourceMessageId !== "string"
+    ) {
+      state.lastRelevantQuestion = null;
+      state.lastRelevantQuestionMessageId = null;
+      state.lastRelevantQuestionContextVersion = null;
+    }
+  }
   assertJsonValue(
     {
       objective: state.objective,
@@ -186,6 +233,11 @@ export function deserializeConversationState(input: unknown): ConversationState 
     },
     "conversation state",
   );
+
+  if (state.lastRelevantQuestion) {
+    const question = state.lastRelevantQuestion as unknown as Record<string, unknown>;
+    question.askedAt = parseDate(question.askedAt, "lastRelevantQuestion.askedAt");
+  }
 
   for (const facts of [state.confirmedFacts, state.temporaryFacts]) {
     for (const fact of Object.values(facts)) {
@@ -274,6 +326,10 @@ export function applyTurnToConversationState(
     updatedAt: now,
   };
 
+  if (!next.firstMessageId) {
+    next.firstMessageId = understanding.evidenceMessageIds[0] ?? null;
+  }
+
   if (understanding.objectiveAction === "REPLACE") {
     next.objective = understanding.objective ?? null;
     next.secondaryObjectives = [];
@@ -311,6 +367,8 @@ export function applyTurnToConversationState(
 
   if (understanding.nextQuestion) {
     next.lastRelevantQuestion = understanding.nextQuestion;
+    next.lastRelevantQuestionMessageId = understanding.nextQuestion.sourceMessageId ?? null;
+    next.lastRelevantQuestionContextVersion = understanding.nextQuestion.contextVersion;
     next.lastValidNextStep = understanding.nextQuestion.prompt;
     if (understanding.nextQuestion.fieldKey) {
       next.pendingFields = Array.from(

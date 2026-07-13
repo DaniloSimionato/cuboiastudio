@@ -34,6 +34,8 @@ export type RelevantQuestion = {
   prompt: string;
   fieldKey?: string;
   sourceMessageId?: string;
+  contextVersion: number;
+  askedAt: Date;
 };
 
 export type ContactProfile = {
@@ -58,6 +60,8 @@ export type ConversationState = {
   assistantId: string;
   conversationId: string;
   contextVersion: number;
+  sessionStartedAt: Date;
+  firstMessageId: string | null;
   lastProcessedMessageId: string | null;
   lastProcessedExternalMessageId: string | null;
   createdAt: Date;
@@ -69,6 +73,8 @@ export type ConversationState = {
   answeredQuestions: string[];
   pendingFields: string[];
   lastRelevantQuestion: RelevantQuestion | null;
+  lastRelevantQuestionMessageId: string | null;
+  lastRelevantQuestionContextVersion: number | null;
   lastValidNextStep: string | null;
   selectedIntent: string | null;
   selectedFlowId: string | null;
@@ -88,6 +94,8 @@ export type SerializedConversationState = {
   assistantId: string;
   conversationId: string;
   contextVersion: number;
+  sessionStartedAt: string;
+  firstMessageId: string | null;
   lastProcessedMessageId: string | null;
   lastProcessedExternalMessageId: string | null;
   createdAt: string;
@@ -101,6 +109,8 @@ export type SerializedConversationState = {
   answeredQuestions: string[];
   pendingFields: string[];
   lastRelevantQuestion: JsonValue;
+  lastRelevantQuestionMessageId: string | null;
+  lastRelevantQuestionContextVersion: number | null;
   lastValidNextStep: string | null;
   selectedIntent: string | null;
   selectedFlowId: string | null;
@@ -117,6 +127,7 @@ export type TurnUnderstanding = {
   correctedFactKeys: string[];
   answeredQuestionKey?: string;
   isShortConfirmation: boolean;
+  confirmationAmbiguous?: boolean;
   isSideQuestion: boolean;
   explicitlyRequestsPreviousTopic: boolean;
   requestedInformationCategories: string[];

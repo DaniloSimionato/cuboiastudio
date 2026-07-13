@@ -109,11 +109,14 @@ test("confirmações curtas usam a última pergunta relevante sem raciocínio li
     fieldKey: "device_model",
     prompt: "Seu notebook é um Acer Nitro 5?",
     sourceMessageId: "assistant-question-1",
+    contextVersion: 1,
+    askedAt: new Date("2026-07-13T12:00:00.000Z"),
   };
   state.pendingFields = ["device_model"];
   const understanding = understandTurn({
     message: "Sim, isso mesmo.",
     messageId: "customer-confirmation-1",
+    contextVersion: 1,
     lastRelevantQuestion: state.lastRelevantQuestion,
   });
 

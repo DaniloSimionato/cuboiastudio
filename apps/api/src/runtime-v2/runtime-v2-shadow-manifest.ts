@@ -37,9 +37,15 @@ export type RuntimeV2ShadowManifest = {
   confirmedFactKeysPreserved: string[];
   pendingFieldKeys: string[];
   lastRelevantQuestionKey: string | null;
+  lastRelevantQuestionContextVersion: number | null;
   retrievalPlanCategories: string[];
   authorityCategoriesRequested: string[];
+  authorityCategoriesAvailable: string[];
   authorityCategoriesMissing: string[];
+  authorityConflictDetected: boolean;
+  authorityConflictCategories: string[];
+  winningSourceTypes: string[];
+  rejectedSourceTypes: string[];
   responsePlanAction: ResponsePlanAction;
   repeatedQuestionDetected: boolean;
   validationResult: ResponseValidationResult["result"] | "ERROR";
@@ -82,7 +88,12 @@ export function buildRuntimeV2ShadowManifest(input: {
   understanding: TurnUnderstanding;
   retrievalPlan: RetrievalPlan;
   authorityCategoriesRequested: string[];
+  authorityCategoriesAvailable?: string[];
   authorityCategoriesMissing: string[];
+  authorityConflictDetected?: boolean;
+  authorityConflictCategories?: string[];
+  winningSourceTypes?: string[];
+  rejectedSourceTypes?: string[];
   responsePlanAction: ResponsePlanAction;
   repeatedQuestionDetected: boolean;
   validationResult: ResponseValidationResult["result"] | "ERROR";
@@ -132,13 +143,20 @@ export function buildRuntimeV2ShadowManifest(input: {
     confirmedFactKeysPreserved: preserved,
     pendingFieldKeys: input.afterState.pendingFields,
     lastRelevantQuestionKey: input.afterState.lastRelevantQuestion?.key ?? null,
+    lastRelevantQuestionContextVersion:
+      input.afterState.lastRelevantQuestion?.contextVersion ?? null,
     retrievalPlanCategories: [
       ...input.retrievalPlan.memoryTopics,
       ...input.retrievalPlan.officialFactCategories,
       ...input.retrievalPlan.knowledgeQueries,
     ],
     authorityCategoriesRequested: [...input.authorityCategoriesRequested],
+    authorityCategoriesAvailable: [...(input.authorityCategoriesAvailable ?? [])],
     authorityCategoriesMissing: [...input.authorityCategoriesMissing],
+    authorityConflictDetected: input.authorityConflictDetected ?? false,
+    authorityConflictCategories: [...(input.authorityConflictCategories ?? [])],
+    winningSourceTypes: [...(input.winningSourceTypes ?? [])],
+    rejectedSourceTypes: [...(input.rejectedSourceTypes ?? [])],
     responsePlanAction: input.responsePlanAction,
     repeatedQuestionDetected: input.repeatedQuestionDetected,
     validationResult: input.validationResult,

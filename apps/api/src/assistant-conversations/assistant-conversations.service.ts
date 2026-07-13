@@ -78,6 +78,7 @@ import {
 import { formatImportedHumanHistoryMessage } from "./conversation-history-format";
 import type { RuntimeV2ShadowSnapshot } from "../runtime-v2/runtime-v2-shadow-orchestrator";
 import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
+import { validateV1AnswerAuthority } from "./runtime-authority-guard";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -206,6 +207,12 @@ export type AssistantConversationRuntime = {
     toolCallCount?: number;
     persistenceStatus?: string;
     outboundStatus?: string;
+    authorityConflictDetected?: boolean;
+    authorityConflictCategories?: string[];
+    winningSourceTypes?: string[];
+    rejectedSourceTypes?: string[];
+    v1UnsupportedClaimDetected?: boolean;
+    v1UnsupportedClaimCategories?: string[];
     behaviorId?: string | null;
     behaviorUpdatedAt?: Date | null;
     assistantUpdatedAt?: Date | null;
@@ -2671,15 +2678,7 @@ export class AssistantConversationsService {
       officialDataSource: "structured-assistant-company",
     };
 
-    const lastRelevantQuestionMessage = [...priorHistory]
-      .reverse()
-      .find(
-        (message) =>
-          message.role === "assistant" &&
-          !message.content.startsWith("MENSAGEM HISTÓRICA DE ATENDENTE HUMANO ANTERIOR.") &&
-          message.content.includes("?"),
-      );
-    this.scheduleRuntimeV2Shadow({
+    const shadowSnapshot: RuntimeV2ShadowSnapshot = {
       scope: {
         companyId: input.tenant.companyId,
         assistantId: input.assistantId,
@@ -2698,13 +2697,29 @@ export class AssistantConversationsService {
             ? "ATTACHMENT"
             : "TEXT",
       currentMessage: interpretedMessage,
-      lastRelevantQuestion: lastRelevantQuestionMessage
-        ? {
-            key: `question:${lastRelevantQuestionMessage.id}`,
-            prompt: lastRelevantQuestionMessage.content,
-            sourceMessageId: lastRelevantQuestionMessage.id,
-          }
-        : null,
+      // A V1 question may be used only as a timestamped reference. The V2
+      // orchestrator rejects it when it predates the V2 session boundary.
+      lastRelevantQuestion: (() => {
+        const question = [...priorHistory]
+          .reverse()
+          .find(
+            (message) =>
+              message.role === "assistant" &&
+              !message.content.startsWith("MENSAGEM HISTÓRICA DE ATENDENTE HUMANO ANTERIOR.") &&
+              message.content.includes("?"),
+          );
+        return question
+          ? {
+              key: `question:${question.id}`,
+              prompt: question.content,
+              sourceMessageId: question.id,
+              contextVersion: conversation.currentContextVersion ?? 1,
+              askedAt:
+                recentMessages.find((message) => message.id === question.id)?.createdAt ??
+                new Date(0),
+            }
+          : null;
+      })(),
       usefulHistory: priorHistory.slice(-6).map((message) => ({
         id: message.id,
         role: message.role as "user" | "assistant" | "tool",
@@ -2717,7 +2732,7 @@ export class AssistantConversationsService {
       audioMessage,
       transcriptionAvailable,
       transcriptionPersisted: transcriptionAvailable,
-    });
+    };
 
     contextMetadata.contextManifest = {
       version: RUNTIME_CONTEXT_MANIFEST_VERSION,
@@ -2813,6 +2828,10 @@ export class AssistantConversationsService {
       },
     };
     let answer = deterministicRuntime.answer;
+    let selectedFlowForAuthority: {
+      instructions?: string | null;
+      fixedMessage?: string | null;
+    } | null = null;
     const configuredFallbackMessage = assistant.fallbackMessage?.trim() || null;
     const resolveFallbackAnswer = (deterministicAnswer: string) =>
       resolveRuntimeFallbackAnswer({
@@ -2971,6 +2990,7 @@ export class AssistantConversationsService {
           const selectedFlow = routeResult.flowId
             ? (assistant.flows ?? []).find((f) => f.id === routeResult.flowId)
             : null;
+          selectedFlowForAuthority = selectedFlow ?? null;
           const flowToolContext = this.resolveFlowToolContext(selectedFlow ?? null);
           const calendarScope = flowToolContext?.calendar ?? null;
 
@@ -3737,6 +3757,52 @@ export class AssistantConversationsService {
       toolCallCount: contextMetadata.toolCallCount ?? 0,
     };
 
+    const authorityGuard = validateV1AnswerAuthority({
+      answer,
+      currentMessage: interpretedMessage,
+      sources,
+      officialBusinessContext,
+      flowText: selectedFlowForAuthority
+        ? `${selectedFlowForAuthority.instructions ?? ""} ${selectedFlowForAuthority.fixedMessage ?? ""}`
+        : null,
+    });
+    if (authorityGuard.unsupportedClaimDetected) {
+      answer = authorityGuard.answer;
+      sources = [
+        {
+          id: "official-authority-guard",
+          title: "Proteção de autoridade factual",
+        },
+      ];
+    }
+    Object.assign(contextMetadata, {
+      v1UnsupportedClaimDetected: authorityGuard.unsupportedClaimDetected,
+      v1UnsupportedClaimCategories: authorityGuard.blockedCategories,
+      authorityConflictDetected: authorityGuard.authorityConflictDetected,
+      authorityConflictCategories: authorityGuard.authorityConflictCategories,
+      winningSourceTypes: authorityGuard.winningSourceTypes,
+      rejectedSourceTypes: authorityGuard.rejectedSourceTypes,
+    });
+    contextMetadata.contextManifest = {
+      ...contextMetadata.contextManifest,
+      authorityConflictDetected: authorityGuard.authorityConflictDetected,
+      authorityConflictCategories: authorityGuard.authorityConflictCategories,
+      winningSourceTypes: authorityGuard.winningSourceTypes,
+      rejectedSourceTypes: authorityGuard.rejectedSourceTypes,
+      v1UnsupportedClaimDetected: authorityGuard.unsupportedClaimDetected,
+      v1UnsupportedClaimCategories: authorityGuard.blockedCategories,
+    };
+
+    this.scheduleRuntimeV2Shadow({
+      ...shadowSnapshot,
+      v1Comparison: {
+        selectedFlowId: contextMetadata.selectedFlowId ?? null,
+        selectedIntent: contextMetadata.detectedIntent ?? null,
+        triageMode: contextMetadata.triageMode ? "TRIAGE" : null,
+        toolsExposed: contextMetadata.toolsExposed ?? [],
+      },
+    });
+
     runtime = {
       ...runtime,
       summary: this.buildRuntimeSummary({
@@ -3862,6 +3928,12 @@ export class AssistantConversationsService {
             outboundBlockCountPlanned: runtime.context.outboundBlockCountPlanned,
             outboundBlockCountSent: runtime.context.outboundBlockCountSent,
             outboundBlockCount: runtime.context.outboundBlockCount,
+            authorityConflictDetected: runtime.context.authorityConflictDetected,
+            authorityConflictCategories: runtime.context.authorityConflictCategories,
+            winningSourceTypes: runtime.context.winningSourceTypes,
+            rejectedSourceTypes: runtime.context.rejectedSourceTypes,
+            v1UnsupportedClaimDetected: runtime.context.v1UnsupportedClaimDetected,
+            v1UnsupportedClaimCategories: runtime.context.v1UnsupportedClaimCategories,
             knowledgeCount: runtime.ragData?.usedKnowledge?.length ?? knowledgeItems.length,
             knowledgeLimit: runtime.context.knowledgeLimit,
             knowledgeChunkCount: runtime.context.knowledgeChunkCount,

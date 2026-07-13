@@ -106,8 +106,18 @@ export class RuntimeV2ShadowIntegrationService {
   }
 
   async drain(): Promise<void> {
-    while (this.pending.size > 0) {
-      await Promise.all([...this.pending]);
+    for (;;) {
+      const pending = [...this.pending];
+      if (pending.length > 0) {
+        await Promise.allSettled(pending);
+        continue;
+      }
+
+      // Allow a fire-and-forget schedule that was started by the current
+      // event-loop turn to register its promise before declaring the queue
+      // drained. This method is only a deterministic test hook.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (this.pending.size === 0) return;
     }
   }
 
@@ -189,9 +199,23 @@ export class RuntimeV2ShadowIntegrationService {
       confirmedFactKeysUpdated: manifest?.confirmedFactKeysUpdated ?? [],
       confirmedFactKeysPreserved: manifest?.confirmedFactKeysPreserved ?? [],
       pendingFieldKeys: manifest?.pendingFieldKeys ?? [],
+      lastRelevantQuestionKey: manifest?.lastRelevantQuestionKey ?? null,
+      lastRelevantQuestionContextVersion: manifest?.lastRelevantQuestionContextVersion ?? null,
       retrievalPlanCategories: manifest?.retrievalPlanCategories ?? [],
       authorityCategoriesRequested: manifest?.authorityCategoriesRequested ?? [],
+      authorityCategoriesAvailable: manifest?.authorityCategoriesAvailable ?? [],
       authorityCategoriesMissing: manifest?.authorityCategoriesMissing ?? [],
+      authorityConflictDetected: manifest?.authorityConflictDetected ?? false,
+      authorityConflictCategories: manifest?.authorityConflictCategories ?? [],
+      winningSourceTypes: manifest?.winningSourceTypes ?? [],
+      rejectedSourceTypes: manifest?.rejectedSourceTypes ?? [],
+      responsePlanAction: manifest?.responsePlanAction ?? null,
+      validationResult: manifest?.validationResult ?? null,
+      repeatedQuestionDetected: manifest?.repeatedQuestionDetected ?? false,
+      v1SelectedIntent: manifest?.v1Comparison.selectedIntent ?? null,
+      v1SelectedFlowId: manifest?.v1Comparison.selectedFlowId ?? null,
+      v1TriageMode: manifest?.v1Comparison.triageMode ?? null,
+      v1ToolsExposed: manifest?.v1Comparison.toolsExposed ?? [],
       persistenceResult: manifest?.persistenceResult ?? null,
       processingDurationMs: manifest?.processingDurationMs ?? null,
       errorCode: shadowErrorCode,

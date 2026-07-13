@@ -75,7 +75,11 @@ test("feature flag fica OFF por padrão e SHADOW exige allowlist válida", () =>
 
 test("shadow mantém estado ao longo dos turnos e não produz provider, ferramenta ou outbound", async () => {
   const store = new InMemoryConversationStateStore();
-  const orchestrator = new RuntimeV2ShadowOrchestrator(store, shadowEnvironment);
+  const orchestrator = new RuntimeV2ShadowOrchestrator(
+    store,
+    shadowEnvironment,
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  );
 
   const greeting = await orchestrator.process(snapshot("Bom dia.", "message-1"));
   assert.equal(greeting.manifest.mode, "SHADOW");
@@ -127,7 +131,11 @@ test("shadow mantém estado ao longo dos turnos e não produz provider, ferramen
 
 test("shadow mantém referência de confirmação, correção, áudio e fala humana sem tratá-la como cliente", async () => {
   const store = new InMemoryConversationStateStore();
-  const orchestrator = new RuntimeV2ShadowOrchestrator(store, shadowEnvironment);
+  const orchestrator = new RuntimeV2ShadowOrchestrator(
+    store,
+    shadowEnvironment,
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  );
   const first = await orchestrator.process(
     snapshot("Seu notebook é um Acer Nitro 5?", "message-q", {
       source: "CUSTOMER",
@@ -140,6 +148,8 @@ test("shadow mantém referência de confirmação, correção, áudio e fala hum
         prompt: "Seu notebook é um Acer Nitro 5?",
         fieldKey: "device_model",
         sourceMessageId: "assistant-question",
+        contextVersion: 1,
+        askedAt: new Date("2026-07-13T12:00:01.000Z"),
       },
     }),
   );

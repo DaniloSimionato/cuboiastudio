@@ -164,6 +164,9 @@ test("stateJson valida schema, redaction e limite de 64 KB sem truncamento", asy
     key: "question:1",
     prompt: "token=secret telefone 67999999999 email cliente@example.com",
     fieldKey: "device_model",
+    sourceMessageId: "question:1-source",
+    contextVersion: scope.contextVersion,
+    askedAt: new Date(),
   };
   const redacted = sanitizeConversationStateForPersistence(safeState);
   assert.equal(JSON.stringify(redacted.json).includes("cliente@example.com"), false);

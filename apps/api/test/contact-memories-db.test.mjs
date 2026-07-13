@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { PrismaClient } from "@prisma/client";
 import { ContactMemoriesService } from "../dist/contact-memories/contact-memories.service.js";
@@ -6,6 +7,8 @@ import { ContactMemoriesService } from "../dist/contact-memories/contact-memorie
 // Integration test using real PostgreSQL database with pgvector on port 5433
 test("Integration: pgvector lifecycle on real Postgres database", async () => {
   const prisma = new PrismaClient();
+  const testCompanyId = `company_pgvector_${randomUUID()}`;
+  const testProfileId = `profile_pgvector_${randomUUID()}`;
 
   try {
     // 1. Setup mock AiService producing real 1536 float arrays
@@ -30,37 +33,38 @@ test("Integration: pgvector lifecycle on real Postgres database", async () => {
           dimension: 1536,
           durationMs: 5,
         };
-      }
+      },
     };
 
     const mockCacheService = {
       get: async (key) => null,
-      set: async (key, val, ttl) => {}
+      set: async (key, val, ttl) => {},
     };
 
     const service = new ContactMemoriesService(prisma, mockAiService, mockCacheService);
 
-    const testCompanyId = "company_demo_cubo_ai_studio";
-    const testAssistantId = "assistant-integration-test";
+    await prisma.company.create({
+      data: { id: testCompanyId, name: "pgvector integration fixture" },
+    });
 
     // Clean up any stale data from previous run just in case
     await prisma.$executeRawUnsafe(
       `DELETE FROM contact_memory_items WHERE "companyId" = $1`,
-      testCompanyId
+      testCompanyId,
     );
     await prisma.$executeRawUnsafe(
       `DELETE FROM contact_memory_profiles WHERE "companyId" = $1`,
-      testCompanyId
+      testCompanyId,
     );
 
     // Create a real profile
     const profile = await prisma.contactMemoryProfile.create({
       data: {
-        id: "profile-integration-test",
+        id: testProfileId,
         companyId: testCompanyId,
         identityKey: "phone_5567999999999",
         displayName: "Integration Contact",
-      }
+      },
     });
 
     // 2. Create memory item (will be PENDING vectorization)
@@ -79,7 +83,7 @@ test("Integration: pgvector lifecycle on real Postgres database", async () => {
 
     // Verify it is in the database with null embedding
     const dbItemBefore = await prisma.contactMemoryItem.findUnique({
-      where: { id: item.id }
+      where: { id: item.id },
     });
     assert.ok(dbItemBefore);
     assert.ok(["PENDING", "PROCESSING", "READY"].includes(dbItemBefore.embeddingStatus));
@@ -89,7 +93,7 @@ test("Integration: pgvector lifecycle on real Postgres database", async () => {
 
     // Verify the status has been updated to READY in the DB
     const dbItemAfter = await prisma.contactMemoryItem.findUnique({
-      where: { id: item.id }
+      where: { id: item.id },
     });
     assert.equal(dbItemAfter.embeddingStatus, "READY");
     assert.equal(dbItemAfter.embeddingModel, "text-embedding-3-small");
@@ -98,7 +102,7 @@ test("Integration: pgvector lifecycle on real Postgres database", async () => {
     // Verify the embedding vector exists (we can read it via select)
     const [rawRow] = await prisma.$queryRawUnsafe(
       `SELECT embedding::text FROM contact_memory_items WHERE id = $1`,
-      item.id
+      item.id,
     );
     assert.ok(rawRow);
     assert.ok(rawRow.embedding);
@@ -120,14 +124,22 @@ test("Integration: pgvector lifecycle on real Postgres database", async () => {
     // 5. Clean up database
     await prisma.$executeRawUnsafe(
       `DELETE FROM contact_memory_items WHERE "companyId" = $1`,
-      testCompanyId
+      testCompanyId,
     );
     await prisma.$executeRawUnsafe(
       `DELETE FROM contact_memory_profiles WHERE "companyId" = $1`,
-      testCompanyId
+      testCompanyId,
     );
-
   } finally {
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM contact_memory_items WHERE "companyId" = $1`,
+      testCompanyId,
+    );
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM contact_memory_profiles WHERE "companyId" = $1`,
+      testCompanyId,
+    );
+    await prisma.company.deleteMany({ where: { id: testCompanyId } });
     await prisma.$disconnect();
   }
 });
