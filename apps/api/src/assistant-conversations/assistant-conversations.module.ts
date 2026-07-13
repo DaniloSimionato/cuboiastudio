@@ -17,6 +17,7 @@ import {
   RUNTIME_V2_STATE_STORE,
 } from "../runtime-v2/prisma-conversation-state-store";
 import { RuntimeV2ShadowOrchestrator } from "../runtime-v2/runtime-v2-shadow-orchestrator";
+import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { RuntimeV2ShadowOrchestrator } from "../runtime-v2/runtime-v2-shadow-orc
         new RuntimeV2ShadowOrchestrator(stateStore),
       inject: [RUNTIME_V2_STATE_STORE],
     },
+    RuntimeV2ShadowIntegrationService,
     AssistantConversationsService,
   ],
   exports: [AssistantConversationsService],

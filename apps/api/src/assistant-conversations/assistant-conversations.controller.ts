@@ -86,7 +86,11 @@ function fileExtension(fileName: string): string {
   return match?.[1]?.toLowerCase() ?? "";
 }
 
-function isAllowedMimeType(type: keyof typeof UPLOAD_LIMITS, mimeType: string, fileName: string): boolean {
+function isAllowedMimeType(
+  type: keyof typeof UPLOAD_LIMITS,
+  mimeType: string,
+  fileName: string,
+): boolean {
   const mime = mimeType.toLowerCase();
   const extension = fileExtension(fileName);
 
@@ -192,7 +196,8 @@ export class AssistantConversationsController {
         mimeType,
         size: file.size,
         caption: trimText(item.caption),
-        durationSeconds: typeof item.durationSeconds === "number" ? item.durationSeconds : undefined,
+        durationSeconds:
+          typeof item.durationSeconds === "number" ? item.durationSeconds : undefined,
         buffer: file.buffer,
       };
     });
@@ -276,7 +281,12 @@ export class AssistantConversationsController {
     });
 
     try {
-      const response = await this.assistantConversationsService.create({ assistantId, dto, user, tenant });
+      const response = await this.assistantConversationsService.create({
+        assistantId,
+        dto,
+        user,
+        tenant,
+      });
       this.logger.log({
         event: "tests.conversation.create.success",
         assistantId,
@@ -366,7 +376,11 @@ export class AssistantConversationsController {
     });
 
     try {
-      const response = await this.assistantConversationsService.findAll({ assistantId, user, tenant });
+      const response = await this.assistantConversationsService.findAll({
+        assistantId,
+        user,
+        tenant,
+      });
       this.logger.log({
         event: "tests.conversation.list.success",
         assistantId,
@@ -612,6 +626,7 @@ export class AssistantConversationsController {
         },
         assistantMessage: {
           type: "object",
+          nullable: true,
           properties: {
             id: { type: "string", example: "assistant_conversation_message_demo_02" },
             role: { type: "string", example: "assistant" },
@@ -753,8 +768,7 @@ export class AssistantConversationsController {
   @UseInterceptors(AnyFilesInterceptor({ limits: { files: 10, fileSize: 30 * MB } }))
   @ApiOperation({
     summary: "Send a test message with real files using multipart/form-data",
-    description:
-      "Used by the /testes screen to avoid sending base64/dataUrl payloads inside JSON.",
+    description: "Used by the /testes screen to avoid sending base64/dataUrl payloads inside JSON.",
   })
   sendMessageMultipart(
     @Param("assistantId") assistantId: string,
@@ -878,7 +892,7 @@ export class AssistantConversationsController {
       conversationId,
       companyId: tenant.companyId,
     });
-    
+
     return this.assistantConversationsService.resumeConversation({
       assistantId,
       conversationId,

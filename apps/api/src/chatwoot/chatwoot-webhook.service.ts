@@ -86,7 +86,7 @@ export class ChatwootWebhookService {
       responseSent = false,
     ): Promise<ChatwootWebhookProcessResult> => {
       await this.completeWebhookDiagnostic(diagnostic, {
-        ignoredReason: result.ignored ? result.reason ?? "IGNORED" : null,
+        ignoredReason: result.ignored ? (result.reason ?? "IGNORED") : null,
         responseSent,
       });
       return result;
@@ -254,10 +254,10 @@ export class ChatwootWebhookService {
 
       return finish(
         {
-        ok: true,
-        source: "chatwoot",
-        conversationId: response.conversationId,
-        messageId: response.assistantMessage.id,
+          ok: true,
+          source: "chatwoot",
+          conversationId: response.conversationId,
+          messageId: response.assistantMessage?.id ?? response.userMessage.id,
         },
         true,
       );

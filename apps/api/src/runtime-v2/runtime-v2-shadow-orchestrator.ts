@@ -81,6 +81,17 @@ export const DEFAULT_SHADOW_TIMEOUT_MS = 250;
 export const DEFAULT_SHADOW_MAX_CONCURRENT = 16;
 export const DEFAULT_SHADOW_STATE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+function sanitizeShadowErrorCode(error: unknown): string {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && /^P\d{4}$/.test(code)) return `PRISMA_${code}`;
+  }
+  if (error instanceof Error && /^[A-Z][A-Z0-9_:-]{2,79}$/.test(error.message)) {
+    return error.message;
+  }
+  return "SHADOW_PROCESSING_ERROR";
+}
+
 const MIN_SHADOW_TIMEOUT_MS = 25;
 const MAX_SHADOW_TIMEOUT_MS = 5_000;
 const MIN_SHADOW_MAX_CONCURRENT = 1;
@@ -185,7 +196,7 @@ export class RuntimeV2ShadowOrchestrator {
               ? "STALE_CONTEXT"
               : error instanceof Error && error.message === "STATE_PAYLOAD_TOO_LARGE"
                 ? "STATE_PAYLOAD_TOO_LARGE"
-                : "SHADOW_PROCESSING_ERROR";
+                : sanitizeShadowErrorCode(error);
       if (error instanceof ShadowTimeoutError) this.metrics.timeout += 1;
       else this.metrics.processingError += 1;
       return this.buildErrorResult(snapshot, errorCode, startedAt);
@@ -346,7 +357,8 @@ export class RuntimeV2ShadowOrchestrator {
       | "SHADOW_PROCESSING_ERROR"
       | "MISSING_INTERNAL_MESSAGE_ID"
       | "STALE_CONTEXT"
-      | "STATE_PAYLOAD_TOO_LARGE",
+      | "STATE_PAYLOAD_TOO_LARGE"
+      | string,
     startedAt: number,
   ): RuntimeV2ShadowResult {
     const fallbackState = createEmptyConversationState(snapshot.scope, this.now());

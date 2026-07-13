@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   HttpException,
   Injectable,
@@ -75,10 +76,8 @@ import {
   selectRuntimeKnowledgeItems,
 } from "./runtime-context-manifest";
 import { formatImportedHumanHistoryMessage } from "./conversation-history-format";
-import {
-  RuntimeV2ShadowOrchestrator,
-  type RuntimeV2ShadowSnapshot,
-} from "../runtime-v2/runtime-v2-shadow-orchestrator";
+import type { RuntimeV2ShadowSnapshot } from "../runtime-v2/runtime-v2-shadow-orchestrator";
+import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -241,7 +240,8 @@ export type AssistantConversationRuntime = {
     | "ai-provider-quota-error"
     | "ai-provider-error"
     | "conversation-reset-executed"
-    | "conversation-reset-executed-duplicate";
+    | "conversation-reset-executed-duplicate"
+    | "duplicate-external-message-id";
   warning?: string;
   ragData?: any;
 };
@@ -253,7 +253,7 @@ export type FindConversationMessagesResponse = {
 export type SendAssistantConversationMessageResponse = {
   conversationId: string;
   userMessage: AssistantConversationMessageItem;
-  assistantMessage: AssistantConversationMessageItem;
+  assistantMessage: AssistantConversationMessageItem | null;
   runtime: AssistantConversationRuntime;
 };
 
@@ -262,9 +262,7 @@ export function splitNaturalResponseBlocks(content: string): string[] {
   if (!normalized) return [];
 
   const lines = normalized.split("\n");
-  const containsListStructure = lines.some((line) =>
-    /^\s*(?:[-*•]|\d+[.)])\s+/.test(line),
-  );
+  const containsListStructure = lines.some((line) => /^\s*(?:[-*•]|\d+[.)])\s+/.test(line));
   const containsMarkdownHeading = lines.some((line) =>
     /^\s*(?:#{1,6}\s+|\*\*[^*]{2,80}\*\*\s*:?)\s*$/.test(line),
   );
@@ -294,6 +292,21 @@ function getPromptSectionLabels(messages: Array<{ role: string; content?: unknow
   return buildPromptSectionManifest(messages)
     .filter((section) => section.role === "system")
     .map((section) => section.name);
+}
+
+function isExternalMessageIdUniqueConstraintError(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") {
+    return false;
+  }
+
+  const target = error.meta?.target;
+  if (!Array.isArray(target)) return false;
+  return (
+    target.length === 3 &&
+    target.includes("companyId") &&
+    target.includes("source") &&
+    target.includes("externalMessageId")
+  );
 }
 
 function isPrismaUniqueConstraintError(error: unknown): boolean {
@@ -326,6 +339,8 @@ type AssistantConversationSafeRecord = Prisma.AssistantConversationGetPayload<{
 
 const assistantConversationMessageSafeSelect = {
   id: true,
+  assistantId: true,
+  conversationId: true,
   role: true,
   content: true,
   source: true,
@@ -555,14 +570,131 @@ export class AssistantConversationsService {
     private readonly contactMemoriesService?: ContactMemoriesService,
     private readonly contactMemoriesExtractionService?: ContactMemoriesExtractionService,
     private readonly cacheService?: CacheService,
-    @Optional() private readonly runtimeV2ShadowOrchestrator?: RuntimeV2ShadowOrchestrator,
+    @Optional() private readonly runtimeV2ShadowIntegration?: RuntimeV2ShadowIntegrationService,
   ) {}
 
   private scheduleRuntimeV2Shadow(input: RuntimeV2ShadowSnapshot): void {
-    if (!this.runtimeV2ShadowOrchestrator) return;
-    void this.runtimeV2ShadowOrchestrator.process(input).catch(() => {
-      this.logger.warn("Runtime V2 shadow failed safely; V1 execution continues");
+    if (!this.runtimeV2ShadowIntegration) return;
+    void this.runtimeV2ShadowIntegration.schedule(input);
+  }
+
+  private async findExistingExternalMessage(input: {
+    companyId: string;
+    assistantId: string;
+    conversationId: string;
+    source: string;
+    externalMessageId?: string | null;
+  }): Promise<AssistantConversationMessageSafeRecord | null> {
+    const externalMessageId = input.externalMessageId?.trim();
+    if (!externalMessageId) return null;
+
+    if (typeof this.prisma.assistantConversationMessage.findFirst !== "function") {
+      return null;
+    }
+
+    return this.prisma.assistantConversationMessage.findFirst({
+      where: {
+        companyId: input.companyId,
+        assistantId: input.assistantId,
+        conversationId: input.conversationId,
+        source: input.source,
+        externalMessageId,
+      },
+      select: assistantConversationMessageSafeSelect,
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
+  }
+
+  private async buildIdempotentMessageResponse(input: {
+    assistant: AssistantConversationRuntimeAssistantRecord;
+    companyId: string;
+    conversationId: string;
+    existingMessage: AssistantConversationMessageSafeRecord;
+  }): Promise<SendAssistantConversationMessageResponse> {
+    const runtimeLog = await this.prisma.assistantRuntimeLog.findFirst({
+      where: {
+        companyId: input.companyId,
+        assistantId: input.assistant.id,
+        conversationId: input.conversationId,
+        userMessageId: input.existingMessage.id,
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: {
+        assistantMessageId: true,
+        mode: true,
+        provider: true,
+        model: true,
+        configurationSource: true,
+        fallback: true,
+        outcome: true,
+        durationMs: true,
+      },
+    });
+
+    const assistantMessage = runtimeLog?.assistantMessageId
+      ? await this.prisma.assistantConversationMessage.findUnique({
+          where: { id: runtimeLog.assistantMessageId },
+          select: assistantConversationMessageSafeSelect,
+        })
+      : await this.prisma.assistantConversationMessage.findFirst({
+          where: {
+            companyId: input.companyId,
+            assistantId: input.assistant.id,
+            conversationId: input.conversationId,
+            role: "assistant",
+            createdAt: { gte: input.existingMessage.createdAt },
+          },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          select: assistantConversationMessageSafeSelect,
+        });
+
+    return {
+      conversationId: input.conversationId,
+      userMessage: toConversationMessageItem(input.existingMessage),
+      assistantMessage: assistantMessage ? toConversationMessageItem(assistantMessage) : null,
+      runtime: {
+        mode: "deterministic-runtime",
+        assistant: {
+          id: input.assistant.id,
+          name: input.assistant.name,
+        },
+        ...(runtimeLog?.provider ? { provider: runtimeLog.provider } : {}),
+        ...(runtimeLog?.model ? { model: runtimeLog.model } : {}),
+        temperature: input.assistant.temperature ?? 0.7,
+        temperatureSource: "assistant",
+        configurationSource: "tenant-settings",
+        fallback: runtimeLog?.fallback ?? false,
+        outcome:
+          runtimeLog?.outcome === "fallback"
+            ? "fallback"
+            : runtimeLog?.outcome === "needs_human"
+              ? "needs_human"
+              : "success",
+        reason: "duplicate-external-message-id",
+        summary: "Message already processed; existing result returned",
+        context: {
+          historyMessagesUsed: 0,
+          historyLimit: MAX_RUNTIME_HISTORY_MESSAGES,
+          initialMessageIncluded: false,
+          instructionsIncluded: false,
+        },
+      },
+    };
+  }
+
+  private isResetCommand(input: {
+    assistant: AssistantConversationRuntimeAssistantRecord;
+    dto: SendAssistantConversationMessageDto;
+  }): boolean {
+    if (!input.assistant.conversationResetEnabled || typeof input.dto.message !== "string") {
+      return false;
+    }
+    if ((input.dto.attachments?.length ?? 0) > 0) return false;
+    const normalized = input.dto.message.normalize("NFKC").trim().toLowerCase();
+    const keywords = (input.assistant.conversationResetKeywords as string[]) || ["reset"];
+    return keywords.some(
+      (keyword) => keyword.normalize("NFKC").trim().toLowerCase() === normalized,
+    );
   }
 
   private assertTenantContext(input: { user: AuthenticatedUser; tenant: RequestTenant }): void {
@@ -1521,7 +1653,9 @@ export class AssistantConversationsService {
 
     // Check exact keyword match
     const keywords = (input.assistant.conversationResetKeywords as string[]) || ["reset"];
-    const matchedKeyword = keywords.find((kw) => kw.normalize("NFKC").trim().toLowerCase() === normalizedMessage);
+    const matchedKeyword = keywords.find(
+      (kw) => kw.normalize("NFKC").trim().toLowerCase() === normalizedMessage,
+    );
     if (!matchedKeyword) {
       return null;
     }
@@ -1609,10 +1743,7 @@ export class AssistantConversationsService {
     let extractedCount = 0;
     let contactMemoryProfileId: string | null = null;
 
-    if (
-      input.assistant.memoryEnabled &&
-      this.contactMemoriesService
-    ) {
+    if (input.assistant.memoryEnabled && this.contactMemoriesService) {
       try {
         const profile = await this.contactMemoriesService.findOrCreateProfile({
           companyId: input.tenant.companyId,
@@ -1620,7 +1751,8 @@ export class AssistantConversationsService {
           externalAccountId: input.conversation.externalAccountId,
           externalContactId: input.conversation.externalContactId,
           externalInboxId: input.conversation.externalInboxId,
-          chatwootContactId: input.conversation.externalContactId ?? input.conversation.externalAccountId,
+          chatwootContactId:
+            input.conversation.externalContactId ?? input.conversation.externalAccountId,
           phoneNormalized: input.dto.externalSenderPhone,
           displayName: input.dto.externalSenderName,
           assistantId: input.assistant.id,
@@ -1635,7 +1767,9 @@ export class AssistantConversationsService {
           this.contactMemoriesExtractionService &&
           messagesToExtract.length > 0
         ) {
-          const lastUserMsgIndex = [...messagesToExtract].reverse().findIndex((m) => m.role === "user");
+          const lastUserMsgIndex = [...messagesToExtract]
+            .reverse()
+            .findIndex((m) => m.role === "user");
           if (lastUserMsgIndex !== -1) {
             const actualIndex = messagesToExtract.length - 1 - lastUserMsgIndex;
             const currentMsg = messagesToExtract[actualIndex];
@@ -1669,7 +1803,9 @@ export class AssistantConversationsService {
                 allowedCategories: categories,
                 tempDefaultDays: input.assistant.memoryTempDefaultDays,
               }),
-              new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Timeout de extração de memória")), 5000)),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error("Timeout de extração de memória")), 5000),
+              ),
             ]);
 
             extractedCount = extResult.extracted?.length ?? 0;
@@ -1714,10 +1850,7 @@ export class AssistantConversationsService {
           companyId: input.tenant.companyId,
           profileId: contactMemoryProfileId,
           category: "TEMPORARY_CONTEXT",
-          OR: [
-            { sourceConversationId: null },
-            { sourceConversationId: input.conversation.id },
-          ],
+          OR: [{ sourceConversationId: null }, { sourceConversationId: input.conversation.id }],
         },
       });
     }
@@ -1742,7 +1875,10 @@ export class AssistantConversationsService {
 
     // 6. Enviar confirmação e saudação inicial se configurado
     let replyContent = input.assistant.conversationResetConfirmationMessage;
-    if (input.assistant.conversationResetSendInitialMessage && input.assistant.initialMessage?.trim()) {
+    if (
+      input.assistant.conversationResetSendInitialMessage &&
+      input.assistant.initialMessage?.trim()
+    ) {
       replyContent = `${input.assistant.conversationResetConfirmationMessage}\n\n${input.assistant.initialMessage.trim()}`;
     }
 
@@ -1844,6 +1980,25 @@ export class AssistantConversationsService {
       tenant: input.tenant,
     });
 
+    const source = input.dto.source ?? "manual";
+    const existingExternalMessage = this.isResetCommand({ assistant, dto: input.dto })
+      ? null
+      : await this.findExistingExternalMessage({
+          companyId: input.tenant.companyId,
+          assistantId: input.assistantId,
+          conversationId: conversation.id,
+          source,
+          externalMessageId: input.dto.externalMessageId,
+        });
+    if (existingExternalMessage) {
+      return this.buildIdempotentMessageResponse({
+        assistant,
+        companyId: input.tenant.companyId,
+        conversationId: conversation.id,
+        existingMessage: existingExternalMessage,
+      });
+    }
+
     const isReset = await this.checkAndExecuteReset({
       assistant,
       conversation,
@@ -1858,7 +2013,6 @@ export class AssistantConversationsService {
       return isReset;
     }
 
-    const source = input.dto.source ?? "manual";
     const attachmentSource: InboundMessageSource = source === "chatwoot" ? "chatwoot" : "tests";
     const persistedAttachments =
       input.preparedAttachments ??
@@ -1892,69 +2046,102 @@ export class AssistantConversationsService {
           })
         : conversation.channelType;
 
-    const { userMessage } = await this.prisma.$transaction(async (tx) => {
-      const createdUserMessage = await tx.assistantConversationMessage.create({
-        data: {
-          companyId: input.tenant.companyId,
-          assistantId: input.assistantId,
-          conversationId: conversation.id,
-          role: "user",
-          content: initialContent,
-          source,
-          messageType: input.dto.messageType ?? null,
-          externalMessageId: input.dto.externalMessageId ?? null,
-          contextVersion: conversation.currentContextVersion ?? 1,
-          externalPayload: this.toSerializableJsonValue({
+    let userMessage: AssistantConversationMessageSafeRecord;
+    try {
+      ({ userMessage } = await this.prisma.$transaction(async (tx) => {
+        const createdUserMessage = await tx.assistantConversationMessage.create({
+          data: {
+            companyId: input.tenant.companyId,
+            assistantId: input.assistantId,
+            conversationId: conversation.id,
+            role: "user",
+            content: initialContent,
             source,
-            message: input.dto.message ?? null,
             messageType: input.dto.messageType ?? null,
             externalMessageId: input.dto.externalMessageId ?? null,
-            externalAccountId: input.dto.externalAccountId ?? null,
-            externalConversationId: input.dto.externalConversationId ?? null,
-            externalContactId: input.dto.externalContactId ?? null,
-            externalSenderId: input.dto.externalSenderId ?? null,
-            externalSenderIdentifier: input.dto.externalSenderIdentifier ?? null,
-            externalSenderName: input.dto.externalSenderName ?? null,
-            externalSenderPhone: input.dto.externalSenderPhone ?? null,
-            externalChannelId: input.dto.externalChannelId ?? null,
-            externalInboxId: input.dto.externalInboxId ?? null,
-            contact: input.dto.contact ?? null,
-            location: input.dto.location ?? null,
-            attachments: persistedAttachments,
-            interpretedMessage: initialContent,
-          }),
-          attachments: this.toSerializableJsonValue(persistedAttachments),
-          sources: Prisma.JsonNull,
-          mode: null,
+            contextVersion: conversation.currentContextVersion ?? 1,
+            externalPayload: this.toSerializableJsonValue({
+              source,
+              message: input.dto.message ?? null,
+              messageType: input.dto.messageType ?? null,
+              externalMessageId: input.dto.externalMessageId ?? null,
+              externalAccountId: input.dto.externalAccountId ?? null,
+              externalConversationId: input.dto.externalConversationId ?? null,
+              externalContactId: input.dto.externalContactId ?? null,
+              externalSenderId: input.dto.externalSenderId ?? null,
+              externalSenderIdentifier: input.dto.externalSenderIdentifier ?? null,
+              externalSenderName: input.dto.externalSenderName ?? null,
+              externalSenderPhone: input.dto.externalSenderPhone ?? null,
+              externalChannelId: input.dto.externalChannelId ?? null,
+              externalInboxId: input.dto.externalInboxId ?? null,
+              contact: input.dto.contact ?? null,
+              location: input.dto.location ?? null,
+              attachments: persistedAttachments,
+              interpretedMessage: initialContent,
+            }),
+            attachments: this.toSerializableJsonValue(persistedAttachments),
+            sources: Prisma.JsonNull,
+            mode: null,
+          },
+          select: assistantConversationMessageSafeSelect,
+        });
+
+        await tx.assistantConversation.update({
+          where: {
+            id: conversation.id,
+          },
+          data: {
+            source: conversationSourceUpdate,
+            channelType: channelTypeUpdate,
+            sourceProvider: source,
+            externalAccountId:
+              input.dto.externalAccountId ?? conversation.externalAccountId ?? null,
+            externalConversationId:
+              input.dto.externalConversationId ?? conversation.externalConversationId ?? null,
+            externalContactId:
+              input.dto.externalContactId ?? conversation.externalContactId ?? null,
+            externalChannelId:
+              input.dto.externalChannelId ?? conversation.externalChannelId ?? null,
+            externalInboxId: input.dto.externalInboxId ?? conversation.externalInboxId ?? null,
+            lastMessageAt: new Date(),
+          },
+          select: {
+            id: true,
+          },
+        });
+
+        return {
+          userMessage: createdUserMessage,
+        };
+      }));
+    } catch (error) {
+      if (!isExternalMessageIdUniqueConstraintError(error) || !input.dto.externalMessageId) {
+        throw error;
+      }
+
+      const collision = await this.prisma.assistantConversationMessage.findFirst({
+        where: {
+          companyId: input.tenant.companyId,
+          source,
+          externalMessageId: input.dto.externalMessageId,
         },
         select: assistantConversationMessageSafeSelect,
       });
+      if (!collision) throw error;
+      if (
+        collision.assistantId !== input.assistantId ||
+        collision.conversationId !== conversation.id
+      ) {
+        throw new ConflictException("externalMessageId is already used in another conversation.");
+      }
 
-      await tx.assistantConversation.update({
-        where: {
-          id: conversation.id,
-        },
-        data: {
-          source: conversationSourceUpdate,
-          channelType: channelTypeUpdate,
-          sourceProvider: source,
-          externalAccountId: input.dto.externalAccountId ?? conversation.externalAccountId ?? null,
-          externalConversationId:
-            input.dto.externalConversationId ?? conversation.externalConversationId ?? null,
-          externalContactId: input.dto.externalContactId ?? conversation.externalContactId ?? null,
-          externalChannelId: input.dto.externalChannelId ?? conversation.externalChannelId ?? null,
-          externalInboxId: input.dto.externalInboxId ?? conversation.externalInboxId ?? null,
-          lastMessageAt: new Date(),
-        },
-        select: {
-          id: true,
-        },
+      return this.buildIdempotentMessageResponse({
+        assistant,
+        companyId: input.tenant.companyId,
+        conversationId: conversation.id,
+        existingMessage: collision,
       });
-
-      return {
-        userMessage: createdUserMessage,
-      };
-    });
+    }
 
     const processedAttachments = [];
     for (let index = 0; index < persistedAttachments.length; index += 1) {
@@ -1974,7 +2161,10 @@ export class AssistantConversationsService {
               processingError: persistedAttachment.processingError ?? null,
               metadataJson: persistedAttachment.metadataJson ?? null,
             }
-          : await this.attachmentInterpreterService.processAttachment(interpreterInput, input.tenant.companyId)
+          : await this.attachmentInterpreterService.processAttachment(
+              interpreterInput,
+              input.tenant.companyId,
+            )
         : {
             processingStatus: "completed" as const,
             extractedText: persistedAttachment.extractedText ?? null,
@@ -2202,10 +2392,20 @@ export class AssistantConversationsService {
     let triageContinuation = false;
 
     if (loadedTriageState && loadedTriageState.active && loadedTriageState.expiresAt > Date.now()) {
-      const isPriceQuery = /(quanto\s+fica|quanto\s+custa|valores?|preços?|custos?|precos?|tabela)/i.test(interpretedMessage);
-      const isScheduleQuery = /(agendar|agendamento|marcar|horário|horario|reserva|agenda)/i.test(interpretedMessage);
-      const isListQuery = /\b(me\s+)?(envie|mande|passa|quero|lista|quais|tabela)\b.*\b(lista|serviços|opções|opcoes|catalogo|catálogo)\b/i.test(interpretedMessage);
-      const isHandoffQuery = /(humano|atendente|atendimento\s+humano|falar\s+com\s+alguém)/i.test(interpretedMessage);
+      const isPriceQuery =
+        /(quanto\s+fica|quanto\s+custa|valores?|preços?|custos?|precos?|tabela)/i.test(
+          interpretedMessage,
+        );
+      const isScheduleQuery = /(agendar|agendamento|marcar|horário|horario|reserva|agenda)/i.test(
+        interpretedMessage,
+      );
+      const isListQuery =
+        /\b(me\s+)?(envie|mande|passa|quero|lista|quais|tabela)\b.*\b(lista|serviços|opções|opcoes|catalogo|catálogo)\b/i.test(
+          interpretedMessage,
+        );
+      const isHandoffQuery = /(humano|atendente|atendimento\s+humano|falar\s+com\s+alguém)/i.test(
+        interpretedMessage,
+      );
 
       if (isPriceQuery || isScheduleQuery || isListQuery || isHandoffQuery) {
         shouldClearTriage = true;
@@ -2366,8 +2566,7 @@ export class AssistantConversationsService {
         message.externalPayload && typeof message.externalPayload === "object"
           ? (message.externalPayload as any)
           : {};
-      const isImportedHuman =
-        message.messageType === "resume-human" || payload.speaker === "human";
+      const isImportedHuman = message.messageType === "resume-human" || payload.speaker === "human";
       return {
         id: message.id,
         role: isImportedHuman ? "assistant" : (message.role as "user" | "assistant" | "tool"),
@@ -2681,11 +2880,11 @@ export class AssistantConversationsService {
       contextMetadata.contextManifest = {
         ...contextMetadata.contextManifest,
         mode: "outside-business-hours",
-          fallback: {
-            used: true,
-            category: "outside_business_hours",
-            includedInPrompt: false,
-            messageUsed: outsideHoursFallback.configuredMessageUsed,
+        fallback: {
+          used: true,
+          category: "outside_business_hours",
+          includedInPrompt: false,
+          messageUsed: outsideHoursFallback.configuredMessageUsed,
         },
       };
       runtime = {
@@ -2946,9 +3145,7 @@ export class AssistantConversationsService {
                 method: contextMetadata.intentSelectionMethod,
                 confidence: routeResult.confidence ?? null,
               },
-              flow: selectedFlow
-                ? { id: selectedFlow.id, name: selectedFlow.name }
-                : null,
+              flow: selectedFlow ? { id: selectedFlow.id, name: selectedFlow.name } : null,
               toolsExposed: contextMetadata.toolsExposed,
               mode: "ai-runtime",
             };
@@ -3074,7 +3271,9 @@ export class AssistantConversationsService {
               });
 
               if (completion && completion.answer && isTriageResponseValid(completion.answer)) {
-                const parsed = JSON.parse(completion.answer.replace(/^```json\s*/i, "").replace(/\s*```$/, ""));
+                const parsed = JSON.parse(
+                  completion.answer.replace(/^```json\s*/i, "").replace(/\s*```$/, ""),
+                );
                 if (parsed.triageResolved) {
                   triageResolved = true;
                   triageValidationPassed = true;
@@ -3092,7 +3291,7 @@ export class AssistantConversationsService {
                       lastQuestion: parsed.message ?? "",
                       attemptCount: triageAttemptCount,
                       resolved: false,
-                      expiresAt: loadedTriageState?.expiresAt ?? (Date.now() + 3600000),
+                      expiresAt: loadedTriageState?.expiresAt ?? Date.now() + 3600000,
                     };
                     await this.cacheService.set(triageCacheKey, triageState, 3600);
                   }
@@ -3155,7 +3354,9 @@ export class AssistantConversationsService {
                 });
 
                 if (completion && completion.answer && isTriageResponseValid(completion.answer)) {
-                  const parsed = JSON.parse(completion.answer.replace(/^```json\s*/i, "").replace(/\s*```$/, ""));
+                  const parsed = JSON.parse(
+                    completion.answer.replace(/^```json\s*/i, "").replace(/\s*```$/, ""),
+                  );
                   if (parsed.triageResolved) {
                     triageResolved = true;
                     triageValidationPassed = true;
@@ -3173,7 +3374,7 @@ export class AssistantConversationsService {
                         lastQuestion: parsed.message ?? "",
                         attemptCount: triageAttemptCount,
                         resolved: false,
-                        expiresAt: loadedTriageState?.expiresAt ?? (Date.now() + 3600000),
+                        expiresAt: loadedTriageState?.expiresAt ?? Date.now() + 3600000,
                       };
                       await this.cacheService.set(triageCacheKey, triageState, 3600);
                     }
@@ -3186,7 +3387,8 @@ export class AssistantConversationsService {
 
             // Fallback genérico se falhar
             if (!triageValidationPassed) {
-              answer = "Consigo te ajudar com isso! Qual é o principal detalhe ou informação que você já consegue me passar?";
+              answer =
+                "Consigo te ajudar com isso! Qual é o principal detalhe ou informação que você já consegue me passar?";
               if (this.cacheService) {
                 const triageState: TriageState = {
                   active: true,
@@ -3196,7 +3398,7 @@ export class AssistantConversationsService {
                   lastQuestion: answer,
                   attemptCount: triageAttemptCount,
                   resolved: false,
-                  expiresAt: loadedTriageState?.expiresAt ?? (Date.now() + 3600000),
+                  expiresAt: loadedTriageState?.expiresAt ?? Date.now() + 3600000,
                 };
                 await this.cacheService.set(triageCacheKey, triageState, 3600);
               }
@@ -3794,9 +3996,12 @@ export class AssistantConversationsService {
           typeof this.prisma.assistantRuntimeLog.findUnique === "function" &&
           typeof this.prisma.assistantRuntimeLog.update === "function"
         ) {
-          const log = await this.prisma.assistantRuntimeLog.findUnique({ where: { id: runtimeLogId } });
+          const log = await this.prisma.assistantRuntimeLog.findUnique({
+            where: { id: runtimeLogId },
+          });
           if (log && log.metadata) {
-            const currentMeta = typeof log.metadata === "string" ? JSON.parse(log.metadata) : log.metadata;
+            const currentMeta =
+              typeof log.metadata === "string" ? JSON.parse(log.metadata) : log.metadata;
             const updatedMeta = {
               ...currentMeta,
               outboundBlockCountSent: blocksSent,
@@ -4424,11 +4629,9 @@ export class AssistantConversationsService {
       }
       if (
         config?.permissionType === "READ" &&
-        [
-          "calendar_createBooking",
-          "calendar_rescheduleBooking",
-          "calendar_cancelBooking",
-        ].includes(toolName)
+        ["calendar_createBooking", "calendar_rescheduleBooking", "calendar_cancelBooking"].includes(
+          toolName,
+        )
       ) {
         throw new Error(
           `Erro de execução: a ferramenta '${toolName}' exige permissão de escrita para este assistente.`,
@@ -4961,8 +5164,7 @@ export class AssistantConversationsService {
         // instruction or a customer message.
         const role = isIncoming ? "user" : "assistant";
         const speaker = isIncoming ? "customer" : isBot ? "assistant" : "human";
-        const externalMessageId =
-          msg.id !== undefined && msg.id !== null ? String(msg.id) : null;
+        const externalMessageId = msg.id !== undefined && msg.id !== null ? String(msg.id) : null;
 
         const existing = externalMessageId
           ? await this.prisma.assistantConversationMessage.findFirst({
@@ -5005,7 +5207,11 @@ export class AssistantConversationsService {
         }
       }
 
-      const resumeLockKey = [conversation.companyId, conversation.id, currentExternalMessageId].join(":");
+      const resumeLockKey = [
+        conversation.companyId,
+        conversation.id,
+        currentExternalMessageId,
+      ].join(":");
       const activeResume = this.resumeMessageLocks.get(resumeLockKey);
       if (activeResume) {
         await activeResume;

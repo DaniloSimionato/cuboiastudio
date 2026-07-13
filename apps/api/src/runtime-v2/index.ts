@@ -12,4 +12,5 @@ export * from "./runtime-v2-prototype";
 export * from "./conversation-state-store";
 export * from "./runtime-v2-shadow-manifest";
 export * from "./runtime-v2-shadow-orchestrator";
+export * from "./runtime-v2-shadow-integration.service";
 export * from "./prisma-conversation-state-store";

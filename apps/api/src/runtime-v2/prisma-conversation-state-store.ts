@@ -1,4 +1,5 @@
 import { Prisma, RuntimeV2StateEventStatus, RuntimeV2StateMode } from "@prisma/client";
+import { Injectable, Optional } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
 import {
   CONVERSATION_STATE_VERSION,
@@ -127,11 +128,16 @@ function messageMatchesConversation(
   );
 }
 
+@Injectable()
 export class PrismaConversationStateStore implements ConversationStateStore {
+  private readonly now: () => Date;
+
   constructor(
     private readonly prisma: PrismaService,
-    private readonly now: () => Date = () => new Date(),
-  ) {}
+    @Optional() now?: () => Date,
+  ) {
+    this.now = now ?? (() => new Date());
+  }
 
   async load(scope: ConversationStateStoreScope): Promise<ConversationState | null> {
     const row = await this.prisma.assistantConversationStateV2.findUnique(scopeWhere(scope));
