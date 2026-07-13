@@ -10,6 +10,8 @@ import { AssistantSecurityRulesModule } from "../assistant-security-rules/assist
 import { ContactMemoriesModule } from "../contact-memories/contact-memories.module";
 import { AssistantConversationsController } from "./assistant-conversations.controller";
 import { AssistantConversationsService } from "./assistant-conversations.service";
+import { InMemoryConversationStateStore } from "../runtime-v2/conversation-state-store";
+import { RuntimeV2ShadowOrchestrator } from "../runtime-v2/runtime-v2-shadow-orchestrator";
 
 @Module({
   imports: [
@@ -24,7 +26,16 @@ import { AssistantConversationsService } from "./assistant-conversations.service
     ContactMemoriesModule,
   ],
   controllers: [AssistantConversationsController],
-  providers: [AssistantConversationsService],
+  providers: [
+    InMemoryConversationStateStore,
+    {
+      provide: RuntimeV2ShadowOrchestrator,
+      useFactory: (stateStore: InMemoryConversationStateStore) =>
+        new RuntimeV2ShadowOrchestrator(stateStore),
+      inject: [InMemoryConversationStateStore],
+    },
+    AssistantConversationsService,
+  ],
   exports: [AssistantConversationsService],
 })
 export class AssistantConversationsModule {}

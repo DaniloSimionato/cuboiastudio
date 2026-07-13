@@ -40,12 +40,26 @@ function deviceObjective(message: string, messageId: string): ConversationObject
   );
   if (!match) return null;
   return {
-    key: "device_service",
+    key:
+      /formatar|formatação|formatacao/i.test(message) && /mac\s+m1/i.test(message)
+        ? "format_mac"
+        : "device_service",
     label: "atendimento do equipamento",
     subject: match[1].trim(),
     sourceMessageId: messageId,
     confidence: 0.9,
   };
+}
+
+function factConfirmedByQuestion(
+  question: RelevantQuestion,
+  messageId: string,
+): ConfirmedFactInput[] {
+  if (question.fieldKey !== "device_model") return [];
+  const match = question.prompt.match(
+    /\b(acer(?:\s+nitro\s+5)?|mac\s+m1|macbook(?:\s+pro)?|dell(?:\s+[a-z0-9 -]+)?)\b/i,
+  );
+  return match ? [fact("device_model", match[1].trim(), messageId)] : [];
 }
 
 function questionFor(message: string, messageId: string): RelevantQuestion | null {
@@ -96,7 +110,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
       confidence: 0.97,
       objectiveAction: "KEEP",
       objective: input.existingObjective ?? null,
-      factsExtracted: [],
+      factsExtracted: factConfirmedByQuestion(input.lastRelevantQuestion, input.messageId),
       correctedFactKeys: [],
       answeredQuestionKey: input.lastRelevantQuestion.key,
       isShortConfirmation: true,
@@ -144,7 +158,18 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
     factsExtracted.push(fact("requested_service_ssd", true, input.messageId));
   }
   if (includesAny(lower, ["salvar imagens", "pasta de projeto", "salvar arquivos"])) {
-    factsExtracted.push(fact("storage_requirements", normalized, input.messageId));
+    factsExtracted.push(
+      fact(
+        "storage_requirements",
+        {
+          categories: [
+            ...(lower.includes("imagem") ? ["images"] : []),
+            ...(lower.includes("pasta") || lower.includes("arquivo") ? ["project_files"] : []),
+          ],
+        },
+        input.messageId,
+      ),
+    );
   }
 
   const explicitNewObjective = Boolean(

@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { ConversationChannelType, ConversationSource, Prisma, Status } from "@prisma/client";
@@ -74,6 +75,10 @@ import {
   selectRuntimeKnowledgeItems,
 } from "./runtime-context-manifest";
 import { formatImportedHumanHistoryMessage } from "./conversation-history-format";
+import {
+  RuntimeV2ShadowOrchestrator,
+  type RuntimeV2ShadowSnapshot,
+} from "../runtime-v2/runtime-v2-shadow-orchestrator";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -550,7 +555,15 @@ export class AssistantConversationsService {
     private readonly contactMemoriesService?: ContactMemoriesService,
     private readonly contactMemoriesExtractionService?: ContactMemoriesExtractionService,
     private readonly cacheService?: CacheService,
+    @Optional() private readonly runtimeV2ShadowOrchestrator?: RuntimeV2ShadowOrchestrator,
   ) {}
+
+  private scheduleRuntimeV2Shadow(input: RuntimeV2ShadowSnapshot): void {
+    if (!this.runtimeV2ShadowOrchestrator) return;
+    void this.runtimeV2ShadowOrchestrator.process(input).catch(() => {
+      this.logger.warn("Runtime V2 shadow failed safely; V1 execution continues");
+    });
+  }
 
   private assertTenantContext(input: { user: AuthenticatedUser; tenant: RequestTenant }): void {
     if (input.user.companyId !== input.tenant.companyId) {
@@ -2458,6 +2471,54 @@ export class AssistantConversationsService {
       officialOnBreak: officialBusinessContext.businessStatus.isOnBreak,
       officialDataSource: "structured-assistant-company",
     };
+
+    const lastRelevantQuestionMessage = [...priorHistory]
+      .reverse()
+      .find(
+        (message) =>
+          message.role === "assistant" &&
+          !message.content.startsWith("MENSAGEM HISTÓRICA DE ATENDENTE HUMANO ANTERIOR.") &&
+          message.content.includes("?"),
+      );
+    this.scheduleRuntimeV2Shadow({
+      scope: {
+        companyId: input.tenant.companyId,
+        assistantId: input.assistantId,
+        conversationId: conversation.id,
+        contextVersion: conversation.currentContextVersion ?? 1,
+      },
+      correlationId:
+        input.correlationId ?? input.requestId ?? input.dto.externalMessageId ?? userMessage.id,
+      internalMessageId: userMessage.id,
+      externalMessageId: input.dto.externalMessageId ?? null,
+      source: "CUSTOMER",
+      messageType:
+        audioMessage || messageType === "audio"
+          ? "AUDIO"
+          : processedAttachments.length > 0
+            ? "ATTACHMENT"
+            : "TEXT",
+      currentMessage: interpretedMessage,
+      lastRelevantQuestion: lastRelevantQuestionMessage
+        ? {
+            key: `question:${lastRelevantQuestionMessage.id}`,
+            prompt: lastRelevantQuestionMessage.content,
+            sourceMessageId: lastRelevantQuestionMessage.id,
+          }
+        : null,
+      usefulHistory: priorHistory.slice(-6).map((message) => ({
+        id: message.id,
+        role: message.role as "user" | "assistant" | "tool",
+        content: message.content,
+        relevance:
+          message.role === "assistant" && message.content.includes("?")
+            ? "question-reference"
+            : "objective",
+      })),
+      audioMessage,
+      transcriptionAvailable,
+      transcriptionPersisted: transcriptionAvailable,
+    });
 
     contextMetadata.contextManifest = {
       version: RUNTIME_CONTEXT_MANIFEST_VERSION,
