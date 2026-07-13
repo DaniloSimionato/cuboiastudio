@@ -9,6 +9,7 @@ import { normalizeChatwootMessageCreatedPayload } from "../dist/webhooks/chatwoo
 import { ChatwootInboxConfigService } from "../dist/chatwoot/chatwoot-inbox-config.service.js";
 import { ChatwootWebhookService } from "../dist/chatwoot/chatwoot-webhook.service.js";
 import { AssistantConversationsService } from "../dist/assistant-conversations/assistant-conversations.service.js";
+import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
 
 function createMessageCreatedPayload(overrides = {}) {
   return {
@@ -522,11 +523,14 @@ function createAssistantServiceDeps(overrides = {}) {
   const calls = {
     runtimeResolved: [],
     providerConfigured: [],
+    providerPayloads: [],
     chatwootFetches: [],
     conversationCreates: [],
     conversationUpdates: [],
     messageCreates: [],
     messageUpdates: [],
+    runtimeLogCreates: [],
+    historyQueryTakes: [],
     transactions: 0,
   };
 
@@ -597,7 +601,10 @@ function createAssistantServiceDeps(overrides = {}) {
       },
     },
     assistantRuntimeLog: {
-      create: async () => ({ id: "runtime-log-1" }),
+      create: async ({ data }) => {
+        calls.runtimeLogCreates.push(data);
+        return { id: "runtime-log-1" };
+      },
     },
   };
 
@@ -629,7 +636,11 @@ function createAssistantServiceDeps(overrides = {}) {
       },
     },
     assistantConversationMessage: {
-      findMany: async () => [],
+      findMany: async ({ take }) => {
+        calls.historyQueryTakes.push(take);
+        return overrides.recentMessages ?? [];
+      },
+      count: async () => overrides.historyMessageCount ?? (overrides.recentMessages ?? []).length,
       create: async () => ({ id: "user-msg" }),
       update: async ({ data }) => {
         calls.messageUpdates.push(data);
@@ -640,7 +651,10 @@ function createAssistantServiceDeps(overrides = {}) {
       findMany: async () => [],
     },
     assistantRuntimeLog: {
-      create: async () => ({ id: "runtime-log-1" }),
+      create: async ({ data }) => {
+        calls.runtimeLogCreates.push(data);
+        return { id: "runtime-log-1" };
+      },
     },
     $transaction: async (callback) => {
       calls.transactions += 1;
@@ -672,8 +686,9 @@ function createAssistantServiceDeps(overrides = {}) {
       calls.providerConfigured.push({ companyId, model });
       return overrides.providerConfigured ?? true;
     },
-    generateChatCompletion: async () => {
+    generateChatCompletion: async (request) => {
       calls.runtimeResolved.push("generateChatCompletion");
+      calls.providerPayloads.push(request);
       return (
         overrides.completion ?? {
           provider: "openai-compatible",
@@ -731,7 +746,7 @@ function createAssistantServiceDeps(overrides = {}) {
     }),
   };
 
-  const promptCompilerService = {
+  const promptCompilerService = overrides.promptCompilerService ?? {
     compile: ({ assistant, historyMessages, currentMessage }) => [
       {
         role: "system",
@@ -1980,6 +1995,190 @@ test("sendMessage chama outbound somente depois do runtime", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("sendMessage preserva continuidade além de nove mensagens e mantém transcrição no payload", async () => {
+  const priorMessages = [
+    {
+      id: "history-facts",
+      role: "user",
+      content:
+        "O cliente deseja formatação, aumentar a memória RAM e instalar SSD de 2 TB no Acer Nitro 5.",
+      createdAt: new Date("2026-07-13T13:47:11.000Z"),
+    },
+    {
+      id: "history-facts-answer",
+      role: "assistant",
+      content: "Entendido, vou considerar essas necessidades.",
+      createdAt: new Date("2026-07-13T13:47:13.000Z"),
+    },
+    ...Array.from({ length: 9 }, (_, index) => [
+      {
+        id: `history-user-${index}`,
+        role: "user",
+        content:
+          index === 3
+            ? "Áudio anterior: Transcrição: também confirme a busca em domicílio."
+            : `Mensagem anterior do cliente ${index + 1}.`,
+        createdAt: new Date(Date.UTC(2026, 6, 13, 13, 48 + index, 0)),
+      },
+      {
+        id: `history-assistant-${index}`,
+        role: "assistant",
+        content: `Resposta anterior ${index + 1}.`,
+        createdAt: new Date(Date.UTC(2026, 6, 13, 13, 48 + index, 1)),
+      },
+    ]).flat(),
+  ];
+  const recentMessages = [
+    {
+      id: "current-user",
+      role: "user",
+      content: "Quero continuar o atendimento.",
+      createdAt: new Date("2026-07-13T13:59:29.000Z"),
+      externalPayload: null,
+      attachments: [],
+      messageType: "incoming",
+    },
+    ...priorMessages.reverse(),
+  ];
+  const { service, calls } = createAssistantServiceDeps({
+    recentMessages,
+    outboundConfig: { baseUrl: "" },
+  });
+
+  await service.sendMessage({
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    dto: {
+      source: "chatwoot",
+      externalConversationId: "conversation-1",
+      externalAccountId: "account-1",
+      externalContactId: "contact-1",
+      externalInboxId: "inbox-1",
+      message: "Quero continuar o atendimento.",
+    },
+    user: {
+      id: "user-1",
+      companyId: "company-1",
+      email: "user@cubo.local",
+      name: "User",
+      roles: [],
+      permissions: [],
+    },
+    tenant: { companyId: "company-1" },
+    preparedAttachments: [],
+  });
+
+  assert.equal(calls.historyQueryTakes[0], 24);
+  assert.equal(calls.runtimeLogCreates[0].historyLimit, 24);
+  assert.equal(calls.runtimeLogCreates[0].historyMessagesUsed, priorMessages.length);
+  assert.equal(calls.runtimeLogCreates[0].metadata.contextManifest.historyWindowLimit, 24);
+  assert.equal(
+    calls.runtimeLogCreates[0].metadata.contextManifest.historyMessagesSelected,
+    priorMessages.length,
+  );
+  assert.equal(calls.runtimeLogCreates[0].metadata.contextManifest.historyMessagesDropped, 0);
+  assert.equal(calls.runtimeLogCreates[0].metadata.contextManifest.audioMessage, false);
+  assert.equal(calls.runtimeLogCreates[0].metadata.contextManifest.transcriptionAvailable, false);
+  assert.equal(calls.runtimeLogCreates[0].metadata.contextManifest.transcriptionPersisted, false);
+
+  const providerMessages = calls.providerPayloads[0].messages;
+  const providerText = providerMessages.map((message) => String(message.content)).join("\n");
+  assert.match(providerText, /formatação/);
+  assert.match(providerText, /memória RAM/);
+  assert.match(providerText, /SSD de 2 TB/);
+  assert.match(providerText, /Acer Nitro 5/);
+  assert.match(providerText, /Transcrição: também confirme a busca em domicílio/);
+  assert.equal(providerMessages.at(-1).role, "user");
+  assert.equal(providerMessages.at(-1).content, "Quero continuar o atendimento.");
+});
+
+test("triagem recebe fatos anteriores do cliente sem receber respostas antigas, RAG ou ferramentas", async () => {
+  const recentMessages = [
+    {
+      id: "triage-current",
+      role: "user",
+      content: "Quero formatar, aumentar a memória RAM e instalar SSD de 2 TB.",
+      createdAt: new Date("2026-07-13T13:59:29.000Z"),
+      externalPayload: null,
+      attachments: [],
+      messageType: "incoming",
+    },
+    {
+      id: "triage-old-answer",
+      role: "assistant",
+      content: "Resposta antiga que não deve virar contexto instrutivo.",
+      createdAt: new Date("2026-07-13T13:58:00.000Z"),
+      externalPayload: null,
+      attachments: [],
+      messageType: null,
+    },
+    {
+      id: "triage-old-facts",
+      role: "user",
+      content: "Já informei que o equipamento é um Acer Nitro 5 e que não há defeito.",
+      createdAt: new Date("2026-07-13T13:57:00.000Z"),
+      externalPayload: null,
+      attachments: [],
+      messageType: "incoming",
+    },
+  ];
+  const { service, calls } = createAssistantServiceDeps({
+    recentMessages,
+    promptCompilerService: new PromptCompilerService(),
+    outboundConfig: { baseUrl: "" },
+    completion: {
+      provider: "openai-compatible",
+      model: "gpt-4o-mini",
+      answer: JSON.stringify({
+        message: "Consigo te ajudar com isso. Qual é o modelo do equipamento?",
+        action: "ASK_NEXT_DETAIL",
+        requestedDetail: "modelo do equipamento",
+        suggestScheduling: false,
+        triageResolved: false,
+      }),
+      durationMs: 1,
+    },
+  });
+
+  await service.sendMessage({
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    dto: {
+      source: "chatwoot",
+      externalConversationId: "conversation-1",
+      externalAccountId: "account-1",
+      externalContactId: "contact-1",
+      externalInboxId: "inbox-1",
+      message: "Quero formatar, aumentar a memória RAM e instalar SSD de 2 TB.",
+    },
+    user: {
+      id: "user-1",
+      companyId: "company-1",
+      email: "user@cubo.local",
+      name: "User",
+      roles: [],
+      permissions: [],
+    },
+    tenant: { companyId: "company-1" },
+    preparedAttachments: [],
+  });
+
+  const triageRequest = calls.providerPayloads[0];
+  const triageText = triageRequest.messages.map((message) => String(message.content)).join("\n");
+  assert.deepEqual(triageRequest.response_format, { type: "json_object" });
+  assert.deepEqual(triageRequest.tools, []);
+  assert.match(triageText, /CONTEXTO ANTERIOR DA CONVERSA/);
+  assert.match(triageText, /Acer Nitro 5/);
+  assert.doesNotMatch(triageText, /Resposta antiga que não deve virar contexto instrutivo/);
+  assert.doesNotMatch(triageText, /BASE DE CONHECIMENTO RELEVANTE/);
+  assert.equal(calls.runtimeLogCreates[0].metadata.triageMode, true);
+  assert.equal(calls.runtimeLogCreates[0].metadata.contextManifest.triageCustomerMessageCount, 1);
+  assert.equal(
+    calls.runtimeLogCreates[0].metadata.contextManifest.triageAssistantReferenceCount,
+    0,
+  );
 });
 
 test("ensureConversationFromInboundMessage reutiliza conversa existente", async () => {

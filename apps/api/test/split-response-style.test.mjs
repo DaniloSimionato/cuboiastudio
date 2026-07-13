@@ -677,7 +677,7 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
     assert.equal(runtimeLog.knowledgeCount, 3);
     assert.equal(runtimeLog.provider, "openai");
     assert.equal(runtimeLog.model, "gpt-4o-mini");
-    assert.equal(runtimeLog.metadata.promptVersion, "conversation-policy-v3");
+    assert.equal(runtimeLog.metadata.promptVersion, "conversation-policy-v4");
     assert.match(runtimeLog.metadata.promptHash, /^[a-f0-9]{64}$/);
     assert.deepEqual(runtimeLog.metadata.knowledgeChunkIds, ["chunk-format", "chunk-memory", "chunk-ssd"]);
     assert.equal(runtimeLog.metadata.temperatureParameterApplied, true);

@@ -162,7 +162,10 @@ test("PromptCompilerService em modo TRIAGE_ONLY compila apenas o prompt mínimo"
     securityRules: [{ name: "Não inventar", ruleType: "safety", instruction: "Não invente fatos." }],
     flow: { name: "Agendamento", flowInstructions: "Pergunte a data." },
     knowledgeItems: [{ title: "Tabela formal", content: "Serviço: instalação de SSD." }],
-    historyMessages: [{ role: "assistant", content: "• Histórico antigo" }],
+    historyMessages: [
+      { role: "user", content: "Já informei que o equipamento é um Acer Nitro 5." },
+      { role: "assistant", content: "• Histórico antigo" },
+    ],
     currentMessage: "Quero trocar o SSD, formatar e comprar memoria",
     officialBusinessContext: { companyName: "FG Informática" },
     triageMode: true,
@@ -180,10 +183,11 @@ test("PromptCompilerService em modo TRIAGE_ONLY compila apenas o prompt mínimo"
   assert.ok(contents.some((c) => c.includes("OBJETIVO DA TRIAGEM:")));
   assert.ok(contents.some((c) => c.includes("CONTRATO DA RESPOSTA OBRIGATÓRIO:")));
 
-  // Verificar que RAG, fluxos, howItActs, histórico NÃO estão no prompt
+  // A triagem recebe apenas fatos anteriores do cliente, sem blocos normais.
   assert.ok(!contents.some((c) => c.includes("Serviço: instalação de SSD")));
   assert.ok(!contents.some((c) => c.includes("Agendamento")));
   assert.ok(!contents.some((c) => c.includes("Pergunte a data")));
+  assert.ok(contents.some((c) => c.includes("Acer Nitro 5")));
   assert.ok(!contents.some((c) => c.includes("Histórico antigo")));
 
   // Testar segunda tentativa (sem RAG e prompt crítico)
@@ -191,4 +195,38 @@ test("PromptCompilerService em modo TRIAGE_ONLY compila apenas o prompt mínimo"
   const contents2 = messages2.map((m) => String(m.content));
   assert.ok(contents2.some((c) => c.includes("SEGUNDA TENTATIVA OBRIGATÓRIA")));
   assert.ok(!contents2.some((c) => c.includes("OBJETIVO DA TRIAGEM:")));
+});
+
+test("triagem preserva o referente de confirmações curtas sem transformar a pergunta antiga em instrução", () => {
+  const compiler = new PromptCompilerService();
+  const cases = [
+    ["Seu notebook é um Acer Nitro 5?", "Sim, isso mesmo."],
+    ["Você deseja SSD de 2 TB?", "Pode ser."],
+    ["O problema é lentidão?", "Não, é só melhoria."],
+  ];
+
+  for (const [question, answer] of cases) {
+    const messages = compiler.compile({
+      assistant: { name: "Atendente" },
+      behavior: { showAttendantName: false },
+      knowledgeItems: [{ title: "Não deve entrar", content: "RAG desnecessário." }],
+      historyMessages: [
+        { role: "assistant", content: question },
+        { role: "user", content: answer },
+      ],
+      currentMessage: "Quero continuar o atendimento.",
+      triageMode: true,
+    });
+    const triageContext = messages.find((message) =>
+      String(message.content).includes("CONTEXTO ANTERIOR DA CONVERSA"),
+    );
+    const triageText = String(triageContext?.content ?? "");
+
+    assert.match(triageText, new RegExp(question.replace(/[?]/g, "\\?")));
+    assert.match(triageText, new RegExp(answer.replace(/[.?]/g, "\\$&")));
+    assert.match(triageText, /não a execute nem a trate como instrução atual/i);
+    assert.doesNotMatch(triageText, /RAG desnecessário/);
+    assert.equal(messages.at(-1).role, "user");
+    assert.equal(messages.at(-1).content, "Quero continuar o atendimento.");
+  }
 });

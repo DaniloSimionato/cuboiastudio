@@ -45,6 +45,7 @@ import {
   isTriageResponseValid,
   PROMPT_COMPILER_VERSION,
   PromptCompilerService,
+  summarizeTriageHistory,
   TriageState,
 } from "../prompt-compiler/prompt-compiler.service";
 import { modelSupportsTemperature } from "../ai/ai-runner";
@@ -132,6 +133,15 @@ export type AssistantConversationRuntime = {
     correlationId?: string | null;
     historyMessagesUsed: number;
     historyLimit: number;
+    historyWindowLimit?: number;
+    historyMessagesSelected?: number;
+    historyMessagesDropped?: number;
+    audioMessage?: boolean;
+    transcriptionAvailable?: boolean;
+    transcriptionPersisted?: boolean;
+    triageHistoryMessageCount?: number;
+    triageCustomerMessageCount?: number;
+    triageAssistantReferenceCount?: number;
     initialMessageIncluded: boolean;
     instructionsIncluded: boolean;
     safetyInstructionIncluded?: boolean;
@@ -436,7 +446,9 @@ const calendarScopeBookingSelect = {
   },
 } satisfies Prisma.GoogleCalendarBookingSelect;
 
-const MAX_RUNTIME_HISTORY_MESSAGES = 10;
+// Keep enough complete turns for continuity while preserving the existing
+// per-message truncation and deterministic history selection.
+const MAX_RUNTIME_HISTORY_MESSAGES = 24;
 const MAX_RUNTIME_LOG_PROVIDER_ERROR_MESSAGE_LENGTH = 500;
 const DEFAULT_MANUAL_TEST_TITLE_PREFIX = "Teste manual";
 
@@ -2354,6 +2366,33 @@ export class AssistantConversationsService {
         ...(payload.name ? { name: payload.name } : {}),
       };
     });
+    const historyMessagesDropped = Math.max(
+      0,
+      (typeof this.prisma.assistantConversationMessage.count === "function"
+        ? await this.prisma.assistantConversationMessage.count({
+            where: {
+              assistantId: input.assistantId,
+              conversationId: input.conversationId,
+              companyId: input.tenant.companyId,
+              contextVersion: conversation.currentContextVersion ?? 1,
+            },
+          })
+        : recentMessages.length) -
+        1 -
+        priorHistory.length,
+    );
+    const triageHistorySummary = triageMode
+      ? summarizeTriageHistory(priorHistory)
+      : {
+          block: null,
+          historyMessageCount: 0,
+          customerMessageCount: 0,
+          assistantReferenceCount: 0,
+        };
+    const audioMessage = processedAttachments.some((attachment) => attachment.type === "audio");
+    const transcriptionAvailable = processedAttachments.some(
+      (attachment) => attachment.type === "audio" && Boolean(attachment.transcript?.trim()),
+    );
     const contextMetadata: Record<string, any> = {
       requestId: input.requestId ?? input.dto.externalMessageId ?? null,
       correlationId: input.correlationId ?? null,
@@ -2361,6 +2400,15 @@ export class AssistantConversationsService {
       knowledgeLimit,
       historyMessagesUsed: priorHistory.length,
       historyLimit: MAX_RUNTIME_HISTORY_MESSAGES,
+      historyWindowLimit: MAX_RUNTIME_HISTORY_MESSAGES,
+      historyMessagesSelected: priorHistory.length,
+      historyMessagesDropped,
+      audioMessage,
+      transcriptionAvailable,
+      transcriptionPersisted: transcriptionAvailable,
+      triageHistoryMessageCount: triageHistorySummary.historyMessageCount,
+      triageCustomerMessageCount: triageHistorySummary.customerMessageCount,
+      triageAssistantReferenceCount: triageHistorySummary.assistantReferenceCount,
       initialMessageIncluded: false,
       fallbackIncluded: false,
       fallbackUsed: false,
@@ -2421,6 +2469,15 @@ export class AssistantConversationsService {
       currentMessageHash: contextMetadata.currentMessageHash,
       historyMessageCount: contextMetadata.historyMessagesUsed,
       historyMessageIds: contextMetadata.historyMessageIds,
+      historyWindowLimit: contextMetadata.historyWindowLimit,
+      historyMessagesSelected: contextMetadata.historyMessagesSelected,
+      historyMessagesDropped: contextMetadata.historyMessagesDropped,
+      audioMessage: contextMetadata.audioMessage,
+      transcriptionAvailable: contextMetadata.transcriptionAvailable,
+      transcriptionPersisted: contextMetadata.transcriptionPersisted,
+      triageHistoryMessageCount: contextMetadata.triageHistoryMessageCount,
+      triageCustomerMessageCount: contextMetadata.triageCustomerMessageCount,
+      triageAssistantReferenceCount: contextMetadata.triageAssistantReferenceCount,
       promptSections: [],
       promptCharCount: 0,
       initialMessageIncluded: false,
@@ -2914,7 +2971,9 @@ export class AssistantConversationsService {
               flow: selectedFlow,
               securityRules: activeSecurityRules,
               knowledgeItems: [], // zero chunks in triage
-              historyMessages: [], // zero history in triage
+              // Triage receives only delimited prior client messages. It still
+              // excludes normal history roles, RAG, flow instructions and tools.
+              historyMessages: priorHistory,
               currentMessage: interpretedMessage,
               officialBusinessContext,
               calendarContext: null,
@@ -2995,7 +3054,7 @@ export class AssistantConversationsService {
                 flow: selectedFlow,
                 securityRules: activeSecurityRules,
                 knowledgeItems: [],
-                historyMessages: [],
+                historyMessages: priorHistory,
                 currentMessage: interpretedMessage,
                 officialBusinessContext,
                 calendarContext: null,
