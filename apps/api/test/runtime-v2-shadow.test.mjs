@@ -260,7 +260,9 @@ test("store possui limpeza lazy, TTL, limite de IDs e isolamento por tenant/cont
   expired.expiresAt = new Date("2026-07-13T11:59:00.000Z");
   await store.create(expired);
   assert.equal(await store.load({ ...expiringScope, runtimeVersion: "V2", mode: "SHADOW" }), null);
-  assert.equal(store.getDebugStats().stateCount, 0);
+  assert.equal(store.getDebugStats().stateCount, 1);
+  assert.equal(await store.deleteExpired(new Date("2026-07-20T12:00:00.000Z")), 0);
+  assert.equal(await store.deleteExpired(new Date("2026-08-20T12:00:00.000Z")), 1);
 
   const activeScope = { ...scope, conversationId: "conversation-bounded" };
   let state = createEmptyConversationState(activeScope);

@@ -11,6 +11,11 @@ import { ContactMemoriesModule } from "../contact-memories/contact-memories.modu
 import { AssistantConversationsController } from "./assistant-conversations.controller";
 import { AssistantConversationsService } from "./assistant-conversations.service";
 import { InMemoryConversationStateStore } from "../runtime-v2/conversation-state-store";
+import { resolveRuntimeV2StateStoreMode } from "../runtime-v2/runtime-v2-feature-flag";
+import {
+  PrismaConversationStateStore,
+  RUNTIME_V2_STATE_STORE,
+} from "../runtime-v2/prisma-conversation-state-store";
 import { RuntimeV2ShadowOrchestrator } from "../runtime-v2/runtime-v2-shadow-orchestrator";
 
 @Module({
@@ -28,11 +33,20 @@ import { RuntimeV2ShadowOrchestrator } from "../runtime-v2/runtime-v2-shadow-orc
   controllers: [AssistantConversationsController],
   providers: [
     InMemoryConversationStateStore,
+    PrismaConversationStateStore,
+    {
+      provide: RUNTIME_V2_STATE_STORE,
+      useFactory: (
+        inMemoryStore: InMemoryConversationStateStore,
+        postgresStore: PrismaConversationStateStore,
+      ) => (resolveRuntimeV2StateStoreMode() === "POSTGRES" ? postgresStore : inMemoryStore),
+      inject: [InMemoryConversationStateStore, PrismaConversationStateStore],
+    },
     {
       provide: RuntimeV2ShadowOrchestrator,
-      useFactory: (stateStore: InMemoryConversationStateStore) =>
+      useFactory: (stateStore: InMemoryConversationStateStore | PrismaConversationStateStore) =>
         new RuntimeV2ShadowOrchestrator(stateStore),
-      inject: [InMemoryConversationStateStore],
+      inject: [RUNTIME_V2_STATE_STORE],
     },
     AssistantConversationsService,
   ],

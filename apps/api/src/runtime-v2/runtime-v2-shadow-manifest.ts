@@ -43,7 +43,15 @@ export type RuntimeV2ShadowManifest = {
   responsePlanAction: ResponsePlanAction;
   repeatedQuestionDetected: boolean;
   validationResult: ResponseValidationResult["result"] | "ERROR";
-  persistenceResult: "CREATED" | "UPDATED" | "DUPLICATE" | "CONFLICT" | "DISABLED" | "ERROR";
+  persistenceResult:
+    | "CREATED"
+    | "UPDATED"
+    | "DUPLICATE"
+    | "STALE_CONTEXT"
+    | "STALE_EVENT"
+    | "CONFLICT"
+    | "DISABLED"
+    | "ERROR";
   processingDurationMs: number;
   shadowErrorCode: string | null;
   providerCalled: false;

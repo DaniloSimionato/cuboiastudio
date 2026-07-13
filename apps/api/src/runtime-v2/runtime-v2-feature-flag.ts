@@ -1,6 +1,7 @@
 import { type RuntimeV2FeatureConfig, type RuntimeVersion } from "./runtime-v2.types";
 
 export type RuntimeV2Mode = "OFF" | "SHADOW";
+export type RuntimeV2StateStoreMode = "MEMORY" | "POSTGRES";
 
 export type RuntimeV2ShadowConfig = RuntimeV2FeatureConfig & {
   assistantId?: string | null;
@@ -46,6 +47,12 @@ export function isRuntimeV2ShadowEnabled(
   const allowlist =
     input.shadowAssistantIds ?? parseAllowlist(environment.RUNTIME_V2_SHADOW_ASSISTANT_IDS);
   return Boolean(input.assistantId && allowlist.includes(input.assistantId));
+}
+
+export function resolveRuntimeV2StateStoreMode(
+  environment: NodeJS.ProcessEnv = process.env,
+): RuntimeV2StateStoreMode {
+  return environment.RUNTIME_V2_STATE_STORE === "POSTGRES" ? "POSTGRES" : "MEMORY";
 }
 
 export function assertNoDualOutbound(input: {

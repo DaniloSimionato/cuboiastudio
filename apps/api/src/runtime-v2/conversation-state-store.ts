@@ -11,12 +11,29 @@ export type ProcessedMessageLookup = {
   externalMessageId?: string | null;
 };
 
+export type ConversationStateTurn = ProcessedMessageLookup & {
+  sourceOccurredAt?: Date | null;
+  receivedAt?: Date;
+  messageHash?: string | null;
+};
+
+export type ConversationStateSaveTurnResult = {
+  state: ConversationState;
+  messageAlreadyProcessed: boolean;
+  persistenceResult: "CREATED" | "UPDATED" | "DUPLICATE" | "STALE_CONTEXT" | "STALE_EVENT";
+};
+
 export const MAX_IN_MEMORY_PROCESSED_MESSAGE_IDS = 512;
 
 export interface ConversationStateStore {
   load(scope: ConversationStateStoreScope): Promise<ConversationState | null>;
   create(initialState: ConversationState): Promise<ConversationState>;
   save(state: ConversationState, expectedRevision: number): Promise<ConversationState>;
+  saveTurn(
+    state: ConversationState,
+    expectedRevision: number,
+    message: ConversationStateTurn,
+  ): Promise<ConversationStateSaveTurnResult>;
   reset(scope: ConversationStateStoreScope): Promise<ConversationState | null>;
   deleteExpired(now?: Date): Promise<number>;
   findByLastProcessedMessage(
@@ -42,6 +59,34 @@ export class StateAlreadyExistsError extends Error {
     this.name = "StateAlreadyExistsError";
   }
 }
+
+export class MissingInternalMessageIdError extends Error {
+  constructor() {
+    super("MISSING_INTERNAL_MESSAGE_ID");
+    this.name = "MissingInternalMessageIdError";
+  }
+}
+
+export class StatePayloadTooLargeError extends Error {
+  readonly sizeBytes: number;
+
+  constructor(sizeBytes: number) {
+    super("STATE_PAYLOAD_TOO_LARGE");
+    this.name = "StatePayloadTooLargeError";
+    this.sizeBytes = sizeBytes;
+  }
+}
+
+export class StaleContextError extends Error {
+  constructor() {
+    super("STALE_CONTEXT");
+    this.name = "StaleContextError";
+  }
+}
+
+export const MAX_STATE_JSON_BYTES = 64 * 1024;
+export const STATE_EXPIRY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+export const STATE_PURGE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function scopeKey(scope: ConversationStateStoreScope): string {
   return [
@@ -80,7 +125,8 @@ export class InMemoryConversationStateStore implements ConversationStateStore {
   async load(scope: ConversationStateStoreScope): Promise<ConversationState | null> {
     await this.deleteExpired();
     const state = this.states.get(scopeKey(scope));
-    return state ? cloneState(state) : null;
+    if (!state || (state.expiresAt && state.expiresAt.getTime() <= Date.now())) return null;
+    return cloneState(state);
   }
 
   async create(initialState: ConversationState): Promise<ConversationState> {
@@ -138,18 +184,78 @@ export class InMemoryConversationStateStore implements ConversationStateStore {
     return cloneState(stored);
   }
 
+  async saveTurn(
+    state: ConversationState,
+    expectedRevision: number,
+    message: ConversationStateTurn,
+  ): Promise<ConversationStateSaveTurnResult> {
+    if (!message.internalMessageId?.trim()) throw new MissingInternalMessageIdError();
+    await this.deleteExpired();
+    const key = scopeKey({ ...state, runtimeVersion: "V2", mode: "SHADOW" });
+    const processed = this.processedMessages.get(key);
+    const duplicate = Boolean(
+      processed &&
+      ((message.internalMessageId && processed.internal.has(message.internalMessageId)) ||
+        (message.externalMessageId && processed.external.has(message.externalMessageId))),
+    );
+    const current = this.states.get(key);
+    if (duplicate && current) {
+      return {
+        state: cloneState(current),
+        messageAlreadyProcessed: true,
+        persistenceResult: "DUPLICATE",
+      };
+    }
+
+    const expired = Boolean(current?.expiresAt && current.expiresAt.getTime() <= Date.now());
+    if (!current) {
+      if (expectedRevision !== 0 || state.revision !== 1) throw new StateRevisionConflictError();
+      const stored = cloneState(state);
+      this.states.set(key, stored);
+      this.rememberMessage(key, message);
+      return {
+        state: cloneState(stored),
+        messageAlreadyProcessed: false,
+        persistenceResult: "CREATED",
+      };
+    }
+
+    const expectedCurrentRevision = expired ? current.revision : expectedRevision;
+    const expectedNextRevision = expired ? current.revision + 1 : expectedRevision + 1;
+    if (
+      current.revision !== expectedCurrentRevision ||
+      state.revision !== (expired ? 1 : expectedNextRevision)
+    ) {
+      throw new StateRevisionConflictError();
+    }
+    const stored = cloneState({
+      ...state,
+      revision: expectedNextRevision,
+      createdAt: expired ? state.createdAt : current.createdAt,
+    });
+    this.states.set(key, stored);
+    this.rememberMessage(key, message);
+    return {
+      state: cloneState(stored),
+      messageAlreadyProcessed: false,
+      persistenceResult: "UPDATED",
+    };
+  }
+
   async reset(scope: ConversationStateStoreScope): Promise<ConversationState | null> {
     const key = scopeKey(scope);
     const current = this.states.get(key);
-    this.states.delete(key);
-    this.processedMessages.delete(key);
-    return current ? cloneState(current) : null;
+    if (!current) return null;
+    const expired = cloneState({ ...current, expiresAt: new Date() });
+    this.states.set(key, expired);
+    return expired;
   }
 
   async deleteExpired(now = new Date()): Promise<number> {
     let deleted = 0;
     for (const [key, state] of this.states) {
-      if (state.expiresAt && state.expiresAt.getTime() <= now.getTime()) {
+      const purgeAt = state.updatedAt.getTime() + STATE_PURGE_RETENTION_MS;
+      if (purgeAt <= now.getTime()) {
         this.states.delete(key);
         this.processedMessages.delete(key);
         deleted += 1;
@@ -197,5 +303,15 @@ export class InMemoryConversationStateStore implements ConversationStateStore {
       if (typeof oldest !== "string") break;
       set.delete(oldest);
     }
+  }
+
+  private rememberMessage(key: string, message: ConversationStateTurn): void {
+    const processed = this.processedMessages.get(key) ?? {
+      internal: new Set<string>(),
+      external: new Set<string>(),
+    };
+    this.remember(processed.internal, message.internalMessageId ?? null);
+    this.remember(processed.external, message.externalMessageId ?? null);
+    this.processedMessages.set(key, processed);
   }
 }

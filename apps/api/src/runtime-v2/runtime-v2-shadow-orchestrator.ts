@@ -1,7 +1,6 @@
 import {
   applyTurnToConversationState,
   createEmptyConversationState,
-  isMessageAlreadyProcessed,
   markMessageProcessed,
 } from "./conversation-state";
 import {
@@ -19,6 +18,9 @@ import {
   InMemoryConversationStateStore,
   StateAlreadyExistsError,
   StateRevisionConflictError,
+  MissingInternalMessageIdError,
+  StaleContextError,
+  type ConversationStateSaveTurnResult,
   type ConversationStateStore,
   type ConversationStateStoreScope,
 } from "./conversation-state-store";
@@ -175,7 +177,15 @@ export class RuntimeV2ShadowOrchestrator {
       return result;
     } catch (error) {
       const errorCode =
-        error instanceof ShadowTimeoutError ? "SHADOW_TIMEOUT" : "SHADOW_PROCESSING_ERROR";
+        error instanceof ShadowTimeoutError
+          ? "SHADOW_TIMEOUT"
+          : error instanceof MissingInternalMessageIdError
+            ? "MISSING_INTERNAL_MESSAGE_ID"
+            : error instanceof StaleContextError
+              ? "STALE_CONTEXT"
+              : error instanceof Error && error.message === "STATE_PAYLOAD_TOO_LARGE"
+                ? "STATE_PAYLOAD_TOO_LARGE"
+                : "SHADOW_PROCESSING_ERROR";
       if (error instanceof ShadowTimeoutError) this.metrics.timeout += 1;
       else this.metrics.processingError += 1;
       return this.buildErrorResult(snapshot, errorCode, startedAt);
@@ -201,36 +211,23 @@ export class RuntimeV2ShadowOrchestrator {
       snapshot,
     );
     let persistenceResult: RuntimeV2ShadowManifest["persistenceResult"] = "UPDATED";
-    if (!state) {
-      state = createEmptyConversationState(snapshot.scope, now);
-      state.expiresAt = new Date(
-        now.getTime() +
-          readBoundedEnvironmentInteger(
-            this.environment.RUNTIME_V2_SHADOW_STATE_TTL_MS,
-            DEFAULT_SHADOW_STATE_TTL_MS,
-            MIN_SHADOW_STATE_TTL_MS,
-            MAX_SHADOW_STATE_TTL_MS,
-          ),
-      );
-      try {
-        this.assertBeforeDeadline(deadlineAt);
-        state = await this.stateStore.create(state);
-        persistenceResult = "CREATED";
-      } catch (error) {
-        if (error instanceof StateAlreadyExistsError && attempt < 1) {
-          return this.processWithRetry(snapshot, startedAt, attempt + 1, deadlineAt);
-        }
-        throw error;
-      }
-    }
+    state ??= createEmptyConversationState(snapshot.scope, now);
+    state.expiresAt = new Date(
+      now.getTime() +
+        readBoundedEnvironmentInteger(
+          this.environment.RUNTIME_V2_SHADOW_STATE_TTL_MS,
+          DEFAULT_SHADOW_STATE_TTL_MS,
+          MIN_SHADOW_STATE_TTL_MS,
+          MAX_SHADOW_STATE_TTL_MS,
+        ),
+    );
 
     if (!state.lastRelevantQuestion && snapshot.lastRelevantQuestion) {
       state = { ...state, lastRelevantQuestion: snapshot.lastRelevantQuestion };
     }
 
     const beforeState = state;
-    const messageAlreadyProcessed =
-      messageAlreadyProcessedBeforeLoad || isMessageAlreadyProcessed(state, snapshot);
+    let messageAlreadyProcessed = messageAlreadyProcessedBeforeLoad;
     const understanding = understandTurn({
       message: snapshot.currentMessage,
       messageId: snapshot.internalMessageId,
@@ -254,9 +251,24 @@ export class RuntimeV2ShadowOrchestrator {
       );
       try {
         this.assertBeforeDeadline(deadlineAt);
-        nextState = await this.stateStore.save(nextState, state.revision);
+        const persisted: ConversationStateSaveTurnResult = await this.stateStore.saveTurn(
+          nextState,
+          state.revision,
+          {
+            ...snapshot,
+            receivedAt: now,
+          },
+        );
+        nextState = persisted.state;
+        messageAlreadyProcessed = persisted.messageAlreadyProcessed;
+        persistenceResult = persisted.persistenceResult;
       } catch (error) {
-        if (error instanceof StateRevisionConflictError && attempt < 1) {
+        if (
+          (error instanceof StateRevisionConflictError ||
+            error instanceof StateAlreadyExistsError) &&
+          attempt < 2
+        ) {
+          await this.waitBeforeRetry(attempt, deadlineAt);
           return this.processWithRetry(snapshot, startedAt, attempt + 1, deadlineAt);
         }
         throw error;
@@ -319,9 +331,22 @@ export class RuntimeV2ShadowOrchestrator {
     if (this.now().getTime() > deadlineAt) throw new ShadowTimeoutError();
   }
 
+  private async waitBeforeRetry(attempt: number, deadlineAt: number): Promise<void> {
+    const delayMs = Math.min(25, 5 * (attempt + 1) + Math.floor(Math.random() * 5));
+    this.assertBeforeDeadline(deadlineAt - delayMs);
+    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    this.assertBeforeDeadline(deadlineAt);
+  }
+
   private buildErrorResult(
     snapshot: RuntimeV2ShadowSnapshot,
-    errorCode: "SHADOW_TIMEOUT" | "SHADOW_CAPACITY_EXCEEDED" | "SHADOW_PROCESSING_ERROR",
+    errorCode:
+      | "SHADOW_TIMEOUT"
+      | "SHADOW_CAPACITY_EXCEEDED"
+      | "SHADOW_PROCESSING_ERROR"
+      | "MISSING_INTERNAL_MESSAGE_ID"
+      | "STALE_CONTEXT"
+      | "STATE_PAYLOAD_TOO_LARGE",
     startedAt: number,
   ): RuntimeV2ShadowResult {
     const fallbackState = createEmptyConversationState(snapshot.scope, this.now());

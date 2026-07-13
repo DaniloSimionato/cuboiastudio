@@ -78,6 +78,18 @@ enum ContactMemoryEventType {
   DELETED
 }
 
+enum RuntimeV2StateMode {
+  SHADOW
+}
+
+enum RuntimeV2StateEventStatus {
+  PROCESSING
+  PROCESSED
+  STALE_CONTEXT
+  STALE_EVENT
+  ERROR
+}
+
 model Company {
   id        String    @id @default(cuid())
   name      String
@@ -90,33 +102,35 @@ model Company {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  users                         User[]                         @relation("PrimaryCompanyUsers")
-  activeUsers                   User[]                         @relation("ActiveCompanyUsers")
-  memberships                   CompanyMembership[]
-  aiSettings                    CompanyAiSettings?
-  chatwootInboxConfigs          ChatwootInboxConfig[]
-  roles                         Role[]
-  assistants                    Assistant[]
-  assistantConversations        AssistantConversation[]
-  assistantConversationMessages AssistantConversationMessage[]
-  assistantKnowledgeItems       AssistantKnowledge[]
-  assistantPreviewLogs          AssistantPreviewLog[]
-  assistantRuntimeLogs          AssistantRuntimeLog[]
-  assistantKnowledgeChunks      AssistantKnowledgeChunk[]
-  assistantSecurityRules        AssistantSecurityRule[]
-  appInstallations              AppInstallation[]
-  appCredentials                AppCredential[]
-  appActionLogs                 AppActionLog[]
-  googleCalendarResources       GoogleCalendarResource[]
-  googleCalendarBookings        GoogleCalendarBooking[]
-  reservableResourceTypes       ReservableResourceType[]
-  reservableResourceCategories  ReservableResourceCategory[]
-  reservableResourceAttributes  ReservableResourceAttribute[]
-  customWebhookActions          CustomWebhookAction[]
-  contactMemoryProfiles         ContactMemoryProfile[]
-  contactMemoryItems            ContactMemoryItem[]
-  contactMemoryEvents           ContactMemoryEvent[]
-  assistantConversationSessions AssistantConversationSession[]
+  users                              User[]                              @relation("PrimaryCompanyUsers")
+  activeUsers                        User[]                              @relation("ActiveCompanyUsers")
+  memberships                        CompanyMembership[]
+  aiSettings                         CompanyAiSettings?
+  chatwootInboxConfigs               ChatwootInboxConfig[]
+  roles                              Role[]
+  assistants                         Assistant[]
+  assistantConversations             AssistantConversation[]
+  assistantConversationMessages      AssistantConversationMessage[]
+  assistantKnowledgeItems            AssistantKnowledge[]
+  assistantPreviewLogs               AssistantPreviewLog[]
+  assistantRuntimeLogs               AssistantRuntimeLog[]
+  assistantKnowledgeChunks           AssistantKnowledgeChunk[]
+  assistantSecurityRules             AssistantSecurityRule[]
+  appInstallations                   AppInstallation[]
+  appCredentials                     AppCredential[]
+  appActionLogs                      AppActionLog[]
+  googleCalendarResources            GoogleCalendarResource[]
+  googleCalendarBookings             GoogleCalendarBooking[]
+  reservableResourceTypes            ReservableResourceType[]
+  reservableResourceCategories       ReservableResourceCategory[]
+  reservableResourceAttributes       ReservableResourceAttribute[]
+  customWebhookActions               CustomWebhookAction[]
+  contactMemoryProfiles              ContactMemoryProfile[]
+  contactMemoryItems                 ContactMemoryItem[]
+  contactMemoryEvents                ContactMemoryEvent[]
+  assistantConversationSessions      AssistantConversationSession[]
+  assistantConversationStatesV2      AssistantConversationStateV2[]
+  assistantConversationStateV2Events AssistantConversationStateV2Event[]
 
   @@index([status])
   @@index([deletedAt])
@@ -480,19 +494,21 @@ model Assistant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company                       Company                        @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  knowledgeItems                AssistantKnowledge[]
-  conversations                 AssistantConversation[]
-  chatwootInboxConfigs          ChatwootInboxConfig[]
-  previewLogs                   AssistantPreviewLog[]
-  runtimeLogs                   AssistantRuntimeLog[]
-  knowledgeChunks               AssistantKnowledgeChunk[]
-  assistantConversationMessages AssistantConversationMessage[]
-  behavior                      AssistantBehavior?
-  flows                         AssistantFlow[]
-  securityRules                 AssistantSecurityRule[]
-  toolConfigs                   AssistantToolConfig[]
-  assistantConversationSessions AssistantConversationSession[]
+  company                            Company                             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  knowledgeItems                     AssistantKnowledge[]
+  conversations                      AssistantConversation[]
+  chatwootInboxConfigs               ChatwootInboxConfig[]
+  previewLogs                        AssistantPreviewLog[]
+  runtimeLogs                        AssistantRuntimeLog[]
+  knowledgeChunks                    AssistantKnowledgeChunk[]
+  assistantConversationMessages      AssistantConversationMessage[]
+  behavior                           AssistantBehavior?
+  flows                              AssistantFlow[]
+  securityRules                      AssistantSecurityRule[]
+  toolConfigs                        AssistantToolConfig[]
+  assistantConversationSessions      AssistantConversationSession[]
+  assistantConversationStatesV2      AssistantConversationStateV2[]
+  assistantConversationStateV2Events AssistantConversationStateV2Event[]
 
   @@index([companyId])
   @@index([status])
@@ -576,12 +592,14 @@ model AssistantConversation {
   createdAt              DateTime                @default(now())
   updatedAt              DateTime                @updatedAt
 
-  company                Company                        @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  assistant              Assistant                      @relation(fields: [assistantId], references: [id], onDelete: Restrict)
-  user                   User?                          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  company                Company                             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  assistant              Assistant                           @relation(fields: [assistantId], references: [id], onDelete: Restrict)
+  user                   User?                               @relation(fields: [userId], references: [id], onDelete: SetNull)
   messages               AssistantConversationMessage[]
   googleCalendarBookings GoogleCalendarBooking[]
   sessions               AssistantConversationSession[]
+  runtimeV2States        AssistantConversationStateV2[]
+  runtimeV2Events        AssistantConversationStateV2Event[]
 
   @@unique([companyId, assistantId, externalAccountId, externalConversationId])
   @@index([companyId])
@@ -613,9 +631,10 @@ model AssistantConversationMessage {
   contextVersion    Int      @default(1)
   createdAt         DateTime @default(now())
 
-  company      Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  assistant    Assistant             @relation(fields: [assistantId], references: [id], onDelete: Restrict)
-  conversation AssistantConversation @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  company        Company                            @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  assistant      Assistant                          @relation(fields: [assistantId], references: [id], onDelete: Restrict)
+  conversation   AssistantConversation              @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  runtimeV2Event AssistantConversationStateV2Event?
 
   @@unique([companyId, source, externalMessageId])
   @@index([companyId])
@@ -1079,4 +1098,68 @@ model AssistantConversationSession {
   @@index([assistantId])
   @@index([conversationId])
   @@map("assistant_conversation_sessions")
+}
+
+model AssistantConversationStateV2 {
+  id                             String             @id @default(cuid())
+  companyId                      String
+  assistantId                    String
+  conversationId                 String
+  contextVersion                 Int
+  mode                           RuntimeV2StateMode @default(SHADOW)
+  schemaVersion                  String
+  revision                       Int                @default(0)
+  stateJson                      Json
+  lastProcessedMessageId         String?
+  lastProcessedExternalMessageId String?
+  createdAt                      DateTime           @default(now())
+  updatedAt                      DateTime           @updatedAt
+  expiresAt                      DateTime
+  purgeAt                        DateTime
+
+  company      Company                             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  assistant    Assistant                           @relation(fields: [assistantId], references: [id], onDelete: Restrict)
+  conversation AssistantConversation               @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  events       AssistantConversationStateV2Event[]
+
+  @@unique([companyId, assistantId, conversationId, contextVersion, mode])
+  @@index([companyId])
+  @@index([assistantId])
+  @@index([conversationId])
+  @@index([expiresAt])
+  @@index([purgeAt])
+  @@index([updatedAt])
+  @@map("assistant_conversation_states_v2")
+}
+
+model AssistantConversationStateV2Event {
+  id                String                    @id @default(cuid())
+  stateId           String
+  companyId         String
+  assistantId       String
+  conversationId    String
+  contextVersion    Int
+  internalMessageId String                    @unique
+  externalMessageId String?
+  sourceOccurredAt  DateTime?
+  receivedAt        DateTime                  @default(now())
+  processedAt       DateTime?
+  resultingRevision Int?
+  status            RuntimeV2StateEventStatus @default(PROCESSING)
+  errorCode         String?
+  messageHash       String?
+
+  state        AssistantConversationStateV2 @relation(fields: [stateId], references: [id], onDelete: Restrict)
+  message      AssistantConversationMessage @relation(fields: [internalMessageId], references: [id], onDelete: Restrict)
+  company      Company                      @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  assistant    Assistant                    @relation(fields: [assistantId], references: [id], onDelete: Restrict)
+  conversation AssistantConversation        @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+
+  @@index([stateId])
+  @@index([companyId])
+  @@index([conversationId])
+  @@index([contextVersion])
+  @@index([processedAt])
+  @@index([status])
+  @@map("assistant_conversation_state_v2_events")
 }
