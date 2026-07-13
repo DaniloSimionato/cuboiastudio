@@ -174,7 +174,7 @@ test("AssistantConversationsService - Execução de Custom Webhook e higienizaç
           required: ["sku"],
         },
         timeoutMs: 5000,
-        permissionType: "READ",
+        permissionType: "WRITE",
         requiresConfirmation: false,
         responseFilter: null,
         active: true,

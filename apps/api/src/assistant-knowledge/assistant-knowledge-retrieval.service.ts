@@ -3,6 +3,9 @@ import { PrismaService } from "../database/prisma.service";
 import { AiService } from "../ai/ai.service";
 import { type AuthenticatedUser, type RequestTenant } from "../auth/auth.types";
 import { Status } from "@prisma/client";
+import {
+  normalizeRagScoreThreshold,
+} from "../assistant-conversations/runtime-context-manifest";
 
 export interface AssistantKnowledgeSearchInput {
   companyId?: string;
@@ -17,6 +20,11 @@ export interface AssistantKnowledgeSearchInput {
 export interface AssistantKnowledgeSearchResult {
   query: string;
   totalChunksScanned: number;
+  scoreThreshold: number;
+  scoreThresholdSource: "default" | "explicit" | "default_invalid";
+  scoredChunkCount: number;
+  filteredOutCount: number;
+  filteredOutScoreRange: { min: number; max: number } | null;
   results: Array<{
     knowledgeId: string;
     knowledgeTitle: string;
@@ -81,7 +89,8 @@ export class AssistantKnowledgeRetrievalService {
     }
 
     const topK = input.topK && input.topK > 0 ? Math.min(input.topK, 20) : 5;
-    const threshold = input.scoreThreshold ?? 0.0; // Padrão zero só pra não quebrar nada, RAG real usaria ex: 0.75
+    const normalizedThreshold = normalizeRagScoreThreshold(input.scoreThreshold);
+    const threshold = normalizedThreshold.threshold;
 
     // 1. Fetch chunks that belong to ACTIVE and READY knowledge items.
     // Using findMany because we will do in-memory Cosine Similarity.
@@ -117,6 +126,11 @@ export class AssistantKnowledgeRetrievalService {
       return {
         query: trimmedQuery,
         totalChunksScanned: 0,
+        scoreThreshold: threshold,
+        scoreThresholdSource: normalizedThreshold.source,
+        scoredChunkCount: 0,
+        filteredOutCount: 0,
+        filteredOutScoreRange: null,
         results: [],
         warning: "Nenhum chunk de conhecimento ativo e preparado (READY) foi encontrado para este agente.",
       };
@@ -144,17 +158,32 @@ export class AssistantKnowledgeRetrievalService {
           score,
         };
       })
-      .filter((item): item is { chunk: any; score: number } => item !== null && item.score >= threshold);
+      .filter((item): item is { chunk: any; score: number } => item !== null);
+
+    const filteredOut = scoredChunks.filter((item) => item.score < threshold);
+    const filteredOutCount = filteredOut.length;
+    const filteredOutScoreRange = filteredOut.length
+      ? {
+          min: Number(Math.min(...filteredOut.map((item) => item.score)).toFixed(4)),
+          max: Number(Math.max(...filteredOut.map((item) => item.score)).toFixed(4)),
+        }
+      : null;
+    const acceptedChunks = scoredChunks.filter((item) => item.score >= threshold);
 
     // 4. Sort descending
-    scoredChunks.sort((a, b) => b.score - a.score);
+    acceptedChunks.sort((a, b) => b.score - a.score);
 
     // 5. Take topK
-    const topResults = scoredChunks.slice(0, topK);
+    const topResults = acceptedChunks.slice(0, topK);
 
     return {
       query: trimmedQuery,
       totalChunksScanned: chunks.length,
+      scoreThreshold: threshold,
+      scoreThresholdSource: normalizedThreshold.source,
+      scoredChunkCount: scoredChunks.length,
+      filteredOutCount,
+      filteredOutScoreRange,
       results: topResults.map(res => ({
         knowledgeId: res.chunk.knowledgeId,
         knowledgeTitle: res.chunk.knowledge.title,

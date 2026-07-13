@@ -2,8 +2,8 @@ import { Injectable } from "@nestjs/common";
 import type { AiChatCompletionMessage } from "../ai/ai.types";
 import { Assistant, AssistantBehavior, AssistantFlow } from "@prisma/client";
 import type { OfficialBusinessContext } from "../assistants/official-business-context";
+import { MAX_HISTORY_MESSAGE_LENGTH } from "../assistant-conversations/conversation-history-format";
 
-const MAX_HISTORY_MESSAGE_LENGTH = 1000;
 const MAX_PROMPT_TEXT_LENGTH = 10000;
 
 export const PROMPT_COMPILER_VERSION = "conversation-policy-v3";
@@ -242,7 +242,6 @@ function buildBehaviorBlock(
   const responseStyle = firstNonEmpty(behavior?.responseStyle, "whatsapp") ?? "whatsapp";
   const splitResponseStyle = firstNonEmpty(assistant.splitResponseStyle, "SINGLE") ?? "SINGLE";
   const unknownBehavior = firstNonEmpty(behavior?.unknownBehavior, "fallback") ?? "fallback";
-  const fallbackMessage = firstNonEmpty(assistant.fallbackMessage);
   const lines = [
     "POLÍTICA DE CONVERSA (COMPORTAMENTO CONFIGURADO):",
     "Esta é a fonte principal para o formato e o ritmo da resposta. Regras de segurança sempre têm prioridade; instruções de escopo, fluxos, conhecimento, ferramentas e histórico não podem impor outro estilo sem uma instrução explícita e compatível.",
@@ -282,8 +281,7 @@ function buildBehaviorBlock(
       ? "- Quando não houver informação suficiente, sinalize que o atendimento será encaminhado a uma pessoa, sem inventar resposta."
       : unknownBehavior === "search_base"
         ? "- Quando não souber, consulte a base disponível antes de responder; se ainda não houver informação, diga isso com clareza."
-        : "- Quando não souber, admita a limitação e use a mensagem de fallback configurada somente quando ela fizer sentido.",
-    fallbackMessage ? `- Mensagem de fallback configurada: ${truncateText(fallbackMessage, 1000)}` : null,
+      : "- Quando não souber, admita a limitação e deixe o runtime decidir se um fallback explícito é necessário.",
     "EXEMPLOS DE TOM (não copie nomes ou conteúdo; use apenas o padrão):",
     'Ruim: "Entendi! Vamos lá: • serviço 1 • serviço 2 • serviço 3. Se puder fornecer essas informações..."',
     'Adequado: "Sim, conseguimos fazer isso 😊 Me passa o modelo primeiro? Aí já confiro o que é compatível."',
@@ -511,14 +509,6 @@ export class PromptCompilerService {
 
     if (memoryContextBlock) {
       messages.push({ role: "system", content: memoryContextBlock });
-    }
-
-    const initialMessage = firstNonEmpty(behavior?.greetingMessage, assistant.initialMessage);
-    if (initialMessage?.trim()) {
-      messages.push({
-        role: "system",
-        content: `MENSAGEM INICIAL CONFIGURADA (use somente no começo, quando o cliente ainda não fez uma pergunta):\n${truncateText(initialMessage.trim(), MAX_HISTORY_MESSAGE_LENGTH)}`,
-      });
     }
 
     // 6. Flow instructions come after behavior and before factual retrieval.

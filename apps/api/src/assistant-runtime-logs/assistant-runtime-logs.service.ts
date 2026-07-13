@@ -34,6 +34,7 @@ export type AssistantRuntimeLogDetail = AssistantRuntimeLogListItem & {
   assistantMessageId: string | null;
   providerErrorType: string | null;
   providerErrorMessage: string | null;
+  metadata: Record<string, unknown> | null;
 };
 
 export type FindAllAssistantRuntimeLogsResponse = {
@@ -88,6 +89,7 @@ const assistantRuntimeLogDetailSelect = {
   assistantMessageId: true,
   providerErrorType: true,
   providerErrorMessage: true,
+  metadata: true,
 } satisfies Prisma.AssistantRuntimeLogSelect;
 
 type AssistantRuntimeLogListRecord = Prisma.AssistantRuntimeLogGetPayload<{
@@ -282,5 +284,9 @@ function toDetail(
     assistantMessageId: record.assistantMessageId,
     providerErrorType: record.providerErrorType,
     providerErrorMessage: record.providerErrorMessage,
+    metadata:
+      record.metadata && typeof record.metadata === "object" && !Array.isArray(record.metadata)
+        ? (record.metadata as Record<string, unknown>)
+        : null,
   };
 }

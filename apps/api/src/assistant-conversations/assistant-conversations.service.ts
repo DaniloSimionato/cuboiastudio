@@ -63,6 +63,16 @@ import {
 } from "../apps/google-calendar/google-calendar-tool-scope";
 import { secureFetch, validateJsonSchema, validateJsonDepth } from "../common/security";
 import { decryptData, getOrMigrateWebhookCredentials } from "../common/encryption";
+import {
+  buildPromptSectionManifest,
+  DEFAULT_RAG_SCORE_THRESHOLD,
+  hashRuntimeText,
+  normalizeRagScoreThreshold,
+  RUNTIME_CONTEXT_MANIFEST_VERSION,
+  resolveRuntimeFallbackAnswer,
+  selectRuntimeKnowledgeItems,
+} from "./runtime-context-manifest";
+import { formatImportedHumanHistoryMessage } from "./conversation-history-format";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -151,6 +161,37 @@ export type AssistantConversationRuntime = {
     promptVersion?: string | null;
     promptHash?: string | null;
     promptSections?: string[];
+    promptSectionManifest?: Array<{
+      name: string;
+      role: string;
+      charCount: number;
+    }>;
+    promptCharCount?: number;
+    contextManifest?: Record<string, any>;
+    fallbackIncluded?: boolean;
+    fallbackUsed?: boolean;
+    fallbackMessageUsed?: boolean;
+    fallbackCategory?: string | null;
+    ragEnabled?: boolean;
+    ragScoreThreshold?: number;
+    ragScoreThresholdSource?: string;
+    ragItemCount?: number;
+    ragItemIds?: string[];
+    ragItems?: any[];
+    ragRejectedCount?: number;
+    ragRejectedScoreRange?: { min: number; max: number } | null;
+    ragSelectionReason?: string | null;
+    externalIdentifiers?: Record<string, string | null>;
+    currentMessageHash?: string | null;
+    historyMessageIds?: string[];
+    memoryCount?: number;
+    memoryIds?: string[];
+    memoryItems?: any[];
+    officialContextIncluded?: boolean;
+    toolsExposed?: string[];
+    toolCallCount?: number;
+    persistenceStatus?: string;
+    outboundStatus?: string;
     behaviorId?: string | null;
     behaviorUpdatedAt?: Date | null;
     assistantUpdatedAt?: Date | null;
@@ -158,6 +199,7 @@ export type AssistantConversationRuntime = {
     splitResponseStyle?: string | null;
     temperature?: number | null;
     temperatureParameterApplied?: boolean | null;
+    temperatureOmissionReason?: string | null;
     triageMode?: boolean;
     triageValidationPassed?: boolean;
     triageAttemptCount?: number;
@@ -234,24 +276,13 @@ function hashPromptMessages(messages: unknown[]): string {
 }
 
 function getPromptSectionLabels(messages: Array<{ role: string; content?: unknown }>): string[] {
-  return messages
-    .filter((message) => message.role === "system")
-    .map((message) => String(message.content ?? "").split("\n", 1)[0])
-    .map((firstLine) => {
-      if (firstLine.startsWith("REGRAS DE SEGURANÇA")) return "security";
-      if (firstLine.startsWith("IDENTIDADE E ESCOPO")) return "identity";
-      if (firstLine.startsWith("INSTRUÇÕES GERAIS")) return "assistant-instructions";
-      if (firstLine.startsWith("POLÍTICA DE CONVERSA")) return "behavior";
-      if (firstLine.startsWith("EXPRESSÕES A EVITAR")) return "avoid-phrases";
-      if (firstLine.startsWith("CONTEXTO OFICIAL")) return "official-context";
-      if (firstLine.startsWith("INSTRUÇÕES DO SISTEMA DE RESERVAS")) return "calendar";
-      if (firstLine.startsWith("MEMÓRIA")) return "memory";
-      if (firstLine.startsWith("MENSAGEM INICIAL")) return "initial-message";
-      if (firstLine.startsWith("INSTRUÇÕES DO FLUXO")) return "flow";
-      if (firstLine.startsWith("BASE DE CONHECIMENTO")) return "knowledge";
-      if (firstLine.startsWith("HISTÓRICO DA CONVERSA")) return "history-policy";
-      return "system-context";
-    });
+  return buildPromptSectionManifest(messages)
+    .filter((section) => section.role === "system")
+    .map((section) => section.name);
+}
+
+function isPrismaUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 
 const assistantConversationSafeSelect = {
@@ -370,12 +401,6 @@ const assistantConversationRuntimeAssistantSelect = {
 type AssistantConversationRuntimeAssistantRecord = Prisma.AssistantGetPayload<{
   select: typeof assistantConversationRuntimeAssistantSelect;
 }>;
-
-const assistantConversationKnowledgeSelect = {
-  id: true,
-  title: true,
-  content: true,
-} satisfies Prisma.AssistantKnowledgeSelect;
 
 const calendarScopeResourceSelect = {
   id: true,
@@ -496,6 +521,8 @@ function toConversationMessageItem(
 
 @Injectable()
 export class AssistantConversationsService {
+  private readonly resumeMessageLocks = new Map<string, Promise<void>>();
+
   private readonly logger = new Logger(AssistantConversationsService.name);
 
   constructor(
@@ -1108,13 +1135,13 @@ export class AssistantConversationsService {
     assistantId: string;
     content: string;
     handoff?: boolean;
-  }): Promise<void> {
+  }): Promise<"sent" | "skipped" | "failed"> {
     const accountIdentifier = (input.conversation.externalAccountId ?? "").trim();
     const inboxIdentifier = (input.conversation.externalInboxId ?? "").trim();
     const conversationIdentifier = (input.conversation.externalConversationId ?? "").trim();
 
     if (!accountIdentifier || !conversationIdentifier) {
-      return;
+      return "skipped";
     }
 
     const resolvedConfig = await this.chatwootInboxConfigService.resolveActiveForConversation({
@@ -1125,7 +1152,7 @@ export class AssistantConversationsService {
 
     const baseUrl = resolvedConfig?.baseUrl?.trim() || "";
     if (!baseUrl) {
-      return;
+      return "skipped";
     }
 
     const outboundUrl = `${baseUrl.replace(/\/$/, "")}/api/v1/accounts/${encodeURIComponent(
@@ -1173,17 +1200,19 @@ export class AssistantConversationsService {
         this.logger.warn(
           `Chatwoot outbound failed: company=${input.conversation.companyId} outboundUrl=${outboundUrl} account=${accountIdentifier} externalConversation=${conversationIdentifier} inbox=${inboxIdentifier || "unknown"} assistantMessageId=${input.assistantMessageId} status=${response.status} responseBody=${safeResponseBody}`,
         );
-        return;
+        return "failed";
       }
 
       this.logger.log(
         `Chatwoot outbound completed: company=${input.conversation.companyId} outboundUrl=${outboundUrl} account=${accountIdentifier} externalConversation=${conversationIdentifier} inbox=${inboxIdentifier || "unknown"} assistantMessageId=${input.assistantMessageId} status=${response.status} responseBody=${safeResponseBody}`,
       );
+      return "sent";
     } catch (error) {
       this.logger.warn(
         `Chatwoot outbound failed: company=${input.conversation.companyId} outboundUrl=${outboundUrl} account=${accountIdentifier} externalConversation=${conversationIdentifier} inbox=${inboxIdentifier || "unknown"} assistantMessageId=${input.assistantMessageId} error=${this.summarizeOutboundError(error)}`,
       );
       // Non-blocking by design. The conversation turn still succeeds locally.
+      return "failed";
     }
   }
 
@@ -1995,6 +2024,12 @@ export class AssistantConversationsService {
     let memoryContextBlock: string | null = null;
     let contactMemoryProfileId: string | null = null;
     let existingMemories: any[] = [];
+    let selectedMemoryManifest: Array<{
+      id: string | null;
+      type: string | null;
+      score: number | null;
+      reason: string | null;
+    }> = [];
 
     if (
       assistant.memoryEnabled &&
@@ -2077,6 +2112,18 @@ export class AssistantConversationsService {
               limit: assistant.semanticMemoryMaxResults ?? 15,
             });
 
+          selectedMemoryManifest = selectedMemories.map((memory: any) => ({
+            id: typeof memory.id === "string" ? memory.id : null,
+            type: typeof memory.category === "string" ? memory.category : null,
+            score:
+              typeof memory.finalScore === "number"
+                ? memory.finalScore
+                : typeof memory.similarity === "number"
+                  ? memory.similarity
+                  : null,
+            reason: typeof memory.reason === "string" ? memory.reason : null,
+          }));
+
           // Log structured semantic query info
           this.logger.log({
             message: "Semantic memory search executed",
@@ -2154,7 +2201,20 @@ export class AssistantConversationsService {
 
     const knowledgeLimit = triageMode ? 2 : 5;
     let knowledgeItems: { id: string; title: string; content: string }[] = [];
-    let ragLogData: any = null;
+    const ragThresholdConfig = normalizeRagScoreThreshold(undefined);
+    let ragLogData: any = {
+      ragEnabled: Boolean(assistant.ragEnabled),
+      scoreThreshold: ragThresholdConfig.threshold,
+      scoreThresholdSource: ragThresholdConfig.source,
+      requestedTopK: knowledgeLimit,
+      totalChunksScanned: 0,
+      scoredChunkCount: 0,
+      filteredOutCount: 0,
+      selectedCount: 0,
+      usedKnowledge: [],
+      selectionReason: assistant.ragEnabled ? "not_executed" : "rag_disabled",
+      warning: null,
+    };
 
     if (assistant.ragEnabled && this.assistantKnowledgeRetrievalService) {
       const searchResult = await this.assistantKnowledgeRetrievalService.searchRelevantKnowledge({
@@ -2164,41 +2224,48 @@ export class AssistantConversationsService {
         topK: knowledgeLimit,
       });
 
+      const knowledgeSelection = selectRuntimeKnowledgeItems({
+        ragEnabled: true,
+        results: searchResult.results,
+        threshold: searchResult.scoreThreshold,
+        filteredOutCount: searchResult.filteredOutCount,
+        filteredOutScoreRange: searchResult.filteredOutScoreRange,
+        warning: searchResult.warning,
+      });
+
       ragLogData = {
         ragEnabled: true,
         requestedTopK: knowledgeLimit,
         totalChunksScanned: searchResult.totalChunksScanned,
+        scoredChunkCount: searchResult.scoredChunkCount,
+        scoreThreshold: searchResult.scoreThreshold,
+        scoreThresholdSource: searchResult.scoreThresholdSource,
+        filteredOutCount: searchResult.filteredOutCount,
+        filteredOutScoreRange: searchResult.filteredOutScoreRange,
+        selectedCount: knowledgeSelection.items.length,
+        selectionReason:
+          knowledgeSelection.items.length > 0 ? "score_at_or_above_threshold" : "no_valid_results",
         warning: searchResult.warning,
         usedKnowledge: searchResult.results.map((r) => ({
           knowledgeId: r.knowledgeId,
           title: r.knowledgeTitle,
           chunkId: r.chunkId,
           score: r.score,
+          reason: "score_at_or_above_threshold",
         })),
       };
 
-      if (searchResult.results.length > 0) {
-        knowledgeItems = searchResult.results.map((res) => ({
-          id: res.chunkId,
-          title: res.knowledgeTitle,
-          content: res.contentPreview,
-        }));
-      }
+      knowledgeItems = knowledgeSelection.items;
 
       this.logger.log(
         `[RAG Runtime] Assistant ${input.assistantId} | Scanned: ${ragLogData.totalChunksScanned} | Found: ${ragLogData.usedKnowledge.length}`,
       );
-    } else {
-      knowledgeItems = await this.prisma.assistantKnowledge.findMany({
-        where: {
-          assistantId: input.assistantId,
-          companyId: input.tenant.companyId,
-          status: Status.ACTIVE,
-        },
-        select: assistantConversationKnowledgeSelect,
-        orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-        take: knowledgeLimit,
-      });
+    } else if (assistant.ragEnabled) {
+      ragLogData = {
+        ...ragLogData,
+        selectionReason: "retrieval_unavailable",
+        warning: "RAG retrieval service is unavailable.",
+      };
     }
 
     const activeSecurityRules: AssistantSecurityRuleItem[] = this.assistantSecurityRulesService
@@ -2274,9 +2341,14 @@ export class AssistantConversationsService {
         message.externalPayload && typeof message.externalPayload === "object"
           ? (message.externalPayload as any)
           : {};
+      const isImportedHuman =
+        message.messageType === "resume-human" || payload.speaker === "human";
       return {
-        role: message.role as "user" | "assistant" | "tool",
-        content: message.content,
+        id: message.id,
+        role: isImportedHuman ? "assistant" : (message.role as "user" | "assistant" | "tool"),
+        content: isImportedHuman
+          ? formatImportedHumanHistoryMessage(message.content)
+          : message.content,
         ...(payload.tool_calls ? { tool_calls: payload.tool_calls } : {}),
         ...(payload.tool_call_id ? { tool_call_id: payload.tool_call_id } : {}),
         ...(payload.name ? { name: payload.name } : {}),
@@ -2289,16 +2361,93 @@ export class AssistantConversationsService {
       knowledgeLimit,
       historyMessagesUsed: priorHistory.length,
       historyLimit: MAX_RUNTIME_HISTORY_MESSAGES,
-      initialMessageIncluded: Boolean(assistant.initialMessage?.trim()),
+      initialMessageIncluded: false,
+      fallbackIncluded: false,
+      fallbackUsed: false,
+      fallbackMessageUsed: false,
+      fallbackCategory: null,
       instructionsIncluded: Boolean(assistant.instructions?.trim()),
       safetyInstructionIncluded: Boolean(assistant.safetyInstruction?.trim()),
       activeSecurityRulesCount: activeSecurityRules.length,
+      ragEnabled: Boolean(assistant.ragEnabled),
+      ragScoreThreshold: ragLogData.scoreThreshold ?? DEFAULT_RAG_SCORE_THRESHOLD,
+      ragScoreThresholdSource: ragLogData.scoreThresholdSource ?? "default",
+      ragItemCount: ragLogData.selectedCount ?? 0,
+      ragItemIds: (ragLogData.usedKnowledge ?? []).map((item: any) => item.chunkId),
+      ragItems: ragLogData.usedKnowledge ?? [],
+      ragRejectedCount: ragLogData.filteredOutCount ?? 0,
+      ragRejectedScoreRange: ragLogData.filteredOutScoreRange ?? null,
+      ragSelectionReason: ragLogData.selectionReason ?? null,
+      memoryCount: selectedMemoryManifest.length,
+      memoryIds: selectedMemoryManifest.map((memory) => memory.id).filter(Boolean),
+      memoryItems: selectedMemoryManifest,
+      officialContextIncluded: Boolean(officialBusinessContext.promptBlock),
+      currentMessageHash: hashRuntimeText(interpretedMessage),
+      historyMessageIds: priorHistory
+        .map((message) => message.id)
+        .filter((id): id is string => typeof id === "string"),
+      externalIdentifiers: {
+        conversationId: conversation.externalConversationId ?? null,
+        accountId: conversation.externalAccountId ?? null,
+        contactId: conversation.externalContactId ?? null,
+        channelId: conversation.externalChannelId ?? null,
+        inboxId: conversation.externalInboxId ?? null,
+      },
+      contextVersion: conversation.currentContextVersion ?? 1,
+      model: null,
+      modelSource: null,
+      temperature: null,
+      temperatureParameterApplied: null,
+      temperatureOmissionReason: null,
+      toolsExposed: [],
+      toolCallCount: 0,
+      persistenceStatus: "pending",
+      outboundStatus: "pending",
       officialTimezoneUsed: officialBusinessContext.timezone,
       officialLocalDate: officialBusinessContext.businessStatus.localDate,
       officialLocalTime: officialBusinessContext.businessStatus.localTime,
       officialOpenNow: officialBusinessContext.businessStatus.isOpenNow,
       officialOnBreak: officialBusinessContext.businessStatus.isOnBreak,
       officialDataSource: "structured-assistant-company",
+    };
+
+    contextMetadata.contextManifest = {
+      version: RUNTIME_CONTEXT_MANIFEST_VERSION,
+      companyId: input.tenant.companyId,
+      assistantId: assistant.id,
+      conversationId: conversation.id,
+      externalIdentifiers: contextMetadata.externalIdentifiers,
+      contextVersion: contextMetadata.contextVersion,
+      currentMessageHash: contextMetadata.currentMessageHash,
+      historyMessageCount: contextMetadata.historyMessagesUsed,
+      historyMessageIds: contextMetadata.historyMessageIds,
+      promptSections: [],
+      promptCharCount: 0,
+      initialMessageIncluded: false,
+      fallbackIncluded: false,
+      fallbackMessageUsed: false,
+      officialContextIncluded: contextMetadata.officialContextIncluded,
+      memoryCount: contextMetadata.memoryCount,
+      memoryItems: contextMetadata.memoryItems,
+      ragEnabled: contextMetadata.ragEnabled,
+      ragItemCount: contextMetadata.ragItemCount,
+      ragItems: contextMetadata.ragItems,
+      ragRejectedCount: contextMetadata.ragRejectedCount,
+      ragRejectedScoreRange: contextMetadata.ragRejectedScoreRange,
+      ragThreshold: contextMetadata.ragScoreThreshold,
+      ragSelectionReason: contextMetadata.ragSelectionReason,
+      intent: null,
+      flow: null,
+      toolsExposed: [],
+      model: contextMetadata.model,
+      temperature: contextMetadata.temperature,
+      temperatureParameterApplied: contextMetadata.temperatureParameterApplied,
+      temperatureOmissionReason: contextMetadata.temperatureOmissionReason,
+      mode: null,
+      fallback: null,
+      toolCallCount: 0,
+      persistenceStatus: "pending",
+      outboundStatus: "pending",
     };
 
     const deterministicRuntime = buildDeterministicAssistantResponse({
@@ -2308,12 +2457,51 @@ export class AssistantConversationsService {
       knowledgeItems,
       officialBusinessContext,
     });
+    const deterministicFallbackCategory =
+      deterministicRuntime.sources.length > 0 ? "deterministic_response" : "no_information";
 
     const runtimeConfig = await this.aiService.resolveRuntimeConfig(input.tenant.companyId);
     const resolvedModel = this.resolveRuntimeModel(assistant, runtimeConfig);
     const temperature = this.resolveRuntimeTemperature(assistant);
     const temperatureSource = this.resolveRuntimeTemperatureSource(assistant);
+    Object.assign(contextMetadata, {
+      model: resolvedModel.model ?? null,
+      modelSource: resolvedModel.source,
+      temperature,
+      temperatureParameterApplied: modelSupportsTemperature(resolvedModel.model),
+      temperatureOmissionReason: modelSupportsTemperature(resolvedModel.model)
+        ? null
+        : "model_does_not_support_temperature",
+    });
+    contextMetadata.contextManifest = {
+      ...contextMetadata.contextManifest,
+      model: resolvedModel.model ?? null,
+      temperature,
+      temperatureParameterApplied: modelSupportsTemperature(resolvedModel.model),
+      temperatureOmissionReason: contextMetadata.temperatureOmissionReason,
+    };
+    Object.assign(contextMetadata, {
+      fallbackUsed: true,
+      fallbackCategory: runtimeConfig.runtimeEnabled
+        ? deterministicFallbackCategory
+        : "runtime_disabled",
+    });
+    contextMetadata.contextManifest = {
+      ...contextMetadata.contextManifest,
+      mode: "deterministic-runtime",
+      fallback: {
+        used: true,
+        category: contextMetadata.fallbackCategory,
+        includedInPrompt: false,
+      },
+    };
     let answer = deterministicRuntime.answer;
+    const configuredFallbackMessage = assistant.fallbackMessage?.trim() || null;
+    const resolveFallbackAnswer = (deterministicAnswer: string) =>
+      resolveRuntimeFallbackAnswer({
+        configuredFallbackMessage,
+        deterministicAnswer,
+      });
     let sources = deterministicRuntime.sources;
     let providerErrorLogFields: RuntimeLogProviderErrorFields = {};
     let runtime: AssistantConversationRuntime = {
@@ -2354,9 +2542,10 @@ export class AssistantConversationsService {
       !officialBusinessContext.aiRespondsOutsideBusinessHours &&
       !officialBusinessContext.businessStatus.isOpenNow
     ) {
-      answer =
-        assistant.fallbackMessage?.trim() ||
-        buildOutsideBusinessHoursReply(officialBusinessContext);
+      const outsideHoursFallback = resolveFallbackAnswer(
+        buildOutsideBusinessHoursReply(officialBusinessContext),
+      );
+      answer = outsideHoursFallback.answer;
       sources = [
         {
           id: "official-structured-data",
@@ -2367,7 +2556,20 @@ export class AssistantConversationsService {
         llmSkipped: true,
         outsideBusinessHours: true,
         outsideBusinessHoursPolicy: "assistant-disabled",
+        fallbackUsed: true,
+        fallbackCategory: "outside_business_hours",
+        fallbackMessageUsed: outsideHoursFallback.configuredMessageUsed,
       });
+      contextMetadata.contextManifest = {
+        ...contextMetadata.contextManifest,
+        mode: "outside-business-hours",
+          fallback: {
+            used: true,
+            category: "outside_business_hours",
+            includedInPrompt: false,
+            messageUsed: outsideHoursFallback.configuredMessageUsed,
+        },
+      };
       runtime = {
         ...runtime,
         mode: "deterministic-runtime",
@@ -2396,6 +2598,23 @@ export class AssistantConversationsService {
           console.log("FallbackReason:", fallbackReason);
           console.log("=== END DIAGNOSTIC ===\n");
         }
+
+        Object.assign(contextMetadata, {
+          fallbackUsed: true,
+          fallbackCategory: "provider_unavailable",
+          fallbackMessageUsed: Boolean(configuredFallbackMessage),
+        });
+        const providerUnavailableFallback = resolveFallbackAnswer(deterministicRuntime.answer);
+        answer = providerUnavailableFallback.answer;
+        contextMetadata.contextManifest = {
+          ...contextMetadata.contextManifest,
+          fallback: {
+            used: true,
+            category: "provider_unavailable",
+            includedInPrompt: false,
+            messageUsed: providerUnavailableFallback.configuredMessageUsed,
+          },
+        };
 
         runtime = {
           ...runtime,
@@ -2468,6 +2687,10 @@ export class AssistantConversationsService {
 
           let tools = resolvedTools.length > 0 ? resolvedTools : undefined;
 
+          Object.assign(contextMetadata, {
+            toolsExposed: (tools ?? []).map((tool: any) => tool?.function?.name).filter(Boolean),
+          });
+
           const resourcesContext = calendarToolsActive
             ? await this.getCalendarResourcesContext(input.tenant.companyId, calendarScope)
             : "";
@@ -2479,6 +2702,13 @@ export class AssistantConversationsService {
             selectedFlowId: routeResult.flowId,
             selectedFlowName: routeResult.flowName,
             intentConfidence: routeResult.confidence,
+            intentSelectionMethod: routeResult.reason?.startsWith("Keyword match")
+              ? "keyword"
+              : routeResult.reason?.startsWith("LLM")
+                ? "llm"
+                : routeResult.flowId
+                  ? "other"
+                  : "none",
             calendarScopeApplied: hasCalendarToolScope(calendarScope),
             calendarScope: calendarScope,
             toolArgsOverridden: false,
@@ -2564,10 +2794,18 @@ export class AssistantConversationsService {
               memoryContextBlock,
             });
 
+            const promptSectionManifest = buildPromptSectionManifest(promptMessages);
+            const promptCharCount = promptSectionManifest.reduce(
+              (total, section) => total + section.charCount,
+              0,
+            );
+
             Object.assign(contextMetadata, {
               promptVersion: PROMPT_COMPILER_VERSION,
               promptHash: hashPromptMessages(promptMessages),
               promptSections: getPromptSectionLabels(promptMessages),
+              promptSectionManifest,
+              promptCharCount,
               behaviorId: assistant.behavior?.id ?? null,
               behaviorUpdatedAt: assistant.behavior?.updatedAt ?? null,
               assistantUpdatedAt: assistant.updatedAt,
@@ -2580,6 +2818,22 @@ export class AssistantConversationsService {
               knowledgeChunkCount: knowledgeItems.length,
               knowledgeChunkIds: knowledgeItems.map((item) => item.id),
             });
+
+            contextMetadata.contextManifest = {
+              ...contextMetadata.contextManifest,
+              promptSections: promptSectionManifest,
+              promptCharCount,
+              intent: {
+                selected: routeResult.flowName ?? null,
+                method: contextMetadata.intentSelectionMethod,
+                confidence: routeResult.confidence ?? null,
+              },
+              flow: selectedFlow
+                ? { id: selectedFlow.id, name: selectedFlow.name }
+                : null,
+              toolsExposed: contextMetadata.toolsExposed,
+              mode: "ai-runtime",
+            };
 
             if (process.env.AI_RUNTIME_TRACE === "true") {
               this.logger.log(
@@ -2671,11 +2925,23 @@ export class AssistantConversationsService {
             });
 
             // Update prompt metadata
+            const triagePromptSectionManifest = buildPromptSectionManifest(promptMessages);
             Object.assign(contextMetadata, {
               promptVersion: PROMPT_COMPILER_VERSION,
               promptHash: hashPromptMessages(promptMessages),
               promptSections: getPromptSectionLabels(promptMessages),
+              promptSectionManifest: triagePromptSectionManifest,
+              promptCharCount: triagePromptSectionManifest.reduce(
+                (total, section) => total + section.charCount,
+                0,
+              ),
             });
+            contextMetadata.contextManifest = {
+              ...contextMetadata.contextManifest,
+              promptSections: triagePromptSectionManifest,
+              promptCharCount: contextMetadata.promptCharCount,
+              mode: "triage",
+            };
 
             try {
               completion = await this.aiService.generateChatCompletion({
@@ -2740,11 +3006,23 @@ export class AssistantConversationsService {
               });
 
               // Update prompt metadata for second attempt
+              const secondTriagePromptSectionManifest = buildPromptSectionManifest(promptMessages);
               Object.assign(contextMetadata, {
                 promptVersion: PROMPT_COMPILER_VERSION,
                 promptHash: hashPromptMessages(promptMessages),
                 promptSections: getPromptSectionLabels(promptMessages),
+                promptSectionManifest: secondTriagePromptSectionManifest,
+                promptCharCount: secondTriagePromptSectionManifest.reduce(
+                  (total, section) => total + section.charCount,
+                  0,
+                ),
               });
+              contextMetadata.contextManifest = {
+                ...contextMetadata.contextManifest,
+                promptSections: secondTriagePromptSectionManifest,
+                promptCharCount: contextMetadata.promptCharCount,
+                mode: "triage-second-attempt",
+              };
 
               try {
                 completion = await this.aiService.generateChatCompletion({
@@ -2870,6 +3148,7 @@ export class AssistantConversationsService {
           }
 
           let loopCount = 0;
+          let toolCallCount = 0;
 
           while (loopCount < 5 && !toolCallsResolved) {
             completion = await this.aiService.generateChatCompletion({
@@ -2881,6 +3160,11 @@ export class AssistantConversationsService {
             });
 
             if (completion.toolCalls && completion.toolCalls.length > 0) {
+              toolCallCount += completion.toolCalls.length;
+              contextMetadata.toolCallCount = toolCallCount;
+              if (contextMetadata.contextManifest) {
+                contextMetadata.contextManifest.toolCallCount = toolCallCount;
+              }
               promptMessages.push({
                 role: "assistant",
                 content: completion.answer || "",
@@ -3082,6 +3366,12 @@ export class AssistantConversationsService {
           console.error("COMPLETION ERROR TRACE:", error);
           const fallbackReason = this.resolveProviderFallbackReason(error);
           providerErrorLogFields = this.extractProviderErrorLogFields(error);
+          Object.assign(contextMetadata, {
+            fallbackUsed: true,
+            fallbackCategory: "provider_error",
+            fallbackMessageUsed: Boolean(configuredFallbackMessage),
+          });
+          answer = resolveFallbackAnswer(deterministicRuntime.answer).answer;
           runtime = {
             ...runtime,
             mode: "deterministic-runtime",
@@ -3093,6 +3383,37 @@ export class AssistantConversationsService {
         }
       }
     }
+
+    if (!runtimeConfig.runtimeEnabled && configuredFallbackMessage) {
+      const runtimeDisabledFallback = resolveFallbackAnswer(deterministicRuntime.answer);
+      answer = runtimeDisabledFallback.answer;
+      contextMetadata.fallbackMessageUsed = runtimeDisabledFallback.configuredMessageUsed;
+    }
+
+    if (runtime.mode === "flow-bypass") {
+      Object.assign(contextMetadata, {
+        fallbackUsed: false,
+        fallbackCategory: null,
+      });
+    } else if (runtime.mode === "ai-runtime" || runtime.mode === "ai-runtime-rag") {
+      Object.assign(contextMetadata, {
+        fallbackUsed: false,
+        fallbackCategory: null,
+      });
+    }
+
+    contextMetadata.contextManifest = {
+      ...contextMetadata.contextManifest,
+      mode: runtime.mode,
+      fallback: {
+        used: Boolean(contextMetadata.fallbackUsed),
+        category: contextMetadata.fallbackCategory ?? null,
+        includedInPrompt: false,
+        messageUsed: Boolean(contextMetadata.fallbackMessageUsed),
+      },
+      toolsExposed: contextMetadata.toolsExposed ?? [],
+      toolCallCount: contextMetadata.toolCallCount ?? 0,
+    };
 
     runtime = {
       ...runtime,
@@ -3117,7 +3438,12 @@ export class AssistantConversationsService {
       outboundBlockCountPlanned,
       outboundBlockCountSent: 0,
       outboundBlockCount: 0,
+      persistenceStatus: "persisted",
     });
+    contextMetadata.contextManifest = {
+      ...contextMetadata.contextManifest,
+      persistenceStatus: "persisted",
+    };
 
     const { assistantMessage, runtimeLogId } = await this.prisma.$transaction(async (tx) => {
       const createdAssistantMessage = await tx.assistantConversationMessage.create({
@@ -3190,6 +3516,9 @@ export class AssistantConversationsService {
             promptVersion: runtime.context.promptVersion,
             promptHash: runtime.context.promptHash,
             promptSections: runtime.context.promptSections,
+            promptSectionManifest: runtime.context.promptSectionManifest,
+            promptCharCount: runtime.context.promptCharCount,
+            contextManifest: runtime.context.contextManifest,
             behaviorId: runtime.context.behaviorId,
             behaviorUpdatedAt: runtime.context.behaviorUpdatedAt,
             assistantUpdatedAt: runtime.context.assistantUpdatedAt,
@@ -3197,6 +3526,7 @@ export class AssistantConversationsService {
             splitResponseStyle: runtime.context.splitResponseStyle,
             temperature: runtime.context.temperature,
             temperatureParameterApplied: runtime.context.temperatureParameterApplied,
+            temperatureOmissionReason: runtime.context.temperatureOmissionReason,
             triageMode: runtime.context.triageMode,
             triageValidationPassed: runtime.context.triageValidationPassed,
             triageAttemptCount: runtime.context.triageAttemptCount,
@@ -3214,6 +3544,30 @@ export class AssistantConversationsService {
             knowledgeLimit: runtime.context.knowledgeLimit,
             knowledgeChunkCount: runtime.context.knowledgeChunkCount,
             knowledgeChunkIds: runtime.context.knowledgeChunkIds,
+            ragEnabled: runtime.context.ragEnabled,
+            ragScoreThreshold: runtime.context.ragScoreThreshold,
+            ragScoreThresholdSource: runtime.context.ragScoreThresholdSource,
+            ragItemCount: runtime.context.ragItemCount,
+            ragItemIds: runtime.context.ragItemIds,
+            ragItems: runtime.context.ragItems,
+            ragRejectedCount: runtime.context.ragRejectedCount,
+            ragRejectedScoreRange: runtime.context.ragRejectedScoreRange,
+            ragSelectionReason: runtime.context.ragSelectionReason,
+            fallbackIncluded: runtime.context.fallbackIncluded,
+            fallbackUsed: runtime.context.fallbackUsed,
+            fallbackCategory: runtime.context.fallbackCategory,
+            fallbackMessageUsed: runtime.context.fallbackMessageUsed,
+            externalIdentifiers: runtime.context.externalIdentifiers,
+            currentMessageHash: runtime.context.currentMessageHash,
+            historyMessageIds: runtime.context.historyMessageIds,
+            memoryCount: runtime.context.memoryCount,
+            memoryIds: runtime.context.memoryIds,
+            memoryItems: runtime.context.memoryItems,
+            officialContextIncluded: runtime.context.officialContextIncluded,
+            toolsExposed: runtime.context.toolsExposed,
+            toolCallCount: runtime.context.toolCallCount,
+            persistenceStatus: "persisted",
+            outboundStatus: runtime.context.outboundStatus,
           }),
         },
         select: {
@@ -3263,7 +3617,7 @@ export class AssistantConversationsService {
       for (let i = 0; i < blocks.length; i++) {
         const block = blocks[i];
         try {
-          await this.sendChatwootOutboundText({
+          const outboundResult = await this.sendChatwootOutboundText({
             conversation: {
               ...conversation,
               sourceProvider: source,
@@ -3277,9 +3631,18 @@ export class AssistantConversationsService {
             assistantId: input.assistantId,
             content: block,
           });
-          blocksSent++;
+          if (outboundResult === "sent") {
+            blocksSent++;
+          }
+          contextMetadata.outboundStatus =
+            outboundResult === "sent"
+              ? "sent"
+              : outboundResult === "skipped"
+                ? "skipped"
+                : "failed";
         } catch (err: any) {
           this.logger.error(`Error sending Chatwoot block ${i}: ${err.message}`, err.stack);
+          contextMetadata.outboundStatus = "failed";
           break;
         }
 
@@ -3287,6 +3650,21 @@ export class AssistantConversationsService {
         if (i < blocks.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, 1500));
         }
+      }
+
+      contextMetadata.outboundStatus =
+        blocksSent === blocks.length
+          ? "sent"
+          : blocksSent > 0
+            ? "partial"
+            : contextMetadata.outboundStatus === "skipped"
+              ? "skipped"
+              : "failed";
+      if (contextMetadata.contextManifest) {
+        contextMetadata.contextManifest = {
+          ...contextMetadata.contextManifest,
+          outboundStatus: contextMetadata.outboundStatus,
+        };
       }
 
       // Update runtime log metadata with sent blocks count!
@@ -3303,6 +3681,11 @@ export class AssistantConversationsService {
               ...currentMeta,
               outboundBlockCountSent: blocksSent,
               outboundBlockCount: blocksSent,
+              outboundStatus: contextMetadata.outboundStatus,
+              contextManifest: {
+                ...(currentMeta.contextManifest ?? {}),
+                outboundStatus: contextMetadata.outboundStatus,
+              },
             };
             await this.prisma.assistantRuntimeLog.update({
               where: { id: runtimeLogId },
@@ -4418,68 +4801,171 @@ export class AssistantConversationsService {
       reason: input.reason || "resume_endpoint",
     });
 
-    // 2. Se runAi for verdadeiro, fazemos o fetch do histórico do Chatwoot e rodamos a AI
+    // 2. Se runAi for verdadeiro, importa apenas o histórico estruturado e roda a IA
+    // somente sobre a última mensagem real recebida pelo cliente.
     if (input.runAi) {
       const messages = await this.fetchExternalConversationMessages(conversation.id);
 
-      // Monta as promptMessages
-      const promptMessages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [];
+      const incomingMessages = messages.filter(
+        (msg) =>
+          (msg.message_type === 0 || msg.message_type === "incoming") &&
+          typeof msg.content === "string" &&
+          msg.content.trim().length > 0,
+      );
+      const currentMessage = incomingMessages[incomingMessages.length - 1];
 
+      if (!currentMessage) {
+        return;
+      }
+
+      const currentExternalMessageId =
+        currentMessage.id !== undefined && currentMessage.id !== null
+          ? String(currentMessage.id)
+          : null;
+
+      // Importa somente mensagens anteriores, mantendo os papéis sem serializá-las
+      // em uma nova mensagem de usuário.
       for (const msg of messages) {
-        if (msg.message_type === 0 || msg.message_type === "incoming") {
-          promptMessages.push({ role: "user", content: msg.content });
-        } else if (msg.message_type === 1 || msg.message_type === "outgoing") {
-          // Se tiver automation_rule_id é bot, se não é humano
-          const isBot = msg.content_attributes?.automation_rule_id === "cubo_ai_studio";
-          promptMessages.push({
-            role: isBot ? "assistant" : "system",
-            content: isBot ? msg.content : `[MENSAGEM DE ATENDENTE HUMANO]\n${msg.content}`,
+        if (msg === currentMessage || typeof msg.content !== "string" || !msg.content.trim()) {
+          continue;
+        }
+
+        const isIncoming = msg.message_type === 0 || msg.message_type === "incoming";
+        const isOutgoing = msg.message_type === 1 || msg.message_type === "outgoing";
+        if (!isIncoming && !isOutgoing) continue;
+
+        const isBot = msg.content_attributes?.automation_rule_id === "cubo_ai_studio";
+        // Chatwoot does not expose a provider-compatible "human" role. Keep
+        // the speaker identity in messageType/externalPayload, but represent
+        // an imported human reply as assistant output rather than a system
+        // instruction or a customer message.
+        const role = isIncoming ? "user" : "assistant";
+        const speaker = isIncoming ? "customer" : isBot ? "assistant" : "human";
+        const externalMessageId =
+          msg.id !== undefined && msg.id !== null ? String(msg.id) : null;
+
+        const existing = externalMessageId
+          ? await this.prisma.assistantConversationMessage.findFirst({
+              where: {
+                companyId: conversation.companyId,
+                conversationId: conversation.id,
+                externalMessageId,
+              },
+              select: { id: true },
+            })
+          : null;
+
+        if (existing) continue;
+
+        try {
+          await this.prisma.assistantConversationMessage.create({
+            data: {
+              companyId: conversation.companyId,
+              assistantId: conversation.assistantId,
+              conversationId: conversation.id,
+              role,
+              content: msg.content.trim(),
+              source: "chatwoot",
+              messageType: `resume-${speaker}`,
+              externalMessageId,
+              mode: "resume-import",
+              contextVersion: conversation.currentContextVersion ?? 1,
+              externalPayload: this.toSerializableJsonValue({
+                source: "resume-import",
+                speaker,
+                externalMessageId,
+                messageType: msg.message_type,
+              }),
+            },
           });
+        } catch (error) {
+          // The existing company/source/externalMessageId unique key is the
+          // cross-request guard for overlapping resume calls.
+          if (!isPrismaUniqueConstraintError(error)) throw error;
         }
       }
 
-      promptMessages.push({
-        role: "system",
-        content: `[AVISO DE SISTEMA] O atendimento estava em modo humano e agora foi transferido novamente para você. Analise o histórico recente. Se o usuário estiver esperando uma resposta, continue o atendimento de forma natural. Se a última mensagem humana resolver a questão ou se despedir, você pode dar uma resposta curta ou não responder nada.`,
+      const resumeLockKey = [conversation.companyId, conversation.id, currentExternalMessageId].join(":");
+      const activeResume = this.resumeMessageLocks.get(resumeLockKey);
+      if (activeResume) {
+        await activeResume;
+        return;
+      }
+
+      let releaseResumeLock!: () => void;
+      const resumeLock = new Promise<void>((resolve) => {
+        releaseResumeLock = resolve;
       });
+      this.resumeMessageLocks.set(resumeLockKey, resumeLock);
 
-      // Remove provider/apikey hard checks for simplicity.
-      // Runtime engine will validate and throw/fallback correctly if provider is missing.
+      try {
+        const currentAlreadyPersisted = currentExternalMessageId
+          ? await this.prisma.assistantConversationMessage.findFirst({
+              where: {
+                companyId: conversation.companyId,
+                conversationId: conversation.id,
+                source: "chatwoot",
+                externalMessageId: currentExternalMessageId,
+              },
+              select: { id: true },
+            })
+          : null;
 
-      // Chama a IA redirecionando para sendMessage com o histórico incluído em uma mensagem de usuário
-      const messagesText = promptMessages
-        .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
-        .join("\n");
-      const hiddenMessage = `[AVISO DE SISTEMA]\nO atendimento estava com um humano e acabou de ser devolvido para você.\nHistórico recente da conversa com o humano:\n${messagesText}\n\nPor favor, analise e continue o atendimento a partir daqui de forma natural (não mencione que você é uma IA retomando, apenas continue o fluxo).`;
+        // Do not remove the external ID to force a second execution.
+        if (currentAlreadyPersisted) return;
 
-      const resumeDto: SendAssistantConversationMessageDto = {
-        message: hiddenMessage,
-        source: "chatwoot",
-        externalConversationId: conversation.externalConversationId ?? undefined,
-        externalAccountId: conversation.externalAccountId ?? undefined,
-        externalInboxId: conversation.externalInboxId ?? undefined,
-      };
+        const resumeDto: SendAssistantConversationMessageDto = {
+          message: currentMessage.content.trim(),
+          source: "chatwoot",
+          ...(currentExternalMessageId ? { externalMessageId: currentExternalMessageId } : {}),
+          externalConversationId: conversation.externalConversationId ?? undefined,
+          externalAccountId: conversation.externalAccountId ?? undefined,
+          externalContactId: conversation.externalContactId ?? undefined,
+          externalInboxId: conversation.externalInboxId ?? undefined,
+        };
 
-      // Nós podemos apenas chamar this.sendMessage(...)
-      // que vai salvar no banco local, rodar as rules, e enviar resposta ao Chatwoot.
-      const mockUser: any = {
-        id: "system",
-        email: "system@localhost",
-        roles: [],
-        companyId: input.tenant.companyId,
-        primaryCompanyId: input.tenant.companyId,
-        activeCompanyId: input.tenant.companyId,
-        memberships: [input.tenant.companyId],
-        name: "System",
-        permissions: [],
-      };
-      await this.sendMessage({
-        assistantId: input.assistantId,
-        conversationId: input.conversationId,
-        dto: resumeDto,
-        user: mockUser,
-        tenant: input.tenant,
-      });
+        const mockUser: any = {
+          id: "system",
+          email: "system@localhost",
+          roles: [],
+          companyId: input.tenant.companyId,
+          primaryCompanyId: input.tenant.companyId,
+          activeCompanyId: input.tenant.companyId,
+          memberships: [input.tenant.companyId],
+          name: "System",
+          permissions: [],
+        };
+        try {
+          await this.sendMessage({
+            assistantId: input.assistantId,
+            conversationId: input.conversationId,
+            dto: resumeDto,
+            user: mockUser,
+            tenant: input.tenant,
+          });
+        } catch (error) {
+          // A concurrent process may win the existing unique key between the
+          // idempotency read and sendMessage. Treat it as already claimed only
+          // when the current external message now exists.
+          if (!currentExternalMessageId || !isPrismaUniqueConstraintError(error)) throw error;
+
+          const claimedMessage = await this.prisma.assistantConversationMessage.findFirst({
+            where: {
+              companyId: conversation.companyId,
+              conversationId: conversation.id,
+              source: "chatwoot",
+              externalMessageId: currentExternalMessageId,
+            },
+            select: { id: true },
+          });
+          if (!claimedMessage) throw error;
+        }
+      } finally {
+        releaseResumeLock();
+        if (this.resumeMessageLocks.get(resumeLockKey) === resumeLock) {
+          this.resumeMessageLocks.delete(resumeLockKey);
+        }
+      }
     }
   }
 
