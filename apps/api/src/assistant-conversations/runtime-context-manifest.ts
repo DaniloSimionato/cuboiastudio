@@ -39,6 +39,7 @@ function labelPromptSection(message: { role: string; content?: unknown }): strin
   if (firstLine.startsWith("MEMÓRIA")) return "memory";
   if (firstLine.startsWith("MENSAGEM INICIAL")) return "initial-message";
   if (firstLine.startsWith("INSTRUÇÕES DO FLUXO")) return "flow";
+  if (firstLine.startsWith("CONTEXTO ESTRUTURADO DO FLOW")) return "triage-flow-context";
   if (firstLine.startsWith("BASE DE CONHECIMENTO")) return "knowledge";
   if (firstLine.startsWith("DECISÃO DE TRIAGEM")) return "triage";
   if (firstLine.startsWith("HISTÓRICO DA CONVERSA")) return "history-policy";

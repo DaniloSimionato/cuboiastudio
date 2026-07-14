@@ -805,6 +805,32 @@ export class AttachmentInterpreterService {
     return parts.join("\n\n").trim();
   }
 
+  /**
+   * Text authored by the customer (or transcribed from the customer's audio).
+   * Contact, location and attachment labels are runtime metadata and must not
+   * participate in intent or flow selection.
+   */
+  buildCustomerIntentText(input: {
+    rawText?: string | null;
+    attachments: Array<{
+      extractedText?: string | null;
+      interpretedSummary?: string | null;
+      transcript?: string | null;
+    }>;
+  }): string {
+    const parts: string[] = [];
+    if (input.rawText?.trim()) parts.push(input.rawText.trim());
+    for (const attachment of input.attachments) {
+      const interpreted = [
+        attachment.transcript,
+        attachment.extractedText,
+        attachment.interpretedSummary,
+      ].find((value) => Boolean(value?.trim()));
+      if (interpreted?.trim()) parts.push(interpreted.trim());
+    }
+    return parts.join("\n\n").trim();
+  }
+
   async processAttachments(input: {
     source: AttachmentInterpreterInput["source"];
     attachments: AttachmentInterpreterInput[];

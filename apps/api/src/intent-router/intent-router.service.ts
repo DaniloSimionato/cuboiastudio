@@ -1,6 +1,11 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { AssistantFlow } from "@prisma/client";
 import { AiService } from "../ai/ai.service";
+import {
+  flowIntentKey,
+  scoreFlowCandidates,
+  type FlowKeywordEvidence,
+} from "./intent-routing";
 
 export type IntentRouterInput = {
   companyId: string;
@@ -16,6 +21,11 @@ export type IntentRouterResult = {
   flowName: string | null;
   confidence: number;
   reason?: string;
+  flowSelectionMethod?: "keyword_scored" | "llm_semantic" | "none";
+  score?: number;
+  matchedAliases?: string[];
+  candidates?: FlowKeywordEvidence[];
+  secondaryIntentKeys?: string[];
 };
 
 @Injectable()
@@ -25,46 +35,61 @@ export class IntentRouterService {
   constructor(private readonly aiService: AiService) {}
 
   async route(input: IntentRouterInput): Promise<IntentRouterResult> {
+    if (!input.message?.trim()) {
+      return {
+        flowId: null,
+        flowName: null,
+        confidence: 0,
+        flowSelectionMethod: "none",
+        reason: "No customer intent text",
+      };
+    }
     if (!input.flows || input.flows.length === 0) {
       return { flowId: null, flowName: null, confidence: 0, reason: "No flows available" };
     }
 
-    const activeFlows = input.flows.filter((f) => f.active).sort((a, b) => b.priority - a.priority);
+    const activeFlows = input.flows.filter((f) => f.active);
     
     if (activeFlows.length === 0) {
       return { flowId: null, flowName: null, confidence: 0, reason: "No active flows" };
     }
 
-    const messageLower = input.message.toLowerCase();
-
-    // 1. Fixed triggers (Keywords) - Prioritize highest priority flow with keyword match
-    for (const flow of activeFlows) {
-      if (flow.triggerKeywords) {
-        try {
-          const keywords: string[] = JSON.parse(flow.triggerKeywords);
-          if (Array.isArray(keywords)) {
-            for (const keyword of keywords) {
-              if (keyword && messageLower.includes(keyword.toLowerCase())) {
-                this.logger.debug(`Flow matched by keyword: ${flow.name} (keyword: ${keyword})`);
-                return {
-                  flowId: flow.id,
-                  flowName: flow.name,
-                  confidence: 1.0,
-                  reason: `Keyword match: ${keyword}`,
-                };
-              }
-            }
-          }
-        } catch (e) {
-          this.logger.warn(`Failed to parse triggerKeywords for flow ${flow.id}`);
-        }
-      }
+    // Evaluate every active flow. Priority is only a deterministic tie-breaker.
+    const candidates = scoreFlowCandidates(input.message, activeFlows);
+    const best = candidates[0];
+    if (best && best.score >= 2) {
+      const secondaryIntentKeys = candidates
+        .slice(1)
+        .filter((candidate) => candidate.score >= 2)
+        .map((candidate) => flowIntentKey(candidate.flowName));
+      const confidence = Math.min(0.99, 0.55 + best.score / 12);
+      this.logger.debug(
+        `Flow matched by scored evidence: ${best.flowName} (${best.matchedAliases.join(", ")})`,
+      );
+      return {
+        flowId: best.flowId,
+        flowName: best.flowName,
+        confidence,
+        score: best.score,
+        matchedAliases: best.matchedAliases,
+        candidates,
+        secondaryIntentKeys,
+        flowSelectionMethod: "keyword_scored",
+        reason: `Scored keyword match: ${best.matchedAliases.join(", ")}`,
+      };
     }
 
     // 2. LLM Fallback (if configured and no keyword match)
     const flowsWithDescriptions = activeFlows.filter((f) => f.triggerDescription?.trim());
     if (flowsWithDescriptions.length === 0) {
-      return { flowId: null, flowName: null, confidence: 0, reason: "No flows with descriptions for LLM" };
+      return {
+        flowId: null,
+        flowName: null,
+        confidence: 0,
+        candidates,
+        flowSelectionMethod: "none",
+        reason: "No flows with descriptions for LLM",
+      };
     }
 
     try {
@@ -91,7 +116,14 @@ export class IntentRouterService {
       const responseText = (completion.answer || "").trim();
       
       if (responseText.toLowerCase() === "fallback") {
-        return { flowId: null, flowName: null, confidence: 0.8, reason: "LLM selected fallback" };
+        return {
+          flowId: null,
+          flowName: null,
+          confidence: 0.8,
+          candidates,
+          flowSelectionMethod: "llm_semantic",
+          reason: "LLM selected fallback",
+        };
       }
 
       const matchedFlow = flowsWithDescriptions.find(f => responseText.includes(f.id));
@@ -101,15 +133,31 @@ export class IntentRouterService {
           flowId: matchedFlow.id,
           flowName: matchedFlow.name,
           confidence: 0.8,
+          candidates,
+          flowSelectionMethod: "llm_semantic",
           reason: "LLM semantic match",
         };
       }
 
-      return { flowId: null, flowName: null, confidence: 0, reason: "LLM response did not match any flow ID" };
+      return {
+        flowId: null,
+        flowName: null,
+        confidence: 0,
+        candidates,
+        flowSelectionMethod: "none",
+        reason: "LLM response did not match any flow ID",
+      };
     } catch (err) {
       const e = err as Error;
       this.logger.error(`Intent classification failed: ${e.message}`);
-      return { flowId: null, flowName: null, confidence: 0, reason: `LLM error: ${e.message}` };
+      return {
+        flowId: null,
+        flowName: null,
+        confidence: 0,
+        candidates,
+        flowSelectionMethod: "none",
+        reason: `LLM error: ${e.message}`,
+      };
     }
   }
 }

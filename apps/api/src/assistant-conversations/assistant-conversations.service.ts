@@ -49,6 +49,7 @@ import {
   PromptCompilerService,
   summarizeTriageHistory,
   TriageState,
+  TriageFlowContext,
 } from "../prompt-compiler/prompt-compiler.service";
 import { modelSupportsTemperature } from "../ai/ai-runner";
 import { IntentRouterService } from "../intent-router/intent-router.service";
@@ -79,6 +80,11 @@ import { formatImportedHumanHistoryMessage } from "./conversation-history-format
 import type { RuntimeV2ShadowSnapshot } from "../runtime-v2/runtime-v2-shadow-orchestrator";
 import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
 import { validateV1AnswerAuthority } from "./runtime-authority-guard";
+import {
+  extractCustomerStructuredFields,
+  flowIntentKey,
+  flowObjective,
+} from "../intent-router/intent-routing";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -152,8 +158,21 @@ export type AssistantConversationRuntime = {
     safetyInstructionIncluded?: boolean;
     activeSecurityRulesCount?: number;
     detectedIntent?: string | null;
+    intentInputSource?: "CUSTOMER_TEXT" | "TRANSCRIPTION";
+    metadataExcludedFromIntent?: boolean;
     selectedFlowId?: string | null;
     selectedFlowName?: string | null;
+    flowSelectionMethod?: string | null;
+    flowScore?: number | null;
+    flowConfidence?: number | null;
+    candidateFlowIds?: string[];
+    candidateScores?: Array<{ flowId: string; score: number }>;
+    matchedAliases?: string[];
+    secondaryIntentKeys?: string[];
+    triageFlowIncluded?: boolean;
+    knownFieldKeys?: string[];
+    pendingFieldKeys?: string[];
+    requestedDetailKey?: string | null;
     intentConfidence?: number | null;
     finalAction?: string | null;
     llmSkipped?: boolean | null;
@@ -1276,6 +1295,44 @@ export class AssistantConversationsService {
     });
   }
 
+  private buildCustomerIntentText(input: {
+    message?: string | null;
+    attachments: InboundAttachmentRecord[];
+  }): string {
+    const interpreter = this.attachmentInterpreterService as AttachmentInterpreterService & {
+      buildCustomerIntentText?: (value: {
+        rawText?: string | null;
+        attachments: Array<{
+          extractedText?: string | null;
+          interpretedSummary?: string | null;
+          transcript?: string | null;
+        }>;
+      }) => string;
+    };
+    if (typeof interpreter.buildCustomerIntentText === "function") {
+      return interpreter.buildCustomerIntentText({
+        rawText: input.message,
+        attachments: input.attachments,
+      });
+    }
+
+    // Compatibility with narrow test doubles and older adapters.
+    return [
+      input.message?.trim() ?? "",
+      ...input.attachments
+        .map((attachment) =>
+          [attachment.transcript, attachment.extractedText, attachment.interpretedSummary].find(
+            (value) => Boolean(value?.trim()),
+          ),
+        )
+        .filter((value): value is string => Boolean(value?.trim()))
+        .map((value) => value.trim()),
+    ]
+      .filter(Boolean)
+      .join("\n\n")
+      .trim();
+  }
+
   private toAttachmentInterpreterInput(input: {
     attachment: InboundAttachmentRecord;
     source: InboundMessageSource;
@@ -2198,6 +2255,10 @@ export class AssistantConversationsService {
       contact: input.dto.contact ?? null,
       location: input.dto.location ?? null,
     });
+    const customerIntentText = this.buildCustomerIntentText({
+      message: input.dto.message,
+      attachments: processedAttachments,
+    });
 
     if (!interpretedMessage.trim()) {
       throw new BadRequestException("Message content or multimodal payload is required.");
@@ -2383,7 +2444,7 @@ export class AssistantConversationsService {
       }
     }
 
-    let triageMode = isMultiNeedTriageMessage(interpretedMessage);
+    let triageMode = isMultiNeedTriageMessage(customerIntentText);
     const triageCacheKey = `triage:${input.tenant.companyId}:${conversation.id}`;
     let loadedTriageState: TriageState | null = null;
 
@@ -2401,17 +2462,17 @@ export class AssistantConversationsService {
     if (loadedTriageState && loadedTriageState.active && loadedTriageState.expiresAt > Date.now()) {
       const isPriceQuery =
         /(quanto\s+fica|quanto\s+custa|valores?|preços?|custos?|precos?|tabela)/i.test(
-          interpretedMessage,
+          customerIntentText,
         );
       const isScheduleQuery = /(agendar|agendamento|marcar|horário|horario|reserva|agenda)/i.test(
-        interpretedMessage,
+        customerIntentText,
       );
       const isListQuery =
         /\b(me\s+)?(envie|mande|passa|quero|lista|quais|tabela)\b.*\b(lista|serviços|opções|opcoes|catalogo|catálogo)\b/i.test(
-          interpretedMessage,
+          customerIntentText,
         );
       const isHandoffQuery = /(humano|atendente|atendimento\s+humano|falar\s+com\s+alguém)/i.test(
-        interpretedMessage,
+          customerIntentText,
       );
 
       if (isPriceQuery || isScheduleQuery || isListQuery || isHandoffQuery) {
@@ -2612,6 +2673,14 @@ export class AssistantConversationsService {
     const transcriptionAvailable = processedAttachments.some(
       (attachment) => attachment.type === "audio" && Boolean(attachment.transcript?.trim()),
     );
+    const extractedCustomerFields = extractCustomerStructuredFields(customerIntentText);
+    const mergedKnownFieldKeys = [
+      ...new Set([...(loadedTriageState?.knownFieldKeys ?? []), ...extractedCustomerFields.knownFieldKeys]),
+    ];
+    const mergedPendingFieldKeys = [
+      ...new Set(extractedCustomerFields.pendingFieldKeys),
+    ].filter((key) => !mergedKnownFieldKeys.includes(key));
+    const intentInputSource = audioMessage && transcriptionAvailable ? "TRANSCRIPTION" : "CUSTOMER_TEXT";
     const contextMetadata: Record<string, any> = {
       requestId: input.requestId ?? input.dto.externalMessageId ?? null,
       correlationId: input.correlationId ?? null,
@@ -2628,6 +2697,20 @@ export class AssistantConversationsService {
       triageHistoryMessageCount: triageHistorySummary.historyMessageCount,
       triageCustomerMessageCount: triageHistorySummary.customerMessageCount,
       triageAssistantReferenceCount: triageHistorySummary.assistantReferenceCount,
+      intentInputSource,
+      metadataExcludedFromIntent: true,
+      selectedFlowId: null,
+      flowSelectionMethod: "none",
+      flowScore: 0,
+      flowConfidence: 0,
+      candidateFlowIds: [],
+      candidateScores: [],
+      matchedAliases: [],
+      secondaryIntentKeys: extractedCustomerFields.secondaryIntentKeys,
+      triageFlowIncluded: false,
+      knownFieldKeys: mergedKnownFieldKeys,
+      pendingFieldKeys: mergedPendingFieldKeys,
+      requestedDetailKey: extractedCustomerFields.requestedDetailKey,
       initialMessageIncluded: false,
       fallbackIncluded: false,
       fallbackUsed: false,
@@ -2696,7 +2779,7 @@ export class AssistantConversationsService {
           : processedAttachments.length > 0
             ? "ATTACHMENT"
             : "TEXT",
-      currentMessage: interpretedMessage,
+      currentMessage: customerIntentText,
       // A V1 question may be used only as a timestamped reference. The V2
       // orchestrator rejects it when it predates the V2 session boundary.
       lastRelevantQuestion: (() => {
@@ -2753,6 +2836,20 @@ export class AssistantConversationsService {
       triageHistoryMessageCount: contextMetadata.triageHistoryMessageCount,
       triageCustomerMessageCount: contextMetadata.triageCustomerMessageCount,
       triageAssistantReferenceCount: contextMetadata.triageAssistantReferenceCount,
+      intentInputSource: contextMetadata.intentInputSource,
+      metadataExcludedFromIntent: contextMetadata.metadataExcludedFromIntent,
+      selectedFlowId: contextMetadata.selectedFlowId,
+      flowSelectionMethod: contextMetadata.flowSelectionMethod,
+      flowScore: contextMetadata.flowScore,
+      flowConfidence: contextMetadata.flowConfidence,
+      candidateFlowIds: contextMetadata.candidateFlowIds,
+      candidateScores: contextMetadata.candidateScores,
+      matchedAliases: contextMetadata.matchedAliases,
+      secondaryIntentKeys: contextMetadata.secondaryIntentKeys,
+      triageFlowIncluded: contextMetadata.triageFlowIncluded,
+      knownFieldKeys: contextMetadata.knownFieldKeys,
+      pendingFieldKeys: contextMetadata.pendingFieldKeys,
+      requestedDetailKey: contextMetadata.requestedDetailKey,
       promptSections: [],
       promptCharCount: 0,
       initialMessageIncluded: false,
@@ -2975,7 +3072,7 @@ export class AssistantConversationsService {
             ? await this.intentRouterService.route({
                 companyId: input.tenant.companyId,
                 assistantId: input.assistantId,
-                message: interpretedMessage,
+                message: customerIntentText,
                 flows: assistant.flows ?? [],
                 model: resolvedModel.model,
                 temperature,
@@ -2989,6 +3086,36 @@ export class AssistantConversationsService {
 
           const selectedFlow = routeResult.flowId
             ? (assistant.flows ?? []).find((f) => f.id === routeResult.flowId)
+            : null;
+          const triageFlowContext: TriageFlowContext | null = selectedFlow
+            ? {
+                flowId: selectedFlow.id,
+                flowName: selectedFlow.name,
+                objective: flowObjective(selectedFlow.name),
+                requiredFieldKeys:
+                  flowIntentKey(selectedFlow.name) === "technical_support"
+                    ? ["device_model", "service_details"]
+                    : flowIntentKey(selectedFlow.name) === "pricing"
+                      ? ["service_details"]
+                      : flowIntentKey(selectedFlow.name) === "pickup_delivery"
+                        ? ["pickup_or_delivery_policy"]
+                        : ["requested_information"],
+                knownFieldKeys: mergedKnownFieldKeys,
+                pendingFieldKeys: mergedPendingFieldKeys,
+                nextQuestionKey: extractedCustomerFields.requestedDetailKey,
+                relevantRuleKeys: ["one_question_at_a_time", "do_not_repeat_known_fields"],
+                allowedToolSlugs: (() => {
+                  if (!selectedFlow.allowedToolSlugs) return [];
+                  try {
+                    const parsed = JSON.parse(selectedFlow.allowedToolSlugs);
+                    return Array.isArray(parsed)
+                      ? parsed.filter((value): value is string => typeof value === "string")
+                      : [];
+                  } catch {
+                    return [];
+                  }
+                })(),
+              }
             : null;
           selectedFlowForAuthority = selectedFlow ?? null;
           const flowToolContext = this.resolveFlowToolContext(selectedFlow ?? null);
@@ -3039,7 +3166,22 @@ export class AssistantConversationsService {
             selectedFlowId: routeResult.flowId,
             selectedFlowName: routeResult.flowName,
             intentConfidence: routeResult.confidence,
-            intentSelectionMethod: routeResult.reason?.startsWith("Keyword match")
+            flowSelectionMethod: routeResult.flowSelectionMethod ?? "none",
+            flowScore: routeResult.score ?? 0,
+            flowConfidence: routeResult.confidence,
+            candidateFlowIds: (routeResult.candidates ?? []).map((candidate) => candidate.flowId),
+            candidateScores: (routeResult.candidates ?? []).map((candidate) => ({
+              flowId: candidate.flowId,
+              score: candidate.score,
+            })),
+            matchedAliases: routeResult.matchedAliases ?? [],
+            secondaryIntentKeys: [
+              ...new Set([
+                ...(routeResult.secondaryIntentKeys ?? []),
+                ...extractedCustomerFields.secondaryIntentKeys,
+              ]),
+            ],
+            intentSelectionMethod: routeResult.flowSelectionMethod === "keyword_scored"
               ? "keyword"
               : routeResult.reason?.startsWith("LLM")
                 ? "llm"
@@ -3053,6 +3195,22 @@ export class AssistantConversationsService {
             blockedByToolScope: false,
             blockReason: null,
           });
+          contextMetadata.contextManifest = {
+            ...contextMetadata.contextManifest,
+            intentInputSource: contextMetadata.intentInputSource,
+            metadataExcludedFromIntent: true,
+            selectedFlowId: contextMetadata.selectedFlowId,
+            flowSelectionMethod: contextMetadata.flowSelectionMethod,
+            flowScore: contextMetadata.flowScore,
+            flowConfidence: contextMetadata.flowConfidence,
+            candidateFlowIds: contextMetadata.candidateFlowIds,
+            candidateScores: contextMetadata.candidateScores,
+            matchedAliases: contextMetadata.matchedAliases,
+            secondaryIntentKeys: contextMetadata.secondaryIntentKeys,
+            knownFieldKeys: contextMetadata.knownFieldKeys,
+            pendingFieldKeys: contextMetadata.pendingFieldKeys,
+            requestedDetailKey: contextMetadata.requestedDetailKey,
+          };
 
           let toolCallsResolved = false;
 
@@ -3118,7 +3276,7 @@ export class AssistantConversationsService {
               securityRules: activeSecurityRules,
               knowledgeItems,
               historyMessages: priorHistory,
-              currentMessage: interpretedMessage,
+              currentMessage: customerIntentText,
               officialBusinessContext,
               calendarContext: calendarToolsActive
                 ? {
@@ -3252,13 +3410,14 @@ export class AssistantConversationsService {
               // Triage receives only delimited prior client messages. It still
               // excludes normal history roles, RAG, flow instructions and tools.
               historyMessages: priorHistory,
-              currentMessage: interpretedMessage,
+              currentMessage: customerIntentText,
               officialBusinessContext,
               calendarContext: null,
               memoryContextBlock,
               triageMode: true,
               isSecondAttempt: false,
               triageState: loadedTriageState,
+              triageFlowContext,
             });
 
             // Update prompt metadata
@@ -3272,12 +3431,14 @@ export class AssistantConversationsService {
                 (total, section) => total + section.charCount,
                 0,
               ),
+              triageFlowIncluded: Boolean(triageFlowContext),
             });
             contextMetadata.contextManifest = {
               ...contextMetadata.contextManifest,
               promptSections: triagePromptSectionManifest,
               promptCharCount: contextMetadata.promptCharCount,
               mode: "triage",
+              triageFlowIncluded: Boolean(triageFlowContext),
             };
 
             try {
@@ -3307,11 +3468,15 @@ export class AssistantConversationsService {
                       active: true,
                       startedAt: loadedTriageState?.startedAt ?? new Date().toISOString(),
                       sourceMessageId: userMessage.id,
-                      requestedDetail: parsed.requestedDetail ?? "",
+                      requestedDetail:
+                        extractedCustomerFields.requestedDetailKey ?? parsed.requestedDetail ?? "",
+                      requestedDetailKey: extractedCustomerFields.requestedDetailKey,
                       lastQuestion: parsed.message ?? "",
                       attemptCount: triageAttemptCount,
                       resolved: false,
                       expiresAt: loadedTriageState?.expiresAt ?? Date.now() + 3600000,
+                      knownFieldKeys: mergedKnownFieldKeys,
+                      pendingFieldKeys: mergedPendingFieldKeys,
                     };
                     await this.cacheService.set(triageCacheKey, triageState, 3600);
                   }
@@ -3335,13 +3500,14 @@ export class AssistantConversationsService {
                 securityRules: activeSecurityRules,
                 knowledgeItems: [],
                 historyMessages: priorHistory,
-                currentMessage: interpretedMessage,
+                currentMessage: customerIntentText,
                 officialBusinessContext,
                 calendarContext: null,
                 memoryContextBlock,
                 triageMode: true,
                 isSecondAttempt: true,
                 triageState: loadedTriageState,
+                triageFlowContext,
               });
 
               // Update prompt metadata for second attempt
@@ -3355,12 +3521,14 @@ export class AssistantConversationsService {
                   (total, section) => total + section.charCount,
                   0,
                 ),
+                triageFlowIncluded: Boolean(triageFlowContext),
               });
               contextMetadata.contextManifest = {
                 ...contextMetadata.contextManifest,
                 promptSections: secondTriagePromptSectionManifest,
                 promptCharCount: contextMetadata.promptCharCount,
                 mode: "triage-second-attempt",
+                triageFlowIncluded: Boolean(triageFlowContext),
               };
 
               try {
@@ -3390,11 +3558,15 @@ export class AssistantConversationsService {
                         active: true,
                         startedAt: loadedTriageState?.startedAt ?? new Date().toISOString(),
                         sourceMessageId: userMessage.id,
-                        requestedDetail: parsed.requestedDetail ?? "",
+                        requestedDetail:
+                          extractedCustomerFields.requestedDetailKey ?? parsed.requestedDetail ?? "",
+                        requestedDetailKey: extractedCustomerFields.requestedDetailKey,
                         lastQuestion: parsed.message ?? "",
                         attemptCount: triageAttemptCount,
                         resolved: false,
                         expiresAt: loadedTriageState?.expiresAt ?? Date.now() + 3600000,
+                        knownFieldKeys: mergedKnownFieldKeys,
+                        pendingFieldKeys: mergedPendingFieldKeys,
                       };
                       await this.cacheService.set(triageCacheKey, triageState, 3600);
                     }
@@ -3415,10 +3587,14 @@ export class AssistantConversationsService {
                   startedAt: loadedTriageState?.startedAt ?? new Date().toISOString(),
                   sourceMessageId: userMessage.id,
                   requestedDetail: loadedTriageState?.requestedDetail ?? "informações básicas",
+                  requestedDetailKey:
+                    loadedTriageState?.requestedDetailKey ?? extractedCustomerFields.requestedDetailKey,
                   lastQuestion: answer,
                   attemptCount: triageAttemptCount,
                   resolved: false,
                   expiresAt: loadedTriageState?.expiresAt ?? Date.now() + 3600000,
+                  knownFieldKeys: mergedKnownFieldKeys,
+                  pendingFieldKeys: mergedPendingFieldKeys,
                 };
                 await this.cacheService.set(triageCacheKey, triageState, 3600);
               }
@@ -3759,7 +3935,7 @@ export class AssistantConversationsService {
 
     const authorityGuard = validateV1AnswerAuthority({
       answer,
-      currentMessage: interpretedMessage,
+      currentMessage: customerIntentText,
       sources,
       officialBusinessContext,
       flowText: selectedFlowForAuthority
@@ -3792,16 +3968,6 @@ export class AssistantConversationsService {
       v1UnsupportedClaimDetected: authorityGuard.unsupportedClaimDetected,
       v1UnsupportedClaimCategories: authorityGuard.blockedCategories,
     };
-
-    this.scheduleRuntimeV2Shadow({
-      ...shadowSnapshot,
-      v1Comparison: {
-        selectedFlowId: contextMetadata.selectedFlowId ?? null,
-        selectedIntent: contextMetadata.detectedIntent ?? null,
-        triageMode: contextMetadata.triageMode ? "TRIAGE" : null,
-        toolsExposed: contextMetadata.toolsExposed ?? [],
-      },
-    });
 
     runtime = {
       ...runtime,
@@ -4128,6 +4294,18 @@ export class AssistantConversationsService {
           this.logger.error(`Background memory extraction failed: ${err.message}`);
         });
     }
+
+    // O cliente já foi persistido e o V1 concluiu sua própria persistência e
+    // outbound. O shadow permanece assíncrono e não participa da resposta V1.
+    this.scheduleRuntimeV2Shadow({
+      ...shadowSnapshot,
+      v1Comparison: {
+        selectedFlowId: contextMetadata.selectedFlowId ?? null,
+        selectedIntent: contextMetadata.detectedIntent ?? null,
+        triageMode: contextMetadata.triageMode ? "TRIAGE" : null,
+        toolsExposed: contextMetadata.toolsExposed ?? [],
+      },
+    });
 
     return {
       conversationId: conversation.id,
