@@ -11,6 +11,11 @@ import { ChatwootWebhookService } from "../dist/chatwoot/chatwoot-webhook.servic
 import { AssistantConversationsService } from "../dist/assistant-conversations/assistant-conversations.service.js";
 import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
 import { IntentRouterService } from "../dist/intent-router/intent-router.service.js";
+import {
+  InMemoryConversationStateStore,
+  RuntimeV2ShadowOrchestrator,
+} from "../dist/runtime-v2/index.js";
+import { RuntimeV2ShadowIntegrationService } from "../dist/runtime-v2/runtime-v2-shadow-integration.service.js";
 
 function createMessageCreatedPayload(overrides = {}) {
   return {
@@ -787,6 +792,7 @@ function createAssistantServiceDeps(overrides = {}) {
     undefined,
     undefined,
     overrides.cacheService,
+    overrides.runtimeV2ShadowIntegration,
   );
 
   return {
@@ -2279,6 +2285,89 @@ test("encerra triagem técnica e mantém preço como intenção atual", async ()
     calls.messageCreates.find((message) => message.role === "assistant")?.content ?? "",
     /Não tenho um valor confirmado/,
   );
+});
+
+test("pipeline Chatwoot completo preserva saída de triagem e drena o Shadow sem efeitos externos", async () => {
+  const shadowLogs = [];
+  const shadowPrisma = {
+    assistantRuntimeLog: {
+      create: async ({ data }) => {
+        shadowLogs.push(data);
+        return { id: "shadow-log-1" };
+      },
+    },
+  };
+  const shadowStore = new InMemoryConversationStateStore();
+  const shadowOrchestrator = new RuntimeV2ShadowOrchestrator(
+    shadowStore,
+    {
+      RUNTIME_V2_MODE: "SHADOW",
+      RUNTIME_V2_SHADOW_ASSISTANT_IDS: "assistant-1",
+    },
+  );
+  const shadowIntegration = new RuntimeV2ShadowIntegrationService(
+    shadowPrisma,
+    shadowOrchestrator,
+    {
+      RUNTIME_V2_MODE: "SHADOW",
+      RUNTIME_V2_SHADOW_ASSISTANT_IDS: "assistant-1",
+    },
+  );
+  const { service, calls } = createAssistantServiceDeps({
+    runtimeV2ShadowIntegration: shadowIntegration,
+    outboundConfig: { baseUrl: "" },
+    cacheService: {
+      get: async () => ({
+        active: true,
+        startedAt: new Date(Date.now() - 60_000).toISOString(),
+        sourceMessageId: "triage-source",
+        requestedDetail: "interface do componente",
+        requestedDetailKey: "component_interface",
+        lastQuestion: "Qual é a interface do componente?",
+        attemptCount: 1,
+        resolved: false,
+        expiresAt: Date.now() + 3_600_000,
+        knownFieldKeys: ["ssd_capacity_gb", "ram_capacity_gb"],
+        pendingFieldKeys: ["component_interface"],
+      }),
+      set: async () => undefined,
+    },
+    completion: {
+      provider: "openai-compatible",
+      model: "gpt-4o-mini",
+      answer: "Preciso confirmar a disponibilidade antes de indicar um horário.",
+      durationMs: 1,
+    },
+  });
+
+  await service.sendMessage({
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    dto: {
+      source: "chatwoot",
+      externalConversationId: "conversation-1",
+      externalAccountId: "account-1",
+      externalContactId: "contact-1",
+      externalInboxId: "inbox-1",
+      externalMessageId: "shadow-e2e-1",
+      message: "Não entendo SATA ou NVMe. Vocês podem verificar?",
+    },
+    user: { id: "user-1", companyId: "company-1", roles: [], permissions: [] },
+    tenant: { companyId: "company-1" },
+    preparedAttachments: [],
+  });
+  await shadowIntegration.drain();
+
+  const assistantMessage = calls.messageCreates.find((message) => message.role === "assistant");
+  assert.match(assistantMessage?.content ?? "", /avaliação|avaliacao/i);
+  assert.doesNotMatch(assistantMessage?.content ?? "", /disponibilidade|horário|horario/i);
+  assert.equal(calls.providerPayloads.length, 1);
+  assert.equal(shadowLogs.length, 1);
+  assert.equal(shadowLogs[0].metadata.status, "COMPLETED");
+  assert.equal(shadowLogs[0].metadata.providerCalled, false);
+  assert.equal(shadowLogs[0].metadata.toolCalls, 0);
+  assert.equal(shadowLogs[0].metadata.outboundSent, false);
+  assert.equal(shadowLogs[0].metadata.v2TriageSignalReceived, true);
 });
 
 test("não repete detalhe técnico recusado no caminho normal do V1", async () => {

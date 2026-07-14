@@ -248,6 +248,17 @@ export type AssistantConversationRuntime = {
     generatedClaimCategory?: string | null;
     finalSafeResponseCategory?: string | null;
     authorityCategorySource?: string | null;
+    conversationalOutcome?: string | null;
+    triageResponseProtected?: boolean;
+    replacementReason?: string | null;
+    officialHoursEvaluated?: boolean;
+    requestedDayOpen?: boolean | null;
+    requestedTimeWithinHours?: boolean | null;
+    officialContactAvailable?: boolean;
+    officialContactSource?: string | null;
+    staleQuestionRemoved?: boolean;
+    v2TriageSignalReceived?: boolean;
+    lastRelevantQuestionCleared?: boolean;
     triageExitReason?: string | null;
     requestedDetailBefore?: string | null;
     requestedDetailAfter?: string | null;
@@ -2488,6 +2499,10 @@ export class AssistantConversationsService {
     }
 
     let triageMode = isMultiNeedTriageMessage(customerIntentText);
+    const isExplicitPriceQuery =
+      /(quanto\s+fica|quanto\s+custa|valores?|preços?|custos?|precos?|tabela|orçamento|orcamento)/i.test(
+        customerIntentText,
+      );
     const triageCacheKey = `triage:${input.tenant.companyId}:${conversation.id}`;
     let loadedTriageState: TriageState | null = null;
 
@@ -2505,7 +2520,8 @@ export class AssistantConversationsService {
     let requestedDetailBefore: string | null = null;
     let requestedDetailChangeReason: string | null = null;
     const customerUnableToAnswer = Boolean(
-      loadedTriageState?.active && getCustomerUnableToAnswerReason(customerIntentText),
+      loadedTriageState?.active &&
+        getCustomerUnableToAnswerReason(customerIntentText),
     );
 
     if (loadedTriageState && loadedTriageState.active && loadedTriageState.expiresAt > Date.now()) {
@@ -2516,10 +2532,6 @@ export class AssistantConversationsService {
         requestedDetailBefore = loadedTriageState.requestedDetailKey ?? loadedTriageState.requestedDetail;
         requestedDetailChangeReason = "CUSTOMER_UNABLE_TO_PROVIDE_DETAIL";
       }
-      const isPriceQuery =
-        /(quanto\s+fica|quanto\s+custa|valores?|preços?|custos?|precos?|tabela)/i.test(
-          customerIntentText,
-        );
       const isScheduleQuery = /(agendar|agendamento|marcar|horário|horario|reserva|agenda)/i.test(
         customerIntentText,
       );
@@ -2533,7 +2545,7 @@ export class AssistantConversationsService {
 
       if (
         !customerUnableToAnswer &&
-        (isPriceQuery || isScheduleQuery || isListQuery || isHandoffQuery)
+        (isExplicitPriceQuery || isScheduleQuery || isListQuery || isHandoffQuery)
       ) {
         shouldClearTriage = true;
       } else {
@@ -2552,6 +2564,9 @@ export class AssistantConversationsService {
         this.logger.warn(`Failed to clear triage state: ${err.message}`);
       }
     }
+
+    const conversationalOutcome =
+      customerUnableToAnswer && !isExplicitPriceQuery ? "technical_evaluation" : null;
 
     const knowledgeLimit = triageMode ? 2 : 5;
     let knowledgeItems: { id: string; title: string; content: string }[] = [];
@@ -2786,6 +2801,21 @@ export class AssistantConversationsService {
       requestedDetailAfter: null,
       requestedDetailChangeReason,
       customerUnableToAnswer,
+      conversationalOutcome,
+      triageResponseProtected: false,
+      replacementReason: null,
+      officialHoursEvaluated: false,
+      requestedDayOpen: null,
+      requestedTimeWithinHours: null,
+      officialContactAvailable: Boolean(
+        assistant.businessPhone?.trim() ||
+          assistant.businessWhatsapp?.trim() ||
+          assistant.businessWhatsappSupport?.trim(),
+      ),
+      officialContactSource: "structured-assistant-company",
+      staleQuestionRemoved: false,
+      v2TriageSignalReceived: false,
+      lastRelevantQuestionCleared: false,
       currentIntentOverrodeHistory: false,
       lastRelevantQuestionUpdated: false,
       lastRelevantQuestionUpdateReason: null,
@@ -2888,6 +2918,12 @@ export class AssistantConversationsService {
       audioMessage,
       transcriptionAvailable,
       transcriptionPersisted: transcriptionAvailable,
+      v1TriageSignal: {
+        customerUnableToAnswer,
+        triageExitReason,
+        requestedDetailKey: requestedDetailBefore ?? extractedCustomerFields.requestedDetailKey,
+        conversationalOutcome,
+      },
     };
 
     contextMetadata.contextManifest = {
@@ -2929,6 +2965,17 @@ export class AssistantConversationsService {
       requestedDetailAfter: contextMetadata.requestedDetailAfter,
       requestedDetailChangeReason: contextMetadata.requestedDetailChangeReason,
       customerUnableToAnswer: contextMetadata.customerUnableToAnswer,
+      conversationalOutcome: contextMetadata.conversationalOutcome,
+      triageResponseProtected: contextMetadata.triageResponseProtected,
+      replacementReason: contextMetadata.replacementReason,
+      officialHoursEvaluated: contextMetadata.officialHoursEvaluated,
+      requestedDayOpen: contextMetadata.requestedDayOpen,
+      requestedTimeWithinHours: contextMetadata.requestedTimeWithinHours,
+      officialContactAvailable: contextMetadata.officialContactAvailable,
+      officialContactSource: contextMetadata.officialContactSource,
+      staleQuestionRemoved: contextMetadata.staleQuestionRemoved,
+      v2TriageSignalReceived: contextMetadata.v2TriageSignalReceived,
+      lastRelevantQuestionCleared: contextMetadata.lastRelevantQuestionCleared,
       expectedAuthorityCategory: contextMetadata.expectedAuthorityCategory,
       generatedClaimCategory: contextMetadata.generatedClaimCategory,
       finalSafeResponseCategory: contextMetadata.finalSafeResponseCategory,
@@ -3299,6 +3346,8 @@ export class AssistantConversationsService {
             currentMessage: customerIntentText,
             normalizedIntent: routeResult.flowName,
             selectedFlowKey: selectedFlow ? flowIntentKeyForFlow(selectedFlow) : null,
+            conversationalOutcome,
+            officialBusinessContext,
           });
           Object.assign(contextMetadata, {
             expectedAuthorityCategory: expectedAuthority.category,
@@ -3394,6 +3443,9 @@ export class AssistantConversationsService {
                 "PRIORIDADE DO TURNO ATUAL:",
                 "Responda primeiro à mensagem atual do cliente. O histórico é apenas contexto e não pode substituir a intenção explícita deste turno.",
                 `Categoria factual esperada para este turno: ${expectedAuthority.category ?? "nenhuma"}.`,
+                conversationalOutcome
+                  ? `Resultado conversacional protegido: ${conversationalOutcome}. Esta saída prevalece sobre qualquer categoria inferida da resposta do modelo.`
+                  : "A categoria factual deve seguir a intenção atual; não reutilize a categoria de respostas antigas.",
                 selectedFlow
                   ? `Flow atual selecionado: ${selectedFlow.id}. Execute somente o objetivo configurado para este flow.`
                   : "Nenhum flow foi selecionado para este turno.",
@@ -4061,6 +4113,8 @@ export class AssistantConversationsService {
       selectedFlowKey: selectedFlowForAuthority
         ? flowIntentKeyForFlow(selectedFlowForAuthority)
         : null,
+      conversationalOutcome,
+      officialBusinessContext,
     });
     const authorityGuard = validateV1AnswerAuthority({
       answer,
@@ -4076,10 +4130,19 @@ export class AssistantConversationsService {
         ? flowIntentKeyForFlow(selectedFlowForAuthority)
         : null,
       expectedAuthorityCategory: expectedAuthority.category,
+      conversationalOutcome,
+      triageExitReason,
+      customerUnableToAnswer,
+      officialHoursEvaluation: expectedAuthority.officialHours,
+      officialContactAvailable: contextMetadata.officialContactAvailable,
       currentCustomerIntentSource: contextMetadata.intentInputSource,
       currentTurnIsExplicitIntent: Boolean(expectedAuthority.category),
     });
-    if (authorityGuard.unsupportedClaimDetected) {
+    if (
+      authorityGuard.unsupportedClaimDetected ||
+      authorityGuard.triageResponseProtected ||
+      authorityGuard.replacementReason
+    ) {
       answer = authorityGuard.answer;
       sources = [
         {
@@ -4099,6 +4162,14 @@ export class AssistantConversationsService {
       authorityConflictCategories: authorityGuard.authorityConflictCategories,
       winningSourceTypes: authorityGuard.winningSourceTypes,
       rejectedSourceTypes: authorityGuard.rejectedSourceTypes,
+      conversationalOutcome,
+      triageResponseProtected: authorityGuard.triageResponseProtected,
+      replacementReason: authorityGuard.replacementReason,
+      officialHoursEvaluated: expectedAuthority.officialHours.evaluated,
+      requestedDayOpen: expectedAuthority.officialHours.requestedDayOpen,
+      requestedTimeWithinHours: expectedAuthority.officialHours.requestedTimeWithinHours,
+      officialContactAvailable: contextMetadata.officialContactAvailable,
+      officialContactSource: contextMetadata.officialContactSource,
     });
     contextMetadata.contextManifest = {
       ...contextMetadata.contextManifest,
@@ -4112,6 +4183,14 @@ export class AssistantConversationsService {
       generatedClaimCategory: authorityGuard.generatedClaimCategory,
       finalSafeResponseCategory: authorityGuard.finalSafeResponseCategory,
       authorityCategorySource: authorityGuard.authorityCategorySource,
+      conversationalOutcome,
+      triageResponseProtected: authorityGuard.triageResponseProtected,
+      replacementReason: authorityGuard.replacementReason,
+      officialHoursEvaluated: expectedAuthority.officialHours.evaluated,
+      requestedDayOpen: expectedAuthority.officialHours.requestedDayOpen,
+      requestedTimeWithinHours: expectedAuthority.officialHours.requestedTimeWithinHours,
+      officialContactAvailable: contextMetadata.officialContactAvailable,
+      officialContactSource: contextMetadata.officialContactSource,
     };
 
     runtime = {
@@ -4250,10 +4329,21 @@ export class AssistantConversationsService {
             finalSafeResponseCategory: runtime.context.finalSafeResponseCategory,
             authorityCategorySource: runtime.context.authorityCategorySource,
             triageExitReason: runtime.context.triageExitReason,
+            conversationalOutcome: runtime.context.conversationalOutcome,
+            triageResponseProtected: runtime.context.triageResponseProtected,
+            replacementReason: runtime.context.replacementReason,
+            officialHoursEvaluated: runtime.context.officialHoursEvaluated,
+            requestedDayOpen: runtime.context.requestedDayOpen,
+            requestedTimeWithinHours: runtime.context.requestedTimeWithinHours,
+            officialContactAvailable: runtime.context.officialContactAvailable,
+            officialContactSource: runtime.context.officialContactSource,
             requestedDetailBefore: runtime.context.requestedDetailBefore,
             requestedDetailAfter: runtime.context.requestedDetailAfter,
             requestedDetailChangeReason: runtime.context.requestedDetailChangeReason,
             customerUnableToAnswer: runtime.context.customerUnableToAnswer,
+            v2TriageSignalReceived: runtime.context.v2TriageSignalReceived,
+            staleQuestionRemoved: runtime.context.staleQuestionRemoved,
+            lastRelevantQuestionCleared: runtime.context.lastRelevantQuestionCleared,
             currentIntentOverrodeHistory: runtime.context.currentIntentOverrodeHistory,
             lastRelevantQuestionUpdated: runtime.context.lastRelevantQuestionUpdated,
             lastRelevantQuestionUpdateReason: runtime.context.lastRelevantQuestionUpdateReason,
@@ -4462,6 +4552,9 @@ export class AssistantConversationsService {
         selectedIntent: contextMetadata.detectedIntent ?? null,
         triageMode: contextMetadata.triageMode ? "TRIAGE" : null,
         toolsExposed: contextMetadata.toolsExposed ?? [],
+        customerUnableToAnswer,
+        triageExitReason,
+        conversationalOutcome,
       },
     });
 

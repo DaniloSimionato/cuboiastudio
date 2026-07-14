@@ -176,6 +176,12 @@ function hasExternalVisitEvidence(text: string): boolean {
   ].some((alias) => containsAlias(text, alias));
 }
 
+function isOfficialContactRequest(text: string): boolean {
+  return /(?:telefone|numero|whatsapp|contato|como falar com voces|como falar com a empresa)/.test(
+    text,
+  );
+}
+
 function parsedTriggerKeywords(flow: AssistantFlow): string[] {
   if (!flow.triggerKeywords) return [];
   try {
@@ -226,6 +232,9 @@ export function scoreFlowCandidates(
         if (normalized && containsAlias(text, candidate.alias)) {
           matched.set(normalized, Math.max(matched.get(normalized) ?? 0, candidate.weight));
         }
+      }
+      if (intentKey === "company_information" && isOfficialContactRequest(text)) {
+        matched.set("official_contact", 6);
       }
       return {
         flowId: flow.id,

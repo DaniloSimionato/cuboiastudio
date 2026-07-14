@@ -7,7 +7,16 @@ export type RuntimeAuthorityGuardResult = {
   unsupportedClaimDetected: boolean;
   generatedClaimCategory: string | null;
   finalSafeResponseCategory: string | null;
-  authorityCategorySource: "explicit_intent" | "normalized_intent" | "selected_flow" | "claim" | "none";
+  authorityCategorySource:
+    | "triage_outcome"
+    | "explicit_intent"
+    | "normalized_intent"
+    | "selected_flow"
+    | "official_context"
+    | "claim"
+    | "none";
+  replacementReason: string | null;
+  triageResponseProtected: boolean;
   authorityConflictDetected: boolean;
   authorityConflictCategories: string[];
   winningSourceTypes: string[];
@@ -21,8 +30,19 @@ export type ExpectedAuthorityCategory =
   | "business_hours"
   | "pickup"
   | "address"
+  | "official_contact"
+  | "technical_evaluation"
+  | "generic_unavailable"
   | "exceptionRequest"
   | null;
+
+export type OfficialHoursEvaluation = {
+  evaluated: boolean;
+  requestedDay: string | null;
+  requestedTime: string | null;
+  requestedDayOpen: boolean | null;
+  requestedTimeWithinHours: boolean | null;
+};
 
 function normalize(value: string): string {
   return value
@@ -42,7 +62,9 @@ function hasSourceForCategory(sources: AssistantRuntimeSource[], category: strin
     return (
       sourceText.includes(normalizedCategory) ||
       (source.id === "official-structured-data" &&
-        ["address", "businesshours"].includes(normalizedCategory))
+        ["address", "businesshours", "business_hours", "official_contact", "contact"].includes(
+          normalizedCategory,
+        ))
     );
   });
 }
@@ -53,13 +75,18 @@ function safeUnavailable(category: string): string {
       return "Não tenho um valor confirmado para esse serviço. Posso verificar para você.";
     case "pickup":
       return "Preciso confirmar se a retirada está disponível para esse atendimento.";
-    case "booking":
     case "availability":
-      return "Preciso confirmar a disponibilidade antes de indicar ou confirmar um horário.";
+      return "Preciso confirmar se existe disponibilidade para esse atendimento.";
+    case "booking":
+      return "Não consigo confirmar esse agendamento sem consultar a agenda.";
     case "business_hours":
-      return "Preciso confirmar o horário oficial de funcionamento antes de responder.";
+      return "Esse horário está fora do funcionamento oficial informado.";
     case "address":
       return "Preciso confirmar o endereço oficial antes de informar esse dado.";
+    case "official_contact":
+      return "O contato oficial não está disponível no contexto. Posso encaminhar para confirmação da equipe.";
+    case "technical_evaluation":
+      return "Sem problema. Os dados informados foram registrados, e o detalhe técnico poderá ser verificado durante a avaliação ou confirmado pela equipe.";
     case "exceptionRequest":
       return "Preciso confirmar essa exceção com um atendente antes de prometer esse atendimento.";
     default:
@@ -67,59 +94,147 @@ function safeUnavailable(category: string): string {
   }
 }
 
+const WEEKDAY_ALIASES: Array<[string, string]> = [
+  ["domingo", "sunday"],
+  ["segunda", "monday"],
+  ["terca", "tuesday"],
+  ["quarta", "wednesday"],
+  ["quinta", "thursday"],
+  ["sexta", "friday"],
+  ["sabado", "saturday"],
+];
+
+function parseRequestedTime(message: string): string | null {
+  const match = message.match(/\b(\d{1,2})(?::(\d{2}))?\s*(?:h|hrs?|horas?)?\b/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2] ?? "0");
+  if (hour > 23 || minute > 59) return null;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+export function evaluateRequestedBusinessHours(input: {
+  currentMessage: string;
+  officialBusinessContext?: OfficialBusinessContext | null;
+}): OfficialHoursEvaluation {
+  const message = normalize(input.currentMessage);
+  const requestedDay = WEEKDAY_ALIASES.find(([alias]) => message.includes(alias))?.[1] ?? null;
+  const requestedTime = parseRequestedTime(message);
+  if (!requestedDay || !input.officialBusinessContext) {
+    return {
+      evaluated: false,
+      requestedDay,
+      requestedTime,
+      requestedDayOpen: null,
+      requestedTimeWithinHours: null,
+    };
+  }
+
+  const intervals = input.officialBusinessContext.businessHours[
+    requestedDay as keyof OfficialBusinessContext["businessHours"]
+  ] ?? [];
+  const requestedDayOpen = intervals.length > 0;
+  if (!requestedTime) {
+    return {
+      evaluated: true,
+      requestedDay,
+      requestedTime: null,
+      requestedDayOpen,
+      requestedTimeWithinHours: null,
+    };
+  }
+
+  const requestedMinutes = Number(requestedTime.slice(0, 2)) * 60 + Number(requestedTime.slice(3));
+  const requestedTimeWithinHours = intervals.some((interval) => {
+    const [startHour, startMinute] = interval.start.split(":").map(Number);
+    const [endHour, endMinute] = interval.end.split(":").map(Number);
+    return (
+      requestedMinutes >= startHour * 60 + startMinute &&
+      requestedMinutes <= endHour * 60 + endMinute
+    );
+  });
+  return {
+    evaluated: true,
+    requestedDay,
+    requestedTime,
+    requestedDayOpen,
+    requestedTimeWithinHours,
+  };
+}
+
 export function deriveExpectedAuthorityCategory(input: {
   currentMessage: string;
   normalizedIntent?: string | null;
   selectedFlowKey?: string | null;
-}): { category: ExpectedAuthorityCategory; source: RuntimeAuthorityGuardResult["authorityCategorySource"] } {
+  conversationalOutcome?: ExpectedAuthorityCategory;
+  officialBusinessContext?: OfficialBusinessContext | null;
+}): {
+  category: ExpectedAuthorityCategory;
+  source: RuntimeAuthorityGuardResult["authorityCategorySource"];
+  officialHours: OfficialHoursEvaluation;
+} {
+  const officialHours = evaluateRequestedBusinessHours(input);
+  if (input.conversationalOutcome === "technical_evaluation") {
+    return { category: "technical_evaluation", source: "triage_outcome", officialHours };
+  }
+
   const message = normalize(input.currentMessage);
+  if (/(?:telefone|numero|whatsapp|contato|como falar com voces|como falar com a empresa)/.test(message)) {
+    return { category: "official_contact", source: "explicit_intent", officialHours };
+  }
   if (/(?:preco|valor|quanto custa|quanto fica|orcamento|custa)/.test(message)) {
-    return { category: "price", source: "explicit_intent" };
+    return { category: "price", source: "explicit_intent", officialHours };
+  }
+  if (
+    officialHours.evaluated &&
+    (officialHours.requestedDayOpen === false || officialHours.requestedTimeWithinHours === false)
+  ) {
+    return { category: "business_hours", source: "official_context", officialHours };
   }
   if (
     /(?:agendar|agendamento|marcar|reserva|domingo|segunda|terca|quarta|quinta|sexta|sabado)\b/.test(message) &&
     /(?:\b(?:as|a)\s*\d{1,2}|agendar|agendamento|marcar|reserva|horario)/.test(message)
   ) {
-    return { category: "booking", source: "explicit_intent" };
+    return { category: "booking", source: "explicit_intent", officialHours };
   }
   if (/(?:para agora|imediato|disponibilidade|tem vaga|tem horario)/.test(message)) {
-    return { category: "availability", source: "explicit_intent" };
+    return { category: "availability", source: "explicit_intent", officialHours };
   }
   if (/(?:horario|funcionamento|abrem|aberto|fechado)/.test(message)) {
-    return { category: "business_hours", source: "explicit_intent" };
+    return { category: "business_hours", source: "explicit_intent", officialHours };
   }
   if (/(?:busca|buscar|retirada|retirar|coleta|domicilio)/.test(message)) {
-    return { category: "pickup", source: "explicit_intent" };
+    return { category: "pickup", source: "explicit_intent", officialHours };
   }
   if (/(?:endereco|onde fica|localizacao|como chegar)/.test(message)) {
-    return { category: "address", source: "explicit_intent" };
+    return { category: "address", source: "explicit_intent", officialHours };
   }
   if (/(?:esperar|aguardar|depois de fechar|apos o horario)/.test(message)) {
-    return { category: "exceptionRequest", source: "explicit_intent" };
+    return { category: "exceptionRequest", source: "explicit_intent", officialHours };
   }
 
   const normalizedIntent = normalize(input.normalizedIntent ?? "");
   if (normalizedIntent.includes("price") || normalizedIntent.includes("orcamento")) {
-    return { category: "price", source: "normalized_intent" };
+    return { category: "price", source: "normalized_intent", officialHours };
   }
   if (normalizedIntent.includes("booking") || normalizedIntent.includes("schedule")) {
-    return { category: "booking", source: "normalized_intent" };
+    return { category: "booking", source: "normalized_intent", officialHours };
   }
   if (normalizedIntent.includes("availability")) {
-    return { category: "availability", source: "normalized_intent" };
+    return { category: "availability", source: "normalized_intent", officialHours };
   }
 
   const flow = normalize(input.selectedFlowKey ?? "");
   if (flow.includes("price") || flow.includes("orcamento")) {
-    return { category: "price", source: "selected_flow" };
+    return { category: "price", source: "selected_flow", officialHours };
   }
   if (flow.includes("pickup") || flow.includes("coleta")) {
-    return { category: "pickup", source: "selected_flow" };
+    return { category: "pickup", source: "selected_flow", officialHours };
   }
   if (flow.includes("company") || flow.includes("informacoes")) {
-    return { category: "address", source: "selected_flow" };
+    return { category: "address", source: "selected_flow", officialHours };
   }
-  return { category: null, source: "none" };
+  return { category: null, source: "none", officialHours };
 }
 
 function isHistoricalCustomerAmountReference(answer: string): boolean {
@@ -141,6 +256,11 @@ export function validateV1AnswerAuthority(input: {
   selectedFlowId?: string | null;
   selectedFlowKey?: string | null;
   expectedAuthorityCategory?: ExpectedAuthorityCategory;
+  conversationalOutcome?: ExpectedAuthorityCategory;
+  triageExitReason?: string | null;
+  customerUnableToAnswer?: boolean;
+  officialHoursEvaluation?: OfficialHoursEvaluation;
+  officialContactAvailable?: boolean;
   currentCustomerIntentSource?: "CUSTOMER_TEXT" | "TRANSCRIPTION";
   currentTurnIsExplicitIntent?: boolean;
 }): RuntimeAuthorityGuardResult {
@@ -150,18 +270,20 @@ export function validateV1AnswerAuthority(input: {
   const blockedCategories: string[] = [];
   const winningSourceTypes: string[] = [];
   const rejectedSourceTypes: string[] = [];
-  let replacementCategory: string | null = null;
+  let replacementCategory: ExpectedAuthorityCategory = null;
+  let replacementReason: string | null = null;
   let authorityConflictDetected = false;
   const authorityConflictCategories: string[] = [];
   const derivedExpected = deriveExpectedAuthorityCategory({
     currentMessage: input.currentMessage,
     normalizedIntent: input.normalizedIntent,
     selectedFlowKey: input.selectedFlowKey,
+    conversationalOutcome: input.conversationalOutcome,
+    officialBusinessContext: input.officialBusinessContext,
   });
   const expectedCategory = input.expectedAuthorityCategory ?? derivedExpected.category;
-  const authorityCategorySource = input.expectedAuthorityCategory
-    ? "explicit_intent"
-    : derivedExpected.source;
+  const authorityCategorySource = derivedExpected.source;
+  const officialHours = input.officialHoursEvaluation ?? derivedExpected.officialHours;
 
   const flowText = normalize(input.flowText ?? "");
   const sundayClosed = input.officialBusinessContext.businessHours.sunday.length === 0;
@@ -188,6 +310,7 @@ export function validateV1AnswerAuthority(input: {
     ) && /(?:vaga|disponibilidade|horario|agendamento)/.test(normalizedAnswer);
   const availabilityClaim =
     !availabilityExplicitlyUnconfirmed &&
+    !/(?:telefone|whatsapp|contato|numero)/.test(normalizedAnswer) &&
     /(?:disponivel|temos horario|posso te atender|atendimento hoje|atendimento amanha|agendar|confirmar o agendamento|vaga)/.test(
       normalizedAnswer,
     );
@@ -199,6 +322,9 @@ export function validateV1AnswerAuthority(input: {
     sundayClosed &&
     normalizedAnswer.includes("domingo") &&
     /(?:abert|atend|07:30|08:00|12:00)/.test(normalizedAnswer);
+  const contactClaim =
+    /(?:telefone|whatsapp|contato|numero)/.test(normalizedAnswer) &&
+    /(?:oficial|empresa|assistencia|atendimento|informar|disponivel)/.test(normalizedAnswer);
 
   const generatedClaimCategory = priceClaim
     ? "price"
@@ -206,15 +332,80 @@ export function validateV1AnswerAuthority(input: {
       ? "business_hours"
       : pickupClaim
         ? "pickup"
-        : availabilityClaim
-          ? normalizedQuestion.includes("agendar")
-            ? "booking"
-            : "availability"
-          : exceptionClaim
-            ? "exceptionRequest"
-            : null;
+        : contactClaim
+          ? "official_contact"
+          : availabilityClaim
+            ? normalizedQuestion.includes("agendar")
+              ? "booking"
+              : "availability"
+            : exceptionClaim
+              ? "exceptionRequest"
+              : null;
 
-  if (priceClaim && !hasSourceForCategory(input.sources, "price")) {
+  if (expectedCategory === "technical_evaluation") {
+    if (generatedClaimCategory) {
+      blockedCategories.push(generatedClaimCategory);
+    }
+    return {
+      answer: safeUnavailable("technical_evaluation"),
+      blockedCategories: Array.from(new Set(blockedCategories)),
+      unsupportedClaimDetected: blockedCategories.length > 0,
+      generatedClaimCategory,
+      finalSafeResponseCategory: "technical_evaluation",
+      authorityCategorySource: "triage_outcome",
+      replacementReason: "explicit_triage_outcome_precedence",
+      triageResponseProtected: true,
+      authorityConflictDetected,
+      authorityConflictCategories: Array.from(new Set(authorityConflictCategories)),
+      winningSourceTypes: Array.from(new Set(winningSourceTypes)),
+      rejectedSourceTypes: Array.from(new Set(rejectedSourceTypes)),
+    };
+  }
+
+  if (
+    expectedCategory === "business_hours" &&
+    officialHours.evaluated &&
+    (officialHours.requestedDayOpen === false || officialHours.requestedTimeWithinHours === false)
+  ) {
+    blockedCategories.push(
+      generatedClaimCategory && generatedClaimCategory !== "business_hours"
+        ? generatedClaimCategory
+        : "businessHours",
+    );
+    return {
+      answer: safeUnavailable("business_hours"),
+      blockedCategories: Array.from(new Set(blockedCategories)),
+      unsupportedClaimDetected: blockedCategories.length > 0,
+      generatedClaimCategory,
+      finalSafeResponseCategory: "business_hours",
+      authorityCategorySource: "official_context",
+      replacementReason: "official_business_hours_precedence",
+      triageResponseProtected: false,
+      authorityConflictDetected,
+      authorityConflictCategories: Array.from(new Set(authorityConflictCategories)),
+      winningSourceTypes: Array.from(new Set([...winningSourceTypes, "OFFICIAL_CONTEXT"])),
+      rejectedSourceTypes: Array.from(new Set(rejectedSourceTypes)),
+    };
+  }
+
+  const priceResponseAlreadySafe =
+    /(?:nao tenho|nao possuo|preciso confirmar|posso verificar).{0,48}(?:preco|valor|orcamento)/.test(
+      normalizedAnswer,
+    );
+
+  if (
+    expectedCategory === "price" &&
+    !hasSourceForCategory(input.sources, "price") &&
+    !priceResponseAlreadySafe
+  ) {
+    if (generatedClaimCategory && generatedClaimCategory !== "price") {
+      blockedCategories.push(generatedClaimCategory);
+    } else {
+      blockedCategories.push("price");
+    }
+    replacementCategory = "price";
+    replacementReason = "expected_category_without_authority";
+  } else if (priceClaim && !hasSourceForCategory(input.sources, "price")) {
     blockedCategories.push("price");
     replacementCategory = expectedCategory ?? "price";
   } else if (sundayOpenClaim) {
@@ -223,6 +414,14 @@ export function validateV1AnswerAuthority(input: {
   } else if (pickupClaim && !hasSourceForCategory(input.sources, "pickup")) {
     blockedCategories.push("pickup");
     replacementCategory = expectedCategory ?? "pickup";
+  } else if (
+    expectedCategory === "official_contact" &&
+    !input.officialContactAvailable &&
+    !hasSourceForCategory(input.sources, "official_contact")
+  ) {
+    blockedCategories.push("official_contact");
+    replacementCategory = "official_contact";
+    replacementReason = "official_contact_unavailable";
   } else if (
     availabilityClaim &&
     !hasSourceForCategory(input.sources, "availability") &&
@@ -234,11 +433,22 @@ export function validateV1AnswerAuthority(input: {
   } else if (exceptionClaim && !hasSourceForCategory(input.sources, "exceptionRequest")) {
     blockedCategories.push("exceptionRequest");
     replacementCategory = expectedCategory ?? "exceptionRequest";
+  } else if (
+    contactClaim &&
+    !input.officialContactAvailable &&
+    !hasSourceForCategory(input.sources, "official_contact")
+  ) {
+    blockedCategories.push("official_contact");
+    replacementCategory = expectedCategory ?? "official_contact";
   }
 
   if (hasOfficialSchedule(input.officialBusinessContext)) {
     winningSourceTypes.push("OFFICIAL_CONTEXT");
   }
+  if (input.officialContactAvailable && expectedCategory === "official_contact") {
+    winningSourceTypes.push("OFFICIAL_CONTEXT");
+  }
+  if (replacementCategory) replacementReason = "unsupported_claim_replaced";
 
   return {
     answer: replacementCategory ? safeUnavailable(replacementCategory) : answer,
@@ -248,6 +458,8 @@ export function validateV1AnswerAuthority(input: {
     finalSafeResponseCategory: replacementCategory,
     authorityCategorySource:
       expectedCategory !== null ? authorityCategorySource : generatedClaimCategory ? "claim" : "none",
+    replacementReason,
+    triageResponseProtected: false,
     authorityConflictDetected,
     authorityConflictCategories: Array.from(new Set(authorityConflictCategories)),
     winningSourceTypes: Array.from(new Set(winningSourceTypes)),

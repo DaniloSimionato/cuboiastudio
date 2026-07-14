@@ -52,11 +52,20 @@ export type RuntimeV2ShadowSnapshot = {
   audioMessage?: boolean;
   transcriptionAvailable?: boolean;
   transcriptionPersisted?: boolean;
+  v1TriageSignal?: {
+    customerUnableToAnswer?: boolean;
+    triageExitReason?: string | null;
+    requestedDetailKey?: string | null;
+    conversationalOutcome?: string | null;
+  };
   v1Comparison?: {
     selectedFlowId?: string | null;
     selectedIntent?: string | null;
     triageMode?: string | null;
     toolsExposed?: string[];
+    customerUnableToAnswer?: boolean;
+    triageExitReason?: string | null;
+    conversationalOutcome?: string | null;
   };
 };
 
@@ -253,8 +262,22 @@ export class RuntimeV2ShadowOrchestrator {
         ),
     );
 
+    const stateBeforeQuestionSync = state;
     const snapshotQuestion = snapshot.lastRelevantQuestion;
+    const v1TriageSignal = snapshot.v1TriageSignal;
+    const staleQuestionRemoved = Boolean(
+      v1TriageSignal?.customerUnableToAnswer && state.lastRelevantQuestion,
+    );
+    if (staleQuestionRemoved) {
+      state = {
+        ...state,
+        lastRelevantQuestion: null,
+        lastRelevantQuestionMessageId: null,
+        lastRelevantQuestionContextVersion: null,
+      };
+    }
     if (
+      !staleQuestionRemoved &&
       !state.lastRelevantQuestion &&
       snapshotQuestion?.contextVersion === snapshot.scope.contextVersion &&
       snapshotQuestion.askedAt instanceof Date &&
@@ -279,7 +302,7 @@ export class RuntimeV2ShadowOrchestrator {
       };
     }
 
-    const beforeState = state;
+    const beforeState = stateBeforeQuestionSync;
     let messageAlreadyProcessed = messageAlreadyProcessedBeforeLoad;
     const understanding = understandTurn({
       message: snapshot.currentMessage,
@@ -372,7 +395,10 @@ export class RuntimeV2ShadowOrchestrator {
       transcriptionPersisted: snapshot.transcriptionPersisted,
       lastRelevantQuestionUpdated:
         beforeState.lastRelevantQuestion?.key !== nextState.lastRelevantQuestion?.key,
-      lastRelevantQuestionUpdateReason: understanding.reasonCodes.includes("CUSTOMER_UNABLE_TO_ANSWER")
+      lastRelevantQuestionCleared:
+        Boolean(staleQuestionRemoved) || understanding.reasonCodes.includes("CUSTOMER_UNABLE_TO_ANSWER"),
+      staleQuestionRemoved,
+      lastRelevantQuestionUpdateReason: staleQuestionRemoved || understanding.reasonCodes.includes("CUSTOMER_UNABLE_TO_ANSWER")
         ? "CUSTOMER_UNABLE_TO_ANSWER"
         : beforeState.lastRelevantQuestion?.key !== nextState.lastRelevantQuestion?.key
           ? "ASSISTANT_OBJECTIVE_QUESTION"

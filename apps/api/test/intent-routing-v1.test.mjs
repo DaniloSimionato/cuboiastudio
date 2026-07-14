@@ -58,6 +58,21 @@ test("seleciona preço, formatação e coleta por evidência normalizada", async
   assert.equal((await router().route({ companyId: "c", assistantId: "a", message: "qual o endereço?", flows })).flowId, "company");
 });
 
+test("contato é uma categoria genérica e vence assistência apenas quando há evidência de contato", async () => {
+  const result = await router().route({
+    companyId: "tenant-contact",
+    assistantId: "assistant-contact",
+    message: "Qual é o telefone da assistência?",
+    flows: [
+      flow("technical", "Suporte de componentes", 100, ["assistência", "ssd"]),
+      flow("company", "Canal institucional", 1, ["contato", "telefone"]),
+    ],
+  });
+  assert.equal(result.flowId, "company");
+  assert.equal(result.candidates?.[0]?.intentKey, "company_information");
+  assert.ok(result.matchedAliases.includes("official_contact"));
+});
+
 test("múltiplas necessidades escolhem o flow técnico e registram candidato comercial", async () => {
   const result = await router().route({
     companyId: "c",

@@ -357,3 +357,60 @@ test("horário comercial não é confundido com vaga ou agendamento", () => {
   });
   assert.equal(pickupPolicy.unsupportedClaimDetected, false);
 });
+
+test("saída explícita da triagem vence a categoria inventada pelo provider", () => {
+  const result = validateV1AnswerAuthority({
+    answer: "Preciso confirmar a disponibilidade antes de indicar um horário.",
+    currentMessage: "Não entendo SATA ou NVMe. Vocês podem verificar?",
+    sources: [],
+    officialBusinessContext: officialContext(),
+    conversationalOutcome: "technical_evaluation",
+    triageExitReason: "CUSTOMER_REQUESTS_TECHNICAL_EVALUATION",
+    customerUnableToAnswer: true,
+  });
+
+  assert.equal(result.finalSafeResponseCategory, "technical_evaluation");
+  assert.equal(result.authorityCategorySource, "triage_outcome");
+  assert.equal(result.triageResponseProtected, true);
+  assert.equal(result.replacementReason, "explicit_triage_outcome_precedence");
+  assert.match(result.answer, /avaliação|avaliacao/i);
+  assert.doesNotMatch(result.answer, /disponibilidade|horário|horario/i);
+});
+
+test("domingo fechado vence booking e produz categoria de horário comercial", () => {
+  const result = validateV1AnswerAuthority({
+    answer: "Posso verificar a disponibilidade para domingo às 13h.",
+    currentMessage: "Domingo às 13h posso levar?",
+    sources: [],
+    officialBusinessContext: officialContext(),
+    normalizedIntent: "request_booking_date",
+  });
+
+  assert.equal(result.finalSafeResponseCategory, "business_hours");
+  assert.equal(result.authorityCategorySource, "official_context");
+  assert.equal(result.replacementReason, "official_business_hours_precedence");
+  assert.match(result.answer, /funcionamento oficial/i);
+});
+
+test("contato oficial ausente não é inventado e contato estruturado é permitido", () => {
+  const absent = validateV1AnswerAuthority({
+    answer: "O telefone da empresa é 67999999999.",
+    currentMessage: "Qual é o telefone da assistência?",
+    sources: [],
+    officialBusinessContext: officialContext(),
+    expectedAuthorityCategory: "official_contact",
+    officialContactAvailable: false,
+  });
+  assert.equal(absent.finalSafeResponseCategory, "official_contact");
+  assert.match(absent.answer, /contato oficial não está disponível/i);
+
+  const present = validateV1AnswerAuthority({
+    answer: "O telefone oficial está disponível no cadastro da empresa.",
+    currentMessage: "Qual é o telefone da assistência?",
+    sources: [{ id: "official-structured-data", title: "Contato oficial" }],
+    officialBusinessContext: officialContext(),
+    expectedAuthorityCategory: "official_contact",
+    officialContactAvailable: true,
+  });
+  assert.equal(present.unsupportedClaimDetected, false);
+});

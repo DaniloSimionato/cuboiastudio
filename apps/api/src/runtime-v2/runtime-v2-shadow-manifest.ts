@@ -40,6 +40,9 @@ export type RuntimeV2ShadowManifest = {
   lastRelevantQuestionContextVersion: number | null;
   lastRelevantQuestionUpdated: boolean;
   lastRelevantQuestionUpdateReason: string;
+  lastRelevantQuestionCleared: boolean;
+  staleQuestionRemoved: boolean;
+  v2TriageSignalReceived: boolean;
   customerUnableToAnswer: boolean;
   retrievalPlanCategories: string[];
   authorityCategoriesRequested: string[];
@@ -71,6 +74,9 @@ export type RuntimeV2ShadowManifest = {
     selectedIntent: string | null;
     triageMode: string | null;
     toolsExposed: string[];
+    customerUnableToAnswer?: boolean;
+    triageExitReason?: string | null;
+    conversationalOutcome?: string | null;
   };
 };
 
@@ -88,6 +94,9 @@ export function buildRuntimeV2ShadowManifest(input: {
   transcriptionPersisted?: boolean;
   lastRelevantQuestionUpdated?: boolean;
   lastRelevantQuestionUpdateReason?: string;
+  lastRelevantQuestionCleared?: boolean;
+  staleQuestionRemoved?: boolean;
+  v2TriageSignalReceived?: boolean;
   beforeState: ConversationState;
   afterState: ConversationState;
   understanding: TurnUnderstanding;
@@ -152,7 +161,18 @@ export function buildRuntimeV2ShadowManifest(input: {
       input.afterState.lastRelevantQuestion?.contextVersion ?? null,
     lastRelevantQuestionUpdated: input.lastRelevantQuestionUpdated ?? false,
     lastRelevantQuestionUpdateReason: input.lastRelevantQuestionUpdateReason ?? "UNCHANGED",
-    customerUnableToAnswer: input.understanding.reasonCodes.includes("CUSTOMER_UNABLE_TO_ANSWER"),
+    lastRelevantQuestionCleared: input.lastRelevantQuestionCleared ?? false,
+    staleQuestionRemoved: input.staleQuestionRemoved ?? false,
+    v2TriageSignalReceived:
+      input.v2TriageSignalReceived ??
+      Boolean(
+        input.v1Comparison?.customerUnableToAnswer ||
+          input.v1Comparison?.triageExitReason ||
+          input.v1Comparison?.conversationalOutcome,
+      ),
+    customerUnableToAnswer:
+      input.understanding.reasonCodes.includes("CUSTOMER_UNABLE_TO_ANSWER") ||
+      Boolean(input.v1Comparison?.customerUnableToAnswer),
     retrievalPlanCategories: [
       ...input.retrievalPlan.memoryTopics,
       ...input.retrievalPlan.officialFactCategories,
@@ -179,6 +199,9 @@ export function buildRuntimeV2ShadowManifest(input: {
       selectedIntent: comparison.selectedIntent ?? null,
       triageMode: comparison.triageMode ?? null,
       toolsExposed: comparison.toolsExposed ?? [],
+      customerUnableToAnswer: comparison.customerUnableToAnswer ?? false,
+      triageExitReason: comparison.triageExitReason ?? null,
+      conversationalOutcome: comparison.conversationalOutcome ?? null,
     },
   };
 }
