@@ -36,3 +36,24 @@ export function formatImportedHumanHistoryMessage(content: string): string {
 
   return buildHumanHistoryMessage(truncatedContent);
 }
+
+export function compactRepeatedAssistantHistoryMessages<T extends { role?: string; content?: unknown }>(
+  messages: T[],
+): { messages: T[]; removedCount: number } {
+  const compacted: T[] = [];
+  let removedCount = 0;
+  for (const message of messages) {
+    const previous = compacted[compacted.length - 1];
+    const isDuplicateAssistant =
+      message.role === "assistant" &&
+      previous?.role === "assistant" &&
+      typeof message.content === "string" &&
+      message.content.trim() === String(previous.content ?? "").trim();
+    if (isDuplicateAssistant) {
+      removedCount += 1;
+      continue;
+    }
+    compacted.push(message);
+  }
+  return { messages: compacted, removedCount };
+}

@@ -261,6 +261,22 @@ test("guardião bloqueia preço, pickup e disponibilidade sem fonte e vence conf
   assert.ok(availability.blockedCategories.includes("availability"));
 });
 
+test("guardião usa a intenção atual para escolher a resposta segura", () => {
+  const result = validateV1AnswerAuthority({
+    answer: "Temos disponibilidade e posso agendar esse atendimento.",
+    currentMessage: "Qual o preço para formatar o Mac?",
+    normalizedIntent: "ask_price",
+    selectedFlowId: "configured-price-flow",
+    selectedFlowKey: "pricing",
+    sources: [],
+    officialBusinessContext: officialContext(),
+  });
+  assert.deepEqual(result.blockedCategories, ["availability"]);
+  assert.equal(result.generatedClaimCategory, "availability");
+  assert.equal(result.finalSafeResponseCategory, "price");
+  assert.match(result.answer, /valor confirmado/i);
+});
+
 test("proteção factual diferencia especificações do cliente de afirmações comerciais", () => {
   const context = officialContext();
   const customerSpecs = validateV1AnswerAuthority({

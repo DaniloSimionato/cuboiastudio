@@ -92,28 +92,28 @@ test("shadow mantém estado ao longo dos turnos e não produz provider, ferramen
   const price = await orchestrator.process(
     snapshot("Quero saber o valor para formatar um Mac M1.", "message-2"),
   );
-  assert.equal(price.state.objective.key, "format_mac");
+  assert.equal(price.state.objective.key, "format_device");
   assert.equal(price.manifest.responsePlanAction, "SAFE_UNAVAILABLE");
   assert.deepEqual(price.manifest.authorityCategoriesMissing, ["price"]);
 
   const files = await orchestrator.process(
     snapshot("Preciso salvar imagens e uma pasta de projeto.", "message-3"),
   );
-  assert.equal(files.state.objective.key, "format_mac");
+  assert.equal(files.state.objective.key, "format_device");
   assert.ok(files.manifest.confirmedFactKeysAdded.includes("storage_requirements"));
 
   const pickup = await orchestrator.process(snapshot("Vocês conseguem buscar?", "message-4"));
-  assert.equal(pickup.manifest.currentObjective, "format_mac");
+  assert.equal(pickup.manifest.currentObjective, "format_device");
   assert.ok(pickup.manifest.retrievalPlanCategories.includes("pickup"));
   assert.equal(pickup.manifest.responsePlanAction, "SAFE_UNAVAILABLE");
 
   const address = await orchestrator.process(snapshot("Qual é o endereço?", "message-5"));
-  assert.equal(address.manifest.currentObjective, "format_mac");
+  assert.equal(address.manifest.currentObjective, "format_device");
   assert.ok(address.manifest.retrievalPlanCategories.includes("address"));
 
   const continued = await orchestrator.process(snapshot("Vamos continuar.", "message-6"));
-  assert.equal(continued.manifest.currentObjective, "format_mac");
-  assert.equal(continued.state.objective.key, "format_mac");
+  assert.equal(continued.manifest.currentObjective, "format_device");
+  assert.equal(continued.state.objective.key, "format_device");
 
   const duplicate = await orchestrator.process(snapshot("Vamos continuar.", "message-6"));
   assert.equal(duplicate.manifest.messageAlreadyProcessed, true);
@@ -182,6 +182,25 @@ test("shadow mantém referência de confirmação, correção, áudio e fala hum
   assert.equal(human.manifest.providerCalled, false);
 });
 
+test("triagem técnica sai com segurança quando o cliente não consegue responder", async () => {
+  const store = new InMemoryConversationStateStore();
+  const orchestrator = new RuntimeV2ShadowOrchestrator(
+    store,
+    shadowEnvironment,
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  );
+  const asked = await orchestrator.process(snapshot("Qual é o modelo do equipamento?", "question"));
+  assert.equal(asked.state.lastRelevantQuestion?.fieldKey, "device_model");
+
+  const unable = await orchestrator.process(snapshot("Não entendo nada disso.", "unable"));
+  assert.equal(unable.manifest.turnIntent, "unable_to_answer");
+  assert.equal(unable.manifest.lastRelevantQuestionKey, null);
+  assert.equal(unable.manifest.lastRelevantQuestionUpdated, true);
+  assert.equal(unable.manifest.lastRelevantQuestionUpdateReason, "CUSTOMER_UNABLE_TO_ANSWER");
+  assert.equal(unable.manifest.customerUnableToAnswer, true);
+  assert.equal(unable.manifest.providerCalled, false);
+});
+
 test("reset cria novo escopo e erro do shadow não bloqueia o V1", async () => {
   const store = new InMemoryConversationStateStore();
   const orchestrator = new RuntimeV2ShadowOrchestrator(store, shadowEnvironment);
@@ -194,7 +213,7 @@ test("reset cria novo escopo e erro do shadow não bloqueia o V1", async () => {
     (await store.load({ ...resetScope, runtimeVersion: "V2", mode: "SHADOW" })).objective,
     null,
   );
-  assert.equal(oldScopeState.objective.key, "format_mac");
+  assert.equal(oldScopeState.objective.key, "format_device");
 
   const failingStore = {
     load: async () => {

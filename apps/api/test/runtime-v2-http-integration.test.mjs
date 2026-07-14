@@ -203,7 +203,7 @@ test(
     });
     const parsedState = state?.stateJson;
     assert.equal(state.revision, messages.length);
-    assert.equal(parsedState.objective.key, "format_mac");
+    assert.equal(parsedState.objective.key, "format_device");
     assert.ok(parsedState.confirmedFacts.storage_requirements);
     assert.equal(new Set(shadowLogIds).size, messages.length);
   }),

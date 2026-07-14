@@ -225,6 +225,7 @@ export type PromptCompilerInput = {
   isSecondAttempt?: boolean;
   triageState?: TriageState | null;
   triageFlowContext?: TriageFlowContext | null;
+  currentTurnPriorityInstruction?: string | null;
 };
 
 function buildSecurityBlock(
@@ -415,6 +416,7 @@ export class PromptCompilerService {
       isSecondAttempt = false,
       triageState = null,
       triageFlowContext = null,
+      currentTurnPriorityInstruction = null,
     } = input;
 
     if (triageMode) {
@@ -664,6 +666,10 @@ export class PromptCompilerService {
         ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
         ...(message.name ? { name: message.name } : {}),
       } as any);
+    }
+
+    if (currentTurnPriorityInstruction) {
+      messages.push({ role: "system", content: currentTurnPriorityInstruction });
     }
 
     messages.push({

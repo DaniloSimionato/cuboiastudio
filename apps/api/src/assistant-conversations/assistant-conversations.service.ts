@@ -10,6 +10,7 @@ import {
 } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { ConversationChannelType, ConversationSource, Prisma, Status } from "@prisma/client";
+import type { AssistantFlow } from "@prisma/client";
 import type { AiResolvedRuntimeConfig } from "../ai/ai.types";
 import { AiService } from "../ai/ai.service";
 import { AttachmentInterpreterService } from "../attachments/attachment-interpreter.service";
@@ -76,14 +77,24 @@ import {
   resolveRuntimeFallbackAnswer,
   selectRuntimeKnowledgeItems,
 } from "./runtime-context-manifest";
-import { formatImportedHumanHistoryMessage } from "./conversation-history-format";
-import type { RuntimeV2ShadowSnapshot } from "../runtime-v2/runtime-v2-shadow-orchestrator";
+import {
+  compactRepeatedAssistantHistoryMessages,
+  formatImportedHumanHistoryMessage,
+} from "./conversation-history-format";
+import {
+  isActionableAssistantQuestion,
+  type RuntimeV2ShadowSnapshot,
+} from "../runtime-v2/runtime-v2-shadow-orchestrator";
 import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
-import { validateV1AnswerAuthority } from "./runtime-authority-guard";
+import {
+  deriveExpectedAuthorityCategory,
+  validateV1AnswerAuthority,
+} from "./runtime-authority-guard";
 import {
   extractCustomerStructuredFields,
-  flowIntentKey,
-  flowObjective,
+  getCustomerUnableToAnswerReason,
+  flowIntentKeyForFlow,
+  flowObjectiveForFlow,
 } from "../intent-router/intent-routing";
 
 export type AssistantConversationListItem = {
@@ -147,6 +158,7 @@ export type AssistantConversationRuntime = {
     historyWindowLimit?: number;
     historyMessagesSelected?: number;
     historyMessagesDropped?: number;
+    historyDuplicateResponsesRemoved?: number;
     audioMessage?: boolean;
     transcriptionAvailable?: boolean;
     transcriptionPersisted?: boolean;
@@ -232,6 +244,18 @@ export type AssistantConversationRuntime = {
     rejectedSourceTypes?: string[];
     v1UnsupportedClaimDetected?: boolean;
     v1UnsupportedClaimCategories?: string[];
+    expectedAuthorityCategory?: string | null;
+    generatedClaimCategory?: string | null;
+    finalSafeResponseCategory?: string | null;
+    authorityCategorySource?: string | null;
+    triageExitReason?: string | null;
+    requestedDetailBefore?: string | null;
+    requestedDetailAfter?: string | null;
+    requestedDetailChangeReason?: string | null;
+    customerUnableToAnswer?: boolean;
+    currentIntentOverrodeHistory?: boolean;
+    lastRelevantQuestionUpdated?: boolean;
+    lastRelevantQuestionUpdateReason?: string | null;
     behaviorId?: string | null;
     behaviorUpdatedAt?: Date | null;
     assistantUpdatedAt?: Date | null;
@@ -553,6 +577,25 @@ function formatManualTestConversationTitle(date: Date): string {
   const minutes = String(date.getMinutes()).padStart(2, "0");
 
   return `${DEFAULT_MANUAL_TEST_TITLE_PREFIX} - ${day}/${month}/${year} ${hours}:${minutes}`;
+}
+
+function answerRepeatsRefusedDetail(answer: string, requestedDetailKey: string | null): boolean {
+  if (!requestedDetailKey || !answer.includes("?")) return false;
+  const normalized = answer
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+  const patterns: Record<string, RegExp> = {
+    component_interface: /\b(?:sata|nvme|interface|conexao|formato)\b/,
+    ssd_interface: /\b(?:sata|nvme|interface|conexao|formato)\b/,
+    device_model: /\b(?:modelo|equipamento|notebook|computador)\b/,
+    component_compatibility: /\bcompatibilidade\b/,
+  };
+  return patterns[requestedDetailKey]?.test(normalized) ?? false;
+}
+
+function buildTriageExitAnswer(): string {
+  return "Sem problema. Já registrei as informações que você conseguiu fornecer. A equipe pode verificar o detalhe técnico pendente durante a avaliação.";
 }
 
 function toConversationMessageItem(
@@ -2458,8 +2501,21 @@ export class AssistantConversationsService {
 
     let shouldClearTriage = false;
     let triageContinuation = false;
+    let triageExitReason: string | null = null;
+    let requestedDetailBefore: string | null = null;
+    let requestedDetailChangeReason: string | null = null;
+    const customerUnableToAnswer = Boolean(
+      loadedTriageState?.active && getCustomerUnableToAnswerReason(customerIntentText),
+    );
 
     if (loadedTriageState && loadedTriageState.active && loadedTriageState.expiresAt > Date.now()) {
+      if (customerUnableToAnswer) {
+        shouldClearTriage = true;
+        triageMode = false;
+        triageExitReason = getCustomerUnableToAnswerReason(customerIntentText);
+        requestedDetailBefore = loadedTriageState.requestedDetailKey ?? loadedTriageState.requestedDetail;
+        requestedDetailChangeReason = "CUSTOMER_UNABLE_TO_PROVIDE_DETAIL";
+      }
       const isPriceQuery =
         /(quanto\s+fica|quanto\s+custa|valores?|preços?|custos?|precos?|tabela)/i.test(
           customerIntentText,
@@ -2475,18 +2531,23 @@ export class AssistantConversationsService {
           customerIntentText,
       );
 
-      if (isPriceQuery || isScheduleQuery || isListQuery || isHandoffQuery) {
+      if (
+        !customerUnableToAnswer &&
+        (isPriceQuery || isScheduleQuery || isListQuery || isHandoffQuery)
+      ) {
         shouldClearTriage = true;
       } else {
-        triageMode = true;
-        triageContinuation = true;
+        if (!customerUnableToAnswer) {
+          triageMode = true;
+          triageContinuation = true;
+        }
       }
     }
 
     if (shouldClearTriage && this.cacheService) {
       try {
         await this.cacheService.set(triageCacheKey, null, 1);
-        loadedTriageState = null;
+        if (!customerUnableToAnswer) loadedTriageState = null;
       } catch (err: any) {
         this.logger.warn(`Failed to clear triage state: ${err.message}`);
       }
@@ -2629,7 +2690,7 @@ export class AssistantConversationsService {
     });
 
     const conversationHistory = [...recentMessages].reverse();
-    const priorHistory = conversationHistory.slice(0, -1).map((message) => {
+    const rawPriorHistory = conversationHistory.slice(0, -1).map((message) => {
       const payload =
         message.externalPayload && typeof message.externalPayload === "object"
           ? (message.externalPayload as any)
@@ -2646,6 +2707,9 @@ export class AssistantConversationsService {
         ...(payload.name ? { name: payload.name } : {}),
       };
     });
+    const compactedHistory = compactRepeatedAssistantHistoryMessages(rawPriorHistory);
+    const priorHistory = compactedHistory.messages;
+    const historyDuplicateResponsesRemoved = compactedHistory.removedCount;
     const historyMessagesDropped = Math.max(
       0,
       (typeof this.prisma.assistantConversationMessage.count === "function"
@@ -2691,6 +2755,7 @@ export class AssistantConversationsService {
       historyWindowLimit: MAX_RUNTIME_HISTORY_MESSAGES,
       historyMessagesSelected: priorHistory.length,
       historyMessagesDropped,
+      historyDuplicateResponsesRemoved,
       audioMessage,
       transcriptionAvailable,
       transcriptionPersisted: transcriptionAvailable,
@@ -2716,6 +2781,14 @@ export class AssistantConversationsService {
       fallbackUsed: false,
       fallbackMessageUsed: false,
       fallbackCategory: null,
+      triageExitReason,
+      requestedDetailBefore,
+      requestedDetailAfter: null,
+      requestedDetailChangeReason,
+      customerUnableToAnswer,
+      currentIntentOverrodeHistory: false,
+      lastRelevantQuestionUpdated: false,
+      lastRelevantQuestionUpdateReason: null,
       instructionsIncluded: Boolean(assistant.instructions?.trim()),
       safetyInstructionIncluded: Boolean(assistant.safetyInstruction?.trim()),
       activeSecurityRulesCount: activeSecurityRules.length,
@@ -2789,7 +2862,7 @@ export class AssistantConversationsService {
             (message) =>
               message.role === "assistant" &&
               !message.content.startsWith("MENSAGEM HISTÓRICA DE ATENDENTE HUMANO ANTERIOR.") &&
-              message.content.includes("?"),
+              isActionableAssistantQuestion(message.content),
           );
         return question
           ? {
@@ -2830,6 +2903,7 @@ export class AssistantConversationsService {
       historyWindowLimit: contextMetadata.historyWindowLimit,
       historyMessagesSelected: contextMetadata.historyMessagesSelected,
       historyMessagesDropped: contextMetadata.historyMessagesDropped,
+      historyDuplicateResponsesRemoved: contextMetadata.historyDuplicateResponsesRemoved,
       audioMessage: contextMetadata.audioMessage,
       transcriptionAvailable: contextMetadata.transcriptionAvailable,
       transcriptionPersisted: contextMetadata.transcriptionPersisted,
@@ -2850,6 +2924,18 @@ export class AssistantConversationsService {
       knownFieldKeys: contextMetadata.knownFieldKeys,
       pendingFieldKeys: contextMetadata.pendingFieldKeys,
       requestedDetailKey: contextMetadata.requestedDetailKey,
+      triageExitReason: contextMetadata.triageExitReason,
+      requestedDetailBefore: contextMetadata.requestedDetailBefore,
+      requestedDetailAfter: contextMetadata.requestedDetailAfter,
+      requestedDetailChangeReason: contextMetadata.requestedDetailChangeReason,
+      customerUnableToAnswer: contextMetadata.customerUnableToAnswer,
+      expectedAuthorityCategory: contextMetadata.expectedAuthorityCategory,
+      generatedClaimCategory: contextMetadata.generatedClaimCategory,
+      finalSafeResponseCategory: contextMetadata.finalSafeResponseCategory,
+      authorityCategorySource: contextMetadata.authorityCategorySource,
+      currentIntentOverrodeHistory: contextMetadata.currentIntentOverrodeHistory,
+      lastRelevantQuestionUpdated: contextMetadata.lastRelevantQuestionUpdated,
+      lastRelevantQuestionUpdateReason: contextMetadata.lastRelevantQuestionUpdateReason,
       promptSections: [],
       promptCharCount: 0,
       initialMessageIncluded: false,
@@ -2925,10 +3011,7 @@ export class AssistantConversationsService {
       },
     };
     let answer = deterministicRuntime.answer;
-    let selectedFlowForAuthority: {
-      instructions?: string | null;
-      fixedMessage?: string | null;
-    } | null = null;
+    let selectedFlowForAuthority: AssistantFlow | null = null;
     const configuredFallbackMessage = assistant.fallbackMessage?.trim() || null;
     const resolveFallbackAnswer = (deterministicAnswer: string) =>
       resolveRuntimeFallbackAnswer({
@@ -3091,13 +3174,13 @@ export class AssistantConversationsService {
             ? {
                 flowId: selectedFlow.id,
                 flowName: selectedFlow.name,
-                objective: flowObjective(selectedFlow.name),
+                objective: flowObjectiveForFlow(selectedFlow),
                 requiredFieldKeys:
-                  flowIntentKey(selectedFlow.name) === "technical_support"
+                  flowIntentKeyForFlow(selectedFlow) === "technical_support"
                     ? ["device_model", "service_details"]
-                    : flowIntentKey(selectedFlow.name) === "pricing"
+                    : flowIntentKeyForFlow(selectedFlow) === "pricing"
                       ? ["service_details"]
-                      : flowIntentKey(selectedFlow.name) === "pickup_delivery"
+                      : flowIntentKeyForFlow(selectedFlow) === "pickup_delivery"
                         ? ["pickup_or_delivery_policy"]
                         : ["requested_information"],
                 knownFieldKeys: mergedKnownFieldKeys,
@@ -3212,6 +3295,26 @@ export class AssistantConversationsService {
             requestedDetailKey: contextMetadata.requestedDetailKey,
           };
 
+          const expectedAuthority = deriveExpectedAuthorityCategory({
+            currentMessage: customerIntentText,
+            normalizedIntent: routeResult.flowName,
+            selectedFlowKey: selectedFlow ? flowIntentKeyForFlow(selectedFlow) : null,
+          });
+          Object.assign(contextMetadata, {
+            expectedAuthorityCategory: expectedAuthority.category,
+            authorityCategorySource: expectedAuthority.source,
+            currentIntentOverrodeHistory: Boolean(
+              expectedAuthority.category &&
+              (historyDuplicateResponsesRemoved > 0 || triageExitReason || priorHistory.length > 8),
+            ),
+          });
+          contextMetadata.contextManifest = {
+            ...contextMetadata.contextManifest,
+            expectedAuthorityCategory: expectedAuthority.category,
+            authorityCategorySource: expectedAuthority.source,
+            currentIntentOverrodeHistory: contextMetadata.currentIntentOverrodeHistory,
+          };
+
           let toolCallsResolved = false;
 
           // Short-circuit logic (Phase 1.5)
@@ -3287,6 +3390,17 @@ export class AssistantConversationsService {
                   }
                 : null,
               memoryContextBlock,
+              currentTurnPriorityInstruction: [
+                "PRIORIDADE DO TURNO ATUAL:",
+                "Responda primeiro à mensagem atual do cliente. O histórico é apenas contexto e não pode substituir a intenção explícita deste turno.",
+                `Categoria factual esperada para este turno: ${expectedAuthority.category ?? "nenhuma"}.`,
+                selectedFlow
+                  ? `Flow atual selecionado: ${selectedFlow.id}. Execute somente o objetivo configurado para este flow.`
+                  : "Nenhum flow foi selecionado para este turno.",
+                triageExitReason
+                  ? "O cliente não consegue fornecer o detalhe técnico solicitado. Não repita a pergunta; reconheça os dados já informados e indique que a avaliação técnica poderá verificar o detalhe pendente."
+                  : "Não reutilize respostas antigas de fallback quando elas não responderem à intenção atual.",
+              ].join("\n"),
             });
 
             const promptSectionManifest = buildPromptSectionManifest(promptMessages);
@@ -3933,14 +4047,37 @@ export class AssistantConversationsService {
       toolCallCount: contextMetadata.toolCallCount ?? 0,
     };
 
+    if (customerUnableToAnswer && answerRepeatsRefusedDetail(answer, requestedDetailBefore)) {
+      answer = buildTriageExitAnswer();
+      contextMetadata.triageExitReason =
+        contextMetadata.triageExitReason ?? "CUSTOMER_UNABLE_TO_PROVIDE_DETAIL";
+      contextMetadata.requestedDetailAfter = null;
+      contextMetadata.requestedDetailChangeReason = "CUSTOMER_UNABLE_TO_PROVIDE_DETAIL";
+    }
+
+    const expectedAuthority = deriveExpectedAuthorityCategory({
+      currentMessage: customerIntentText,
+      normalizedIntent: contextMetadata.detectedIntent,
+      selectedFlowKey: selectedFlowForAuthority
+        ? flowIntentKeyForFlow(selectedFlowForAuthority)
+        : null,
+    });
     const authorityGuard = validateV1AnswerAuthority({
       answer,
       currentMessage: customerIntentText,
       sources,
       officialBusinessContext,
       flowText: selectedFlowForAuthority
-        ? `${selectedFlowForAuthority.instructions ?? ""} ${selectedFlowForAuthority.fixedMessage ?? ""}`
+        ? `${selectedFlowForAuthority.flowInstructions ?? ""} ${selectedFlowForAuthority.fixedMessage ?? ""}`
         : null,
+      normalizedIntent: contextMetadata.detectedIntent,
+      selectedFlowId: contextMetadata.selectedFlowId,
+      selectedFlowKey: selectedFlowForAuthority
+        ? flowIntentKeyForFlow(selectedFlowForAuthority)
+        : null,
+      expectedAuthorityCategory: expectedAuthority.category,
+      currentCustomerIntentSource: contextMetadata.intentInputSource,
+      currentTurnIsExplicitIntent: Boolean(expectedAuthority.category),
     });
     if (authorityGuard.unsupportedClaimDetected) {
       answer = authorityGuard.answer;
@@ -3954,6 +4091,10 @@ export class AssistantConversationsService {
     Object.assign(contextMetadata, {
       v1UnsupportedClaimDetected: authorityGuard.unsupportedClaimDetected,
       v1UnsupportedClaimCategories: authorityGuard.blockedCategories,
+      expectedAuthorityCategory: expectedAuthority.category,
+      generatedClaimCategory: authorityGuard.generatedClaimCategory,
+      finalSafeResponseCategory: authorityGuard.finalSafeResponseCategory,
+      authorityCategorySource: authorityGuard.authorityCategorySource,
       authorityConflictDetected: authorityGuard.authorityConflictDetected,
       authorityConflictCategories: authorityGuard.authorityConflictCategories,
       winningSourceTypes: authorityGuard.winningSourceTypes,
@@ -3967,6 +4108,10 @@ export class AssistantConversationsService {
       rejectedSourceTypes: authorityGuard.rejectedSourceTypes,
       v1UnsupportedClaimDetected: authorityGuard.unsupportedClaimDetected,
       v1UnsupportedClaimCategories: authorityGuard.blockedCategories,
+      expectedAuthorityCategory: expectedAuthority.category,
+      generatedClaimCategory: authorityGuard.generatedClaimCategory,
+      finalSafeResponseCategory: authorityGuard.finalSafeResponseCategory,
+      authorityCategorySource: authorityGuard.authorityCategorySource,
     };
 
     runtime = {
@@ -4100,6 +4245,19 @@ export class AssistantConversationsService {
             rejectedSourceTypes: runtime.context.rejectedSourceTypes,
             v1UnsupportedClaimDetected: runtime.context.v1UnsupportedClaimDetected,
             v1UnsupportedClaimCategories: runtime.context.v1UnsupportedClaimCategories,
+            expectedAuthorityCategory: runtime.context.expectedAuthorityCategory,
+            generatedClaimCategory: runtime.context.generatedClaimCategory,
+            finalSafeResponseCategory: runtime.context.finalSafeResponseCategory,
+            authorityCategorySource: runtime.context.authorityCategorySource,
+            triageExitReason: runtime.context.triageExitReason,
+            requestedDetailBefore: runtime.context.requestedDetailBefore,
+            requestedDetailAfter: runtime.context.requestedDetailAfter,
+            requestedDetailChangeReason: runtime.context.requestedDetailChangeReason,
+            customerUnableToAnswer: runtime.context.customerUnableToAnswer,
+            currentIntentOverrodeHistory: runtime.context.currentIntentOverrodeHistory,
+            lastRelevantQuestionUpdated: runtime.context.lastRelevantQuestionUpdated,
+            lastRelevantQuestionUpdateReason: runtime.context.lastRelevantQuestionUpdateReason,
+            historyDuplicateResponsesRemoved: runtime.context.historyDuplicateResponsesRemoved,
             knowledgeCount: runtime.ragData?.usedKnowledge?.length ?? knowledgeItems.length,
             knowledgeLimit: runtime.context.knowledgeLimit,
             knowledgeChunkCount: runtime.context.knowledgeChunkCount,

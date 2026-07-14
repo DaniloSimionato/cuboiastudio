@@ -42,6 +42,15 @@ test("Integration: pgvector lifecycle on real Postgres database", async () => {
     };
 
     const service = new ContactMemoriesService(prisma, mockAiService, mockCacheService);
+    const originalVectorizeMemoryItem = service.vectorizeMemoryItem.bind(service);
+    let suppressBackgroundVectorization = true;
+    service.vectorizeMemoryItem = async (...args) => {
+      if (suppressBackgroundVectorization) {
+        suppressBackgroundVectorization = false;
+        return false;
+      }
+      return originalVectorizeMemoryItem(...args);
+    };
 
     await prisma.company.create({
       data: { id: testCompanyId, name: "pgvector integration fixture" },

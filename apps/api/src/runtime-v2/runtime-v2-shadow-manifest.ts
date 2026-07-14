@@ -38,6 +38,9 @@ export type RuntimeV2ShadowManifest = {
   pendingFieldKeys: string[];
   lastRelevantQuestionKey: string | null;
   lastRelevantQuestionContextVersion: number | null;
+  lastRelevantQuestionUpdated: boolean;
+  lastRelevantQuestionUpdateReason: string;
+  customerUnableToAnswer: boolean;
   retrievalPlanCategories: string[];
   authorityCategoriesRequested: string[];
   authorityCategoriesAvailable: string[];
@@ -83,6 +86,8 @@ export function buildRuntimeV2ShadowManifest(input: {
   audioMessage?: boolean;
   transcriptionAvailable?: boolean;
   transcriptionPersisted?: boolean;
+  lastRelevantQuestionUpdated?: boolean;
+  lastRelevantQuestionUpdateReason?: string;
   beforeState: ConversationState;
   afterState: ConversationState;
   understanding: TurnUnderstanding;
@@ -145,6 +150,9 @@ export function buildRuntimeV2ShadowManifest(input: {
     lastRelevantQuestionKey: input.afterState.lastRelevantQuestion?.key ?? null,
     lastRelevantQuestionContextVersion:
       input.afterState.lastRelevantQuestion?.contextVersion ?? null,
+    lastRelevantQuestionUpdated: input.lastRelevantQuestionUpdated ?? false,
+    lastRelevantQuestionUpdateReason: input.lastRelevantQuestionUpdateReason ?? "UNCHANGED",
+    customerUnableToAnswer: input.understanding.reasonCodes.includes("CUSTOMER_UNABLE_TO_ANSWER"),
     retrievalPlanCategories: [
       ...input.retrievalPlan.memoryTopics,
       ...input.retrievalPlan.officialFactCategories,

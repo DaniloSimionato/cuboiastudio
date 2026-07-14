@@ -4,8 +4,10 @@ import { IntentRouterService } from "../dist/intent-router/intent-router.service
 import { AttachmentInterpreterService } from "../dist/attachments/attachment-interpreter.service.js";
 import {
   extractCustomerStructuredFields,
+  detectCustomerUnableToAnswer,
   normalizeIntentText,
 } from "../dist/intent-router/intent-routing.js";
+import { compactRepeatedAssistantHistoryMessages } from "../dist/assistant-conversations/conversation-history-format.js";
 import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
 
 const now = new Date("2026-07-13T12:00:00.000Z");
@@ -18,7 +20,7 @@ function flow(id, name, priority, keywords = []) {
     priority,
     active: true,
     triggerKeywords: JSON.stringify(keywords),
-    triggerDescription: `${name} para teste`,
+    triggerDescription: "objetivo configurado para este flow",
     flowInstructions: "INSTRUÇÃO QUE NÃO DEVE ENTRAR NA TRIAGEM",
     allowedToolSlugs: JSON.stringify(["calendar_checkAvailability"]),
     createdAt: now,
@@ -62,8 +64,14 @@ test("múltiplas necessidades escolhem o flow técnico e registram candidato com
     assistantId: "a",
     message: "Quero upgrade no Acer com SSD, RAM, mouse, teclado e fone",
     flows: [
-      flow("sales", "Vendas e Comercial", 95, ["mouse", "teclado", "fone"]),
-      flow("technical", "Assistência Técnica Geral", 10, ["upgrade", "ssd", "ram"]),
+      {
+        ...flow("sales", "Nome comercial arbitrário", 95, ["mouse", "teclado", "fone"]),
+        triggerDescription: "vendas de acessórios e produtos",
+      },
+      {
+        ...flow("technical", "Nome técnico arbitrário", 10, ["upgrade", "ssd", "ram"]),
+        triggerDescription: "suporte técnico e melhoria de componentes",
+      },
     ],
   });
   assert.equal(result.flowId, "technical");
@@ -126,4 +134,60 @@ test("triagem recebe apenas resumo seguro do flow", () => {
   assert.match(text, /ferramentas configuradas.*calendar_checkAvailability/);
   assert.equal(text.includes("segredo mutável"), false);
   assert.equal(text.includes("BASE DE CONHECIMENTO"), false);
+});
+
+test("a taxonomia usa a configuração do flow e não nomes específicos do tenant", async () => {
+  const result = await router().route({
+    companyId: "tenant-a",
+    assistantId: "assistant-a",
+    message: "Quero SSD e RAM para melhorar o notebook",
+    flows: [
+      flow("external", "Serviço no local", 100, ["visita", "deslocamento"]),
+      flow("technical", "Componentes e melhoria", 1, ["ssd", "ram", "upgrade"]),
+    ],
+  });
+  assert.equal(result.flowId, "technical");
+
+  const otherTenant = await router().route({
+    companyId: "tenant-b",
+    assistantId: "assistant-b",
+    message: "Quero SSD e RAM para melhorar o notebook",
+    flows: [flow("other", "Atendimento de componentes", 1, ["ssd", "ram"])],
+  });
+  assert.equal(otherTenant.flowId, "other");
+});
+
+test("visita externa exige evidência configurada de deslocamento", async () => {
+  const flows = [
+    {
+      ...flow("external", "Nome arbitrário", 100, ["ssd"]),
+      triggerDescription: "atendimento com visita técnica externa",
+    },
+    flow("technical", "Suporte de componentes", 1, ["ssd", "ram", "upgrade"]),
+  ];
+  assert.equal((await router().route({ companyId: "c", assistantId: "a", message: "SSD", flows })).flowId, "technical");
+  assert.equal(
+    (await router().route({ companyId: "c", assistantId: "a", message: "preciso de uma visita", flows })).flowId,
+    "external",
+  );
+});
+
+test("incapacidade durante triagem é reconhecida somente por aliases explícitos", () => {
+  assert.equal(detectCustomerUnableToAnswer("Não entendo nada disso"), true);
+  assert.equal(detectCustomerUnableToAnswer("Vocês podem verificar aí"), true);
+  assert.equal(detectCustomerUnableToAnswer("Não sei o preço"), true);
+  assert.equal(detectCustomerUnableToAnswer("não sei"), true);
+  assert.equal(detectCustomerUnableToAnswer("Depois vocês verificam e me passam o orçamento"), true);
+  assert.equal(detectCustomerUnableToAnswer("o sistema não sei como funciona"), false);
+});
+
+test("histórico compacta somente respostas consecutivas idênticas", () => {
+  const result = compactRepeatedAssistantHistoryMessages([
+    { role: "assistant", content: "resposta segura" },
+    { role: "assistant", content: "resposta segura" },
+    { role: "user", content: "preço" },
+    { role: "assistant", content: "resposta segura" },
+  ]);
+  assert.equal(result.removedCount, 1);
+  assert.equal(result.messages.length, 3);
 });

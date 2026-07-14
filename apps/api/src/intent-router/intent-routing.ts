@@ -10,10 +10,32 @@ export type CustomerStructuredFields = {
 export type FlowKeywordEvidence = {
   flowId: string;
   flowName: string;
+  intentKey: string;
   score: number;
   matchedAliases: string[];
   priority: number;
 };
+
+const TRIAGE_UNABLE_TO_ANSWER_ALIASES = [
+  "não sei",
+  "não entendo",
+  "não faço ideia",
+  "não sei explicar",
+  "não tenho essa informação",
+  "vocês podem verificar",
+  "voces podem verificar",
+  "vocês verificam aí",
+  "voces verificam ai",
+  "prefiro levar para avaliar",
+  "depois vocês olham",
+  "depois voces olham",
+  "depois vocês veem",
+  "depois voces veem",
+  "depois vocês verificam",
+  "depois voces verificam",
+  "não consigo conferir",
+  "nao consigo conferir",
+];
 
 export function normalizeIntentText(value: string): string {
   return value
@@ -33,6 +55,9 @@ function containsAlias(text: string, alias: string): boolean {
 
 function flowFamily(flowName: string): string {
   const name = normalizeIntentText(flowName);
+  if (name.includes("visita") || name.includes("deslocamento") || name.includes("atendimento externo")) {
+    return "external_visit";
+  }
   if (name.includes("assistencia") || name.includes("tecnica")) return "technical_support";
   if (name.includes("vendas") || name.includes("comercial") || name.includes("seminov"))
     return "commercial";
@@ -43,8 +68,40 @@ function flowFamily(flowName: string): string {
   return name.replace(/\s+/g, "_") || "unknown";
 }
 
-function explicitAliases(flowName: string): Array<{ alias: string; weight: number }> {
-  const family = flowFamily(flowName);
+function configuredFlowText(flow: AssistantFlow): string {
+  return normalizeIntentText(
+    [flow.triggerDescription ?? "", ...parsedTriggerKeywords(flow)].filter(Boolean).join(" "),
+  );
+}
+
+function configuredFlowFamily(flow: AssistantFlow): string {
+  const text = configuredFlowText(flow);
+  if (/(?:visita|deslocamento|ir ate o local|atendimento no local|tecnico na empresa)/.test(text)) {
+    return "external_visit";
+  }
+  if (/(?:buscar|busca|coleta|retirada|retirar|entrega|domicilio)/.test(text)) {
+    return "pickup_delivery";
+  }
+  if (/(?:preco|valor|orcamento|quanto custa|quanto fica|custos?)/.test(text)) {
+    return "pricing";
+  }
+  if (/(?:endereco|localizacao|horario|telefone|contato|empresa)/.test(text)) {
+    return "company_information";
+  }
+  if (/(?:acessorios|produto|comprar|vendas|comercial)/.test(text)) {
+    return "commercial";
+  }
+  if (
+    /(?:formatar|formatacao|upgrade|melhoria|componentes|assistencia|tecnica|suporte|memoria|manutencao|conserto|reparo)/.test(
+      text,
+    )
+  ) {
+    return "technical_support";
+  }
+  return "unknown";
+}
+
+function explicitAliasesForFamily(family: string): Array<{ alias: string; weight: number }> {
   switch (family) {
     case "pricing":
       return [
@@ -60,11 +117,20 @@ function explicitAliases(flowName: string): Array<{ alias: string; weight: numbe
         { alias: "formatar", weight: 3 },
         { alias: "formatação", weight: 3 },
         { alias: "upgrade", weight: 4 },
-        { alias: "ssd", weight: 4 },
-        { alias: "memória ram", weight: 4 },
         { alias: "memória", weight: 3 },
         { alias: "manutenção", weight: 3 },
         { alias: "conserto", weight: 3 },
+      ];
+    case "external_visit":
+      return [
+        { alias: "visita", weight: 5 },
+        { alias: "ir até o local", weight: 5 },
+        { alias: "ir ate o local", weight: 5 },
+        { alias: "atendimento no endereço", weight: 5 },
+        { alias: "atendimento no endereco", weight: 5 },
+        { alias: "técnico na empresa", weight: 5 },
+        { alias: "tecnico na empresa", weight: 5 },
+        { alias: "deslocamento", weight: 5 },
       ];
     case "pickup_delivery":
       return [
@@ -78,10 +144,6 @@ function explicitAliases(flowName: string): Array<{ alias: string; weight: numbe
       ];
     case "commercial":
       return [
-        { alias: "mouse", weight: 2 },
-        { alias: "teclado", weight: 2 },
-        { alias: "fone", weight: 2 },
-        { alias: "kit gamer", weight: 2 },
         { alias: "comprar", weight: 2 },
         { alias: "vendas", weight: 2 },
         { alias: "acessórios", weight: 2 },
@@ -101,6 +163,19 @@ function explicitAliases(flowName: string): Array<{ alias: string; weight: numbe
   }
 }
 
+function hasExternalVisitEvidence(text: string): boolean {
+  return [
+    "visita",
+    "ir até o local",
+    "ir ate o local",
+    "atendimento no endereço",
+    "atendimento no endereco",
+    "técnico na empresa",
+    "tecnico na empresa",
+    "deslocamento",
+  ].some((alias) => containsAlias(text, alias));
+}
+
 function parsedTriggerKeywords(flow: AssistantFlow): string[] {
   if (!flow.triggerKeywords) return [];
   try {
@@ -115,6 +190,13 @@ function parsedTriggerKeywords(flow: AssistantFlow): string[] {
   }
 }
 
+function extractGenericDeviceModel(text: string): string | null {
+  const match = text.match(
+    /\b(?:meu|minha|o meu|a minha|um|uma|no|na|em|do|da|modelo(?:\s+(?:do|da))?|equipamento|notebook|computador|pc)\s+(?:(?:é|e|:)\s*)?(?:(?:um|uma)\s+)?([a-z][a-z0-9-]*(?:\s+[a-z][a-z0-9-]*){0,3}\s+[a-z]?\d+)\b/i,
+  );
+  return match?.[1]?.trim() ?? null;
+}
+
 export function scoreFlowCandidates(
   message: string,
   flows: AssistantFlow[],
@@ -123,8 +205,19 @@ export function scoreFlowCandidates(
   return flows
     .filter((flow) => flow.active)
     .map((flow) => {
+      const intentKey = configuredFlowFamily(flow);
+      if (intentKey === "external_visit" && !hasExternalVisitEvidence(text)) {
+        return {
+          flowId: flow.id,
+          flowName: flow.name,
+          intentKey,
+          score: 0,
+          matchedAliases: [],
+          priority: flow.priority,
+        };
+      }
       const aliases = [
-        ...explicitAliases(flow.name),
+        ...explicitAliasesForFamily(intentKey),
         ...parsedTriggerKeywords(flow).map((alias) => ({ alias, weight: 2 })),
       ];
       const matched = new Map<string, number>();
@@ -137,6 +230,7 @@ export function scoreFlowCandidates(
       return {
         flowId: flow.id,
         flowName: flow.name,
+        intentKey,
         score: [...matched.values()].reduce((sum, value) => sum + value, 0),
         matchedAliases: [...matched.keys()],
         priority: flow.priority,
@@ -148,6 +242,29 @@ export function scoreFlowCandidates(
     );
 }
 
+export function flowIntentKeyForFlow(flow: AssistantFlow): string {
+  return configuredFlowFamily(flow);
+}
+
+export function flowObjectiveForFlow(flow: AssistantFlow): string {
+  switch (flowIntentKeyForFlow(flow)) {
+    case "pricing":
+      return "consultar preço oficial";
+    case "technical_support":
+      return "triagem técnica e compatibilidade";
+    case "pickup_delivery":
+      return "verificar política de coleta ou entrega";
+    case "commercial":
+      return "identificar produto ou acessório comercial";
+    case "company_information":
+      return "informar dados oficiais da empresa";
+    case "external_visit":
+      return "validar necessidade de visita técnica externa";
+    default:
+      return "entender a necessidade principal do cliente";
+  }
+}
+
 export function extractCustomerStructuredFields(message: string): CustomerStructuredFields {
   const text = normalizeIntentText(message);
   const known = new Set<string>();
@@ -157,7 +274,7 @@ export function extractCustomerStructuredFields(message: string): CustomerStruct
   const hasSsd = /\bssd\b/.test(text);
   const hasRam = /\b(ram|memoria ram|memoria)\b/.test(text);
   const hasAccessories = /\b(mouse|teclado|fone|headset|kit gamer|acessorios)\b/.test(text);
-  const deviceModel = /\b(acer nitro 5|mac m1)\b/.test(text);
+  const deviceModel = Boolean(extractGenericDeviceModel(text));
 
   if (deviceModel) known.add("device_model");
   if (hasSsd) {
@@ -193,6 +310,28 @@ export function extractCustomerStructuredFields(message: string): CustomerStruct
   };
 }
 
+export function detectCustomerUnableToAnswer(message: string): boolean {
+  const normalized = normalizeIntentText(message);
+  return TRIAGE_UNABLE_TO_ANSWER_ALIASES.some(
+    (alias) => normalized === normalizeIntentText(alias) || normalized.startsWith(`${normalizeIntentText(alias)} `),
+  );
+}
+
+export function getCustomerUnableToAnswerReason(message: string): string | null {
+  if (!detectCustomerUnableToAnswer(message)) return null;
+  const normalized = normalizeIntentText(message);
+  if (
+    normalized.includes("verificar") ||
+    normalized.includes("verificam") ||
+    normalized.includes("olham") ||
+    normalized.includes("veem")
+  ) {
+    return "CUSTOMER_REQUESTS_TECHNICAL_EVALUATION";
+  }
+  if (normalized.includes("prefiro levar")) return "CUSTOMER_PREFERS_EVALUATION";
+  return "CUSTOMER_UNABLE_TO_PROVIDE_DETAIL";
+}
+
 export function flowObjective(flowName: string): string {
   switch (flowFamily(flowName)) {
     case "pricing":
@@ -205,6 +344,8 @@ export function flowObjective(flowName: string): string {
       return "identificar produto ou acessório comercial";
     case "company_information":
       return "informar dados oficiais da empresa";
+    case "external_visit":
+      return "validar necessidade de visita técnica externa";
     default:
       return "entender a necessidade principal do cliente";
   }

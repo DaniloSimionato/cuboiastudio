@@ -122,6 +122,24 @@ function emptyContext() {
   };
 }
 
+function inferRelevantQuestionField(content: string): string | null {
+  const normalized = content.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+  if (/(?:modelo|equipamento|notebook|computador)/.test(normalized)) return "device_model";
+  if (/(?:interface|conexao|conexao|formato fisico)/.test(normalized)) return "component_interface";
+  if (/(?:capacidade|quantidade de memoria|quantos gb)/.test(normalized)) return "component_capacity";
+  if (/(?:endereco|localizacao|onde fica)/.test(normalized)) return "address";
+  if (/(?:horario|funcionamento|aberto|fechado)/.test(normalized)) return "business_hours";
+  if (/(?:preco|valor|quanto custa|orcamento)/.test(normalized)) return "price";
+  return null;
+}
+
+export function isActionableAssistantQuestion(content: string): boolean {
+  const normalized = content.trim().normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+  if (!normalized.includes("?")) return false;
+  if (/(?:preciso confirmar|como posso ajudar|o que posso fazer)/.test(normalized)) return false;
+  return inferRelevantQuestionField(content) !== null;
+}
+
 export class RuntimeV2ShadowOrchestrator {
   private activeExecutions = 0;
 
@@ -240,14 +258,16 @@ export class RuntimeV2ShadowOrchestrator {
       !state.lastRelevantQuestion &&
       snapshotQuestion?.contextVersion === snapshot.scope.contextVersion &&
       snapshotQuestion.askedAt instanceof Date &&
-      snapshotQuestion.askedAt >= state.sessionStartedAt
+      snapshotQuestion.askedAt >= state.sessionStartedAt &&
+      isActionableAssistantQuestion(snapshotQuestion.prompt)
     ) {
+      const fieldKey = snapshotQuestion.fieldKey ?? inferRelevantQuestionField(snapshotQuestion.prompt);
       state = {
         ...state,
         lastRelevantQuestion: {
           key: snapshotQuestion.key,
           prompt: snapshotQuestion.prompt,
-          ...(snapshotQuestion.fieldKey ? { fieldKey: snapshotQuestion.fieldKey } : {}),
+          ...(fieldKey ? { fieldKey } : {}),
           ...(snapshotQuestion.sourceMessageId
             ? { sourceMessageId: snapshotQuestion.sourceMessageId }
             : {}),
@@ -350,6 +370,13 @@ export class RuntimeV2ShadowOrchestrator {
       audioMessage: snapshot.audioMessage,
       transcriptionAvailable: snapshot.transcriptionAvailable,
       transcriptionPersisted: snapshot.transcriptionPersisted,
+      lastRelevantQuestionUpdated:
+        beforeState.lastRelevantQuestion?.key !== nextState.lastRelevantQuestion?.key,
+      lastRelevantQuestionUpdateReason: understanding.reasonCodes.includes("CUSTOMER_UNABLE_TO_ANSWER")
+        ? "CUSTOMER_UNABLE_TO_ANSWER"
+        : beforeState.lastRelevantQuestion?.key !== nextState.lastRelevantQuestion?.key
+          ? "ASSISTANT_OBJECTIVE_QUESTION"
+          : "UNCHANGED",
     });
     return { enabled: true, mode: "SHADOW", state: nextState, manifest };
   }

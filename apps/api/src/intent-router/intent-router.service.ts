@@ -2,7 +2,6 @@ import { Injectable, Logger } from "@nestjs/common";
 import { AssistantFlow } from "@prisma/client";
 import { AiService } from "../ai/ai.service";
 import {
-  flowIntentKey,
   scoreFlowCandidates,
   type FlowKeywordEvidence,
 } from "./intent-routing";
@@ -61,7 +60,7 @@ export class IntentRouterService {
       const secondaryIntentKeys = candidates
         .slice(1)
         .filter((candidate) => candidate.score >= 2)
-        .map((candidate) => flowIntentKey(candidate.flowName));
+        .map((candidate) => candidate.intentKey);
       const confidence = Math.min(0.99, 0.55 + best.score / 12);
       this.logger.debug(
         `Flow matched by scored evidence: ${best.flowName} (${best.matchedAliases.join(", ")})`,

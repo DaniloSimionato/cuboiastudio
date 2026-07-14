@@ -356,6 +356,17 @@ export function applyTurnToConversationState(
     }
   }
 
+  if (understanding.reasonCodes.includes("CUSTOMER_UNABLE_TO_ANSWER")) {
+    const refusedFieldKey = next.lastRelevantQuestion?.fieldKey;
+    next.lastRelevantQuestion = null;
+    next.lastRelevantQuestionMessageId = null;
+    next.lastRelevantQuestionContextVersion = null;
+    next.lastValidNextStep = null;
+    if (refusedFieldKey) {
+      next.pendingFields = next.pendingFields.filter((field) => field !== refusedFieldKey);
+    }
+  }
+
   if (understanding.answeredQuestionKey) {
     next.answeredQuestions = Array.from(
       new Set([...next.answeredQuestions, understanding.answeredQuestionKey]),

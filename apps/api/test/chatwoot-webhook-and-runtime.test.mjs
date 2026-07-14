@@ -10,6 +10,7 @@ import { ChatwootInboxConfigService } from "../dist/chatwoot/chatwoot-inbox-conf
 import { ChatwootWebhookService } from "../dist/chatwoot/chatwoot-webhook.service.js";
 import { AssistantConversationsService } from "../dist/assistant-conversations/assistant-conversations.service.js";
 import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
+import { IntentRouterService } from "../dist/intent-router/intent-router.service.js";
 
 function createMessageCreatedPayload(overrides = {}) {
   return {
@@ -548,6 +549,7 @@ function createAssistantServiceDeps(overrides = {}) {
       name: "Empresa Teste",
       timezone: "America/Sao_Paulo",
     },
+    ...(overrides.assistant ?? {}),
   };
 
   const conversationRecord = {
@@ -763,7 +765,7 @@ function createAssistantServiceDeps(overrides = {}) {
     ],
   };
 
-  const intentRouterService = {
+  const intentRouterService = overrides.intentRouterService ?? {
     route: async () => ({
       flowId: null,
       flowName: null,
@@ -781,6 +783,10 @@ function createAssistantServiceDeps(overrides = {}) {
     knowledgeRetrievalService,
     promptCompilerService,
     intentRouterService,
+    undefined,
+    undefined,
+    undefined,
+    overrides.cacheService,
   );
 
   return {
@@ -2179,6 +2185,160 @@ test("triagem recebe fatos anteriores do cliente sem receber respostas antigas, 
     calls.runtimeLogCreates[0].metadata.contextManifest.triageAssistantReferenceCount,
     0,
   );
+});
+
+test("encerra triagem técnica e mantém preço como intenção atual", async () => {
+  let cachedTriageState = {
+    active: true,
+    startedAt: new Date(Date.now() - 60_000).toISOString(),
+    sourceMessageId: "triage-source",
+    requestedDetail: "interface do componente",
+    requestedDetailKey: "component_interface",
+    lastQuestion: "Qual é a interface do componente?",
+    attemptCount: 2,
+    resolved: false,
+    expiresAt: Date.now() + 3_600_000,
+    knownFieldKeys: ["device_model", "ssd_capacity_gb", "ram_capacity_gb"],
+    pendingFieldKeys: ["component_interface"],
+  };
+  const cacheWrites = [];
+  const pricingFlow = {
+    id: "flow-pricing-configured",
+    assistantId: "assistant-1",
+    name: "Atendimento Comercial Um",
+    priority: 1,
+    active: true,
+    triggerKeywords: JSON.stringify(["orçamento", "preço"]),
+    triggerDescription: "consultar valor oficial do serviço",
+    flowInstructions: "instruções do fluxo de preço",
+    allowedToolSlugs: JSON.stringify([]),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const { service, calls } = createAssistantServiceDeps({
+    assistant: { flows: [pricingFlow] },
+    cacheService: {
+      get: async () => cachedTriageState,
+      set: async (_key, value) => {
+        cacheWrites.push(value);
+        cachedTriageState = value;
+      },
+    },
+    intentRouterService: new IntentRouterService({
+      generateChatCompletion: async () => ({ answer: "fallback" }),
+    }),
+    promptCompilerService: new PromptCompilerService(),
+    outboundConfig: { baseUrl: "" },
+    completion: {
+      provider: "openai-compatible",
+      model: "gpt-4o-mini",
+      answer: "Temos disponibilidade para agendar esse atendimento.",
+      durationMs: 1,
+    },
+  });
+
+  await service.sendMessage({
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    dto: {
+      source: "chatwoot",
+      externalConversationId: "conversation-1",
+      externalAccountId: "account-1",
+      externalContactId: "contact-1",
+      externalInboxId: "inbox-1",
+      externalMessageId: "external-price-after-triage",
+      message: "Depois vocês verificam e me passam o orçamento.",
+    },
+    user: {
+      id: "user-1",
+      companyId: "company-1",
+      email: "user@cubo.local",
+      name: "User",
+      roles: [],
+      permissions: [],
+    },
+    tenant: { companyId: "company-1" },
+    preparedAttachments: [],
+  });
+
+  const runtimeLog = calls.runtimeLogCreates.at(-1);
+  const manifest = runtimeLog.metadata.contextManifest;
+  assert.equal(manifest.selectedFlowId, "flow-pricing-configured");
+  assert.equal(manifest.triageExitReason, "CUSTOMER_REQUESTS_TECHNICAL_EVALUATION");
+  assert.equal(manifest.requestedDetailBefore, "component_interface");
+  assert.equal(manifest.customerUnableToAnswer, true);
+  assert.equal(manifest.expectedAuthorityCategory, "price");
+  assert.equal(manifest.generatedClaimCategory, "availability");
+  assert.equal(manifest.finalSafeResponseCategory, "price");
+  assert.equal(manifest.authorityCategorySource, "explicit_intent");
+  assert.equal(manifest.triageFlowIncluded, false);
+  assert.deepEqual(cacheWrites.at(-1), null);
+  assert.equal(calls.providerPayloads.length, 1);
+  assert.equal(calls.providerPayloads[0].messages.at(-1).content, "Depois vocês verificam e me passam o orçamento.");
+  assert.match(
+    calls.messageCreates.find((message) => message.role === "assistant")?.content ?? "",
+    /Não tenho um valor confirmado/,
+  );
+});
+
+test("não repete detalhe técnico recusado no caminho normal do V1", async () => {
+  let cacheValue = {
+    active: true,
+    startedAt: new Date(Date.now() - 60_000).toISOString(),
+    sourceMessageId: "triage-source",
+    requestedDetail: "interface do componente",
+    requestedDetailKey: "component_interface",
+    lastQuestion: "Qual é a interface do componente?",
+    attemptCount: 1,
+    resolved: false,
+    expiresAt: Date.now() + 3_600_000,
+    knownFieldKeys: ["ssd_capacity_gb", "ram_capacity_gb"],
+    pendingFieldKeys: ["component_interface"],
+  };
+  const { service, calls } = createAssistantServiceDeps({
+    cacheService: {
+      get: async () => cacheValue,
+      set: async (_key, value) => {
+        cacheValue = value;
+      },
+    },
+    outboundConfig: { baseUrl: "" },
+    completion: {
+      provider: "openai-compatible",
+      model: "gpt-4o-mini",
+      answer: "Você consegue me informar se o SSD é SATA ou NVMe?",
+      durationMs: 1,
+    },
+  });
+
+  await service.sendMessage({
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    dto: {
+      source: "chatwoot",
+      externalConversationId: "conversation-1",
+      externalAccountId: "account-1",
+      externalContactId: "contact-1",
+      externalInboxId: "inbox-1",
+      externalMessageId: "external-unable-to-answer",
+      message: "Não entendo nada disso.",
+    },
+    user: {
+      id: "user-1",
+      companyId: "company-1",
+      email: "user@cubo.local",
+      name: "User",
+      roles: [],
+      permissions: [],
+    },
+    tenant: { companyId: "company-1" },
+    preparedAttachments: [],
+  });
+
+  const assistantMessage = calls.messageCreates.find((message) => message.role === "assistant");
+  assert.ok(assistantMessage);
+  assert.doesNotMatch(assistantMessage.content, /SATA|NVMe|interface/i);
+  assert.match(assistantMessage.content, /avaliação/);
 });
 
 test("ensureConversationFromInboundMessage reutiliza conversa existente", async () => {

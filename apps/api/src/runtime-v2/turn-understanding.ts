@@ -17,8 +17,26 @@ export type TurnUnderstandingInput = {
 const SHORT_CONFIRMATIONS =
   /^(sim|não|nao|isso mesmo|pode ser|é esse|e esse|correto|exatamente|não sei|nao sei|pode continuar)(?:\s+(isso mesmo|é esse|correto|exatamente|é só melhoria))?[.!?\s]*$/i;
 
+const CUSTOMER_UNABLE_TO_ANSWER =
+  /^(?:nao sei|não sei|nao entendo|não entendo|nao faco ideia|não faço ideia|nao sei explicar|não sei explicar|nao tenho essa informacao|não tenho essa informação|voc[eê]s podem verificar|prefiro levar para avaliar|depois voc[eê]s (?:olham|veem|verificam)|nao consigo conferir|não consigo conferir)\b/i;
+
 function includesAny(text: string, values: string[]): boolean {
   return values.some((value) => text.includes(value));
+}
+
+function extractGenericDeviceModel(text: string): string | null {
+  const match = text.match(
+    /\b(?:meu|minha|o meu|a minha|um|uma|no|na|em|do|da|modelo(?:\s+(?:do|da))?|equipamento|notebook|computador|pc)\s+(?:(?:é|e|:)\s*)?(?:(?:um|uma)\s+)?([a-z][a-z0-9-]*(?:\s+[a-z][a-z0-9-]*){0,3}\s+[a-z]?\d+)\b/i,
+  );
+  return match?.[1]?.trim() ?? null;
+}
+
+function extractExplicitTopicSubject(text: string): string | null {
+  const match = text.match(/\b(?:voltar\s+a\s+falar|falar|retomar)\s+(?:de|do|da|sobre|com)\s+([^.!?]+)/i);
+  const subject = match?.[1]?.trim();
+  return subject && !/^(?:isso|aquilo|esse assunto|o assunto|o tema)$/i.test(subject)
+    ? subject
+    : null;
 }
 
 function fact(
@@ -37,22 +55,20 @@ function fact(
 }
 
 function deviceObjective(message: string, messageId: string): ConversationObjective | null {
-  const match = message.match(
-    /\b(acer(?:\s+nitro\s+5)?|mac\s+m1|macbook(?:\s+pro)?|notebook\s+[a-z0-9 -]+)\b/i,
-  );
+  const subject = extractGenericDeviceModel(message) ?? extractExplicitTopicSubject(message);
   const isUpgradeRequest = /upgrade|ssd|memória|memoria|ram|mouse|teclado|fone|kit\s*gamer/i.test(
     message,
   );
-  if (!match && !isUpgradeRequest) return null;
+  if (!subject && !isUpgradeRequest) return null;
   return {
     key:
-      /formatar|formatação|formatacao/i.test(message) && /mac\s+m1/i.test(message)
-        ? "format_mac"
+      /formatar|formatação|formatacao/i.test(message) && subject
+        ? "format_device"
         : /upgrade|ssd|memória|memoria|ram|mouse|teclado|fone|kit\s*gamer/i.test(message)
           ? "device_upgrade"
           : "device_service",
     label: "atendimento do equipamento",
-    subject: match?.[1]?.trim() ?? null,
+    subject,
     sourceMessageId: messageId,
     confidence: 0.9,
   };
@@ -65,10 +81,8 @@ function factConfirmedByQuestion(
 ): ConfirmedFactInput[] {
   if (/^\s*n(?:ã|a)o\b/i.test(answer)) return [];
   if (question.fieldKey !== "device_model") return [];
-  const match = question.prompt.match(
-    /\b(acer(?:\s+nitro\s+5)?|mac\s+m1|macbook(?:\s+pro)?|dell(?:\s+[a-z0-9 -]+)?)\b/i,
-  );
-  return match ? [fact("device_model", match[1].trim(), messageId)] : [];
+  const subject = extractGenericDeviceModel(question.prompt);
+  return subject ? [fact("device_model", subject, messageId)] : [];
 }
 
 function questionFor(
@@ -99,6 +113,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
       .replace(/\s+/g, " ")
       .trim(),
   );
+  const customerUnableToAnswer = CUSTOMER_UNABLE_TO_ANSWER.test(normalized);
   const explicitlyRequestsPreviousTopic = /\b(continuar|voltar|retomar)\b/.test(lower);
   const isSideQuestion = includesAny(lower, [
     "endereço",
@@ -135,6 +150,25 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
       ? ["exceptionRequest"]
       : []),
   ];
+
+  if (customerUnableToAnswer && input.lastRelevantQuestion) {
+    return {
+      turnIntent: "unable_to_answer",
+      confidence: 0.98,
+      objectiveAction: "KEEP",
+      objective: input.existingObjective ?? null,
+      factsExtracted: [],
+      correctedFactKeys: [],
+      isShortConfirmation: shortConfirmation,
+      confirmationAmbiguous: false,
+      isSideQuestion: false,
+      explicitlyRequestsPreviousTopic: false,
+      requestedInformationCategories: [],
+      nextQuestion: null,
+      reasonCodes: ["CUSTOMER_UNABLE_TO_ANSWER", "CLEAR_LAST_RELEVANT_QUESTION"],
+      evidenceMessageIds: [input.messageId],
+    };
+  }
 
   if (shortConfirmation && input.lastRelevantQuestion) {
     const questionBelongsToCurrentSession =
