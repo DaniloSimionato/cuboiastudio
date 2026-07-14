@@ -156,6 +156,86 @@ test("PostgreSQL cria, carrega, reinicia e mantém ledger após expiresAt", asyn
   );
 });
 
+test("stateJson preserva IDs estruturais mesmo quando parecem números de telefone", async () => {
+  const suffix = randomUUID().slice(0, 8);
+  const scope = {
+    companyId: `${prefix}-company-67999999999-001-${suffix}`,
+    assistantId: `${prefix}-assistant-67999999999-002-${suffix}`,
+    conversationId: `${prefix}-conversation-67999999999-003-${suffix}`,
+    contextVersion: 1,
+  };
+  await prisma.company.create({ data: { id: scope.companyId, name: "Structural IDs" } });
+  await prisma.assistant.create({ data: { id: scope.assistantId, companyId: scope.companyId, name: "Structural Assistant" } });
+  await prisma.assistantConversation.create({
+    data: {
+      id: scope.conversationId,
+      companyId: scope.companyId,
+      assistantId: scope.assistantId,
+      source: "SMOKE",
+      channelType: "UNKNOWN",
+      currentContextVersion: scope.contextVersion,
+    },
+  });
+  const message = await createMessage(scope, `${prefix}-structural-message`);
+  const store = new PrismaConversationStateStore(prisma);
+  await store.saveTurn(nextState(scope, message), 0, { internalMessageId: message.id });
+
+  const loaded = await new PrismaConversationStateStore(prisma).load(storeScope(scope));
+  assert.equal(loaded.companyId, scope.companyId);
+  assert.equal(loaded.assistantId, scope.assistantId);
+  assert.equal(loaded.conversationId, scope.conversationId);
+  assert.equal(loaded.lastProcessedMessageId, message.id);
+});
+
+test("redaction preserva IDs estruturais e sanitiza texto livre aninhado", () => {
+  const scope = {
+    companyId: "company-cuid-cm123456789012345678901234",
+    assistantId: "550e8400-e29b-41d4-a716-446655440000",
+    conversationId: "conversation-5511999999999",
+    contextVersion: 7,
+  };
+  const state = createEmptyConversationState(scope);
+  state.firstMessageId = "message-5511999999999";
+  state.lastProcessedMessageId = "9876543210";
+  state.lastProcessedExternalMessageId = "1730000000000";
+  state.lastRelevantQuestion = {
+    key: "question-1",
+    prompt: "Ligue para +55 (11) 99999-9999 ou cliente@example.com",
+    fieldKey: "device_model",
+    sourceMessageId: "event-5511999999999",
+    contextVersion: 7,
+    askedAt: new Date("2026-07-13T12:00:00.000Z"),
+  };
+
+  const redacted = sanitizeConversationStateForPersistence(state);
+  const json = JSON.stringify(redacted.json);
+  assert.equal(json.includes(scope.companyId), true);
+  assert.equal(json.includes(scope.assistantId), true);
+  assert.equal(json.includes(scope.conversationId), true);
+  assert.equal(json.includes(state.firstMessageId), true);
+  assert.equal(json.includes(state.lastProcessedMessageId), true);
+  assert.equal(json.includes(state.lastProcessedExternalMessageId), true);
+  assert.equal(json.includes(state.lastRelevantQuestion.sourceMessageId), true);
+  assert.equal(json.includes("+55 (11) 99999-9999"), false);
+  assert.equal(json.includes("cliente@example.com"), false);
+
+  const nested = {
+    id: "event-5511999999999",
+    flowId: "flow-550e8400-e29b-41d4-a716-446655440000",
+    payload: {
+      phone: "+55 11 99999-9999",
+      email: "nested@example.com",
+    },
+    items: [{ externalMessageId: "5511999999999" }],
+  };
+  const nestedState = { ...state, metadata: nested };
+  const nestedJson = JSON.stringify(sanitizeConversationStateForPersistence(nestedState).json);
+  assert.equal(nestedJson.includes(nested.id), true);
+  assert.equal(nestedJson.includes(nested.flowId), true);
+  assert.equal(nestedJson.includes("nested@example.com"), false);
+  assert.equal(nestedJson.includes("+55 11 99999-9999"), false);
+});
+
 test("stateJson valida schema, redaction e limite de 64 KB sem truncamento", async () => {
   const scope = await createFixture();
   const store = new PrismaConversationStateStore(prisma);
@@ -283,10 +363,15 @@ test("duas instâncias processam a mesma mensagem uma vez e mensagens diferentes
     ...shadowEnvironment,
     RUNTIME_V2_SHADOW_ASSISTANT_IDS: differentScope.assistantId,
   });
-  await Promise.all([
+  const differentResults = await Promise.all([
     left.process(snapshot(differentScope, messageA, "Quero formatar")),
     right.process(snapshot(differentScope, messageB, "Quero SSD")),
   ]);
+  assert.ok(differentResults.every((result) => result.manifest.validationResult === "PASS"));
+  assert.deepEqual(
+    differentResults.map((result) => result.manifest.revisionAfter).sort((a, b) => a - b),
+    [1, 2],
+  );
   const finalState = await new PrismaConversationStateStore(prisma).load(
     storeScope(differentScope),
   );

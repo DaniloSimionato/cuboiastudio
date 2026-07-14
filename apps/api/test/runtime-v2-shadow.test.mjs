@@ -263,6 +263,74 @@ test("timeout, capacidade e erro assíncrono são isolados do V1", async () => {
   assert.equal(JSON.stringify(errorResult.manifest).includes("raw customer content"), false);
 });
 
+test("timeout não permite write tardio depois que a execução expira", async () => {
+  let releaseLoad;
+  let writes = 0;
+  const loadGate = new Promise((resolve) => {
+    releaseLoad = resolve;
+  });
+  const delayedStore = {
+    load: async () => {
+      await loadGate;
+      return null;
+    },
+    existsForMessage: async () => false,
+    saveTurn: async () => {
+      writes += 1;
+      throw new Error("write should not happen after timeout");
+    },
+  };
+  const orchestrator = new RuntimeV2ShadowOrchestrator(delayedStore, {
+    ...shadowEnvironment,
+    RUNTIME_V2_SHADOW_TIMEOUT_MS: "25",
+  });
+
+  const resultPromise = orchestrator.process(snapshot("Oi", "timeout-write-message"));
+  const result = await resultPromise;
+  assert.equal(result.manifest.shadowErrorCode, "SHADOW_TIMEOUT");
+
+  releaseLoad();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(writes, 0);
+});
+
+test("retry de revisão recarrega o estado mais recente antes de persistir", async () => {
+  let loadCount = 0;
+  let saveCount = 0;
+  const latestState = createEmptyConversationState(scope);
+  latestState.revision = 1;
+  const retryStore = {
+    load: async () => {
+      loadCount += 1;
+      return loadCount === 1 ? null : structuredClone(latestState);
+    },
+    existsForMessage: async () => false,
+    saveTurn: async (state, expectedRevision) => {
+      saveCount += 1;
+      if (saveCount === 1) {
+        throw new StateRevisionConflictError();
+      }
+      assert.equal(expectedRevision, 1);
+      return {
+        state: { ...state, revision: 2 },
+        messageAlreadyProcessed: false,
+        persistenceResult: "UPDATED",
+      };
+    },
+  };
+  const orchestrator = new RuntimeV2ShadowOrchestrator(retryStore, {
+    ...shadowEnvironment,
+    RUNTIME_V2_SHADOW_TIMEOUT_MS: "1000",
+  });
+
+  const result = await orchestrator.process(snapshot("Oi", "retry-fresh-state"));
+  assert.equal(result.manifest.validationResult, "PASS");
+  assert.equal(loadCount, 2);
+  assert.equal(saveCount, 2);
+  assert.equal(result.manifest.revisionBefore, 1);
+  assert.equal(result.manifest.revisionAfter, 2);
+});
+
 test("store possui limpeza lazy, TTL, limite de IDs e isolamento por tenant/contextVersion", async () => {
   const store = new InMemoryConversationStateStore();
   const expiringScope = { ...scope, conversationId: "conversation-expiring" };

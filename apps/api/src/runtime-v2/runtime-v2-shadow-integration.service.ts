@@ -53,6 +53,19 @@ function integrationKey(snapshot: RuntimeV2ShadowSnapshot): string {
   ].join(":");
 }
 
+function scopeKey(snapshot: RuntimeV2ShadowSnapshot): string {
+  return [
+    "V2",
+    "SHADOW",
+    snapshot.scope.companyId,
+    snapshot.scope.assistantId,
+    snapshot.scope.conversationId,
+    snapshot.scope.contextVersion,
+  ]
+    .map((value) => encodeURIComponent(String(value)))
+    .join(":");
+}
+
 function isValidSnapshot(
   snapshot: RuntimeV2ShadowSnapshot | null | undefined,
 ): snapshot is RuntimeV2ShadowSnapshot {
@@ -86,6 +99,8 @@ export class RuntimeV2ShadowIntegrationService {
   private readonly logger = new Logger(RuntimeV2ShadowIntegrationService.name);
   private readonly pending = new Set<Promise<RuntimeV2ShadowIntegrationResult>>();
   private readonly inFlight = new Set<string>();
+  private readonly scopeTails = new Map<string, Promise<void>>();
+  private readonly scheduledMessages = new Set<string>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -96,7 +111,40 @@ export class RuntimeV2ShadowIntegrationService {
   schedule(
     snapshot: RuntimeV2ShadowSnapshot | null | undefined,
   ): Promise<RuntimeV2ShadowIntegrationResult> {
-    const task = this.process(snapshot);
+    if (!isValidSnapshot(snapshot)) {
+      return this.process(snapshot);
+    }
+
+    const messageKey = integrationKey(snapshot);
+    if (this.scheduledMessages.has(messageKey)) {
+      return Promise.resolve({
+        status: "ALREADY_PROCESSED",
+        manifest: null,
+        logId: null,
+        logPersisted: false,
+      });
+    }
+
+    this.scheduledMessages.add(messageKey);
+    const sessionKey = scopeKey(snapshot);
+    const previous = this.scopeTails.get(sessionKey) ?? Promise.resolve();
+    const task = previous
+      .catch(() => undefined)
+      .then(() => this.process(snapshot))
+      .finally(() => {
+        this.scheduledMessages.delete(messageKey);
+      });
+    const tail = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.scopeTails.set(sessionKey, tail);
+    void tail.then(() => {
+      if (this.scopeTails.get(sessionKey) === tail) {
+        this.scopeTails.delete(sessionKey);
+      }
+    });
+
     this.pending.add(task);
     void task.then(
       () => this.pending.delete(task),

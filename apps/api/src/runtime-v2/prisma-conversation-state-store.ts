@@ -49,7 +49,36 @@ function isForbiddenStateKey(key: string): boolean {
   );
 }
 
+const STRUCTURAL_STATE_KEYS = new Set([
+  "id",
+  "stateId",
+  "eventId",
+  "runtimeLogId",
+  "flowId",
+  "companyId",
+  "assistantId",
+  "conversationId",
+  "contextVersion",
+  "internalMessageId",
+  "externalMessageId",
+  "schemaVersion",
+  "revision",
+  "firstMessageId",
+  "lastProcessedMessageId",
+  "lastProcessedExternalMessageId",
+  "lastRelevantQuestionMessageId",
+  "lastRelevantQuestionContextVersion",
+  "sourceMessageId",
+  "selectedFlowId",
+]);
+
 function redactStateValue(value: unknown, key = ""): JsonValue | undefined {
+  if (
+    STRUCTURAL_STATE_KEYS.has(key) &&
+    (typeof value === "string" || (typeof value === "number" && Number.isFinite(value)))
+  ) {
+    return value;
+  }
   if (isForbiddenStateKey(key)) return undefined;
   if (typeof value === "string") {
     if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)) return value;

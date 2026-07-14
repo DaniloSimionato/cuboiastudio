@@ -367,7 +367,7 @@ export class RuntimeV2ShadowOrchestrator {
   }
 
   private assertBeforeDeadline(deadlineAt: number): void {
-    if (this.now().getTime() > deadlineAt) throw new ShadowTimeoutError();
+    if (this.now().getTime() >= deadlineAt) throw new ShadowTimeoutError();
   }
 
   private async waitBeforeRetry(attempt: number, deadlineAt: number): Promise<void> {

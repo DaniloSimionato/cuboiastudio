@@ -139,3 +139,72 @@ test("a mesma mensagem em voo não executa o orquestrador duas vezes", async () 
   );
   assert.equal(prisma.logs.length, 1);
 });
+
+test("serializa uma sessão, mas mantém sessões diferentes em paralelo", async () => {
+  const prisma = fakePrisma();
+  const started = [];
+  const gates = new Map();
+  let resolveThirdStart;
+  const thirdStarted = new Promise((resolve) => {
+    resolveThirdStart = resolve;
+  });
+  let active = 0;
+  let maxActive = 0;
+  const environment = {
+    RUNTIME_V2_MODE: "SHADOW",
+    RUNTIME_V2_SHADOW_ASSISTANT_IDS: `${scope.assistantId},other-assistant`,
+  };
+  const orchestrator = {
+    async process(message) {
+      started.push(message.internalMessageId);
+      if (message.internalMessageId === "same-scope-2") resolveThirdStart();
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => gates.set(message.internalMessageId, resolve));
+      active -= 1;
+      return {
+        manifest: {
+          currentMessageHash: `hash-${message.internalMessageId}`,
+          messageAlreadyProcessed: false,
+          persistenceResult: "UPDATED",
+          validationResult: "PASS",
+          shadowErrorCode: null,
+          processingDurationMs: 1,
+          v1Comparison: {
+            selectedFlowId: null,
+            selectedIntent: null,
+            triageMode: null,
+            toolsExposed: [],
+          },
+        },
+      };
+    },
+  };
+  const integration = new RuntimeV2ShadowIntegrationService(prisma, orchestrator, environment);
+  const sameScopeSecond = {
+    ...snapshot("same-scope-2"),
+    currentMessage: "segunda",
+  };
+  const differentScope = {
+    ...snapshot("different-scope"),
+    scope: { ...scope, assistantId: "other-assistant" },
+  };
+
+  const first = integration.schedule(snapshot("same-scope-1"));
+  const second = integration.schedule(sameScopeSecond);
+  const parallel = integration.schedule(differentScope);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual([...started].sort(), ["different-scope", "same-scope-1"]);
+  assert.equal(maxActive, 2);
+  gates.get("same-scope-1")();
+  gates.get("different-scope")();
+  await thirdStarted;
+  gates.get("same-scope-2")();
+  await Promise.all([first, second, parallel]);
+  await integration.drain();
+
+  assert.deepEqual(new Set(started.slice(0, 2)), new Set(["same-scope-1", "different-scope"]));
+  assert.equal(started[2], "same-scope-2");
+  assert.equal(prisma.logs.length, 3);
+});
