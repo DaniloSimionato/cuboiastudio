@@ -443,7 +443,11 @@ test("35. confirmação humana sem validade é rejeitada", () => {
       evidence({
         sourceType: "HUMAN_CONFIRMED",
         category: "BUSINESS_HOURS_EXCEPTION",
-        provenance: { confirmedCategory: "BUSINESS_HOURS_EXCEPTION" },
+        provenance: {
+          sourceTable: "human_confirmation",
+          sourceTool: "human_agent",
+          confirmedCategory: "BUSINESS_HOURS_EXCEPTION",
+        },
         validFrom: null,
         validUntil: null,
       }),
@@ -461,7 +465,11 @@ test("36. confirmação humana válida e escopada pode autorizar a categoria", (
       evidence({
         sourceType: "HUMAN_CONFIRMED",
         category: "BUSINESS_HOURS_EXCEPTION",
-        provenance: { confirmedCategory: "BUSINESS_HOURS_EXCEPTION" },
+        provenance: {
+          sourceTable: "human_confirmation",
+          sourceTool: "human_agent",
+          confirmedCategory: "BUSINESS_HOURS_EXCEPTION",
+        },
       }),
     ],
     scope,

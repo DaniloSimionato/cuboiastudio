@@ -48,7 +48,7 @@ export function evaluateFreshness(input: {
     return {
       status: "UNKNOWN",
       eligible: false,
-      reason: observedAt === null ? "UNKNOWN_NO_OBSERVED_AT" : "UNKNOWN_INVALID_DATE",
+      reason: !input.observedAt ? "UNKNOWN_NO_OBSERVED_AT" : "UNKNOWN_INVALID_DATE",
     };
   }
   if (validFrom !== null && now < validFrom) {

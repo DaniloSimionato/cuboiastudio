@@ -73,17 +73,14 @@ function evidenceIsPotentiallyAuthoritative(
   if (evidence.authorityLevel !== "AUTHORITATIVE" || evidence.isAuthoritative !== true)
     return false;
   if (evidence.sourceStatus === "INACTIVE" || evidence.sourceStatus === "ERROR") return false;
-  if (
-    evidence.sourceType === "TOOL_RESULT" &&
-    policy.requiresToolCoverage &&
-    !hasToolCoverage(evidence, requestedCategory)
-  ) {
+  if (evidence.sourceType === "TOOL_RESULT" && !hasToolCoverage(evidence, requestedCategory)) {
     return false;
   }
   if (evidence.sourceType === "HUMAN_CONFIRMED") {
     if (!policy.allowHumanConfirmed || !evidence.provenance.confirmedCategory) return false;
     if (evidence.provenance.confirmedCategory !== requestedCategory) return false;
     if (!evidence.validFrom || !evidence.validUntil) return false;
+    if (!evidence.provenance.sourceTool && !evidence.provenance.sourceTable) return false;
   }
   return true;
 }
@@ -133,6 +130,7 @@ export function resolveAuthority(input: {
       validFrom: evidence.validFrom,
       validUntil: evidence.validUntil,
       policy: {
+        ttlMs: policy.freshnessTtlMs,
         allowStaleAsAuthority: policy.allowStaleAsAuthority,
         allowUnknownAsAuthority: policy.allowUnknownAsAuthority,
       },

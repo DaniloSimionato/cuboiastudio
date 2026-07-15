@@ -320,7 +320,8 @@ export function combineEvidence(input: {
     }
   }
   const evidence = [...unique.values()].filter((item) => !rejected.has(item.evidenceId));
-  const decisions = input.requestedCategories.map((category) =>
+  const requestedCategories = [...new Set(input.requestedCategories)].sort();
+  const decisions = requestedCategories.map((category) =>
     resolveAuthority({
       requestedCategory: category,
       candidates: evidence.filter((item) => item.category === category),
@@ -332,7 +333,7 @@ export function combineEvidence(input: {
   const bundle: RetrievalBundle = {
     contractVersion: EVIDENCE_CONTRACT_VERSION,
     retrievalBundleVersion: RETRIEVAL_BUNDLE_VERSION,
-    requestedCategories: [...input.requestedCategories],
+    requestedCategories,
     officialEvidence: evidence.filter((item) => item.sourceType === "OFFICIAL_STRUCTURED"),
     documentEvidence: evidence.filter((item) =>
       ["OFFICIAL_DOCUMENT", "RAG_DOCUMENT"].includes(item.sourceType),
@@ -348,8 +349,10 @@ export function combineEvidence(input: {
     contextualEvidence: evidence.filter((item) =>
       ["CONVERSATION_HISTORY", "EXTERNAL_METADATA", "MODEL_GENERATED"].includes(item.sourceType),
     ),
-    adapterStatuses: { ...(input.adapterStatuses ?? {}) },
-    adapterExecutionOrder: [...(input.adapterExecutionOrder ?? [])],
+    adapterStatuses: Object.fromEntries(
+      Object.entries(input.adapterStatuses ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+    adapterExecutionOrder: [...new Set(input.adapterExecutionOrder ?? [])].sort(),
     conflicts: decisions.filter((decision) => decision.conflictDetected),
     missingCategories: decisions
       .filter((decision) => decision.status !== "AUTHORIZED")
@@ -363,8 +366,10 @@ export function combineEvidence(input: {
     duplicateEvidenceRejected,
     invalidEvidenceCount,
     scopeValidationFailures: [...scopeFailures].sort(),
-    adapterStatuses: { ...(input.adapterStatuses ?? {}) },
-    adapterExecutionOrder: [...(input.adapterExecutionOrder ?? [])],
+    adapterStatuses: Object.fromEntries(
+      Object.entries(input.adapterStatuses ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+    adapterExecutionOrder: [...new Set(input.adapterExecutionOrder ?? [])].sort(),
     conflicts: bundle.conflicts,
     missingCategories: [...new Set(bundle.missingCategories)].sort(),
   };
@@ -458,19 +463,35 @@ export function buildCombinedEvidenceManifest(
   return {
     ...decisionMetadata,
     retrievalBundleVersion: RETRIEVAL_BUNDLE_VERSION,
-    adapterExecutionOrder: result.adapterExecutionOrder,
-    adapterStatuses: result.adapterStatuses,
+    adapterExecutionOrder: [...result.adapterExecutionOrder].sort(),
+    adapterStatuses: Object.fromEntries(
+      Object.entries(result.adapterStatuses).sort(([left], [right]) => left.localeCompare(right)),
+    ),
     totalEvidenceCount: rawEvidenceCount,
     deduplicatedEvidenceCount: result.evidence.length,
     duplicateEvidenceRejected: result.duplicateEvidenceRejected,
-    evidenceCountsBySourceType,
-    evidenceCountsByCategory,
-    authorityDecisionsByCategory,
-    decisionStatusCounts,
-    winningEvidenceIdsByCategory,
-    rejectedEvidenceIdsByCategory,
-    winningSourceTypesByCategory,
-    missingCategories: result.missingCategories,
+    evidenceCountsBySourceType: Object.fromEntries(
+      Object.entries(evidenceCountsBySourceType).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+    evidenceCountsByCategory: Object.fromEntries(
+      Object.entries(evidenceCountsByCategory).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+    authorityDecisionsByCategory: Object.fromEntries(
+      Object.entries(authorityDecisionsByCategory).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+    decisionStatusCounts: Object.fromEntries(
+      Object.entries(decisionStatusCounts).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+    winningEvidenceIdsByCategory: Object.fromEntries(
+      Object.entries(winningEvidenceIdsByCategory).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+    rejectedEvidenceIdsByCategory: Object.fromEntries(
+      Object.entries(rejectedEvidenceIdsByCategory).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+    winningSourceTypesByCategory: Object.fromEntries(
+      Object.entries(winningSourceTypesByCategory).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+    missingCategories: [...result.missingCategories].sort(),
     conflictDetected: result.conflicts.length > 0,
     conflictCategories: result.conflicts.map((decision) => decision.requestedCategory).sort(),
     conflictReasons: result.conflicts

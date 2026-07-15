@@ -28,6 +28,7 @@ export type CategoryEvidencePolicy = {
   contextualSourceTypes: SourceType[];
   allowStaleAsAuthority: boolean;
   allowUnknownAsAuthority: boolean;
+  freshnessTtlMs?: number;
   requireCurrentForAuthority: boolean;
   requiresToolCoverage: boolean;
   allowHumanConfirmed: boolean;
@@ -80,8 +81,14 @@ export const DEFAULT_EVIDENCE_POLICIES: Record<EvidenceCategory, CategoryEvidenc
     },
   ),
   PRICE: policy("PRICE", ["OFFICIAL_STRUCTURED", "OFFICIAL_DOCUMENT", "TOOL_RESULT"]),
-  AVAILABILITY: policy("AVAILABILITY", ["TOOL_RESULT"], { requiresToolCoverage: true }),
-  BOOKING: policy("BOOKING", ["TOOL_RESULT"], { requiresToolCoverage: true }),
+  AVAILABILITY: policy("AVAILABILITY", ["TOOL_RESULT", "HUMAN_CONFIRMED"], {
+    requiresToolCoverage: true,
+    allowHumanConfirmed: true,
+  }),
+  BOOKING: policy("BOOKING", ["TOOL_RESULT", "HUMAN_CONFIRMED"], {
+    requiresToolCoverage: true,
+    allowHumanConfirmed: true,
+  }),
   PICKUP_DELIVERY: policy("PICKUP_DELIVERY", [
     "OFFICIAL_STRUCTURED",
     "OFFICIAL_DOCUMENT",

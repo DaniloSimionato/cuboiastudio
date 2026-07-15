@@ -630,6 +630,35 @@ O manifesto sanitizado registra, sem conteúdo integral:
 
 A Fase 6.1B4 poderá introduzir memória contextual metadata-only, com escopo por contato/sessão, expiração explícita e compartilhamento entre assistentes bloqueado por padrão.
 
+## 22. Fase 6.1C — freshness, conflitos e determinismo
+
+### Freshness
+
+O avaliador recebe `currentTime` explicitamente e não usa relógio global. `CURRENT` é elegível conforme a política da categoria; `STALE` só pode ser elegível quando a política declarar isso; `EXPIRED`, datas inválidas, ausência de `observedAt` e `validFrom` futuro não autorizam. A igualdade exata de `validUntil` e do limite de TTL permanece vigente; a expiração ocorre somente após o limite. Sem validade ou TTL declarado, o resultado é `UNKNOWN`, sem autoridade automática. Os testes cobrem todas as categorias do contrato, offsets de timezone e timestamps adjacentes a mudança de horário de verão.
+
+### Precedência e conflitos
+
+As decisões continuam independentes por categoria. Contexto oficial estruturado vigente vence documento contextual; ferramenta ou confirmação humana só vencem na categoria explicitamente coberta, dentro do escopo e da validade; memória, sessão, RAG contextual, histórico e metadata externa não autorizam política empresarial. Preço sem fonte autoritativa, disponibilidade sem ferramenta/confirmação válida e agendamento sem ferramenta/confirmação válida produzem decisão segura na própria categoria. Fontes equivalentes autoritativas com valores divergentes produzem `CONFLICT`; score, confidence, ordem dos adapters ou ordem de entrada não resolvem o conflito.
+
+Confirmação humana exige categoria confirmada, escopo, `sourceId`, proveniência mínima, `observedAt` e validade. Uma confirmação de uma categoria não é reutilizada para outra. `TOOL_RESULT` precisa declarar `coveredCategories`; o resultado não autoriza endereço, preço ou outra categoria não coberta.
+
+### Determinismo e isolamento
+
+Evidências são deduplicadas por `evidenceId`. Hash divergente para o mesmo ID é rejeitado. Arrays, mapas de status, categorias, IDs vencedores/rejeitados e ordem registrada dos adapters são serializados em ordem canônica. Assim, embaralhar evidências, adapters ou executar adapters em paralelo não altera decisão, conflito, ausência ou manifesto, exceto duração. Validações continuam exigindo empresa e, quando aplicável, assistente, contato, conversa e `contextVersion`; fontes fora do escopo são rejeitadas antes de formar conflito.
+
+### Fail-safe e desempenho
+
+Falhas parciais mantêm os adapters restantes e não bloqueiam o V1. Falha total resulta somente em `EVIDENCE_PIPELINE_ERROR` sanitizado, sem retry infinito, escrita tardia ou conteúdo bruto. O benchmark local usa bundles pequeno, médio e próximo ao limite para registrar duração total, quantidade de evidências e deduplicação; não há SLA novo nem otimização prematura. O V1 continua responsável por provider, ferramentas e outbound.
+
+### Critérios da Fase 6.1D
+
+- validar o bundle combinado em `SHADOW_METADATA` com dados sintéticos multi-tenant;
+- confirmar idempotência após duplicidade e restart;
+- confirmar que nenhum adapter inicia busca RAG/memória adicional;
+- confirmar manifestos sanitizados e decisões por categoria em observação operacional controlada;
+- manter V2 sem provider, ferramentas, memória de escrita e outbound;
+- definir rollout e rollback somente após aprovação operacional, sem alterar o comportamento visível do V1.
+
 ## 20. Implementação da Fase 6.1B4 — observação de memória contextual metadata-only
 
 ### Caminho real de memória do V1

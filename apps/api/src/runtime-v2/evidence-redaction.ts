@@ -113,12 +113,16 @@ export function redactRetrievalBundle(bundle: RetrievalBundle): {
   return {
     contractVersion: bundle.contractVersion,
     retrievalBundleVersion: bundle.retrievalBundleVersion ?? 1,
-    requestedCategories: [...bundle.requestedCategories],
-    adapterStatuses: { ...(bundle.adapterStatuses ?? {}) },
-    adapterExecutionOrder: [...(bundle.adapterExecutionOrder ?? [])],
-    evidence: evidence.map(redactSourceEvidence),
-    conflicts: bundle.conflicts.map(redactAuthorityDecision),
-    missingCategories: [...bundle.missingCategories],
+    requestedCategories: [...bundle.requestedCategories].sort(),
+    adapterStatuses: Object.fromEntries(
+      Object.entries(bundle.adapterStatuses ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+    adapterExecutionOrder: [...new Set(bundle.adapterExecutionOrder ?? [])].sort(),
+    evidence: evidence.sort((left, right) => left.evidenceId.localeCompare(right.evidenceId)).map(redactSourceEvidence),
+    conflicts: [...bundle.conflicts]
+      .sort((left, right) => left.requestedCategory.localeCompare(right.requestedCategory))
+      .map(redactAuthorityDecision),
+    missingCategories: [...bundle.missingCategories].sort(),
     redactionApplied: true,
   };
 }
