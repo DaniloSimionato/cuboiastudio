@@ -7,6 +7,7 @@ export type EvidenceContractVersion = typeof EVIDENCE_CONTRACT_VERSION;
 export type SourceType =
   | "OFFICIAL_STRUCTURED"
   | "OFFICIAL_DOCUMENT"
+  | "RAG_DOCUMENT"
   | "TOOL_RESULT"
   | "HUMAN_CONFIRMED"
   | "FLOW_GUIDANCE"

@@ -85,6 +85,10 @@ import {
   isActionableAssistantQuestion,
   type RuntimeV2ShadowSnapshot,
 } from "../runtime-v2/runtime-v2-shadow-orchestrator";
+import {
+  createRagRetrievalObservation,
+  type RagRetrievalObservation,
+} from "../runtime-v2/rag-evidence.adapter";
 import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
 import {
   deriveExpectedAuthorityCategory,
@@ -2520,8 +2524,7 @@ export class AssistantConversationsService {
     let requestedDetailBefore: string | null = null;
     let requestedDetailChangeReason: string | null = null;
     const customerUnableToAnswer = Boolean(
-      loadedTriageState?.active &&
-        getCustomerUnableToAnswerReason(customerIntentText),
+      loadedTriageState?.active && getCustomerUnableToAnswerReason(customerIntentText),
     );
 
     if (loadedTriageState && loadedTriageState.active && loadedTriageState.expiresAt > Date.now()) {
@@ -2529,7 +2532,8 @@ export class AssistantConversationsService {
         shouldClearTriage = true;
         triageMode = false;
         triageExitReason = getCustomerUnableToAnswerReason(customerIntentText);
-        requestedDetailBefore = loadedTriageState.requestedDetailKey ?? loadedTriageState.requestedDetail;
+        requestedDetailBefore =
+          loadedTriageState.requestedDetailKey ?? loadedTriageState.requestedDetail;
         requestedDetailChangeReason = "CUSTOMER_UNABLE_TO_PROVIDE_DETAIL";
       }
       const isScheduleQuery = /(agendar|agendamento|marcar|horário|horario|reserva|agenda)/i.test(
@@ -2540,7 +2544,7 @@ export class AssistantConversationsService {
           customerIntentText,
         );
       const isHandoffQuery = /(humano|atendente|atendimento\s+humano|falar\s+com\s+alguém)/i.test(
-          customerIntentText,
+        customerIntentText,
       );
 
       if (
@@ -2584,6 +2588,16 @@ export class AssistantConversationsService {
       selectionReason: assistant.ragEnabled ? "not_executed" : "rag_disabled",
       warning: null,
     };
+    let ragObservation: RagRetrievalObservation = createRagRetrievalObservation({
+      companyId: input.tenant.companyId,
+      assistantId: input.assistantId,
+      internalMessageId: userMessage.id,
+      queryCategory: "KNOWLEDGE",
+      retrievalExecuted: false,
+      threshold: ragThresholdConfig.threshold,
+      thresholdSource: ragThresholdConfig.source,
+      results: [],
+    });
 
     if (assistant.ragEnabled && this.assistantKnowledgeRetrievalService) {
       const searchResult = await this.assistantKnowledgeRetrievalService.searchRelevantKnowledge({
@@ -2625,6 +2639,17 @@ export class AssistantConversationsService {
       };
 
       knowledgeItems = knowledgeSelection.items;
+
+      ragObservation = createRagRetrievalObservation({
+        companyId: input.tenant.companyId,
+        assistantId: input.assistantId,
+        internalMessageId: userMessage.id,
+        queryCategory: "KNOWLEDGE",
+        retrievalExecuted: true,
+        threshold: searchResult.scoreThreshold,
+        thresholdSource: searchResult.scoreThresholdSource,
+        results: searchResult.results,
+      });
 
       this.logger.log(
         `[RAG Runtime] Assistant ${input.assistantId} | Scanned: ${ragLogData.totalChunksScanned} | Found: ${ragLogData.usedKnowledge.length}`,
@@ -2754,12 +2779,16 @@ export class AssistantConversationsService {
     );
     const extractedCustomerFields = extractCustomerStructuredFields(customerIntentText);
     const mergedKnownFieldKeys = [
-      ...new Set([...(loadedTriageState?.knownFieldKeys ?? []), ...extractedCustomerFields.knownFieldKeys]),
+      ...new Set([
+        ...(loadedTriageState?.knownFieldKeys ?? []),
+        ...extractedCustomerFields.knownFieldKeys,
+      ]),
     ];
-    const mergedPendingFieldKeys = [
-      ...new Set(extractedCustomerFields.pendingFieldKeys),
-    ].filter((key) => !mergedKnownFieldKeys.includes(key));
-    const intentInputSource = audioMessage && transcriptionAvailable ? "TRANSCRIPTION" : "CUSTOMER_TEXT";
+    const mergedPendingFieldKeys = [...new Set(extractedCustomerFields.pendingFieldKeys)].filter(
+      (key) => !mergedKnownFieldKeys.includes(key),
+    );
+    const intentInputSource =
+      audioMessage && transcriptionAvailable ? "TRANSCRIPTION" : "CUSTOMER_TEXT";
     const contextMetadata: Record<string, any> = {
       requestId: input.requestId ?? input.dto.externalMessageId ?? null,
       correlationId: input.correlationId ?? null,
@@ -2809,8 +2838,8 @@ export class AssistantConversationsService {
       requestedTimeWithinHours: null,
       officialContactAvailable: Boolean(
         assistant.businessPhone?.trim() ||
-          assistant.businessWhatsapp?.trim() ||
-          assistant.businessWhatsappSupport?.trim(),
+        assistant.businessWhatsapp?.trim() ||
+        assistant.businessWhatsappSupport?.trim(),
       ),
       officialContactSource: "structured-assistant-company",
       staleQuestionRemoved: false,
@@ -2924,6 +2953,7 @@ export class AssistantConversationsService {
         requestedDetailKey: requestedDetailBefore ?? extractedCustomerFields.requestedDetailKey,
         conversationalOutcome,
       },
+      ragObservation,
     };
 
     contextMetadata.contextManifest = {
@@ -3311,13 +3341,14 @@ export class AssistantConversationsService {
                 ...extractedCustomerFields.secondaryIntentKeys,
               ]),
             ],
-            intentSelectionMethod: routeResult.flowSelectionMethod === "keyword_scored"
-              ? "keyword"
-              : routeResult.reason?.startsWith("LLM")
-                ? "llm"
-                : routeResult.flowId
-                  ? "other"
-                  : "none",
+            intentSelectionMethod:
+              routeResult.flowSelectionMethod === "keyword_scored"
+                ? "keyword"
+                : routeResult.reason?.startsWith("LLM")
+                  ? "llm"
+                  : routeResult.flowId
+                    ? "other"
+                    : "none",
             calendarScopeApplied: hasCalendarToolScope(calendarScope),
             calendarScope: calendarScope,
             toolArgsOverridden: false,
@@ -3725,7 +3756,9 @@ export class AssistantConversationsService {
                         startedAt: loadedTriageState?.startedAt ?? new Date().toISOString(),
                         sourceMessageId: userMessage.id,
                         requestedDetail:
-                          extractedCustomerFields.requestedDetailKey ?? parsed.requestedDetail ?? "",
+                          extractedCustomerFields.requestedDetailKey ??
+                          parsed.requestedDetail ??
+                          "",
                         requestedDetailKey: extractedCustomerFields.requestedDetailKey,
                         lastQuestion: parsed.message ?? "",
                         attemptCount: triageAttemptCount,
@@ -3754,7 +3787,8 @@ export class AssistantConversationsService {
                   sourceMessageId: userMessage.id,
                   requestedDetail: loadedTriageState?.requestedDetail ?? "informações básicas",
                   requestedDetailKey:
-                    loadedTriageState?.requestedDetailKey ?? extractedCustomerFields.requestedDetailKey,
+                    loadedTriageState?.requestedDetailKey ??
+                    extractedCustomerFields.requestedDetailKey,
                   lastQuestion: answer,
                   attemptCount: triageAttemptCount,
                   resolved: false,

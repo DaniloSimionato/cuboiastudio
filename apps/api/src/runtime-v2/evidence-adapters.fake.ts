@@ -10,7 +10,7 @@ export interface EvidenceAdapter {
 }
 
 export type OfficialEvidenceAdapter = EvidenceAdapter;
-export type RagEvidenceAdapter = EvidenceAdapter;
+export type RagEvidenceAdapterContract = EvidenceAdapter;
 export type MemoryEvidenceAdapter = EvidenceAdapter;
 export type ToolEvidenceAdapter = EvidenceAdapter;
 export type HumanEvidenceAdapter = EvidenceAdapter;
@@ -50,10 +50,10 @@ export class InMemoryOfficialEvidenceAdapter
 
 export class InMemoryRagEvidenceAdapter
   extends InMemoryEvidenceAdapterBase
-  implements RagEvidenceAdapter
+  implements RagEvidenceAdapterContract
 {
   constructor() {
-    super(["OFFICIAL_DOCUMENT"]);
+    super(["OFFICIAL_DOCUMENT", "RAG_DOCUMENT"]);
   }
 }
 

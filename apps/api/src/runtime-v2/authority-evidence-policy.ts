@@ -48,6 +48,7 @@ function policy(
     authoritativeSourceTypes,
     contextualSourceTypes: [
       "FLOW_GUIDANCE",
+      "RAG_DOCUMENT",
       "CONVERSATION_HISTORY",
       "MODEL_GENERATED",
       "EXTERNAL_METADATA",

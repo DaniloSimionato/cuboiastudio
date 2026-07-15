@@ -23,3 +23,4 @@ export * from "./authority-evidence-resolver";
 export * from "./evidence-adapters.fake";
 export * from "./evidence-manifest";
 export * from "./official-structured-evidence.adapter";
+export * from "./rag-evidence.adapter";

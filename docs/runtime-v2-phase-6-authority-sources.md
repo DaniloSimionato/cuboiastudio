@@ -567,3 +567,65 @@ O manifesto Shadow inclui `evidenceMode`, versão do contrato, categorias solici
 - testes de conflito entre contexto oficial, RAG e memória;
 - integração dessas fontes somente no `RetrievalBundle` Shadow;
 - nenhuma execução de provider, ferramenta ou outbound pelo V2.
+
+## 19. Implementação da Fase 6.1B3 — observação RAG metadata-only
+
+### Caminho RAG real do V1
+
+O V1 executa `AssistantKnowledgeRetrievalService.searchRelevantKnowledge()` antes da compilação do prompt. O serviço:
+
+- valida o tenant e o vínculo do assistente;
+- lê `AssistantKnowledgeChunk` filtrado por `companyId`, `assistantId` e `status=ACTIVE`;
+- exige `AssistantKnowledge.status=ACTIVE` e `processingStatus=READY`;
+- gera o embedding da consulta no V1;
+- calcula cosine similarity no processo Node.js;
+- aplica o threshold normalizado, cujo default efetivo é `0.70`;
+- ordena os resultados e limita o conjunto conforme o fluxo normal/triagem;
+- entrega os chunks selecionados ao PromptCompiler V1.
+
+O Shadow não repete nenhum desses passos. O V1 cria uma observação sem query, conteúdo, embedding ou título integral, e o V2 recebe somente a observação sanitizada no snapshot do turno.
+
+### Observação e adapter
+
+`RagRetrievalObservation` registra apenas origem `V1_PIPELINE`, escopo, `internalMessageId`, categoria abstrata, threshold, contagem, horário da observação e itens com IDs, score, status, proveniência mínima e hash do texto disponível no resultado do V1. A observação não é persistida como conteúdo.
+
+`RagEvidenceAdapter` é uma transformação metadata-only, sem Prisma e sem efeitos externos. Ele rejeita:
+
+- tenant ou assistente divergente;
+- documentos inativos, removidos ou não `READY`;
+- score abaixo do threshold observado;
+- categoria ou proveniência ausente;
+- observação não executada;
+- escopo inconsistente.
+
+O tipo `RAG_DOCUMENT` representa evidência contextual. `OFFICIAL_DOCUMENT` só é usado quando o metadata estruturado do documento declara explicitamente essa classificação. Score é relevância, não autoridade.
+
+### Freshness e autoridade
+
+Sem validade explícita, a evidência fica `UNKNOWN`. RAG contextual não autoriza preço, endereço, contato, horário, disponibilidade ou agenda. Documento explicitamente oficial com validade suficiente pode ser avaliado pelo resolvedor por categoria; sem validade, continua inelegível para autoridade.
+
+`AVAILABILITY` e `BOOKING` não são autorizados por RAG estático. Contexto oficial estruturado vigente vence documento contextual conflitante, e conflitos entre evidências autoritativas equivalentes permanecem `CONFLICT`.
+
+### Manifesto
+
+O manifesto sanitizado registra, sem conteúdo integral:
+
+- execução e origem da observação;
+- threshold e origem do threshold;
+- contagens de resultados, evidências e rejeições;
+- IDs de conhecimento, documento e chunk;
+- buckets de score;
+- status, freshness e categorias;
+- hashes de conteúdo;
+- rejeições por tenant, status, threshold ou proveniência;
+- conflitos, status e duração do adapter;
+- `ragContentPersisted=false`.
+
+### Limitações e plano da Fase 6.1B4
+
+- O contrato atual do resultado RAG V1 não expõe datas, modelo de embedding ou versão do documento; esses campos permanecem ausentes quando não estão disponíveis no snapshot.
+- Categorias não declaradas pela observação não são inferidas pelo nome, título ou conteúdo.
+- A busca continua sendo exclusivamente responsabilidade do V1.
+- Disponibilidade e booking permanecem dependentes de contexto estruturado ou ferramenta futura.
+
+A Fase 6.1B4 poderá introduzir memória contextual metadata-only, com escopo por contato/sessão, expiração explícita e compartilhamento entre assistentes bloqueado por padrão.

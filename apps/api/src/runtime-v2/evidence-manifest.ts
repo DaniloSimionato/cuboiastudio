@@ -7,6 +7,7 @@ import {
 import { redactAuthorityDecision } from "./evidence-redaction";
 import { type AuthorityDecision } from "./evidence-contracts";
 import { EVIDENCE_POLICY_VERSION } from "./authority-evidence-policy";
+import { type RagEvidenceManifest } from "./rag-evidence.adapter";
 
 export type EvidenceManifestExtension = {
   evidenceMode: "OFF" | "SHADOW_METADATA";
@@ -29,6 +30,7 @@ export type EvidenceManifestExtension = {
   adapterStatus: "COMPLETED" | "PARTIAL" | "EMPTY" | "FAILED" | "SKIPPED";
   adapterDurationMs: number;
   redactionApplied: true;
+  rag: RagEvidenceManifest;
 };
 
 export function buildEvidenceManifestExtension(input: {
@@ -44,6 +46,11 @@ export function buildEvidenceManifestExtension(input: {
   scopeValidationFailures?: string[];
   adapterStatus?: EvidenceManifestExtension["adapterStatus"];
   adapterDurationMs?: number;
+  officialEvidence?: Array<{
+    evidenceId: string;
+    sourceType: SourceType;
+  }>;
+  rag?: RagEvidenceManifest;
 }): EvidenceManifestExtension {
   const evidenceCountsBySourceType: Partial<Record<SourceType, number>> = {};
   const evidenceCountsByCategory: Record<string, number> = {};
@@ -61,8 +68,8 @@ export function buildEvidenceManifestExtension(input: {
     evidenceMode: input.evidenceMode ?? "OFF",
     evidenceContractVersion: EVIDENCE_CONTRACT_VERSION,
     requestedEvidenceCategories: [...input.requestedCategories],
-    officialEvidenceCount: input.evidence.length,
-    officialEvidenceIds: input.evidence
+    officialEvidenceCount: (input.officialEvidence ?? input.evidence).length,
+    officialEvidenceIds: (input.officialEvidence ?? input.evidence)
       .map((item) => item.evidenceId)
       .filter((item): item is string => Boolean(item))
       .sort(),
@@ -90,5 +97,31 @@ export function buildEvidenceManifestExtension(input: {
     adapterStatus: input.adapterStatus ?? "SKIPPED",
     adapterDurationMs: Math.max(0, Math.round(input.adapterDurationMs ?? 0)),
     redactionApplied: true,
+    rag: input.rag ?? {
+      ragObservationReceived: false,
+      ragRetrievalExecuted: false,
+      ragThreshold: null,
+      ragThresholdSource: null,
+      ragResultCount: 0,
+      ragEvidenceCount: 0,
+      ragRejectedCount: 0,
+      ragEvidenceIds: [],
+      ragKnowledgeIds: [],
+      ragDocumentIds: [],
+      ragChunkIds: [],
+      ragScoreBuckets: {},
+      ragStatusCounts: {},
+      ragFreshnessCounts: {},
+      ragCategoryCounts: {},
+      ragContentHashes: [],
+      ragCrossTenantRejected: 0,
+      ragInactiveRejected: 0,
+      ragBelowThresholdRejected: 0,
+      ragMissingProvenanceRejected: 0,
+      ragConflictDetected: false,
+      ragAdapterStatus: "NOT_EXECUTED",
+      ragAdapterDurationMs: 0,
+      ragContentPersisted: false,
+    },
   };
 }

@@ -119,9 +119,7 @@ function createConversationsService(prisma, input) {
       generateChatCompletion: async (request) => {
         aiCalls.push(request);
         const answer =
-          typeof input.answer === "function"
-            ? input.answer(request, aiCalls.length)
-            : input.answer;
+          typeof input.answer === "function" ? input.answer(request, aiCalls.length) : input.answer;
         return {
           answer,
           provider: "openai",
@@ -138,6 +136,11 @@ function createConversationsService(prisma, input) {
     input.knowledgeRetrievalService,
     new PromptCompilerService(),
     input.intentRouterService,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    input.runtimeV2ShadowIntegration,
   );
 
   service.sendChatwootOutboundText = async (payload) => {
@@ -402,11 +405,10 @@ test("Runtime NATURAL_BLOCKS divide respostas longas sem blocos vazios nem URLs 
       [blockOne, blockTwo],
     );
     assert.ok(outboundCalls.every((call) => call.content.trim().length > 0));
-    assert.equal(
-      outboundCalls.map((call) => call.content).join("\n\n"),
-      answer,
+    assert.equal(outboundCalls.map((call) => call.content).join("\n\n"), answer);
+    assert.ok(
+      outboundCalls.some((call) => call.content.includes("https://example.com/rota/importante")),
     );
-    assert.ok(outboundCalls.some((call) => call.content.includes("https://example.com/rota/importante")));
     const normalSystemText = aiCalls[0].messages
       .filter((message) => message.role === "system")
       .map((message) => String(message.content))
@@ -474,8 +476,10 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
   const conversationId = `conversation_chatwoot_policy_${randomUUID()}`;
   const flowId = `flow_chatwoot_policy_${randomUUID()}`;
   const auth = createAuth(companyId);
-  const answer = "Fazemos sim 😊 Me passa o modelo do computador? Aí já verifico o que é compatível.";
+  const answer =
+    "Fazemos sim 😊 Me passa o modelo do computador? Aí já verifico o que é compatível.";
   const ragCalls = [];
+  const shadowSnapshots = [];
 
   try {
     await createRuntimeConversation(prisma, {
@@ -517,50 +521,61 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
       },
     });
 
-    const { service: conversationsService, outboundCalls, aiCalls } = createConversationsService(
-      prisma,
-      {
-        answer,
-        knowledgeRetrievalService: {
-          searchRelevantKnowledge: async ({ topK }) => {
-            ragCalls.push({ topK });
-            const results = [
-              {
-                knowledgeId: "knowledge-1",
-                knowledgeTitle: "Serviços de computador",
-                chunkId: "chunk-format",
-                contentPreview: "Formatação do computador: serviço disponível.",
-              },
-              {
-                knowledgeId: "knowledge-1",
-                knowledgeTitle: "Serviços de computador",
-                chunkId: "chunk-memory",
-                contentPreview: "Aumento de memória RAM: verificar compatibilidade.",
-              },
-              {
-                knowledgeId: "knowledge-1",
-                knowledgeTitle: "Serviços de computador",
-                chunkId: "chunk-ssd",
-                contentPreview: "Instalação de SSD: verificar modelo e capacidade.",
-              },
-            ].slice(0, topK);
-            return {
-              totalChunksScanned: 3,
-              warning: null,
-              results,
+    const {
+      service: conversationsService,
+      outboundCalls,
+      aiCalls,
+    } = createConversationsService(prisma, {
+      answer,
+      knowledgeRetrievalService: {
+        searchRelevantKnowledge: async ({ topK }) => {
+          ragCalls.push({ topK });
+          const results = [
+            {
+              knowledgeId: "knowledge-1",
+              knowledgeTitle: "Serviços de computador",
+              chunkId: "chunk-format",
+              contentPreview: "Formatação do computador: serviço disponível.",
+            },
+            {
+              knowledgeId: "knowledge-1",
+              knowledgeTitle: "Serviços de computador",
+              chunkId: "chunk-memory",
+              contentPreview: "Aumento de memória RAM: verificar compatibilidade.",
+            },
+            {
+              knowledgeId: "knowledge-1",
+              knowledgeTitle: "Serviços de computador",
+              chunkId: "chunk-ssd",
+              contentPreview: "Instalação de SSD: verificar modelo e capacidade.",
+            },
+          ].slice(0, topK);
+          return {
+            totalChunksScanned: 3,
+            warning: null,
+            results,
+            scoreThreshold: 0.7,
+              scoreThresholdSource: "default",
+              filteredOutCount: 0,
+              scoredChunkCount: 3,
             };
-          },
-        },
-        intentRouterService: {
-          route: async () => ({
-            flowId,
-            flowName: "Fluxo com escopo amplo",
-            confidence: 1,
-            reason: "fixture",
-          }),
         },
       },
-    );
+      runtimeV2ShadowIntegration: {
+        schedule: async (snapshot) => {
+          shadowSnapshots.push(snapshot);
+          return { status: "COMPLETED", manifest: null, logId: null, logPersisted: false };
+        },
+      },
+      intentRouterService: {
+        route: async () => ({
+          flowId,
+          flowName: "Fluxo com escopo amplo",
+          confidence: 1,
+          reason: "fixture",
+        }),
+      },
+    });
 
     const webhookConfig = {
       id: "config-chatwoot-policy",
@@ -590,7 +605,10 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
       },
     };
     const inboxService = {
-      recordWebhookReceived: async () => ({ configId: webhookConfig.id, diagnosticId: "diagnostic" }),
+      recordWebhookReceived: async () => ({
+        configId: webhookConfig.id,
+        diagnosticId: "diagnostic",
+      }),
       completeWebhookDiagnostic: async () => undefined,
       recordResponseSent: async () => undefined,
       resolveActiveByWebhook: async () => webhookConfig,
@@ -649,6 +667,16 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
     assert.equal(aiCalls.length, 1);
     assert.equal(aiCalls[0].temperature, 0.6);
     assert.deepEqual(ragCalls, [{ topK: 5 }]);
+    assert.ok(shadowSnapshots.length > 0);
+    const ragSnapshot = shadowSnapshots.find(
+      (snapshot) => snapshot.ragObservation?.retrievalExecuted,
+    );
+    assert.ok(ragSnapshot);
+    assert.equal(ragSnapshot.ragObservation.retrievalSource, "V1_PIPELINE");
+    assert.equal(ragSnapshot.ragObservation.threshold, 0.7);
+    assert.equal(ragSnapshot.ragObservation.items.length, 3);
+    assert.equal("contentPreview" in ragSnapshot.ragObservation.items[0], false);
+    assert.equal("embedding" in ragSnapshot.ragObservation.items[0], false);
     const systemText = aiCalls[0].messages
       .filter((message) => message.role === "system")
       .map((message) => String(message.content))
@@ -663,9 +691,11 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
     assert.match(systemText, /BASE DE CONHECIMENTO RELEVANTE/);
     assert.match(systemText, /Formatação do computador/);
     assert.match(systemText, /Instalação de SSD: verificar modelo/i);
-    assert.ok(aiCalls[0].messages.some((message) =>
-      message.role === "user" && String(message.content).includes("Quero formatar"),
-    ));
+    assert.ok(
+      aiCalls[0].messages.some(
+        (message) => message.role === "user" && String(message.content).includes("Quero formatar"),
+      ),
+    );
     assert.equal(outboundCalls.length, 1);
     assert.equal(outboundCalls[0].content, answer);
 
@@ -679,7 +709,11 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
     assert.equal(runtimeLog.model, "gpt-4o-mini");
     assert.equal(runtimeLog.metadata.promptVersion, "conversation-policy-v4");
     assert.match(runtimeLog.metadata.promptHash, /^[a-f0-9]{64}$/);
-    assert.deepEqual(runtimeLog.metadata.knowledgeChunkIds, ["chunk-format", "chunk-memory", "chunk-ssd"]);
+    assert.deepEqual(runtimeLog.metadata.knowledgeChunkIds, [
+      "chunk-format",
+      "chunk-memory",
+      "chunk-ssd",
+    ]);
     assert.equal(runtimeLog.metadata.temperatureParameterApplied, true);
     assert.equal(runtimeLog.metadata.triageMode, false);
     assert.equal(runtimeLog.metadata.knowledgeLimit, 5);
@@ -759,7 +793,10 @@ test("Triagem usa JSON mínimo e não inclui política normal de split", async (
     assert.doesNotMatch(systemText, /DECISÃO DE TRIAGEM OBRIGATÓRIA/);
     assert.doesNotMatch(systemText, /BASE DE CONHECIMENTO RELEVANTE/);
     assert.equal(outboundCalls.length, 1);
-    assert.equal(outboundCalls[0].content, "Consigo te ajudar com isso. Qual é o modelo do equipamento?");
+    assert.equal(
+      outboundCalls[0].content,
+      "Consigo te ajudar com isso. Qual é o modelo do equipamento?",
+    );
   } finally {
     await cleanupAssistantTestData(prisma, companyId);
     await prisma.$disconnect();
@@ -849,7 +886,9 @@ test("Runtime usa o behavior persistido no prompt e envia temperature zero ao pr
       },
     });
 
-    const { service, aiCalls } = createConversationsService(prisma, { answer: "Resposta natural." });
+    const { service, aiCalls } = createConversationsService(prisma, {
+      answer: "Resposta natural.",
+    });
     await service.sendMessage({
       assistantId,
       conversationId,

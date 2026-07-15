@@ -31,6 +31,7 @@ import {
   deriveOfficialEvidenceCategories,
   type OfficialStructuredEvidenceReader,
 } from "./official-structured-evidence.adapter";
+import { type RagEvidenceAdapter, type RagRetrievalObservation } from "./rag-evidence.adapter";
 import { DEFAULT_EVIDENCE_POLICIES } from "./authority-evidence-policy";
 import { resolveAuthority } from "./authority-evidence-resolver";
 import { buildEvidenceManifestExtension } from "./evidence-manifest";
@@ -66,6 +67,7 @@ export type RuntimeV2ShadowSnapshot = {
     requestedDetailKey?: string | null;
     conversationalOutcome?: string | null;
   };
+  ragObservation?: RagRetrievalObservation | null;
   v1Comparison?: {
     selectedFlowId?: string | null;
     selectedIntent?: string | null;
@@ -185,6 +187,7 @@ export class RuntimeV2ShadowOrchestrator {
     private readonly environment: NodeJS.ProcessEnv = process.env,
     private readonly now: () => Date = () => new Date(),
     private readonly officialEvidenceAdapter?: OfficialStructuredEvidenceReader,
+    private readonly ragEvidenceAdapter?: RagEvidenceAdapter,
   ) {}
 
   getMetrics(): RuntimeV2ShadowMetrics {
@@ -379,7 +382,7 @@ export class RuntimeV2ShadowOrchestrator {
     }
 
     const retrievalPlan = buildRetrievalPlan({ understanding, state: nextState });
-    const evidenceManifest = await this.resolveOfficialEvidence({
+    const evidenceManifest = await this.resolveEvidence({
       snapshot,
       retrievalPlan,
       now,
@@ -433,7 +436,7 @@ export class RuntimeV2ShadowOrchestrator {
     return { enabled: true, mode: "SHADOW", state: nextState, manifest };
   }
 
-  private async resolveOfficialEvidence(input: {
+  private async resolveEvidence(input: {
     snapshot: RuntimeV2ShadowSnapshot;
     retrievalPlan: ReturnType<typeof buildRetrievalPlan>;
     now: Date;
@@ -460,18 +463,36 @@ export class RuntimeV2ShadowOrchestrator {
       adapterStatus: "SKIPPED",
       adapterDurationMs: 0,
     });
-    if (evidenceMode !== "SHADOW_METADATA" || !this.officialEvidenceAdapter) return skipped;
+    if (evidenceMode !== "SHADOW_METADATA") return skipped;
 
-    const result = await this.officialEvidenceAdapter.read({
-      companyId: input.snapshot.scope.companyId,
-      assistantId: input.snapshot.scope.assistantId,
-      requestedCategories,
-      currentTime: input.now,
-    });
+    const officialResult = this.officialEvidenceAdapter
+      ? await this.officialEvidenceAdapter.read({
+          companyId: input.snapshot.scope.companyId,
+          assistantId: input.snapshot.scope.assistantId,
+          requestedCategories,
+          currentTime: input.now,
+        })
+      : {
+          evidence: [],
+          missingCategories: [],
+          failures: [],
+          scopeValidationFailures: [],
+          adapterStatus: "SKIPPED" as const,
+          durationMs: 0,
+        };
+    const ragResult = this.ragEvidenceAdapter
+      ? this.ragEvidenceAdapter.read({
+          scope: input.snapshot.scope,
+          requestedCategories,
+          observation: input.snapshot.ragObservation,
+          currentTime: input.now,
+        })
+      : null;
+    const allEvidence = [...officialResult.evidence, ...(ragResult?.evidence ?? [])];
     const decisions = requestedCategories.map((category) =>
       resolveAuthority({
         requestedCategory: category,
-        candidates: result.evidence.filter((item) => item.category === category),
+        candidates: allEvidence.filter((item) => item.category === category),
         scope: input.snapshot.scope,
         policy: DEFAULT_EVIDENCE_POLICIES[category],
         currentTime: input.now,
@@ -481,16 +502,38 @@ export class RuntimeV2ShadowOrchestrator {
       evidenceMode,
       requestedCategories,
       decisions,
-      evidence: result.evidence,
-      adapterStatus: result.adapterStatus,
-      adapterDurationMs: result.durationMs,
+      evidence: allEvidence,
+      officialEvidence: officialResult.evidence,
+      adapterStatus: officialResult.adapterStatus,
+      adapterDurationMs: officialResult.durationMs,
+      rag: ragResult?.manifest
+        ? {
+            ...ragResult.manifest,
+            ragConflictDetected: decisions.some((item) => item.conflictDetected),
+          }
+        : undefined,
     });
     return {
       ...extension,
       missingCategories: [
-        ...new Set([...extension.missingCategories, ...result.missingCategories]),
+        ...new Set([
+          ...extension.missingCategories,
+          ...officialResult.missingCategories,
+          ...(ragResult?.missingCategories ?? []),
+        ]),
       ].sort(),
-      scopeValidationFailures: result.scopeValidationFailures ?? [],
+      scopeValidationFailures: [
+        ...new Set([
+          ...(officialResult.scopeValidationFailures ?? []),
+          ...(ragResult?.scopeValidationFailures ?? []),
+        ]),
+      ],
+      rag: ragResult?.manifest
+        ? {
+            ...ragResult.manifest,
+            ragConflictDetected: decisions.some((item) => item.conflictDetected),
+          }
+        : extension.rag,
     };
   }
 

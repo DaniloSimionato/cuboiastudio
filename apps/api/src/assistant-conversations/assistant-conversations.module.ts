@@ -19,6 +19,7 @@ import {
 import { RuntimeV2ShadowOrchestrator } from "../runtime-v2/runtime-v2-shadow-orchestrator";
 import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
 import { OfficialStructuredEvidenceAdapter } from "../runtime-v2/official-structured-evidence.adapter";
+import { RagEvidenceAdapter } from "../runtime-v2/rag-evidence.adapter";
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { OfficialStructuredEvidenceAdapter } from "../runtime-v2/official-struct
     InMemoryConversationStateStore,
     PrismaConversationStateStore,
     OfficialStructuredEvidenceAdapter,
+    RagEvidenceAdapter,
     {
       provide: RUNTIME_V2_STATE_STORE,
       useFactory: (
@@ -50,14 +52,16 @@ import { OfficialStructuredEvidenceAdapter } from "../runtime-v2/official-struct
       useFactory: (
         stateStore: InMemoryConversationStateStore | PrismaConversationStateStore,
         officialEvidenceAdapter: OfficialStructuredEvidenceAdapter,
+        ragEvidenceAdapter: RagEvidenceAdapter,
       ) =>
         new RuntimeV2ShadowOrchestrator(
           stateStore,
           process.env,
           undefined,
           officialEvidenceAdapter,
+          ragEvidenceAdapter,
         ),
-      inject: [RUNTIME_V2_STATE_STORE, OfficialStructuredEvidenceAdapter],
+      inject: [RUNTIME_V2_STATE_STORE, OfficialStructuredEvidenceAdapter, RagEvidenceAdapter],
     },
     RuntimeV2ShadowIntegrationService,
     AssistantConversationsService,
