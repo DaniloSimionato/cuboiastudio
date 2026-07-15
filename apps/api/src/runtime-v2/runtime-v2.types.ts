@@ -276,6 +276,7 @@ export type RuntimeV2FeatureConfig = {
   shadowMode?: boolean | null;
   mode?: "OFF" | "SHADOW" | string | null;
   shadowAssistantIds?: string[] | null;
+  evidenceMode?: "OFF" | "SHADOW_METADATA" | string | null;
 };
 
 export type RuntimeV2Scope = {

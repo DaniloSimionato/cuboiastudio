@@ -2,6 +2,7 @@ import { type RuntimeV2FeatureConfig, type RuntimeVersion } from "./runtime-v2.t
 
 export type RuntimeV2Mode = "OFF" | "SHADOW";
 export type RuntimeV2StateStoreMode = "MEMORY" | "POSTGRES";
+export type RuntimeV2EvidenceMode = "OFF" | "SHADOW_METADATA";
 
 export type RuntimeV2ShadowConfig = RuntimeV2FeatureConfig & {
   assistantId?: string | null;
@@ -53,6 +54,14 @@ export function resolveRuntimeV2StateStoreMode(
   environment: NodeJS.ProcessEnv = process.env,
 ): RuntimeV2StateStoreMode {
   return environment.RUNTIME_V2_STATE_STORE === "POSTGRES" ? "POSTGRES" : "MEMORY";
+}
+
+export function resolveRuntimeV2EvidenceMode(
+  config: Pick<RuntimeV2FeatureConfig, "evidenceMode"> = {},
+  environment: NodeJS.ProcessEnv = process.env,
+): RuntimeV2EvidenceMode {
+  const configuredMode = config.evidenceMode ?? environment.RUNTIME_V2_EVIDENCE_MODE ?? "OFF";
+  return configuredMode === "SHADOW_METADATA" ? "SHADOW_METADATA" : "OFF";
 }
 
 export function assertNoDualOutbound(input: {
