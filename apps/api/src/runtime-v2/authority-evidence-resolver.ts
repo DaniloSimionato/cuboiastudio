@@ -38,6 +38,7 @@ function baseDecision(input: {
   resolutionMethod: AuthorityDecision["resolutionMethod"];
   evaluatedAt: Date;
   policyVersion: string;
+  fallbackCategory?: string;
 }): AuthorityDecision {
   const winningEvidenceIds = [...(input.winningEvidenceIds ?? [])].sort();
   const rejectedEvidenceIds = [...(input.rejectedEvidenceIds ?? [])].sort();
@@ -51,7 +52,7 @@ function baseDecision(input: {
     conflictDetected: input.conflictDetected ?? false,
     conflictReason: input.conflictReason ?? null,
     resolutionMethod: input.resolutionMethod,
-    fallbackCategory: "SAFE_UNAVAILABLE",
+    fallbackCategory: input.fallbackCategory ?? input.requestedCategory,
     evaluatedAt: input.evaluatedAt.toISOString(),
     policyVersion: input.policyVersion,
     sanitisedMetadata: {

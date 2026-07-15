@@ -27,10 +27,7 @@ import {
 } from "./conversation-state-store";
 import { validateResponse } from "./response-validator-v2";
 import { understandTurn } from "./turn-understanding";
-import {
-  deriveOfficialEvidenceCategories,
-  type OfficialStructuredEvidenceReader,
-} from "./official-structured-evidence.adapter";
+import { type OfficialStructuredEvidenceReader } from "./official-structured-evidence.adapter";
 import { type RagEvidenceAdapter, type RagRetrievalObservation } from "./rag-evidence.adapter";
 import {
   type MemoryEvidenceAdapter,
@@ -39,6 +36,14 @@ import {
 import { DEFAULT_EVIDENCE_POLICIES } from "./authority-evidence-policy";
 import { resolveAuthority } from "./authority-evidence-resolver";
 import { buildEvidenceManifestExtension } from "./evidence-manifest";
+import {
+  buildCombinedEvidenceManifest,
+  buildCustomerEvidence,
+  buildSessionEvidence,
+  combineEvidence,
+  deriveRequestedEvidenceCategories,
+} from "./combined-evidence";
+import { type SourceEvidence } from "./evidence-contracts";
 import {
   type ConversationState,
   type RuntimeV2Scope,
@@ -73,6 +78,9 @@ export type RuntimeV2ShadowSnapshot = {
   };
   ragObservation?: RagRetrievalObservation | null;
   memoryObservation?: MemoryRetrievalObservation | null;
+  customerEvidenceFields?: string[];
+  customerEvidence?: SourceEvidence[];
+  sessionEvidence?: SourceEvidence[];
   v1Comparison?: {
     selectedFlowId?: string | null;
     selectedIntent?: string | null;
@@ -391,13 +399,26 @@ export class RuntimeV2ShadowOrchestrator {
     const evidenceManifest = await this.resolveEvidence({
       snapshot,
       retrievalPlan,
+      state: nextState,
       now,
     });
-    const responsePlan = buildResponsePlan({
+    let responsePlan = buildResponsePlan({
       understanding,
       state: nextState,
       retrievedContext: emptyContext(),
     });
+    if (evidenceManifest.evidenceMode === "SHADOW_METADATA") {
+      responsePlan = {
+        ...responsePlan,
+        evidenceMetadata: {
+          authorizedCategories: evidenceManifest.authorizedCategories ?? [],
+          contextualOnlyCategories: evidenceManifest.contextualOnlyCategories ?? [],
+          unavailableCategories: evidenceManifest.unavailableCategories ?? [],
+          conflictCategories: evidenceManifest.conflictCategories,
+          winningSourceTypes: evidenceManifest.winningSourceTypes ?? [],
+        },
+      };
+    }
     const validation = validateResponse({
       answer: "",
       responsePlan,
@@ -413,8 +434,14 @@ export class RuntimeV2ShadowOrchestrator {
       understanding,
       retrievalPlan,
       authorityCategoriesRequested: understanding.requestedInformationCategories,
-      authorityCategoriesAvailable: responsePlan.claimsAllowed.map((claim) => claim.category),
-      authorityCategoriesMissing: responsePlan.factsMissing,
+      authorityCategoriesAvailable:
+        evidenceManifest.evidenceMode === "SHADOW_METADATA"
+          ? evidenceManifest.authorizedCategories
+          : responsePlan.claimsAllowed.map((claim) => claim.category),
+      authorityCategoriesMissing:
+        evidenceManifest.evidenceMode === "SHADOW_METADATA"
+          ? evidenceManifest.unavailableCategories
+          : responsePlan.factsMissing,
       responsePlanAction: responsePlan.action,
       repeatedQuestionDetected: validation.repeatedQuestionDetected,
       validationResult: validation.result,
@@ -445,13 +472,16 @@ export class RuntimeV2ShadowOrchestrator {
   private async resolveEvidence(input: {
     snapshot: RuntimeV2ShadowSnapshot;
     retrievalPlan: ReturnType<typeof buildRetrievalPlan>;
+    state: ConversationState;
     now: Date;
   }) {
     const evidenceMode = resolveRuntimeV2EvidenceMode({}, this.environment);
-    const requestedCategories = deriveOfficialEvidenceCategories({
-      requestedCategories: input.retrievalPlan.officialFactCategories,
+    const requestedCategories = deriveRequestedEvidenceCategories({
+      requestedCategories: [
+        ...input.retrievalPlan.officialFactCategories,
+        ...input.retrievalPlan.knowledgeQueries,
+      ],
       includeContactIdentity: input.retrievalPlan.includeContactIdentity,
-      currentMessage: input.snapshot.currentMessage,
     });
     const skipped = buildEvidenceManifestExtension({
       evidenceMode,
@@ -472,12 +502,21 @@ export class RuntimeV2ShadowOrchestrator {
     if (evidenceMode !== "SHADOW_METADATA") return skipped;
 
     const officialResult = this.officialEvidenceAdapter
-      ? await this.officialEvidenceAdapter.read({
-          companyId: input.snapshot.scope.companyId,
-          assistantId: input.snapshot.scope.assistantId,
-          requestedCategories,
-          currentTime: input.now,
-        })
+      ? await this.officialEvidenceAdapter
+          .read({
+            companyId: input.snapshot.scope.companyId,
+            assistantId: input.snapshot.scope.assistantId,
+            requestedCategories,
+            currentTime: input.now,
+          })
+          .catch(() => ({
+            evidence: [],
+            missingCategories: [...requestedCategories],
+            failures: ["OFFICIAL_EVIDENCE_ADAPTER_ERROR"],
+            scopeValidationFailures: [],
+            adapterStatus: "FAILED" as const,
+            durationMs: 0,
+          }))
       : {
           evidence: [],
           missingCategories: [],
@@ -486,51 +525,122 @@ export class RuntimeV2ShadowOrchestrator {
           adapterStatus: "SKIPPED" as const,
           durationMs: 0,
         };
+    let ragAdapterFailed = false;
     const ragResult = this.ragEvidenceAdapter
-      ? this.ragEvidenceAdapter.read({
-          scope: input.snapshot.scope,
-          requestedCategories,
-          observation: input.snapshot.ragObservation,
-          currentTime: input.now,
-        })
+      ? (() => {
+          try {
+            return this.ragEvidenceAdapter!.read({
+              scope: input.snapshot.scope,
+              requestedCategories,
+              observation: input.snapshot.ragObservation,
+              currentTime: input.now,
+            });
+          } catch {
+            ragAdapterFailed = true;
+            return null;
+          }
+        })()
       : null;
+    let memoryAdapterFailed = false;
     const memoryResult = this.memoryEvidenceAdapter
-      ? this.memoryEvidenceAdapter.read({
-          scope: {
-            ...input.snapshot.scope,
-            contactId: input.snapshot.scope.contactId,
-          },
-          requestedCategories,
-          observation: input.snapshot.memoryObservation,
-          currentTime: input.now,
-        })
+      ? (() => {
+          try {
+            return this.memoryEvidenceAdapter!.read({
+              scope: {
+                ...input.snapshot.scope,
+                contactId: input.snapshot.scope.contactId,
+              },
+              requestedCategories,
+              observation: input.snapshot.memoryObservation,
+              currentTime: input.now,
+            });
+          } catch {
+            memoryAdapterFailed = true;
+            return null;
+          }
+        })()
       : null;
-    const allEvidence = [
+    const customerEvidence =
+      input.snapshot.customerEvidence ??
+      buildCustomerEvidence({
+        scope: input.snapshot.scope,
+        internalMessageId: input.snapshot.internalMessageId,
+        observedAt: input.now,
+        fieldKeys: input.snapshot.customerEvidenceFields ?? [],
+        requestedCategories,
+      });
+    const sessionEvidence =
+      input.snapshot.sessionEvidence ??
+      buildSessionEvidence({
+        scope: input.snapshot.scope,
+        state: input.state,
+      });
+    const allRawEvidence = [
       ...officialResult.evidence,
       ...(ragResult?.evidence ?? []),
       ...(memoryResult?.evidence ?? []),
+      ...customerEvidence,
+      ...sessionEvidence,
     ];
-    const decisions = requestedCategories.map((category) =>
-      resolveAuthority({
-        requestedCategory: category,
-        candidates: allEvidence.filter((item) => item.category === category),
+    let combined;
+    try {
+      combined = combineEvidence({
         scope: input.snapshot.scope,
-        policy: DEFAULT_EVIDENCE_POLICIES[category],
+        requestedCategories,
+        officialEvidence: officialResult.evidence,
+        ragEvidence: ragResult?.evidence,
+        memoryEvidence: memoryResult?.evidence,
+        customerEvidence,
+        sessionEvidence,
         currentTime: input.now,
-      }),
-    );
+        adapterStatuses: {
+          official: officialResult.adapterStatus,
+          rag: ragResult?.adapterStatus ?? (ragAdapterFailed ? "FAILED" : "NOT_EXECUTED"),
+          memory: memoryResult?.adapterStatus ?? (memoryAdapterFailed ? "FAILED" : "NOT_EXECUTED"),
+          customer: customerEvidence.length ? "COMPLETED" : "EMPTY",
+          session: sessionEvidence.length ? "COMPLETED" : "EMPTY",
+        },
+        adapterExecutionOrder: ["official", "rag", "memory", "customer", "session"],
+      });
+    } catch {
+      return buildEvidenceManifestExtension({
+        evidenceMode,
+        requestedCategories,
+        decisions: requestedCategories.map((category) =>
+          resolveAuthority({
+            requestedCategory: category,
+            candidates: [],
+            scope: input.snapshot.scope,
+            policy: DEFAULT_EVIDENCE_POLICIES[category],
+            currentTime: input.now,
+          }),
+        ),
+        evidence: [],
+        adapterStatus: "FAILED",
+        adapterDurationMs: 0,
+        evidencePipelineError: "EVIDENCE_PIPELINE_ERROR",
+      });
+    }
+    const combinedMetadata = buildCombinedEvidenceManifest(combined, allRawEvidence.length);
     const extension = buildEvidenceManifestExtension({
       evidenceMode,
       requestedCategories,
-      decisions,
-      evidence: allEvidence,
+      decisions: combined.decisions,
+      evidence: combined.evidence,
       officialEvidence: officialResult.evidence,
       adapterStatus: officialResult.adapterStatus,
       adapterDurationMs: officialResult.durationMs,
+      scopeValidationFailures: [
+        ...(officialResult.scopeValidationFailures ?? []),
+        ...(ragResult?.scopeValidationFailures ?? []),
+        ...(memoryResult?.scopeValidationFailures ?? []),
+        ...combined.scopeValidationFailures,
+      ],
+      combined: combinedMetadata,
       rag: ragResult?.manifest
         ? {
             ...ragResult.manifest,
-            ragConflictDetected: decisions.some((item) => item.conflictDetected),
+            ragConflictDetected: combined.decisions.some((item) => item.conflictDetected),
           }
         : undefined,
     });
@@ -542,6 +652,7 @@ export class RuntimeV2ShadowOrchestrator {
           ...officialResult.missingCategories,
           ...(ragResult?.missingCategories ?? []),
           ...(memoryResult?.missingCategories ?? []),
+          ...combined.missingCategories,
         ]),
       ].sort(),
       scopeValidationFailures: [
@@ -549,12 +660,13 @@ export class RuntimeV2ShadowOrchestrator {
           ...(officialResult.scopeValidationFailures ?? []),
           ...(ragResult?.scopeValidationFailures ?? []),
           ...(memoryResult?.scopeValidationFailures ?? []),
+          ...combined.scopeValidationFailures,
         ]),
       ],
       rag: ragResult?.manifest
         ? {
             ...ragResult.manifest,
-            ragConflictDetected: decisions.some((item) => item.conflictDetected),
+            ragConflictDetected: combined.decisions.some((item) => item.conflictDetected),
           }
         : extension.rag,
       memory: memoryResult?.manifest ?? extension.memory,

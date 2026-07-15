@@ -203,6 +203,13 @@ export type ResponsePlan = {
   nextQuestion?: string;
   shouldHandoff: boolean;
   reasonCodes: string[];
+  evidenceMetadata?: {
+    authorizedCategories: string[];
+    contextualOnlyCategories: string[];
+    unavailableCategories: string[];
+    conflictCategories: string[];
+    winningSourceTypes: string[];
+  };
 };
 
 export type UsefulHistoryMessage = {

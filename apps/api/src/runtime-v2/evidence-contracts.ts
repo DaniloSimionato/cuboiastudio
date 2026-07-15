@@ -107,6 +107,7 @@ export type AuthorityDecision = {
 
 export type RetrievalBundle = {
   contractVersion: EvidenceContractVersion;
+  retrievalBundleVersion: number;
   requestedCategories: string[];
   officialEvidence: SourceEvidence[];
   documentEvidence: SourceEvidence[];
@@ -117,6 +118,8 @@ export type RetrievalBundle = {
   customerEvidence: SourceEvidence[];
   sessionEvidence: SourceEvidence[];
   contextualEvidence: SourceEvidence[];
+  adapterStatuses: Record<string, string>;
+  adapterExecutionOrder: string[];
   conflicts: AuthorityDecision[];
   missingCategories: string[];
 };

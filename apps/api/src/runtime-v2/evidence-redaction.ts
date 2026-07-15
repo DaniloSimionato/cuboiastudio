@@ -90,7 +90,10 @@ export function redactAuthorityDecision(decision: AuthorityDecision): SanitizedA
 
 export function redactRetrievalBundle(bundle: RetrievalBundle): {
   contractVersion: RetrievalBundle["contractVersion"];
+  retrievalBundleVersion: RetrievalBundle["retrievalBundleVersion"];
   requestedCategories: string[];
+  adapterStatuses: Record<string, string>;
+  adapterExecutionOrder: string[];
   evidence: SanitizedSourceEvidence[];
   conflicts: SanitizedAuthorityDecision[];
   missingCategories: string[];
@@ -109,7 +112,10 @@ export function redactRetrievalBundle(bundle: RetrievalBundle): {
   ];
   return {
     contractVersion: bundle.contractVersion,
+    retrievalBundleVersion: bundle.retrievalBundleVersion ?? 1,
     requestedCategories: [...bundle.requestedCategories],
+    adapterStatuses: { ...(bundle.adapterStatuses ?? {}) },
+    adapterExecutionOrder: [...(bundle.adapterExecutionOrder ?? [])],
     evidence: evidence.map(redactSourceEvidence),
     conflicts: bundle.conflicts.map(redactAuthorityDecision),
     missingCategories: [...bundle.missingCategories],

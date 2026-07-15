@@ -2998,6 +2998,9 @@ export class AssistantConversationsService {
         requestedDetailKey: requestedDetailBefore ?? extractedCustomerFields.requestedDetailKey,
         conversationalOutcome,
       },
+      // Only structured field keys cross into Shadow Metadata. Values and the
+      // customer message remain in the V1 pipeline and are never persisted by V2.
+      customerEvidenceFields: extractedCustomerFields.knownFieldKeys,
       ragObservation,
       memoryObservation:
         memoryObservation.contactId === "unresolved" ? null : memoryObservation,

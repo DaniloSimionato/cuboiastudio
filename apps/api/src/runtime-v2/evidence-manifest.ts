@@ -9,6 +9,7 @@ import { type AuthorityDecision } from "./evidence-contracts";
 import { EVIDENCE_POLICY_VERSION } from "./authority-evidence-policy";
 import { type RagEvidenceManifest } from "./rag-evidence.adapter";
 import { type MemoryEvidenceManifest } from "./memory-evidence.adapter";
+import { type CombinedEvidenceManifestMetadata } from "./combined-evidence";
 
 export type EvidenceManifestExtension = {
   evidenceMode: "OFF" | "SHADOW_METADATA";
@@ -33,6 +34,31 @@ export type EvidenceManifestExtension = {
   redactionApplied: true;
   rag: RagEvidenceManifest;
   memory: MemoryEvidenceManifest;
+  retrievalBundleVersion: number | null;
+  adapterExecutionOrder: string[];
+  adapterStatuses: Record<string, string>;
+  totalEvidenceCount: number;
+  deduplicatedEvidenceCount: number;
+  duplicateEvidenceRejected: number;
+  authorityDecisionsByCategory: Record<string, AuthorityDecisionStatus>;
+  decisionStatusCounts: Record<string, number>;
+  winningEvidenceIdsByCategory: Record<string, string[]>;
+  rejectedEvidenceIdsByCategory: Record<string, string[]>;
+  winningSourceTypesByCategory: Record<string, string[]>;
+  conflictReasons: string[];
+  invalidEvidenceCount: number;
+  customerEvidenceCount: number;
+  sessionEvidenceCount: number;
+  ragContentPersisted: false;
+  memoryContentPersisted: false;
+  officialValuePersisted: false;
+  customerContentPersisted: false;
+  sessionContentPersisted: false;
+  authorizedCategories: string[];
+  contextualOnlyCategories: string[];
+  unavailableCategories: string[];
+  winningSourceTypes: string[];
+  evidencePipelineError: string | null;
 };
 
 export function buildEvidenceManifestExtension(input: {
@@ -54,6 +80,8 @@ export function buildEvidenceManifestExtension(input: {
   }>;
   rag?: RagEvidenceManifest;
   memory?: MemoryEvidenceManifest;
+  combined?: CombinedEvidenceManifestMetadata;
+  evidencePipelineError?: string | null;
 }): EvidenceManifestExtension {
   const evidenceCountsBySourceType: Partial<Record<SourceType, number>> = {};
   const evidenceCountsByCategory: Record<string, number> = {};
@@ -155,5 +183,30 @@ export function buildEvidenceManifestExtension(input: {
       memoryWritePerformed: false,
       memoryEmbeddingGenerated: false,
     },
+    retrievalBundleVersion: input.combined?.retrievalBundleVersion ?? null,
+    adapterExecutionOrder: input.combined?.adapterExecutionOrder ?? [],
+    adapterStatuses: input.combined?.adapterStatuses ?? {},
+    totalEvidenceCount: input.combined?.totalEvidenceCount ?? input.evidence.length,
+    deduplicatedEvidenceCount: input.combined?.deduplicatedEvidenceCount ?? input.evidence.length,
+    duplicateEvidenceRejected: input.combined?.duplicateEvidenceRejected ?? 0,
+    authorityDecisionsByCategory: input.combined?.authorityDecisionsByCategory ?? {},
+    decisionStatusCounts: input.combined?.decisionStatusCounts ?? {},
+    winningEvidenceIdsByCategory: input.combined?.winningEvidenceIdsByCategory ?? {},
+    rejectedEvidenceIdsByCategory: input.combined?.rejectedEvidenceIdsByCategory ?? {},
+    winningSourceTypesByCategory: input.combined?.winningSourceTypesByCategory ?? {},
+    conflictReasons: input.combined?.conflictReasons ?? [],
+    invalidEvidenceCount: input.combined?.invalidEvidenceCount ?? 0,
+    customerEvidenceCount: input.combined?.customerEvidenceCount ?? 0,
+    sessionEvidenceCount: input.combined?.sessionEvidenceCount ?? 0,
+    ragContentPersisted: false,
+    memoryContentPersisted: false,
+    officialValuePersisted: false,
+    customerContentPersisted: false,
+    sessionContentPersisted: false,
+    authorizedCategories: input.combined?.authorizedCategories ?? [],
+    contextualOnlyCategories: input.combined?.contextualOnlyCategories ?? [],
+    unavailableCategories: input.combined?.unavailableCategories ?? [],
+    winningSourceTypes: input.combined?.winningSourceTypes ?? [],
+    evidencePipelineError: input.evidencePipelineError ?? null,
   };
 }
