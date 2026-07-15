@@ -24,3 +24,4 @@ export * from "./evidence-adapters.fake";
 export * from "./evidence-manifest";
 export * from "./official-structured-evidence.adapter";
 export * from "./rag-evidence.adapter";
+export * from "./memory-evidence.adapter";

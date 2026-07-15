@@ -89,6 +89,10 @@ import {
   createRagRetrievalObservation,
   type RagRetrievalObservation,
 } from "../runtime-v2/rag-evidence.adapter";
+import {
+  createMemoryRetrievalObservation,
+  type MemoryRetrievalObservation,
+} from "../runtime-v2/memory-evidence.adapter";
 import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
 import {
   deriveExpectedAuthorityCategory,
@@ -2371,6 +2375,24 @@ export class AssistantConversationsService {
       score: number | null;
       reason: string | null;
     }> = [];
+    let memoryObservation: MemoryRetrievalObservation = createMemoryRetrievalObservation({
+      companyId: input.tenant.companyId,
+      assistantId: input.assistantId,
+      contactId: "unresolved",
+      conversationId: conversation.id,
+      contextVersion: conversation.currentContextVersion ?? 1,
+      internalMessageId: userMessage.id,
+      retrievalExecuted: false,
+      configurationSnapshot: {
+        memoryEnabled: Boolean(assistant.memoryEnabled),
+        memoryExtractionEnabled: Boolean(assistant.memoryExtractionEnabled),
+        allowedCategories: null,
+        confidenceThreshold: assistant.memoryConfidenceThreshold ?? null,
+        temporaryDefaultDays: assistant.memoryTempDefaultDays ?? null,
+        sharedAcrossAssistants: Boolean(assistant.memorySharedAcrossAssistants),
+      },
+      selectedMemories: [],
+    });
 
     if (
       assistant.memoryEnabled &&
@@ -2452,6 +2474,27 @@ export class AssistantConversationsService {
               summary: profile.summary,
               limit: assistant.semanticMemoryMaxResults ?? 15,
             });
+
+          memoryObservation = createMemoryRetrievalObservation({
+            companyId: input.tenant.companyId,
+            assistantId: input.assistantId,
+            contactId: profile.id,
+            conversationId: conversation.id,
+            contextVersion: conversation.currentContextVersion ?? 1,
+            internalMessageId: userMessage.id,
+            profileId: profile.id,
+            profileAssistantId: profile.assistantId,
+            retrievalExecuted: true,
+            configurationSnapshot: {
+              memoryEnabled: Boolean(assistant.memoryEnabled),
+              memoryExtractionEnabled: Boolean(assistant.memoryExtractionEnabled),
+              allowedCategories: Array.isArray(categories) ? categories.map(String) : null,
+              confidenceThreshold: assistant.memoryConfidenceThreshold ?? null,
+              temporaryDefaultDays: assistant.memoryTempDefaultDays ?? null,
+              sharedAcrossAssistants: Boolean(assistant.memorySharedAcrossAssistants),
+            },
+            selectedMemories,
+          });
 
           selectedMemoryManifest = selectedMemories.map((memory: any) => ({
             id: typeof memory.id === "string" ? memory.id : null,
@@ -2897,6 +2940,8 @@ export class AssistantConversationsService {
       scope: {
         companyId: input.tenant.companyId,
         assistantId: input.assistantId,
+        contactId:
+          memoryObservation.contactId === "unresolved" ? null : memoryObservation.contactId,
         conversationId: conversation.id,
         contextVersion: conversation.currentContextVersion ?? 1,
       },
@@ -2954,6 +2999,8 @@ export class AssistantConversationsService {
         conversationalOutcome,
       },
       ragObservation,
+      memoryObservation:
+        memoryObservation.contactId === "unresolved" ? null : memoryObservation,
     };
 
     contextMetadata.contextManifest = {

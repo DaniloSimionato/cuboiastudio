@@ -20,6 +20,7 @@ import { RuntimeV2ShadowOrchestrator } from "../runtime-v2/runtime-v2-shadow-orc
 import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
 import { OfficialStructuredEvidenceAdapter } from "../runtime-v2/official-structured-evidence.adapter";
 import { RagEvidenceAdapter } from "../runtime-v2/rag-evidence.adapter";
+import { MemoryEvidenceAdapter } from "../runtime-v2/memory-evidence.adapter";
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { RagEvidenceAdapter } from "../runtime-v2/rag-evidence.adapter";
     PrismaConversationStateStore,
     OfficialStructuredEvidenceAdapter,
     RagEvidenceAdapter,
+    MemoryEvidenceAdapter,
     {
       provide: RUNTIME_V2_STATE_STORE,
       useFactory: (
@@ -53,6 +55,7 @@ import { RagEvidenceAdapter } from "../runtime-v2/rag-evidence.adapter";
         stateStore: InMemoryConversationStateStore | PrismaConversationStateStore,
         officialEvidenceAdapter: OfficialStructuredEvidenceAdapter,
         ragEvidenceAdapter: RagEvidenceAdapter,
+        memoryEvidenceAdapter: MemoryEvidenceAdapter,
       ) =>
         new RuntimeV2ShadowOrchestrator(
           stateStore,
@@ -60,8 +63,14 @@ import { RagEvidenceAdapter } from "../runtime-v2/rag-evidence.adapter";
           undefined,
           officialEvidenceAdapter,
           ragEvidenceAdapter,
+          memoryEvidenceAdapter,
         ),
-      inject: [RUNTIME_V2_STATE_STORE, OfficialStructuredEvidenceAdapter, RagEvidenceAdapter],
+      inject: [
+        RUNTIME_V2_STATE_STORE,
+        OfficialStructuredEvidenceAdapter,
+        RagEvidenceAdapter,
+        MemoryEvidenceAdapter,
+      ],
     },
     RuntimeV2ShadowIntegrationService,
     AssistantConversationsService,

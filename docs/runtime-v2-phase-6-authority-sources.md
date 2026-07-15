@@ -629,3 +629,52 @@ O manifesto sanitizado registra, sem conteúdo integral:
 - Disponibilidade e booking permanecem dependentes de contexto estruturado ou ferramenta futura.
 
 A Fase 6.1B4 poderá introduzir memória contextual metadata-only, com escopo por contato/sessão, expiração explícita e compartilhamento entre assistentes bloqueado por padrão.
+
+## 20. Implementação da Fase 6.1B4 — observação de memória contextual metadata-only
+
+### Caminho real de memória do V1
+
+O V1 resolve ou cria `ContactMemoryProfile` por empresa e identidade do contato. Quando `memoryEnabled` e `memoryPrePromptEnabled` estão ativos, ele consulta `ContactMemoryItem` por perfil/empresa, confiança mínima, categorias permitidas, atividade e expiração. Quando `semanticMemoryEnabled` também está ativo, a busca semântica usa o embedding e o threshold configurados pelo V1. `ContactMemoriesExtractionService.selectHybridMemoriesForPrompt()` combina os candidatos estruturados e semânticos; somente esse conjunto selecionado entra no `memoryContextBlock` do PromptCompiler V1. A extração pós-mensagem e a atualização de uso continuam exclusivamente no V1.
+
+O V2 não chama `ContactMemoriesService`, não cria perfil, não executa busca semântica, não gera embedding, não extrai memória e não grava `ContactMemoryItem` ou `ContactMemoryEvent`. O V1 cria uma observação após a seleção, sem valores, texto de origem, evento integral ou embedding.
+
+### Observação e adapter
+
+`MemoryRetrievalObservation` registra origem `V1_PIPELINE`, empresa, assistente, perfil/contato, conversa, `contextVersion`, `internalMessageId`, snapshot sanitizado das configurações, contagem e IDs dos itens selecionados. Cada item carrega somente categoria, status, confiança, datas, expiração, hash já existente, origem sanitizada, sinal de embedding e escopos. O valor da memória nunca é transportado ao Shadow.
+
+`MemoryEvidenceAdapter` é puro após receber a observação. Ele valida:
+
+- empresa, assistente, contato, perfil, conversa e `contextVersion`;
+- status ativo, `deletedAt`, categorias permitidas e confiança mínima;
+- expiração explícita para memória temporária;
+- validade e `freshness` sem inventar TTL;
+- compartilhamento entre assistentes, negado por padrão;
+- sensibilidade e proveniência mínima.
+
+Memória permanente sem validade suficiente pode ser registrada como `UNKNOWN` contextual, mas nunca autoriza uma afirmação. Memória temporária expirada ou sem `expiresAt` é rejeitada. O adapter não possui caminho de escrita.
+
+### Política de autoridade
+
+`CONTACT_MEMORY` e `TEMPORARY_MEMORY` são sempre `CONTEXTUAL` nesta fase. Identidade do contato, preferências e informação técnica explicitamente permitida podem ser observadas como contexto. Memória nunca autoriza preço, horário, exceção, disponibilidade, agendamento, garantia, política comercial, endereço da empresa, pickup/entrega ou contato oficial. Confiança mede a qualidade da extração, não autoridade empresarial. Conflitos entre itens ativos ficam registrados e não são resolvidos apenas pelo maior confidence.
+
+`sharedAcrossAssistants=true` no V1 não amplia automaticamente o escopo do V2: itens de outro assistente são rejeitados com `CROSS_ASSISTANT_SHARING_DISABLED`. Uma política explícita de compartilhamento existe somente para fixtures controladas e não é ativada no módulo operacional.
+
+### Manifesto e segurança
+
+O manifesto registra apenas contagens, IDs, hashes não reversíveis já disponíveis, buckets de confiança, categorias, status, freshness, rejeições por escopo/categoria/sensibilidade/expiração/compartilhamento, conflitos, duração e os marcadores `memoryContentPersisted=false`, `memoryWritePerformed=false` e `memoryEmbeddingGenerated=false`. Não registra valor, nome, cargo, empresa, telefone, e-mail, mensagem de origem, embedding ou conteúdo do evento.
+
+### Comportamento operacional e limitações
+
+- `OFF` e `SHADOW` sem `SHADOW_METADATA` não executam o adapter.
+- `SHADOW_METADATA` observa uma vez por turno, usando o snapshot produzido pelo V1.
+- Falha ou escopo inválido produz resultado seguro e não bloqueia o V1.
+- O escopo atual não adiciona busca real de memória ao V2 nem altera o PromptCompiler/AuthorityGuard do V1.
+- Categorias Prisma específicas de memória são mapeadas somente para categorias genéricas do contrato; categorias comerciais e operacionais são rejeitadas.
+
+### Plano da Fase 6.1B5
+
+- revisar a composição combinada de evidências oficial, RAG e memória em `RetrievalBundle` Shadow;
+- avaliar sinais de memória contextual no `TurnUnderstanding` sem usar memória como autoridade;
+- testar conflitos e freshness com fixtures PostgreSQL multi-tenant;
+- comparar manifestos V1/V2 sem expor valores;
+- manter rollout somente em `SHADOW_METADATA`, com V2 sem provider, ferramentas, memória de escrita ou outbound.

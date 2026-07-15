@@ -11,7 +11,7 @@ export interface EvidenceAdapter {
 
 export type OfficialEvidenceAdapter = EvidenceAdapter;
 export type RagEvidenceAdapterContract = EvidenceAdapter;
-export type MemoryEvidenceAdapter = EvidenceAdapter;
+export type MemoryEvidenceAdapterContract = EvidenceAdapter;
 export type ToolEvidenceAdapter = EvidenceAdapter;
 export type HumanEvidenceAdapter = EvidenceAdapter;
 export type SessionEvidenceAdapter = EvidenceAdapter;
@@ -59,7 +59,7 @@ export class InMemoryRagEvidenceAdapter
 
 export class InMemoryMemoryEvidenceAdapter
   extends InMemoryEvidenceAdapterBase
-  implements MemoryEvidenceAdapter
+  implements MemoryEvidenceAdapterContract
 {
   constructor() {
     super(["CONTACT_MEMORY", "TEMPORARY_MEMORY"]);

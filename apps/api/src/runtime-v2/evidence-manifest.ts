@@ -8,6 +8,7 @@ import { redactAuthorityDecision } from "./evidence-redaction";
 import { type AuthorityDecision } from "./evidence-contracts";
 import { EVIDENCE_POLICY_VERSION } from "./authority-evidence-policy";
 import { type RagEvidenceManifest } from "./rag-evidence.adapter";
+import { type MemoryEvidenceManifest } from "./memory-evidence.adapter";
 
 export type EvidenceManifestExtension = {
   evidenceMode: "OFF" | "SHADOW_METADATA";
@@ -31,6 +32,7 @@ export type EvidenceManifestExtension = {
   adapterDurationMs: number;
   redactionApplied: true;
   rag: RagEvidenceManifest;
+  memory: MemoryEvidenceManifest;
 };
 
 export function buildEvidenceManifestExtension(input: {
@@ -51,6 +53,7 @@ export function buildEvidenceManifestExtension(input: {
     sourceType: SourceType;
   }>;
   rag?: RagEvidenceManifest;
+  memory?: MemoryEvidenceManifest;
 }): EvidenceManifestExtension {
   const evidenceCountsBySourceType: Partial<Record<SourceType, number>> = {};
   const evidenceCountsByCategory: Record<string, number> = {};
@@ -122,6 +125,35 @@ export function buildEvidenceManifestExtension(input: {
       ragAdapterStatus: "NOT_EXECUTED",
       ragAdapterDurationMs: 0,
       ragContentPersisted: false,
+    },
+    memory: input.memory ?? {
+      memoryObservationReceived: false,
+      memoryRetrievalExecuted: false,
+      memoryResultCount: 0,
+      memoryEvidenceCount: 0,
+      memoryRejectedCount: 0,
+      memoryEvidenceIds: [],
+      memoryProfileIds: [],
+      memoryCategoryCounts: {},
+      memoryStatusCounts: {},
+      memoryFreshnessCounts: {},
+      memoryConfidenceBuckets: {},
+      memoryTemporaryCount: 0,
+      memoryExpiredRejected: 0,
+      memoryMissingExpiryRejected: 0,
+      memoryCategoryRejected: 0,
+      memorySensitiveRejected: 0,
+      memoryCrossTenantRejected: 0,
+      memoryCrossAssistantRejected: 0,
+      memoryCrossContactRejected: 0,
+      memoryContextVersionRejected: 0,
+      memorySharingDisabledRejected: 0,
+      memoryConflictDetected: false,
+      memoryAdapterStatus: "NOT_EXECUTED",
+      memoryAdapterDurationMs: 0,
+      memoryContentPersisted: false,
+      memoryWritePerformed: false,
+      memoryEmbeddingGenerated: false,
     },
   };
 }

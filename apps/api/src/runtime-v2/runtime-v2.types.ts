@@ -282,6 +282,7 @@ export type RuntimeV2FeatureConfig = {
 export type RuntimeV2Scope = {
   companyId: string;
   assistantId: string;
+  contactId?: string | null;
   conversationId: string;
   contextVersion: number;
 };

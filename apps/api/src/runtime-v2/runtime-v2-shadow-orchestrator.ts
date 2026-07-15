@@ -32,6 +32,10 @@ import {
   type OfficialStructuredEvidenceReader,
 } from "./official-structured-evidence.adapter";
 import { type RagEvidenceAdapter, type RagRetrievalObservation } from "./rag-evidence.adapter";
+import {
+  type MemoryEvidenceAdapter,
+  type MemoryRetrievalObservation,
+} from "./memory-evidence.adapter";
 import { DEFAULT_EVIDENCE_POLICIES } from "./authority-evidence-policy";
 import { resolveAuthority } from "./authority-evidence-resolver";
 import { buildEvidenceManifestExtension } from "./evidence-manifest";
@@ -68,6 +72,7 @@ export type RuntimeV2ShadowSnapshot = {
     conversationalOutcome?: string | null;
   };
   ragObservation?: RagRetrievalObservation | null;
+  memoryObservation?: MemoryRetrievalObservation | null;
   v1Comparison?: {
     selectedFlowId?: string | null;
     selectedIntent?: string | null;
@@ -188,6 +193,7 @@ export class RuntimeV2ShadowOrchestrator {
     private readonly now: () => Date = () => new Date(),
     private readonly officialEvidenceAdapter?: OfficialStructuredEvidenceReader,
     private readonly ragEvidenceAdapter?: RagEvidenceAdapter,
+    private readonly memoryEvidenceAdapter?: MemoryEvidenceAdapter,
   ) {}
 
   getMetrics(): RuntimeV2ShadowMetrics {
@@ -488,7 +494,22 @@ export class RuntimeV2ShadowOrchestrator {
           currentTime: input.now,
         })
       : null;
-    const allEvidence = [...officialResult.evidence, ...(ragResult?.evidence ?? [])];
+    const memoryResult = this.memoryEvidenceAdapter
+      ? this.memoryEvidenceAdapter.read({
+          scope: {
+            ...input.snapshot.scope,
+            contactId: input.snapshot.scope.contactId,
+          },
+          requestedCategories,
+          observation: input.snapshot.memoryObservation,
+          currentTime: input.now,
+        })
+      : null;
+    const allEvidence = [
+      ...officialResult.evidence,
+      ...(ragResult?.evidence ?? []),
+      ...(memoryResult?.evidence ?? []),
+    ];
     const decisions = requestedCategories.map((category) =>
       resolveAuthority({
         requestedCategory: category,
@@ -520,12 +541,14 @@ export class RuntimeV2ShadowOrchestrator {
           ...extension.missingCategories,
           ...officialResult.missingCategories,
           ...(ragResult?.missingCategories ?? []),
+          ...(memoryResult?.missingCategories ?? []),
         ]),
       ].sort(),
       scopeValidationFailures: [
         ...new Set([
           ...(officialResult.scopeValidationFailures ?? []),
           ...(ragResult?.scopeValidationFailures ?? []),
+          ...(memoryResult?.scopeValidationFailures ?? []),
         ]),
       ],
       rag: ragResult?.manifest
@@ -534,6 +557,7 @@ export class RuntimeV2ShadowOrchestrator {
             ragConflictDetected: decisions.some((item) => item.conflictDetected),
           }
         : extension.rag,
+      memory: memoryResult?.manifest ?? extension.memory,
     };
   }
 
