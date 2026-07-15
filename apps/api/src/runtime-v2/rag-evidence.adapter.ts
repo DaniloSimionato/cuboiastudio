@@ -12,6 +12,14 @@ import { validateEvidenceScope, type ScopeValidationStatus } from "./evidence-sc
 import type { ScopeContext } from "./evidence-contracts";
 
 export const RAG_RETRIEVAL_SOURCE = "V1_PIPELINE" as const;
+export type RagNotExecutedReason =
+  | "DISABLED"
+  | "NOT_REQUIRED"
+  | "FLOW_SUPPRESSED"
+  | "NO_QUERY"
+  | "EXECUTED_EMPTY"
+  | "EXECUTED_WITH_RESULTS"
+  | "PIPELINE_ERROR";
 
 export type RagRetrievalObservationItem = {
   knowledgeId: string;
@@ -44,6 +52,7 @@ export type RagRetrievalObservation = {
   resultCount: number;
   observedAt: string;
   items: RagRetrievalObservationItem[];
+  notExecutedReason?: RagNotExecutedReason;
 };
 
 export type RagEvidenceAdapterStatus =
@@ -74,6 +83,7 @@ export type RagEvidenceManifest = {
   ragAdapterStatus: RagEvidenceAdapterStatus;
   ragAdapterDurationMs: number;
   ragContentPersisted: false;
+  ragNotExecutedReason: RagNotExecutedReason | null;
 };
 
 export type RagEvidenceAdapterResult = {
@@ -162,6 +172,7 @@ export function createRagRetrievalObservation(input: {
   observedAt?: Date;
   queryCategory?: string | null;
   retrievalExecuted: boolean;
+  notExecutedReason?: RagNotExecutedReason;
   threshold?: number | null;
   thresholdSource?: string | null;
   results?: Array<{
@@ -202,6 +213,13 @@ export function createRagRetrievalObservation(input: {
         contentHash: hashPreview(result.contentPreview ?? ""),
       };
     }),
+    notExecutedReason:
+      input.notExecutedReason ??
+      (input.retrievalExecuted
+        ? results.length > 0
+          ? "EXECUTED_WITH_RESULTS"
+          : "EXECUTED_EMPTY"
+        : "NOT_REQUIRED"),
   };
 }
 
@@ -265,6 +283,7 @@ function emptyManifest(input: {
     ragAdapterStatus: input.adapterStatus,
     ragAdapterDurationMs: Math.max(0, Math.round(input.durationMs)),
     ragContentPersisted: false,
+    ragNotExecutedReason: observation?.notExecutedReason ?? null,
   };
 }
 

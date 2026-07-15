@@ -47,6 +47,13 @@ export type SessionEvidenceInput = {
   state: ConversationState;
 };
 
+export type SessionEvidenceDetails = {
+  evidence: SourceEvidence[];
+  rawCandidateCount: number;
+  deduplicatedCount: number;
+  duplicateRejectedCount: number;
+};
+
 function hashValue(value: unknown): string {
   return createHash("sha256")
     .update(
@@ -179,16 +186,16 @@ function factsFromState(state: ConversationState): Array<[string, ConfirmedFact]
   return [...Object.entries(state.confirmedFacts), ...Object.entries(state.temporaryFacts)];
 }
 
-export function buildSessionEvidence(input: SessionEvidenceInput): SourceEvidence[] {
+export function buildSessionEvidenceDetails(input: SessionEvidenceInput): SessionEvidenceDetails {
   if (
     input.state.companyId !== input.scope.companyId ||
     input.state.assistantId !== input.scope.assistantId ||
     input.state.conversationId !== input.scope.conversationId ||
     input.state.contextVersion !== input.scope.contextVersion
   ) {
-    return [];
+    return { evidence: [], rawCandidateCount: 0, deduplicatedCount: 0, duplicateRejectedCount: 0 };
   }
-  return factsFromState(input.state).flatMap(([fieldKey, fact]) => {
+  const rawEvidence = factsFromState(input.state).flatMap(([fieldKey, fact]) => {
     if (!fact.sourceMessageId || !(fact.confirmedAt instanceof Date)) return [];
     const category = sessionCategoryForFact(fieldKey);
     return [
@@ -206,6 +213,33 @@ export function buildSessionEvidence(input: SessionEvidenceInput): SourceEvidenc
       }),
     ];
   });
+  const unique = new Map<string, SourceEvidence>();
+  let duplicateRejectedCount = 0;
+  for (const item of rawEvidence.sort((left, right) => left.evidenceId.localeCompare(right.evidenceId))) {
+    const key = [
+      item.category,
+      item.fieldKey,
+      item.valueHash ?? "",
+      item.contextVersion ?? "",
+      item.provenance.sourceMessageId ?? "",
+    ].join("|");
+    if (unique.has(key)) {
+      duplicateRejectedCount += 1;
+      continue;
+    }
+    unique.set(key, item);
+  }
+  const evidence = [...unique.values()].sort((left, right) => left.evidenceId.localeCompare(right.evidenceId));
+  return {
+    evidence,
+    rawCandidateCount: rawEvidence.length,
+    deduplicatedCount: evidence.length,
+    duplicateRejectedCount,
+  };
+}
+
+export function buildSessionEvidence(input: SessionEvidenceInput): SourceEvidence[] {
+  return buildSessionEvidenceDetails(input).evidence;
 }
 
 export function deriveRequestedEvidenceCategories(input: {
@@ -216,17 +250,21 @@ export function deriveRequestedEvidenceCategories(input: {
     price: "PRICE",
     address: "ADDRESS",
     official_contact: "OFFICIAL_CONTACT",
+    officialcontact: "OFFICIAL_CONTACT",
     contact: "OFFICIAL_CONTACT",
     phone: "OFFICIAL_CONTACT",
     whatsapp: "OFFICIAL_CONTACT",
     business_hours: "BUSINESS_HOURS",
+    businesshours: "BUSINESS_HOURS",
     hours: "BUSINESS_HOURS",
     availability: "AVAILABILITY",
     booking: "BOOKING",
     pickup: "PICKUP_DELIVERY",
     delivery: "PICKUP_DELIVERY",
     technical_information: "TECHNICAL_INFORMATION",
+    technicalinformation: "TECHNICAL_INFORMATION",
     contact_preference: "CONTACT_PREFERENCE",
+    contactpreference: "CONTACT_PREFERENCE",
     customer_identity: "CUSTOMER_IDENTITY",
     company_identity: "COMPANY_IDENTITY",
   };
@@ -423,6 +461,9 @@ export type CombinedEvidenceManifestMetadata = ReturnType<typeof buildEvidenceDe
   invalidEvidenceCount: number;
   customerEvidenceCount: number;
   sessionEvidenceCount: number;
+  sessionRawCandidateCount: number;
+  sessionDeduplicatedCount: number;
+  sessionDuplicateRejectedCount: number;
   ragContentPersisted: false;
   memoryContentPersisted: false;
   officialValuePersisted: false;
@@ -433,6 +474,7 @@ export type CombinedEvidenceManifestMetadata = ReturnType<typeof buildEvidenceDe
 export function buildCombinedEvidenceManifest(
   result: CombinedEvidenceResult,
   rawEvidenceCount: number,
+  sessionStats?: Pick<SessionEvidenceDetails, "rawCandidateCount" | "deduplicatedCount" | "duplicateRejectedCount">,
 ): CombinedEvidenceManifestMetadata {
   const decisionMetadata = buildEvidenceDecisionMetadata(result);
   const evidenceCountsBySourceType: Record<string, number> = {};
@@ -501,6 +543,9 @@ export function buildCombinedEvidenceManifest(
     invalidEvidenceCount: result.invalidEvidenceCount,
     customerEvidenceCount: result.bundle.customerEvidence.length,
     sessionEvidenceCount: result.bundle.sessionEvidence.length,
+    sessionRawCandidateCount: sessionStats?.rawCandidateCount ?? result.bundle.sessionEvidence.length,
+    sessionDeduplicatedCount: sessionStats?.deduplicatedCount ?? result.bundle.sessionEvidence.length,
+    sessionDuplicateRejectedCount: sessionStats?.duplicateRejectedCount ?? 0,
     ragContentPersisted: false,
     memoryContentPersisted: false,
     officialValuePersisted: false,

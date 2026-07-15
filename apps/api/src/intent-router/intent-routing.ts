@@ -163,7 +163,7 @@ function explicitAliasesForFamily(family: string): Array<{ alias: string; weight
   }
 }
 
-function hasExternalVisitEvidence(text: string): boolean {
+export function hasExternalVisitEvidence(text: string): boolean {
   return [
     "visita",
     "ir até o local",
@@ -176,8 +176,14 @@ function hasExternalVisitEvidence(text: string): boolean {
   ].some((alias) => containsAlias(text, alias));
 }
 
+export function isContactPreferenceRequest(text: string): boolean {
+  return /(?:prefiro (?:receber )?retorno|prefiro (?:ser )?contatad[oa]|me (?:chame|contate|fale) por|como prefiro receber retorno|pode falar comigo pelo)/.test(
+    text,
+  );
+}
+
 function isOfficialContactRequest(text: string): boolean {
-  return /(?:telefone|numero|whatsapp|contato|como falar com voces|como falar com a empresa)/.test(
+  return !isContactPreferenceRequest(text) && /(?:telefone|numero|whatsapp|contato|como falar com voces|como falar com a empresa)/.test(
     text,
   );
 }
@@ -284,6 +290,8 @@ export function extractCustomerStructuredFields(message: string): CustomerStruct
   const hasRam = /\b(ram|memoria ram|memoria)\b/.test(text);
   const hasAccessories = /\b(mouse|teclado|fone|headset|kit gamer|acessorios)\b/.test(text);
   const deviceModel = Boolean(extractGenericDeviceModel(text));
+
+  if (isContactPreferenceRequest(text)) known.add("contact_preference_channel");
 
   if (deviceModel) known.add("device_model");
   if (hasSsd) {

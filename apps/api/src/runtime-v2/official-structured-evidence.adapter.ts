@@ -42,6 +42,13 @@ export type OfficialStructuredEvidenceResult = {
   failures: string[];
   scopeValidationFailures?: string[];
   adapterStatus: "COMPLETED" | "PARTIAL" | "EMPTY" | "FAILED";
+  emptyReason:
+    | "NO_REQUESTED_CATEGORY"
+    | "NO_STRUCTURED_VALUE"
+    | "INVALID_STRUCTURED_VALUE"
+    | "SCOPE_REJECTED"
+    | "UNSUPPORTED_CATEGORY"
+    | "SUCCESS";
   durationMs: number;
 };
 
@@ -311,11 +318,23 @@ export class OfficialStructuredEvidenceAdapter implements OfficialStructuredEvid
   async read(input: OfficialStructuredEvidenceInput): Promise<OfficialStructuredEvidenceResult> {
     const startedAt = Date.now();
     const requestedCategories = unique(input.requestedCategories);
+    if (requestedCategories.length === 0) {
+      return {
+        evidence: [],
+        missingCategories: [],
+        failures: [],
+        scopeValidationFailures: [],
+        adapterStatus: "EMPTY",
+        emptyReason: "NO_REQUESTED_CATEGORY",
+        durationMs: Date.now() - startedAt,
+      };
+    }
     if (!input.companyId.trim() || !input.assistantId.trim()) {
       return {
         evidence: [],
         missingCategories: requestedCategories,
         failures: ["OFFICIAL_SCOPE_REQUIRED"],
+        emptyReason: "SCOPE_REJECTED",
         adapterStatus: "FAILED",
         durationMs: Date.now() - startedAt,
       };
@@ -337,6 +356,7 @@ export class OfficialStructuredEvidenceAdapter implements OfficialStructuredEvid
           evidence: [],
           missingCategories: requestedCategories,
           failures: ["OFFICIAL_ASSISTANT_NOT_FOUND"],
+          emptyReason: "SCOPE_REJECTED",
           adapterStatus: "FAILED",
           durationMs: Date.now() - startedAt,
         };
@@ -409,6 +429,7 @@ export class OfficialStructuredEvidenceAdapter implements OfficialStructuredEvid
               ],
               ["assistant.websiteUrl", normalizeOfficialUrl(assistant.websiteUrl)],
             ] as const;
+            const hasConfiguredContactValue = values.some(([, rawValue]) => Boolean(rawValue));
             const before = evidence.length;
             for (const [fieldKey, value] of values) {
               if (!value) continue;
@@ -428,7 +449,11 @@ export class OfficialStructuredEvidenceAdapter implements OfficialStructuredEvid
             }
             if (before === evidence.length) {
               missing.add(category);
-              failures.push("OFFICIAL_CONTACT_MISSING_OR_INVALID");
+              failures.push(
+                hasConfiguredContactValue
+                  ? "OFFICIAL_CONTACT_INVALID"
+                  : "OFFICIAL_CONTACT_MISSING",
+              );
             }
             break;
           }
@@ -480,10 +505,19 @@ export class OfficialStructuredEvidenceAdapter implements OfficialStructuredEvid
           : failures.length > 0 || missingCategories.length > 0
             ? "PARTIAL"
             : "COMPLETED";
+      const emptyReason =
+        evidence.length > 0
+          ? "SUCCESS"
+          : failures.some((failure) => failure.includes("INVALID"))
+            ? "INVALID_STRUCTURED_VALUE"
+            : failures.some((failure) => failure.includes("NOT_SUPPORTED"))
+              ? "UNSUPPORTED_CATEGORY"
+              : "NO_STRUCTURED_VALUE";
       return {
         evidence,
         missingCategories,
         failures: unique(failures),
+        emptyReason,
         adapterStatus,
         durationMs: Date.now() - startedAt,
       };
@@ -492,6 +526,7 @@ export class OfficialStructuredEvidenceAdapter implements OfficialStructuredEvid
         evidence: [],
         missingCategories: requestedCategories,
         failures: ["OFFICIAL_ADAPTER_READ_FAILED"],
+        emptyReason: "SCOPE_REJECTED",
         adapterStatus: "FAILED",
         durationMs: Date.now() - startedAt,
       };

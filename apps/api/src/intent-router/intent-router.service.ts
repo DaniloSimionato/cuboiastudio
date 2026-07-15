@@ -2,6 +2,9 @@ import { Injectable, Logger } from "@nestjs/common";
 import { AssistantFlow } from "@prisma/client";
 import { AiService } from "../ai/ai.service";
 import {
+  flowIntentKeyForFlow,
+  hasExternalVisitEvidence,
+  normalizeIntentText,
   scoreFlowCandidates,
   type FlowKeywordEvidence,
 } from "./intent-routing";
@@ -127,6 +130,17 @@ export class IntentRouterService {
 
       const matchedFlow = flowsWithDescriptions.find(f => responseText.includes(f.id));
       if (matchedFlow) {
+        const normalizedMessage = normalizeIntentText(input.message);
+        if (flowIntentKeyForFlow(matchedFlow) === "external_visit" && !hasExternalVisitEvidence(normalizedMessage)) {
+          return {
+            flowId: null,
+            flowName: null,
+            confidence: 0,
+            candidates,
+            flowSelectionMethod: "none",
+            reason: "LLM_EXTERNAL_VISIT_WITHOUT_EVIDENCE",
+          };
+        }
         this.logger.debug(`Flow matched by LLM: ${matchedFlow.name}`);
         return {
           flowId: matchedFlow.id,

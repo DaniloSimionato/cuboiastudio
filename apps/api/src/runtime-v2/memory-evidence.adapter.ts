@@ -10,6 +10,18 @@ import { evaluateFreshness } from "./evidence-freshness";
 import { validateEvidenceScope, type ScopeValidationStatus } from "./evidence-scope";
 
 export const MEMORY_RETRIEVAL_SOURCE = "V1_PIPELINE" as const;
+export type MemoryNotExecutedReason =
+  | "MEMORY_DISABLED"
+  | "EXTRACTION_DISABLED"
+  | "CATEGORY_NOT_ALLOWED"
+  | "EXTRACTION_NO_RESULT"
+  | "EXTRACTION_COMPLETED"
+  | "RETRIEVAL_NOT_REQUIRED"
+  | "RETRIEVAL_EMPTY"
+  | "RETRIEVAL_WITH_RESULTS"
+  | "BELOW_CONFIDENCE"
+  | "EXPIRED"
+  | "PIPELINE_ERROR";
 
 export type MemoryRetrievalObservationItem = {
   memoryItemId: string;
@@ -59,6 +71,7 @@ export type MemoryRetrievalObservation = {
   };
   resultCount: number;
   items: MemoryRetrievalObservationItem[];
+  notExecutedReason?: MemoryNotExecutedReason;
 };
 
 export type MemorySharingPolicy = "DENY" | "ALLOW";
@@ -100,6 +113,7 @@ export type MemoryEvidenceManifest = {
   memoryContentPersisted: false;
   memoryWritePerformed: false;
   memoryEmbeddingGenerated: false;
+  memoryNotExecutedReason: MemoryNotExecutedReason | null;
 };
 
 export type MemoryEvidenceAdapterResult = {
@@ -183,6 +197,7 @@ function emptyManifest(
     memoryContentPersisted: false,
     memoryWritePerformed: false,
     memoryEmbeddingGenerated: false,
+    memoryNotExecutedReason: observation?.notExecutedReason ?? null,
   };
 }
 
@@ -197,6 +212,7 @@ export function createMemoryRetrievalObservation(input: {
   profileAssistantId?: string | null;
   observedAt?: Date;
   retrievalExecuted: boolean;
+  notExecutedReason?: MemoryNotExecutedReason;
   configurationSnapshot: MemoryRetrievalObservation["configurationSnapshot"];
   selectedMemories?: Array<Record<string, unknown>>;
 }): MemoryRetrievalObservation {
@@ -255,6 +271,13 @@ export function createMemoryRetrievalObservation(input: {
     configurationSnapshot: input.configurationSnapshot,
     resultCount: items.length,
     items,
+    notExecutedReason:
+      input.notExecutedReason ??
+      (input.retrievalExecuted
+        ? items.length > 0
+          ? "RETRIEVAL_WITH_RESULTS"
+          : "RETRIEVAL_EMPTY"
+        : "RETRIEVAL_NOT_REQUIRED"),
   };
 }
 

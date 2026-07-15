@@ -39,7 +39,7 @@ import { buildEvidenceManifestExtension } from "./evidence-manifest";
 import {
   buildCombinedEvidenceManifest,
   buildCustomerEvidence,
-  buildSessionEvidence,
+  buildSessionEvidenceDetails,
   combineEvidence,
   deriveRequestedEvidenceCategories,
 } from "./combined-evidence";
@@ -81,6 +81,8 @@ export type RuntimeV2ShadowSnapshot = {
   customerEvidenceFields?: string[];
   customerEvidence?: SourceEvidence[];
   sessionEvidence?: SourceEvidence[];
+  requestedCategoryDerivation?: Record<string, string>;
+  memoryNotExecutedReason?: import("./memory-evidence.adapter").MemoryNotExecutedReason;
   v1Comparison?: {
     selectedFlowId?: string | null;
     selectedIntent?: string | null;
@@ -89,6 +91,9 @@ export type RuntimeV2ShadowSnapshot = {
     customerUnableToAnswer?: boolean;
     triageExitReason?: string | null;
     conversationalOutcome?: string | null;
+    flowSelectionReason?: string | null;
+    flowCandidateCount?: number;
+    intentChangedFromPreviousTurn?: boolean;
   };
 };
 
@@ -399,6 +404,7 @@ export class RuntimeV2ShadowOrchestrator {
     const evidenceManifest = await this.resolveEvidence({
       snapshot,
       retrievalPlan,
+      requestedCategoryDerivation: understanding.requestedCategoryDerivation,
       state: nextState,
       now,
     });
@@ -472,6 +478,7 @@ export class RuntimeV2ShadowOrchestrator {
   private async resolveEvidence(input: {
     snapshot: RuntimeV2ShadowSnapshot;
     retrievalPlan: ReturnType<typeof buildRetrievalPlan>;
+    requestedCategoryDerivation?: Record<string, string>;
     state: ConversationState;
     now: Date;
   }) {
@@ -498,6 +505,7 @@ export class RuntimeV2ShadowOrchestrator {
       evidence: [],
       adapterStatus: "SKIPPED",
       adapterDurationMs: 0,
+      requestedCategoryDerivation: input.requestedCategoryDerivation,
     });
     if (evidenceMode !== "SHADOW_METADATA") return skipped;
 
@@ -515,6 +523,7 @@ export class RuntimeV2ShadowOrchestrator {
             failures: ["OFFICIAL_EVIDENCE_ADAPTER_ERROR"],
             scopeValidationFailures: [],
             adapterStatus: "FAILED" as const,
+            emptyReason: "SCOPE_REJECTED" as const,
             durationMs: 0,
           }))
       : {
@@ -523,6 +532,7 @@ export class RuntimeV2ShadowOrchestrator {
           failures: [],
           scopeValidationFailures: [],
           adapterStatus: "SKIPPED" as const,
+          emptyReason: "NO_REQUESTED_CATEGORY" as const,
           durationMs: 0,
         };
     let ragAdapterFailed = false;
@@ -569,12 +579,18 @@ export class RuntimeV2ShadowOrchestrator {
         fieldKeys: input.snapshot.customerEvidenceFields ?? [],
         requestedCategories,
       });
-    const sessionEvidence =
-      input.snapshot.sessionEvidence ??
-      buildSessionEvidence({
-        scope: input.snapshot.scope,
-        state: input.state,
-      });
+    const sessionDetails = input.snapshot.sessionEvidence
+      ? {
+          evidence: input.snapshot.sessionEvidence,
+          rawCandidateCount: input.snapshot.sessionEvidence.length,
+          deduplicatedCount: input.snapshot.sessionEvidence.length,
+          duplicateRejectedCount: 0,
+        }
+      : buildSessionEvidenceDetails({
+          scope: input.snapshot.scope,
+          state: input.state,
+        });
+    const sessionEvidence = sessionDetails.evidence;
     const allRawEvidence = [
       ...officialResult.evidence,
       ...(ragResult?.evidence ?? []),
@@ -621,7 +637,11 @@ export class RuntimeV2ShadowOrchestrator {
         evidencePipelineError: "EVIDENCE_PIPELINE_ERROR",
       });
     }
-    const combinedMetadata = buildCombinedEvidenceManifest(combined, allRawEvidence.length);
+    const combinedMetadata = buildCombinedEvidenceManifest(
+      combined,
+      allRawEvidence.length + sessionDetails.duplicateRejectedCount,
+      sessionDetails,
+    );
     const extension = buildEvidenceManifestExtension({
       evidenceMode,
       requestedCategories,
@@ -637,6 +657,17 @@ export class RuntimeV2ShadowOrchestrator {
         ...combined.scopeValidationFailures,
       ],
       combined: combinedMetadata,
+      requestedCategoryDerivation: input.requestedCategoryDerivation,
+      officialAdapterEmptyReason: officialResult.emptyReason,
+      memory: memoryResult?.manifest
+        ? {
+            ...memoryResult.manifest,
+            memoryNotExecutedReason:
+              memoryResult.manifest.memoryNotExecutedReason ??
+              input.snapshot.memoryNotExecutedReason ??
+              null,
+          }
+        : undefined,
       rag: ragResult?.manifest
         ? {
             ...ragResult.manifest,
@@ -669,7 +700,15 @@ export class RuntimeV2ShadowOrchestrator {
             ragConflictDetected: combined.decisions.some((item) => item.conflictDetected),
           }
         : extension.rag,
-      memory: memoryResult?.manifest ?? extension.memory,
+      memory: memoryResult?.manifest
+        ? {
+            ...memoryResult.manifest,
+            memoryNotExecutedReason:
+              memoryResult.manifest.memoryNotExecutedReason ??
+              input.snapshot.memoryNotExecutedReason ??
+              null,
+          }
+        : extension.memory,
     };
   }
 

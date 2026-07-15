@@ -2383,6 +2383,13 @@ export class AssistantConversationsService {
       contextVersion: conversation.currentContextVersion ?? 1,
       internalMessageId: userMessage.id,
       retrievalExecuted: false,
+      notExecutedReason: !assistant.memoryEnabled
+        ? "MEMORY_DISABLED"
+        : !this.contactMemoriesService || !this.contactMemoriesExtractionService
+          ? "PIPELINE_ERROR"
+          : !assistant.memoryPrePromptEnabled
+            ? "RETRIEVAL_NOT_REQUIRED"
+            : "RETRIEVAL_EMPTY",
       configurationSnapshot: {
         memoryEnabled: Boolean(assistant.memoryEnabled),
         memoryExtractionEnabled: Boolean(assistant.memoryExtractionEnabled),
@@ -2485,6 +2492,8 @@ export class AssistantConversationsService {
             profileId: profile.id,
             profileAssistantId: profile.assistantId,
             retrievalExecuted: true,
+            notExecutedReason:
+              selectedMemories.length > 0 ? "RETRIEVAL_WITH_RESULTS" : "RETRIEVAL_EMPTY",
             configurationSnapshot: {
               memoryEnabled: Boolean(assistant.memoryEnabled),
               memoryExtractionEnabled: Boolean(assistant.memoryExtractionEnabled),
@@ -2637,6 +2646,13 @@ export class AssistantConversationsService {
       internalMessageId: userMessage.id,
       queryCategory: "KNOWLEDGE",
       retrievalExecuted: false,
+      notExecutedReason: !assistant.ragEnabled
+        ? "DISABLED"
+        : !this.assistantKnowledgeRetrievalService
+          ? "PIPELINE_ERROR"
+          : interpretedMessage.trim()
+            ? "NOT_REQUIRED"
+            : "NO_QUERY",
       threshold: ragThresholdConfig.threshold,
       thresholdSource: ragThresholdConfig.source,
       results: [],
@@ -2689,6 +2705,8 @@ export class AssistantConversationsService {
         internalMessageId: userMessage.id,
         queryCategory: "KNOWLEDGE",
         retrievalExecuted: true,
+        notExecutedReason:
+          searchResult.results.length > 0 ? "EXECUTED_WITH_RESULTS" : "EXECUTED_EMPTY",
         threshold: searchResult.scoreThreshold,
         thresholdSource: searchResult.scoreThresholdSource,
         results: searchResult.results,
@@ -3004,6 +3022,7 @@ export class AssistantConversationsService {
       ragObservation,
       memoryObservation:
         memoryObservation.contactId === "unresolved" ? null : memoryObservation,
+      memoryNotExecutedReason: memoryObservation.notExecutedReason,
     };
 
     contextMetadata.contextManifest = {
@@ -4639,6 +4658,9 @@ export class AssistantConversationsService {
         customerUnableToAnswer,
         triageExitReason,
         conversationalOutcome,
+        flowSelectionReason: contextMetadata.detectedIntent ?? null,
+        flowCandidateCount: (contextMetadata.candidateFlowIds ?? []).length,
+        intentChangedFromPreviousTurn: Boolean(contextMetadata.currentIntentOverrodeHistory),
       },
     });
 

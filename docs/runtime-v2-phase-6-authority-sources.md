@@ -731,3 +731,28 @@ Os adapters continuam read-only e recebem apenas snapshots já produzidos pelo V
 - A consolidação ainda não consulta ferramentas reais nem cria `TOOL_RESULT`; disponibilidade e booking seguem indisponíveis sem ferramenta/confirmação válida.
 - Valores de customer/session evidence são representados somente por chaves e hashes no caminho Shadow.
 - O próximo passo é validar o bundle em SHADOW_METADATA com fixtures multi-tenant e, depois, avaliar política de uso operacional sem habilitar outbound V2.
+
+## 22. Fase 6.1D-C — alinhamento com a recuperação real e derivação de categorias
+
+### Gaps reproduzidos
+
+Fixtures sintéticas reproduzem os sete cenários observados: horário de funcionamento, contato oficial, preço, disponibilidade, serviço técnico, preferência atual e consulta posterior da preferência. Antes da correção, a derivação misturava dia/horário com `AVAILABILITY`, não reconhecia contato/preferência/técnico e o fallback semântico do V1 podia aceitar um flow de visita externa sem evidência de deslocamento.
+
+### Correções genéricas
+
+- `TurnUnderstanding` deriva `BUSINESS_HOURS`, `OFFICIAL_CONTACT`, `CONTACT_PREFERENCE`, `TECHNICAL_INFORMATION`, `AVAILABILITY` e `BOOKING` por linguagem explícita normalizada; dia/horário isolado não transforma horário oficial em disponibilidade.
+- O adapter oficial distingue `NO_REQUESTED_CATEGORY`, `NO_STRUCTURED_VALUE`, `INVALID_STRUCTURED_VALUE`, `SCOPE_REJECTED`, `UNSUPPORTED_CATEGORY` e `SUCCESS`.
+- A observação RAG continua exclusivamente `V1_PIPELINE`, sem busca adicional; registra `DISABLED`, `NOT_REQUIRED`, `FLOW_SUPPRESSED`, `NO_QUERY`, `EXECUTED_EMPTY`, `EXECUTED_WITH_RESULTS` ou `PIPELINE_ERROR`.
+- A observação de memória registra o motivo de não execução/resultado e permanece metadata-only; a escrita e eventual extração continuam no V1.
+- A sessão é deduplicada antes da resolução por categoria, campo, hash, `contextVersion` e mensagem de origem; o manifesto mantém candidatos brutos, deduplicados e rejeitados.
+- O fallback semântico rejeita um flow configurado como visita externa quando a mensagem não possui evidência explícita de visita, local, deslocamento ou atendimento externo. A taxonomia continua derivada da configuração do flow, sem IDs ou nomes de tenant.
+
+### Observabilidade sanitizada
+
+O manifesto passou a registrar derivação de categoria, motivo de adapter oficial vazio, motivo de RAG/memória não executados, contagens de deduplicação de sessão, motivo da seleção V1, quantidade de candidatos e mudança de intenção. Nenhuma mensagem, valor, prompt, chunk, memória, telefone ou segredo é persistido.
+
+### Validação e limitações
+
+O teste integrado local dos sete turnos confirma decisões por categoria, monotonicidade, redaction e ausência de provider/ferramenta/outbound V2. A validação PostgreSQL que depende de `DATABASE_URL` não pode ser executada neste ambiente quando essa variável não está disponível; não foi usado banco de staging/produção nem foi exposto qualquer valor. A validação final deve executar essa parte no banco local descartável já aprovado.
+
+O Runtime V2 permanece `OFF`; não há alteração de frontend, migration, provider externo, ferramenta real ou outbound.

@@ -24,6 +24,13 @@ function includesAny(text: string, values: string[]): boolean {
   return values.some((value) => text.includes(value));
 }
 
+function normalizeCategoryText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+}
+
 function extractGenericDeviceModel(text: string): string | null {
   const match = text.match(
     /\b(?:meu|minha|o meu|a minha|um|uma|no|na|em|do|da|modelo(?:\s+(?:do|da))?|equipamento|notebook|computador|pc)\s+(?:(?:é|e|:)\s*)?(?:(?:um|uma)\s+)?([a-z][a-z0-9-]*(?:\s+[a-z][a-z0-9-]*){0,3}\s+[a-z]?\d+)\b/i,
@@ -107,6 +114,7 @@ function questionFor(
 export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding {
   const normalized = input.message.trim().replace(/\s+/g, " ");
   const lower = normalized.toLowerCase();
+  const categoryText = normalizeCategoryText(normalized);
   const shortConfirmation = SHORT_CONFIRMATIONS.test(
     normalized
       .replace(/[,.!?]/g, " ")
@@ -130,16 +138,43 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
     /\b(?:domingo|segunda(?:-feira)?|terça(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sábado|sabado)\b/.test(
       lower,
     );
+  const asksBusinessHours = /(?:horario de atendimento|horario de funcionamento|funcionamento|abre|fech(?:a|am)|que horas|qual horario)/.test(
+    categoryText,
+  );
+  const asksOfficialContact = /(?:telefone oficial|whatsapp(?: oficial)?|numero(?: para contato| oficial)?|contato oficial|como falar com (?:voces|a empresa))/.test(
+    categoryText,
+  );
+  const asksContactPreference = /(?:prefiro (?:receber )?retorno|prefiro (?:ser )?contatad[oa]|me (?:chame|contate|fale) por|como prefiro receber retorno|pode falar comigo pelo)/.test(
+    categoryText,
+  );
+  const asksAvailability = /(?:disponibilidade|tem vaga|ha vaga|pode atender|consegue atender|atendem .*amanha|disponivel .*amanha|para agora|imediato|imediatamente)/.test(
+    categoryText,
+  );
+  const asksBooking = /(?:agendar|agendamento|reservar|reserva|marcar|confirmar (?:o )?(?:horario|atendimento|agendamento))/.test(
+    categoryText,
+  );
+  const asksTechnicalInformation = /(?:reparo|conserto|upgrade|ssd|ram|memoria|equipamento|notebook|computador|capacidade tecnica|instalar componente|melhoria|compatibilidade)/.test(
+    categoryText,
+  );
+  const exceptionRequest = /(?:esperar|aguardar|depois de fechar|apos o horario)/.test(categoryText);
   const requestedInformationCategories = [
-    ...(includesAny(lower, ["quanto custa", "preço", "preco", "valor"]) ? ["price"] : []),
-    ...(includesAny(lower, ["endereço", "endereco"]) ? ["address"] : []),
-    ...(includesAny(lower, ["buscam", "buscar", "retirada", "domicílio", "domicilio"])
+    ...(includesAny(categoryText, ["quanto custa", "preco", "valor", "orcamento"]) ? ["price"] : []),
+    ...(includesAny(categoryText, ["endereco"]) ? ["address"] : []),
+    ...(includesAny(categoryText, ["buscam", "buscar", "retirada", "domicilio", "coleta", "entrega"])
       ? ["pickup"]
       : []),
-    ...(includesAny(lower, ["horário", "horario", "funcionamento"]) ? ["businessHours"] : []),
-    ...(includesAny(lower, ["para agora", "imediato", "imediatamente"]) ? ["availability"] : []),
-    ...(weekdayMentioned ? ["businessHours", "availability"] : []),
-    ...(includesAny(lower, ["às ", "as ", "agendar", "agendamento"]) ? ["booking"] : []),
+    ...(asksBusinessHours ? ["businessHours"] : []),
+    ...(asksOfficialContact && !asksContactPreference ? ["officialContact"] : []),
+    ...(asksContactPreference ? ["contactPreference"] : []),
+    ...(asksTechnicalInformation ? ["technicalInformation"] : []),
+    ...(asksAvailability ? ["availability"] : []),
+    ...(asksBooking ? ["booking"] : []),
+    ...(weekdayMentioned && !asksBusinessHours && !asksAvailability && !asksBooking && !exceptionRequest
+      ? ["businessHours", "availability"]
+      : []),
+    ...(!asksBusinessHours && !asksAvailability && !asksBooking && !exceptionRequest && /(?:as)\s*\d{1,2}/.test(categoryText)
+      ? ["booking"]
+      : []),
     ...(includesAny(lower, [
       "esperar",
       "aguardar",
@@ -150,6 +185,23 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
       ? ["exceptionRequest"]
       : []),
   ];
+  const requestedCategoryDerivation: Record<string, string> = {};
+  for (const category of requestedInformationCategories) {
+    requestedCategoryDerivation[category] =
+      category === "businessHours"
+        ? "EXPLICIT_OPERATING_HOURS_LANGUAGE"
+        : category === "officialContact"
+          ? "EXPLICIT_OFFICIAL_CONTACT_LANGUAGE"
+          : category === "contactPreference"
+            ? "EXPLICIT_CONTACT_PREFERENCE_LANGUAGE"
+            : category === "technicalInformation"
+              ? "TECHNICAL_SERVICE_OR_EQUIPMENT_LANGUAGE"
+              : category === "availability"
+                ? "EXPLICIT_AVAILABILITY_LANGUAGE"
+                : category === "booking"
+                  ? "EXPLICIT_RESERVATION_LANGUAGE"
+                  : "EXPLICIT_CATEGORY_ALIAS";
+  }
 
   if (customerUnableToAnswer && input.lastRelevantQuestion) {
     return {
@@ -164,6 +216,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
       isSideQuestion: false,
       explicitlyRequestsPreviousTopic: false,
       requestedInformationCategories: [],
+      requestedCategoryDerivation: {},
       nextQuestion: null,
       reasonCodes: ["CUSTOMER_UNABLE_TO_ANSWER", "CLEAR_LAST_RELEVANT_QUESTION"],
       evidenceMessageIds: [input.messageId],
@@ -188,6 +241,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
         isSideQuestion: false,
         explicitlyRequestsPreviousTopic: false,
         requestedInformationCategories: [],
+        requestedCategoryDerivation: {},
         nextQuestion: null,
         reasonCodes: ["SHORT_CONFIRMATION", "AMBIGUOUS_REFERENCE"],
         evidenceMessageIds: [input.messageId],
@@ -209,6 +263,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
       isSideQuestion: false,
       explicitlyRequestsPreviousTopic: false,
       requestedInformationCategories: [],
+      requestedCategoryDerivation: {},
       nextQuestion: null,
       reasonCodes: ["SHORT_CONFIRMATION", "LAST_RELEVANT_QUESTION"],
       evidenceMessageIds: [
@@ -233,6 +288,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
       isSideQuestion: false,
       explicitlyRequestsPreviousTopic: false,
       requestedInformationCategories: [],
+      requestedCategoryDerivation: {},
       nextQuestion: null,
       reasonCodes: ["SHORT_CONFIRMATION", "AMBIGUOUS_REFERENCE"],
       evidenceMessageIds: [input.messageId],
@@ -334,9 +390,6 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
   const customerTimeMatch = lower.match(
     /(?:saio|sairei|chego|chegarei).*?(?:às|as)\s*(\d{1,2})(?::(\d{2}))?/,
   );
-  const exceptionRequest = /(?:esperar|aguardar|depois de fechar|ap[oó]s o hor[aá]rio)/i.test(
-    lower,
-  );
   if (customerTimeMatch) {
     factsExtracted.push(
       fact(
@@ -377,25 +430,23 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
       ? "KEEP"
       : "NONE";
 
-  const turnIntent = isSideQuestion
-    ? "side_question"
-    : requestedInformationCategories.includes("price")
-      ? "ask_price"
-      : /\b(?:para agora|imediato|imediatamente)\b/i.test(lower)
-        ? "ask_availability"
-        : weekdayMatch
-          ? "request_booking_date"
-          : exceptionRequest
-            ? "exception_request"
-            : requestedTimeMatch
-              ? "request_booking_time"
-              : explicitlyRequestsPreviousTopic
-                ? "resume_objective"
-                : "general_request";
+  let turnIntent = "general_request";
+  if (requestedInformationCategories.includes("price")) turnIntent = "ask_price";
+  else if (weekdayMentioned && !asksBusinessHours && !asksAvailability && !asksBooking)
+    turnIntent = "request_booking_date";
+  else if (requestedInformationCategories.includes("businessHours")) turnIntent = "ask_business_hours";
+  else if (requestedInformationCategories.includes("officialContact")) turnIntent = "ask_official_contact";
+  else if (requestedInformationCategories.includes("contactPreference")) turnIntent = "ask_contact_preference";
+  else if (requestedInformationCategories.includes("technicalInformation")) turnIntent = "technical_information";
+  else if (requestedInformationCategories.includes("availability")) turnIntent = "ask_availability";
+  else if (requestedInformationCategories.includes("booking")) turnIntent = "request_booking";
+  else if (isSideQuestion) turnIntent = "side_question";
+  else if (requestedInformationCategories.includes("pickup")) turnIntent = "request_pickup";
+  else if (exceptionRequest) turnIntent = "exception_request";
+  else if (explicitlyRequestsPreviousTopic) turnIntent = "resume_objective";
   const requestedAction =
     turnIntent === "ask_availability" ||
-    turnIntent === "request_booking_date" ||
-    turnIntent === "request_booking_time"
+    turnIntent === "request_booking"
       ? "availability"
       : turnIntent === "exception_request"
         ? "exception_request"
@@ -415,6 +466,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
     isSideQuestion,
     explicitlyRequestsPreviousTopic,
     requestedInformationCategories,
+    requestedCategoryDerivation,
     requestedAction,
     nextQuestion: questionFor(
       normalized,

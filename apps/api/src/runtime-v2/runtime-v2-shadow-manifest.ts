@@ -79,6 +79,9 @@ export type RuntimeV2ShadowManifest = {
     customerUnableToAnswer?: boolean;
     triageExitReason?: string | null;
     conversationalOutcome?: string | null;
+    flowSelectionReason: string | null;
+    flowCandidateCount: number;
+    intentChangedFromPreviousTurn: boolean;
   };
 };
 
@@ -206,6 +209,9 @@ export function buildRuntimeV2ShadowManifest(input: {
       customerUnableToAnswer: comparison.customerUnableToAnswer ?? false,
       triageExitReason: comparison.triageExitReason ?? null,
       conversationalOutcome: comparison.conversationalOutcome ?? null,
+      flowSelectionReason: comparison.flowSelectionReason ?? null,
+      flowCandidateCount: comparison.flowCandidateCount ?? 0,
+      intentChangedFromPreviousTurn: comparison.intentChangedFromPreviousTurn ?? false,
     },
   };
 }

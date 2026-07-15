@@ -17,6 +17,8 @@ export type EvidenceManifestExtension = {
   requestedEvidenceCategories: string[];
   officialEvidenceCount: number;
   officialEvidenceIds: string[];
+  officialAdapterEmptyReason: string;
+  requestedCategoryDerivation: Record<string, string>;
   evidenceCountsByCategory: Record<string, number>;
   candidateEvidenceCount: number;
   evidenceCountsBySourceType: Partial<Record<SourceType, number>>;
@@ -49,6 +51,9 @@ export type EvidenceManifestExtension = {
   invalidEvidenceCount: number;
   customerEvidenceCount: number;
   sessionEvidenceCount: number;
+  sessionRawCandidateCount: number;
+  sessionDeduplicatedCount: number;
+  sessionDuplicateRejectedCount: number;
   ragContentPersisted: false;
   memoryContentPersisted: false;
   officialValuePersisted: false;
@@ -82,6 +87,11 @@ export function buildEvidenceManifestExtension(input: {
   memory?: MemoryEvidenceManifest;
   combined?: CombinedEvidenceManifestMetadata;
   evidencePipelineError?: string | null;
+  requestedCategoryDerivation?: Record<string, string>;
+  officialAdapterEmptyReason?: string;
+  sessionRawCandidateCount?: number;
+  sessionDeduplicatedCount?: number;
+  sessionDuplicateRejectedCount?: number;
 }): EvidenceManifestExtension {
   const evidenceCountsBySourceType: Partial<Record<SourceType, number>> = {};
   const evidenceCountsByCategory: Record<string, number> = {};
@@ -104,6 +114,12 @@ export function buildEvidenceManifestExtension(input: {
       .map((item) => item.evidenceId)
       .filter((item): item is string => Boolean(item))
       .sort(),
+    officialAdapterEmptyReason: input.officialAdapterEmptyReason ?? "SUCCESS",
+    requestedCategoryDerivation: Object.fromEntries(
+      Object.entries(input.requestedCategoryDerivation ?? {}).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    ),
     evidenceCountsByCategory,
     candidateEvidenceCount: input.evidence.length,
     evidenceCountsBySourceType,
@@ -153,6 +169,7 @@ export function buildEvidenceManifestExtension(input: {
       ragAdapterStatus: "NOT_EXECUTED",
       ragAdapterDurationMs: 0,
       ragContentPersisted: false,
+      ragNotExecutedReason: null,
     },
     memory: input.memory ?? {
       memoryObservationReceived: false,
@@ -182,6 +199,7 @@ export function buildEvidenceManifestExtension(input: {
       memoryContentPersisted: false,
       memoryWritePerformed: false,
       memoryEmbeddingGenerated: false,
+      memoryNotExecutedReason: null,
     },
     retrievalBundleVersion: input.combined?.retrievalBundleVersion ?? null,
     adapterExecutionOrder: input.combined?.adapterExecutionOrder ?? [],
@@ -198,6 +216,10 @@ export function buildEvidenceManifestExtension(input: {
     invalidEvidenceCount: input.combined?.invalidEvidenceCount ?? 0,
     customerEvidenceCount: input.combined?.customerEvidenceCount ?? 0,
     sessionEvidenceCount: input.combined?.sessionEvidenceCount ?? 0,
+    sessionRawCandidateCount: input.combined?.sessionRawCandidateCount ?? input.sessionRawCandidateCount ?? 0,
+    sessionDeduplicatedCount: input.combined?.sessionDeduplicatedCount ?? input.sessionDeduplicatedCount ?? 0,
+    sessionDuplicateRejectedCount:
+      input.combined?.sessionDuplicateRejectedCount ?? input.sessionDuplicateRejectedCount ?? 0,
     ragContentPersisted: false,
     memoryContentPersisted: false,
     officialValuePersisted: false,

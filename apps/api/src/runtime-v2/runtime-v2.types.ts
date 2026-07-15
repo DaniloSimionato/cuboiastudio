@@ -131,6 +131,7 @@ export type TurnUnderstanding = {
   isSideQuestion: boolean;
   explicitlyRequestsPreviousTopic: boolean;
   requestedInformationCategories: string[];
+  requestedCategoryDerivation?: Record<string, string>;
   requestedAction?: string;
   nextQuestion?: RelevantQuestion | null;
   reasonCodes: string[];
