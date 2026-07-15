@@ -10,6 +10,7 @@ import {
   type RetrievalPlan,
 } from "./runtime-v2.types";
 import { type RuntimeV2Mode } from "./runtime-v2-feature-flag";
+import { type EvidenceManifestExtension } from "./evidence-manifest";
 
 export type RuntimeV2ShadowManifest = {
   runtimeVersion: "V2";
@@ -69,6 +70,7 @@ export type RuntimeV2ShadowManifest = {
   providerCalled: false;
   toolCalls: 0;
   outboundSent: false;
+  evidence?: EvidenceManifestExtension;
   v1Comparison: {
     selectedFlowId: string | null;
     selectedIntent: string | null;
@@ -115,6 +117,7 @@ export function buildRuntimeV2ShadowManifest(input: {
   processingDurationMs: number;
   messageAlreadyProcessed: boolean;
   shadowErrorCode?: string | null;
+  evidence?: EvidenceManifestExtension;
   v1Comparison?: Partial<RuntimeV2ShadowManifest["v1Comparison"]>;
 }): RuntimeV2ShadowManifest {
   const beforeFactKeys = Object.keys(input.beforeState.confirmedFacts);
@@ -167,8 +170,8 @@ export function buildRuntimeV2ShadowManifest(input: {
       input.v2TriageSignalReceived ??
       Boolean(
         input.v1Comparison?.customerUnableToAnswer ||
-          input.v1Comparison?.triageExitReason ||
-          input.v1Comparison?.conversationalOutcome,
+        input.v1Comparison?.triageExitReason ||
+        input.v1Comparison?.conversationalOutcome,
       ),
     customerUnableToAnswer:
       input.understanding.reasonCodes.includes("CUSTOMER_UNABLE_TO_ANSWER") ||
@@ -194,6 +197,7 @@ export function buildRuntimeV2ShadowManifest(input: {
     providerCalled: false,
     toolCalls: 0,
     outboundSent: false,
+    ...(input.evidence ? { evidence: input.evidence } : {}),
     v1Comparison: {
       selectedFlowId: comparison.selectedFlowId ?? null,
       selectedIntent: comparison.selectedIntent ?? null,

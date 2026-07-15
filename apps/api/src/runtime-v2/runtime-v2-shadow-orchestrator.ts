@@ -6,6 +6,7 @@ import {
 import {
   isRuntimeV2ShadowEnabled,
   resolveRuntimeV2Mode,
+  resolveRuntimeV2EvidenceMode,
   type RuntimeV2Mode,
 } from "./runtime-v2-feature-flag";
 import { buildResponsePlan } from "./response-plan";
@@ -26,6 +27,13 @@ import {
 } from "./conversation-state-store";
 import { validateResponse } from "./response-validator-v2";
 import { understandTurn } from "./turn-understanding";
+import {
+  deriveOfficialEvidenceCategories,
+  type OfficialStructuredEvidenceReader,
+} from "./official-structured-evidence.adapter";
+import { DEFAULT_EVIDENCE_POLICIES } from "./authority-evidence-policy";
+import { resolveAuthority } from "./authority-evidence-resolver";
+import { buildEvidenceManifestExtension } from "./evidence-manifest";
 import {
   type ConversationState,
   type RuntimeV2Scope,
@@ -132,10 +140,14 @@ function emptyContext() {
 }
 
 function inferRelevantQuestionField(content: string): string | null {
-  const normalized = content.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+  const normalized = content
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
   if (/(?:modelo|equipamento|notebook|computador)/.test(normalized)) return "device_model";
   if (/(?:interface|conexao|conexao|formato fisico)/.test(normalized)) return "component_interface";
-  if (/(?:capacidade|quantidade de memoria|quantos gb)/.test(normalized)) return "component_capacity";
+  if (/(?:capacidade|quantidade de memoria|quantos gb)/.test(normalized))
+    return "component_capacity";
   if (/(?:endereco|localizacao|onde fica)/.test(normalized)) return "address";
   if (/(?:horario|funcionamento|aberto|fechado)/.test(normalized)) return "business_hours";
   if (/(?:preco|valor|quanto custa|orcamento)/.test(normalized)) return "price";
@@ -143,7 +155,11 @@ function inferRelevantQuestionField(content: string): string | null {
 }
 
 export function isActionableAssistantQuestion(content: string): boolean {
-  const normalized = content.trim().normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+  const normalized = content
+    .trim()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
   if (!normalized.includes("?")) return false;
   if (/(?:preciso confirmar|como posso ajudar|o que posso fazer)/.test(normalized)) return false;
   return inferRelevantQuestionField(content) !== null;
@@ -168,6 +184,7 @@ export class RuntimeV2ShadowOrchestrator {
     private readonly stateStore: ConversationStateStore = new InMemoryConversationStateStore(),
     private readonly environment: NodeJS.ProcessEnv = process.env,
     private readonly now: () => Date = () => new Date(),
+    private readonly officialEvidenceAdapter?: OfficialStructuredEvidenceReader,
   ) {}
 
   getMetrics(): RuntimeV2ShadowMetrics {
@@ -284,7 +301,8 @@ export class RuntimeV2ShadowOrchestrator {
       snapshotQuestion.askedAt >= state.sessionStartedAt &&
       isActionableAssistantQuestion(snapshotQuestion.prompt)
     ) {
-      const fieldKey = snapshotQuestion.fieldKey ?? inferRelevantQuestionField(snapshotQuestion.prompt);
+      const fieldKey =
+        snapshotQuestion.fieldKey ?? inferRelevantQuestionField(snapshotQuestion.prompt);
       state = {
         ...state,
         lastRelevantQuestion: {
@@ -361,6 +379,11 @@ export class RuntimeV2ShadowOrchestrator {
     }
 
     const retrievalPlan = buildRetrievalPlan({ understanding, state: nextState });
+    const evidenceManifest = await this.resolveOfficialEvidence({
+      snapshot,
+      retrievalPlan,
+      now,
+    });
     const responsePlan = buildResponsePlan({
       understanding,
       state: nextState,
@@ -396,15 +419,79 @@ export class RuntimeV2ShadowOrchestrator {
       lastRelevantQuestionUpdated:
         beforeState.lastRelevantQuestion?.key !== nextState.lastRelevantQuestion?.key,
       lastRelevantQuestionCleared:
-        Boolean(staleQuestionRemoved) || understanding.reasonCodes.includes("CUSTOMER_UNABLE_TO_ANSWER"),
+        Boolean(staleQuestionRemoved) ||
+        understanding.reasonCodes.includes("CUSTOMER_UNABLE_TO_ANSWER"),
       staleQuestionRemoved,
-      lastRelevantQuestionUpdateReason: staleQuestionRemoved || understanding.reasonCodes.includes("CUSTOMER_UNABLE_TO_ANSWER")
-        ? "CUSTOMER_UNABLE_TO_ANSWER"
-        : beforeState.lastRelevantQuestion?.key !== nextState.lastRelevantQuestion?.key
-          ? "ASSISTANT_OBJECTIVE_QUESTION"
-          : "UNCHANGED",
+      lastRelevantQuestionUpdateReason:
+        staleQuestionRemoved || understanding.reasonCodes.includes("CUSTOMER_UNABLE_TO_ANSWER")
+          ? "CUSTOMER_UNABLE_TO_ANSWER"
+          : beforeState.lastRelevantQuestion?.key !== nextState.lastRelevantQuestion?.key
+            ? "ASSISTANT_OBJECTIVE_QUESTION"
+            : "UNCHANGED",
+      evidence: evidenceManifest,
     });
     return { enabled: true, mode: "SHADOW", state: nextState, manifest };
+  }
+
+  private async resolveOfficialEvidence(input: {
+    snapshot: RuntimeV2ShadowSnapshot;
+    retrievalPlan: ReturnType<typeof buildRetrievalPlan>;
+    now: Date;
+  }) {
+    const evidenceMode = resolveRuntimeV2EvidenceMode({}, this.environment);
+    const requestedCategories = deriveOfficialEvidenceCategories({
+      requestedCategories: input.retrievalPlan.officialFactCategories,
+      includeContactIdentity: input.retrievalPlan.includeContactIdentity,
+      currentMessage: input.snapshot.currentMessage,
+    });
+    const skipped = buildEvidenceManifestExtension({
+      evidenceMode,
+      requestedCategories,
+      decisions: requestedCategories.map((category) =>
+        resolveAuthority({
+          requestedCategory: category,
+          candidates: [],
+          scope: input.snapshot.scope,
+          policy: DEFAULT_EVIDENCE_POLICIES[category],
+          currentTime: input.now,
+        }),
+      ),
+      evidence: [],
+      adapterStatus: "SKIPPED",
+      adapterDurationMs: 0,
+    });
+    if (evidenceMode !== "SHADOW_METADATA" || !this.officialEvidenceAdapter) return skipped;
+
+    const result = await this.officialEvidenceAdapter.read({
+      companyId: input.snapshot.scope.companyId,
+      assistantId: input.snapshot.scope.assistantId,
+      requestedCategories,
+      currentTime: input.now,
+    });
+    const decisions = requestedCategories.map((category) =>
+      resolveAuthority({
+        requestedCategory: category,
+        candidates: result.evidence.filter((item) => item.category === category),
+        scope: input.snapshot.scope,
+        policy: DEFAULT_EVIDENCE_POLICIES[category],
+        currentTime: input.now,
+      }),
+    );
+    const extension = buildEvidenceManifestExtension({
+      evidenceMode,
+      requestedCategories,
+      decisions,
+      evidence: result.evidence,
+      adapterStatus: result.adapterStatus,
+      adapterDurationMs: result.durationMs,
+    });
+    return {
+      ...extension,
+      missingCategories: [
+        ...new Set([...extension.missingCategories, ...result.missingCategories]),
+      ].sort(),
+      scopeValidationFailures: result.scopeValidationFailures ?? [],
+    };
   }
 
   private async withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

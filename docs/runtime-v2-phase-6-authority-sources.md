@@ -515,3 +515,55 @@ Decisões adiadas:
 - Runtime V2 permaneceu OFF.
 - Nenhuma mensagem foi enviada.
 - Nenhum dado real, secret, prompt ou conteúdo sensível foi incluído neste documento.
+
+## 18. Implementação da Fase 6.1B2 — contexto oficial estruturado
+
+### Fontes realmente conectadas
+
+O adapter read-only consulta somente `Assistant` filtrado por `assistantId`, `companyId` e status ativo, incluindo a relação `Company` filtrada por status ativo. Não há leitura de RAG, memória, flows, ferramentas, Chatwoot ou provider.
+
+Campos estruturados utilizados:
+
+- `Company.name` para `COMPANY_IDENTITY`;
+- campos `Assistant.business*` e `Assistant.websiteUrl` para `ADDRESS` e `OFFICIAL_CONTACT`;
+- `Assistant.weeklySchedule` e timezone de assistente/empresa para `BUSINESS_HOURS`;
+- `Assistant.updatedAt` e `Company.updatedAt` como início explícito de validade da evidência.
+
+Não existe campo estruturado de exceção de horário no schema atual; `BUSINESS_HOURS_EXCEPTION` permanece ausente e nunca é inferida.
+
+### Fluxo de integração
+
+`RetrievalPlan.officialFactCategories` é convertido para a taxonomia canônica. Para dia e horário específicos, `BUSINESS_HOURS` é solicitado antes de `BOOKING`. O fluxo executa somente quando:
+
+- Runtime V2 está em `SHADOW`;
+- `RUNTIME_V2_EVIDENCE_MODE=SHADOW_METADATA`;
+- o assistente está na allowlist do Shadow.
+
+O adapter retorna evidências em memória, valida escopo, avalia freshness e passa as candidatas ao `AuthorityEvidenceResolver`. O manifesto persiste apenas IDs, hashes, categorias, status, freshness, contagens e motivos sanitizados.
+
+### Normalização e segurança
+
+Foram adicionados normalizadores genéricos para telefone/WhatsApp, URL, endereço, timezone e horário semanal. Entradas vazias ou inválidas resultam em ausência ou falha sanitizada. Metadata do remetente, histórico e conteúdo livre não entram no adapter.
+
+### Comportamento fail-safe
+
+Falha de leitura retorna `FAILED` ou `PARTIAL`, categorias ausentes e decisão segura. O erro não altera o V1, não bloqueia o endpoint e não executa provider, ferramenta, memória, RAG ou outbound.
+
+### Metadata persistida
+
+O manifesto Shadow inclui `evidenceMode`, versão do contrato, categorias solicitadas, IDs de evidências, contagens por categoria/tipo, decisões vencedoras/rejeitadas, conflitos, categorias ausentes, freshness, falhas de escopo, status/duração do adapter e `redactionApplied`.
+
+### Limitações
+
+- Exceções de horário ainda não possuem fonte estruturada.
+- Disponibilidade e agendamento continuam sem adapter de agenda.
+- Nenhum conteúdo RAG ou memória é consultado.
+- O adapter ainda não deve ser ativado em servidor sem aprovação operacional do modo `SHADOW_METADATA`.
+
+### Plano da Fase 6.1B3
+
+- adapter metadata-only para RAG, preservando tenant, assistant, status, score e proveniência;
+- adapter contextual de memória com expiração e compartilhamento bloqueado por padrão;
+- testes de conflito entre contexto oficial, RAG e memória;
+- integração dessas fontes somente no `RetrievalBundle` Shadow;
+- nenhuma execução de provider, ferramenta ou outbound pelo V2.

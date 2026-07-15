@@ -18,6 +18,7 @@ import {
 } from "../runtime-v2/prisma-conversation-state-store";
 import { RuntimeV2ShadowOrchestrator } from "../runtime-v2/runtime-v2-shadow-orchestrator";
 import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
+import { OfficialStructuredEvidenceAdapter } from "../runtime-v2/official-structured-evidence.adapter";
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shad
   providers: [
     InMemoryConversationStateStore,
     PrismaConversationStateStore,
+    OfficialStructuredEvidenceAdapter,
     {
       provide: RUNTIME_V2_STATE_STORE,
       useFactory: (
@@ -45,9 +47,17 @@ import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shad
     },
     {
       provide: RuntimeV2ShadowOrchestrator,
-      useFactory: (stateStore: InMemoryConversationStateStore | PrismaConversationStateStore) =>
-        new RuntimeV2ShadowOrchestrator(stateStore),
-      inject: [RUNTIME_V2_STATE_STORE],
+      useFactory: (
+        stateStore: InMemoryConversationStateStore | PrismaConversationStateStore,
+        officialEvidenceAdapter: OfficialStructuredEvidenceAdapter,
+      ) =>
+        new RuntimeV2ShadowOrchestrator(
+          stateStore,
+          process.env,
+          undefined,
+          officialEvidenceAdapter,
+        ),
+      inject: [RUNTIME_V2_STATE_STORE, OfficialStructuredEvidenceAdapter],
     },
     RuntimeV2ShadowIntegrationService,
     AssistantConversationsService,
