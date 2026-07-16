@@ -4,6 +4,7 @@ import {
   InMemoryConversationStateStore,
   RuntimeV2ShadowIntegrationService,
   RuntimeV2ShadowOrchestrator,
+  createV1HandoffObservation,
 } from "../dist/runtime-v2/index.js";
 
 const scope = {
@@ -87,17 +88,83 @@ test("integração allowlisted registra somente manifesto sanitizado", async () 
   assert.equal(typeof metadata.currentMessageHash, "string");
 });
 
+test("integração persiste o Handoff State no manifesto metadata-only", async () => {
+  const prisma = fakePrisma();
+  const environment = {
+    RUNTIME_V2_MODE: "SHADOW",
+    RUNTIME_V2_HANDOFF_STATE_MODE: "SHADOW_STATE",
+    RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  };
+  const orchestrator = new RuntimeV2ShadowOrchestrator(
+    new InMemoryConversationStateStore(),
+    environment,
+    () => new Date("2026-07-16T12:00:00.000Z"),
+  );
+  const integration = new RuntimeV2ShadowIntegrationService(prisma, orchestrator, environment);
+
+  const result = await integration.schedule({
+    ...snapshot("handoff-message-1"),
+    currentMessage: "pedido estruturado de humano",
+    v1HandoffObservation: createV1HandoffObservation({
+      companyId: scope.companyId,
+      assistantId: scope.assistantId,
+      conversationId: scope.conversationId,
+      contextVersion: scope.contextVersion,
+      internalMessageId: "handoff-message-1",
+      flowId: null,
+      handoffPendingObserved: false,
+      reasonCode: "CUSTOMER_REQUESTED_HUMAN",
+      customerRequested: true,
+      humanActiveObserved: false,
+      aiActiveObserved: true,
+      pausedByHumanObserved: false,
+      requestedTargetType: "ANY_HUMAN",
+      requestedTargetIdHash: null,
+      collectedContextKeys: ["customer_requested_human"],
+      contextHash: "",
+      provenance: {
+        source: "V1_PIPELINE",
+        sourceMessageId: "handoff-message-1",
+        sourceFlowId: null,
+        sourceVersion: "test",
+        reasonCode: "CUSTOMER_REQUESTED_HUMAN",
+      },
+    }),
+  });
+  await integration.drain();
+
+  assert.equal(result.status, "COMPLETED");
+  const metadata = prisma.logs[0].metadata;
+  assert.equal(metadata.handoffStateMode, "SHADOW_STATE");
+  assert.equal(metadata.v1HandoffObservationReceived, true);
+  assert.equal(metadata.activeHandoffPresent, true);
+  assert.equal(metadata.activeHandoffStatus, "HANDOFF_READY");
+  assert.equal(metadata.handoffReasonCode, "CUSTOMER_REQUESTED_HUMAN");
+  assert.equal(metadata.handoffRequestedTargetType, "ANY_HUMAN");
+  assert.equal(metadata.handoffCustomerRequested, true);
+  assert.equal(metadata.handoffStatePersisted, true);
+  assert.equal(metadata.handoffExecutionPerformed, false);
+  assert.equal(metadata.chatwootMutationPerformed, false);
+  assert.equal(metadata.labelApplied, false);
+  assert.equal(metadata.assignmentChanged, false);
+  assert.equal(metadata.conversationStatusChanged, false);
+  assert.equal(metadata.aiActiveChanged, false);
+  assert.equal(metadata.outboundSent, false);
+  assert.equal(metadata.handoffRedactionApplied, true);
+  assert.equal(JSON.stringify(metadata).includes("pedido estruturado"), false);
+});
+
 test("falha do orquestrador é capturada e não gera rejeição não tratada", async () => {
   const prisma = fakePrisma();
-  const orchestrator = { process: async () => { throw new Error("provider-like failure"); } };
-  const integration = new RuntimeV2ShadowIntegrationService(
-    prisma,
-    orchestrator,
-    {
-      RUNTIME_V2_MODE: "SHADOW",
-      RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  const orchestrator = {
+    process: async () => {
+      throw new Error("provider-like failure");
     },
-  );
+  };
+  const integration = new RuntimeV2ShadowIntegrationService(prisma, orchestrator, {
+    RUNTIME_V2_MODE: "SHADOW",
+    RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  });
 
   const result = await integration.schedule(snapshot());
   await integration.drain();
@@ -121,8 +188,10 @@ test("a mesma mensagem em voo não executa o orquestrador duas vezes", async () 
     async process(message) {
       calls += 1;
       await new Promise((resolve) => setTimeout(resolve, 10));
-      return new RuntimeV2ShadowOrchestrator(new InMemoryConversationStateStore(), environment)
-        .process(message);
+      return new RuntimeV2ShadowOrchestrator(
+        new InMemoryConversationStateStore(),
+        environment,
+      ).process(message);
     },
   };
   const integration = new RuntimeV2ShadowIntegrationService(prisma, orchestrator, environment);

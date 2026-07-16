@@ -99,6 +99,7 @@ import {
   type V1ToolExecutionObservation,
 } from "../runtime-v2/tool-observation";
 import { createV1HandoffObservation } from "../runtime-v2/handoff-state";
+import { deriveHumanHandoffSignal } from "../runtime-v2/turn-understanding";
 import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
 import {
   deriveExpectedAuthorityCategory,
@@ -2568,10 +2569,8 @@ export class AssistantConversationsService {
     }
 
     let triageMode = isMultiNeedTriageMessage(customerIntentText);
-    const customerRequestedHuman =
-      /(humano|atendente|atendimento\s+humano|falar\s+com\s+alguém|falar\s+com\s+alguem)/i.test(
-        customerIntentText,
-      );
+    const humanHandoffSignal = deriveHumanHandoffSignal(customerIntentText);
+    const customerRequestedHuman = humanHandoffSignal.requested;
     const isExplicitPriceQuery =
       /(quanto\s+fica|quanto\s+custa|valores?|preços?|custos?|precos?|tabela|orçamento|orcamento)/i.test(
         customerIntentText,
@@ -4711,13 +4710,16 @@ export class AssistantConversationsService {
       ...shadowSnapshot,
       v1HandoffObservation:
         contextMetadata.handoffPending ||
-        customerRequestedHuman ||
+        humanHandoffSignal.requested ||
         Boolean(conversation.pausedByHuman)
           ? createV1HandoffObservation({
               companyId: input.tenant.companyId,
               assistantId: assistant.id,
               conversationId: conversation.id,
-              contactId: memoryObservation.contactId === "unresolved" ? null : memoryObservation.contactId,
+              contactId:
+                memoryObservation.contactId === "unresolved"
+                  ? null
+                  : memoryObservation.contactId,
               contextVersion: conversation.currentContextVersion ?? 1,
               internalMessageId: userMessage.id,
               flowId: contextMetadata.selectedFlowId ?? null,
@@ -4725,21 +4727,22 @@ export class AssistantConversationsService {
               reasonCode: contextMetadata.handoffPending
                 ? contextMetadata.finalAction === "handoff" || selectedFlowForAuthority?.requiresHuman
                   ? "FLOW_REQUIRED_HANDOFF"
-                  : customerRequestedHuman
-                    ? "CUSTOMER_REQUESTED_HUMAN"
+                  : humanHandoffSignal.requested
+                    ? (humanHandoffSignal.reasonCode ?? "CUSTOMER_REQUESTED_HUMAN")
                     : "OTHER_STRUCTURED_REASON"
-                : customerRequestedHuman
-                  ? "CUSTOMER_REQUESTED_HUMAN"
+                : humanHandoffSignal.requested
+                  ? (humanHandoffSignal.reasonCode ?? "CUSTOMER_REQUESTED_HUMAN")
                   : "HUMAN_ALREADY_ACTIVE",
-              customerRequested: customerRequestedHuman,
+              customerRequested: humanHandoffSignal.customerRequested,
               humanActiveObserved: Boolean(conversation.pausedByHuman),
               aiActiveObserved: Boolean(conversation.aiActive),
               pausedByHumanObserved: Boolean(conversation.pausedByHuman),
-              requestedTargetType: "ANY_HUMAN",
+              requestedTargetType:
+                humanHandoffSignal.requestedTargetType ?? "ANY_HUMAN",
               requestedTargetIdHash: null,
               collectedContextKeys: [
                 ...(contextMetadata.handoffPending ? ["handoff_pending"] : []),
-                ...(customerRequestedHuman ? ["customer_requested_human"] : []),
+                ...(humanHandoffSignal.requested ? ["customer_requested_human"] : []),
                 ...(contextMetadata.selectedFlowId ? ["selected_flow"] : []),
                 ...(conversation.pausedByHuman ? ["paused_by_human"] : []),
               ],

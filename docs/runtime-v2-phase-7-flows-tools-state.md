@@ -1057,3 +1057,36 @@ Calendar, Webhook, providers ou serviços de outbound. A integração permanece
 desligada e sem operação real; a próxima etapa é a validação Shadow controlada
 com allowlists explícitas, seguida da ativação operacional somente após revisão
 de rollback.
+
+## 20. Fase 7.1I-A — alinhamento do sinal de handoff e manifesto Shadow
+
+O Shadow real de handoff confirmou que o estado persistido podia ser correto
+mesmo quando os campos equivalentes não apareciam no log de manifesto. A causa
+foi de serialização: `RuntimeV2ShadowManifest` já recebia o bloco `handoff`,
+mas `RuntimeV2ShadowIntegrationService.persistResult` não o projetava para o
+metadata flat gravado em `assistant_runtime_logs`. A correção passa a copiar
+somente enums, IDs, hashes, contagens, timestamps e flags negativas de execução;
+payloads, mensagens e dados pessoais continuam excluídos.
+
+`TurnUnderstanding` agora expõe `humanHandoffSignal`, um sinal operacional
+metadata-only separado da intenção comercial primária. Um pedido explícito
+normalizado gera `requested=true`,
+`source=EXPLICIT_CUSTOMER_REQUEST`,
+`reasonCode=CUSTOMER_REQUESTED_HUMAN`,
+`requestedTargetType=ANY_HUMAN` e `customerRequested=true`, mantendo, por
+exemplo, `turnIntent=general_request` quando essa continuar sendo a intenção
+comercial. O V1HandoffObservation consome esse mesmo sinal; não há detector
+paralelo para o caminho Shadow.
+
+A precedência é: intervenção humana real, pedido explícito do cliente, sinal
+estruturado do flow, `handoffPending` legado e, por último, sinais de baixa
+confiança ou falha. Confirmações genéricas e menções não operacionais à palavra
+“humano” não criam handoff. A identidade continua vinculada a empresa,
+assistente, conversa, `contextVersion`, `internalMessageId`, motivo, destino e
+hash de contexto.
+
+Os testes cobrem variações de pedido explícito, negativas, `general_request`
+com sinal operacional, duplicidade, contexto novo, manifesto após persistência,
+redaction e ausência de mutação Chatwoot. O reteste real deve ocorrer em nova
+conversa ou `contextVersion` comprovadamente novo, com Handoff Execution e
+Adapter ainda `OFF`.

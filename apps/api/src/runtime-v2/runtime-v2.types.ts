@@ -128,6 +128,7 @@ export type SerializedConversationState = {
 export type TurnUnderstanding = {
   turnIntent: string;
   confidence: number;
+  humanHandoffSignal: HumanHandoffSignal;
   objectiveAction: ObjectiveAction;
   objective?: ConversationObjective | null;
   factsExtracted: ConfirmedFactInput[];
@@ -143,6 +144,24 @@ export type TurnUnderstanding = {
   nextQuestion?: RelevantQuestion | null;
   reasonCodes: string[];
   evidenceMessageIds: string[];
+};
+
+export type HumanHandoffSignalSource =
+  | "EXPLICIT_CUSTOMER_REQUEST"
+  | "FLOW_SIGNAL"
+  | "V1_HANDOFF_PENDING"
+  | "HUMAN_ACTIVITY"
+  | "MANUAL_OPERATOR_SIGNAL";
+
+export type HumanHandoffSignal = {
+  requested: boolean;
+  source: HumanHandoffSignalSource | null;
+  confidence: number;
+  reasonCode: "CUSTOMER_REQUESTED_HUMAN" | null;
+  requestedTargetType: "ANY_HUMAN" | null;
+  customerRequested: boolean;
+  derivedAtStage: "TURN_UNDERSTANDING";
+  redactionApplied: true;
 };
 
 export type RetrievalPlan = {

@@ -1,6 +1,7 @@
 import {
   type ConversationObjective,
   type ConfirmedFactInput,
+  type HumanHandoffSignal,
   type RelevantQuestion,
   type TurnUnderstanding,
 } from "./runtime-v2.types";
@@ -29,6 +30,35 @@ function normalizeCategoryText(value: string): string {
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
     .toLowerCase();
+}
+
+export function deriveHumanHandoffSignal(message: string): HumanHandoffSignal {
+  const normalized = message.trim().replace(/\s+/g, " ");
+  const categoryText = normalizeCategoryText(normalized);
+  const explicitCustomerRequest =
+    /\b(?:quero|gostaria|preciso|necessito)\s+(?:de\s+)?(?:falar|conversar)\s+com\s+(?:um[a]?\s+)?(?:atendente|humano|pessoa|alguem)\b/.test(
+      categoryText,
+    ) ||
+    /\b(?:quero|gostaria|preciso|necessito)\s+(?:de\s+)?atendimento\s+humano\b/.test(
+      categoryText,
+    ) ||
+    /\b(?:transfira|transferir|chame|chamar)\s+(?:para\s+)?(?:um[a]?\s+)?(?:atendente|humano|pessoa|alguem)\b/.test(
+      categoryText,
+    ) ||
+    /\b(?:pode|podem)\s+(?:me\s+)?(?:chamar|transferir)\s+(?:para\s+)?(?:um[a]?\s+)?(?:atendente|humano|pessoa|alguem)\b/.test(
+      categoryText,
+    );
+
+  return {
+    requested: explicitCustomerRequest,
+    source: explicitCustomerRequest ? "EXPLICIT_CUSTOMER_REQUEST" : null,
+    confidence: explicitCustomerRequest ? 0.99 : 0,
+    reasonCode: explicitCustomerRequest ? "CUSTOMER_REQUESTED_HUMAN" : null,
+    requestedTargetType: explicitCustomerRequest ? "ANY_HUMAN" : null,
+    customerRequested: explicitCustomerRequest,
+    derivedAtStage: "TURN_UNDERSTANDING",
+    redactionApplied: true,
+  };
 }
 
 function extractGenericDeviceModel(text: string): string | null {
@@ -115,6 +145,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
   const normalized = input.message.trim().replace(/\s+/g, " ");
   const lower = normalized.toLowerCase();
   const categoryText = normalizeCategoryText(normalized);
+  const humanHandoffSignal = deriveHumanHandoffSignal(normalized);
   const shortConfirmation = SHORT_CONFIRMATIONS.test(
     normalized
       .replace(/[,.!?]/g, " ")
@@ -207,6 +238,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
     return {
       turnIntent: "unable_to_answer",
       confidence: 0.98,
+      humanHandoffSignal,
       objectiveAction: "KEEP",
       objective: input.existingObjective ?? null,
       factsExtracted: [],
@@ -232,6 +264,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
       return {
         turnIntent: "ambiguous_confirmation",
         confidence: 0.55,
+        humanHandoffSignal,
         objectiveAction: "KEEP",
         objective: input.existingObjective ?? null,
         factsExtracted: [],
@@ -250,6 +283,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
     return {
       turnIntent: "answer_previous_question",
       confidence: 0.97,
+      humanHandoffSignal,
       objectiveAction: "KEEP",
       objective: input.existingObjective ?? null,
       factsExtracted: factConfirmedByQuestion(
@@ -279,6 +313,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
     return {
       turnIntent: "ambiguous_confirmation",
       confidence: 0.55,
+      humanHandoffSignal,
       objectiveAction: "KEEP",
       objective: input.existingObjective ?? null,
       factsExtracted: [],
@@ -299,6 +334,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
     return {
       turnIntent: "greeting",
       confidence: 0.99,
+      humanHandoffSignal,
       objectiveAction: "NONE",
       factsExtracted: [],
       correctedFactKeys: [],
@@ -458,6 +494,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
     turnIntent,
     confidence:
       objective || isSideQuestion || requestedInformationCategories.length > 0 ? 0.9 : 0.65,
+    humanHandoffSignal,
     objectiveAction,
     objective: objective ?? input.existingObjective ?? null,
     factsExtracted,
@@ -475,6 +512,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
       input.now ?? new Date(),
     ),
     reasonCodes: [
+      ...(humanHandoffSignal.requested ? ["EXPLICIT_HUMAN_HANDOFF_REQUEST"] : []),
       ...(isSideQuestion ? ["SIDE_QUESTION"] : []),
       ...(explicitNewObjective ? ["EXPLICIT_NEW_OBJECTIVE"] : []),
       ...(requestedInformationCategories.includes("price") ? ["EXPLICIT_PRICE_REQUEST"] : []),
