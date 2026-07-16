@@ -49,7 +49,15 @@ export type HandoffEventType =
   | "HANDOFF_INVALIDATED_BY_RESET"
   | "HANDOFF_INVALIDATED_BY_CONTEXT_CHANGE"
   | "HANDOFF_HUMAN_ALREADY_ACTIVE"
-  | "HANDOFF_OBSERVATION_RECEIVED";
+  | "HANDOFF_OBSERVATION_RECEIVED"
+  | "HANDOFF_EXECUTION_PENDING"
+  | "HANDOFF_EXECUTION_STARTED"
+  | "HANDOFF_EXECUTION_SUCCEEDED"
+  | "HANDOFF_EXECUTION_FAILED"
+  | "HANDOFF_EXECUTION_TIMED_OUT"
+  | "HANDOFF_RECONCILIATION_STARTED"
+  | "HANDOFF_RECONCILIATION_SUCCEEDED"
+  | "HANDOFF_RECONCILIATION_FAILED";
 
 export type HandoffCompatibility =
   | "SAME_HANDOFF"
@@ -224,6 +232,31 @@ export type HandoffStateManifest = {
   outboundSent: false;
   handoffRedactionApplied: true;
   handoffErrorCode: string | null;
+  handoffExecutionMode: "OFF" | "CONTROLLED";
+  handoffExecutionEligible: boolean;
+  handoffExecutionId: string | null;
+  handoffExecutionAttempt: number | null;
+  handoffExecutionStatus: string | null;
+  handoffExecutionReasonAuthorized: boolean;
+  handoffExecutionAssistantAllowlisted: boolean;
+  handoffExecutionConversationAllowlisted: boolean;
+  handoffPreconditionsValid: boolean;
+  handoffConversationVerified: boolean;
+  handoffHumanAlreadyActive: boolean;
+  handoffAiActiveBefore: boolean | null;
+  handoffAiActiveAfter: boolean | null;
+  handoffPauseAiAttempted: boolean;
+  handoffPauseAiConfirmed: boolean;
+  handoffLabelConfigured: boolean;
+  handoffLabelApplied: boolean;
+  handoffAssignmentConfigured: boolean;
+  handoffAssignmentChanged: boolean;
+  handoffFinalStateVerified: boolean;
+  handoffPartialMutation: boolean;
+  handoffExternalEffectMayHaveOccurred: boolean;
+  handoffReconciliationStatus: string | null;
+  handoffExecutionPersisted: boolean;
+  handoffExecutionRedactionApplied: boolean;
 };
 
 function canonicalize(value: unknown): unknown {
@@ -529,6 +562,40 @@ export function transitionHandoffStatus(
     if (currentStatus === "HANDOFF_PROPOSED" || currentStatus === "HANDOFF_READY") {
       return "HANDOFF_SUPERSEDED";
     }
+    throw new Error("HANDOFF_INVALID_TRANSITION");
+  }
+  if (event === "HANDOFF_EXECUTION_PENDING") {
+    if (currentStatus === "HANDOFF_READY") return "HANDOFF_EXECUTION_PENDING";
+    throw new Error("HANDOFF_INVALID_TRANSITION");
+  }
+  if (event === "HANDOFF_EXECUTION_STARTED") {
+    if (currentStatus === "HANDOFF_EXECUTION_PENDING") return "HANDOFF_EXECUTING";
+    throw new Error("HANDOFF_INVALID_TRANSITION");
+  }
+  if (event === "HANDOFF_EXECUTION_SUCCEEDED") {
+    if (currentStatus === "HANDOFF_EXECUTING") return "HANDOFF_SUCCEEDED";
+    throw new Error("HANDOFF_INVALID_TRANSITION");
+  }
+  if (event === "HANDOFF_EXECUTION_FAILED") {
+    if (currentStatus === "HANDOFF_EXECUTING") return "HANDOFF_FAILED";
+    throw new Error("HANDOFF_INVALID_TRANSITION");
+  }
+  if (event === "HANDOFF_EXECUTION_TIMED_OUT") {
+    if (currentStatus === "HANDOFF_EXECUTING") return "HANDOFF_RECONCILIATION_REQUIRED";
+    throw new Error("HANDOFF_INVALID_TRANSITION");
+  }
+  if (event === "HANDOFF_RECONCILIATION_STARTED") {
+    if (currentStatus === "HANDOFF_RECONCILIATION_REQUIRED") {
+      return "HANDOFF_RECONCILIATION_REQUIRED";
+    }
+    throw new Error("HANDOFF_INVALID_TRANSITION");
+  }
+  if (event === "HANDOFF_RECONCILIATION_SUCCEEDED") {
+    if (currentStatus === "HANDOFF_RECONCILIATION_REQUIRED") return "HANDOFF_SUCCEEDED";
+    throw new Error("HANDOFF_INVALID_TRANSITION");
+  }
+  if (event === "HANDOFF_RECONCILIATION_FAILED") {
+    if (currentStatus === "HANDOFF_RECONCILIATION_REQUIRED") return "HANDOFF_FAILED";
     throw new Error("HANDOFF_INVALID_TRANSITION");
   }
   if (
@@ -1006,5 +1073,30 @@ export function buildHandoffStateManifest(input: {
     outboundSent: false,
     handoffRedactionApplied: true,
     handoffErrorCode: input.errorCode ?? null,
+    handoffExecutionMode: "OFF",
+    handoffExecutionEligible: false,
+    handoffExecutionId: null,
+    handoffExecutionAttempt: null,
+    handoffExecutionStatus: null,
+    handoffExecutionReasonAuthorized: false,
+    handoffExecutionAssistantAllowlisted: false,
+    handoffExecutionConversationAllowlisted: false,
+    handoffPreconditionsValid: false,
+    handoffConversationVerified: false,
+    handoffHumanAlreadyActive: false,
+    handoffAiActiveBefore: null,
+    handoffAiActiveAfter: null,
+    handoffPauseAiAttempted: false,
+    handoffPauseAiConfirmed: false,
+    handoffLabelConfigured: false,
+    handoffLabelApplied: false,
+    handoffAssignmentConfigured: false,
+    handoffAssignmentChanged: false,
+    handoffFinalStateVerified: false,
+    handoffPartialMutation: false,
+    handoffExternalEffectMayHaveOccurred: false,
+    handoffReconciliationStatus: null,
+    handoffExecutionPersisted: false,
+    handoffExecutionRedactionApplied: true,
   };
 }

@@ -916,3 +916,84 @@ operacional e reconciliação ficam explicitamente fora desta fase.
 3. observar sinais reais do V1 sem mutação V2;
 4. executar handoff controlado somente após Shadow, rollback e isolamento
    aprovados, com flags independentes e sem dependência de Google Calendar.
+
+## 18. Fase 7.1H-A — executor controlado de handoff Chatwoot
+
+### Auditoria do caminho existente
+
+O V1 já possui `setExternalConversationAiActive`, que resolve a configuração
+ativa por empresa, account e inbox, envia a alteração `ai_active` ao Chatwoot
+e atualiza o rastreamento local quando a resposta é bem-sucedida. O caminho de
+outbound (`sendChatwootOutboundText`) é separado e não é usado pelo executor.
+`ChatwootInboxConfigService.resolveActiveForConversation` é o ponto de
+resolução de configuração e descriptografia, mas não é importado pelo executor
+controlado. Webhooks continuam sendo entrada/observação do V1; labels,
+assignment e status não são executados nesta subfase real.
+
+### Contrato e elegibilidade
+
+`ChatwootHandoffExecutionPlan` é versionado e metadata-only. Ele contém
+`executionId`, `handoffId`, escopo, `contextVersion`, motivo, destino, passos,
+idempotency key, preconditions e validade. Os passos possíveis são
+`VERIFY_CONVERSATION`, `VERIFY_AI_ACTIVE`, `PAUSE_AI`, `APPLY_LABEL`,
+`ASSIGN_TEAM`, `ASSIGN_AGENT` e `VERIFY_FINAL_STATE`. Payloads, tokens, URLs,
+mensagens, nomes e credenciais nunca fazem parte do plano.
+
+`RUNTIME_V2_HANDOFF_EXECUTION_MODE` aceita `OFF` ou `CONTROLLED` e o default é
+`OFF`. As allowlists independentes
+`RUNTIME_V2_HANDOFF_EXECUTION_ASSISTANT_IDS` e
+`RUNTIME_V2_HANDOFF_EXECUTION_CONVERSATION_IDS` são vazias por padrão. A
+execução só é elegível com Runtime V2 `SHADOW`, Handoff State
+`SHADOW_STATE`, modo `CONTROLLED`, ambas as allowlists, handoff
+`HANDOFF_READY`, escopo íntegro, configuração/inbox válidos e motivo permitido.
+Inicialmente, somente `CUSTOMER_REQUESTED_HUMAN`, `FLOW_REQUIRED_HANDOFF` e
+`MANUAL_OPERATOR_REQUEST` podem executar automaticamente.
+
+### Adapter, ordem e resultados
+
+`ChatwootHandoffAdapter` é uma interface isolada com leitura de estado,
+pausa de IA, label, assignment, verificação final e reconciliação. O executor
+não importa services Chatwoot, Calendar, Webhook, clientes HTTP ou providers;
+os testes usam somente adapter fake determinístico. O adapter real permanece
+uma integração futura, bloqueada quando o modo está `OFF`.
+
+A ordem é: validar escopo/configuração, ler conversa, verificar humano e IA,
+pausar IA, aplicar configurações opcionais, atribuir equipe/agente e verificar
+o estado final. `ANY_HUMAN` pausa somente a IA, salvo label explicitamente
+configurada; `TEAM` e `AGENT` exigem destino hashado e assignment configurado;
+`EXISTING_ASSIGNEE` preserva o responsável atual. Nenhuma mensagem pública ou
+privada é enviada.
+
+O resultado canônico distingue `SUCCEEDED`, `ALREADY_COMPLETED`, falha antes
+da mutação, falha após mutação parcial, `TIMED_OUT_UNKNOWN_EFFECT`, estados de
+reconciliação, `REJECTED`, `CANCELLED` e `HUMAN_ALREADY_ACTIVE`. Timeout após
+envio marca efeito potencialmente ocorrido e exige reconciliação; nunca há
+reativação automática da IA. Pausa já confirmada e assignment já correto são
+tratados idempotentemente.
+
+### Estado, correlação e manifesto
+
+Os eventos de execução permitidos no reducer são
+`HANDOFF_EXECUTION_PENDING`, `HANDOFF_EXECUTION_STARTED`,
+`HANDOFF_EXECUTION_SUCCEEDED`, `HANDOFF_EXECUTION_FAILED`,
+`HANDOFF_EXECUTION_TIMED_OUT` e eventos de reconciliação. Estados terminais
+não retornam à execução. A correlação com Action State continua sendo apenas
+referência; não há duas fontes canônicas nem transição automática de ação por
+este executor.
+
+O manifesto registra modo, elegibilidade, allowlists, preconditions, passos
+tentados/confirmados, estado de IA, mutação parcial, efeito incerto,
+reconciliação, duração/resultado e redaction. Mantém sempre
+`providerCalled=false` e `outboundSent=false`; não registra payload ou
+identificadores externos integrais.
+
+### Validação e limites
+
+Os testes de `runtime-v2-handoff-executor.test.mjs` cobrem modo desligado,
+allowlists, motivos, escopo, configuração, `ANY_HUMAN`, TEAM, AGENT,
+`EXISTING_ASSIGNEE`, humano já ativo, pausa idempotente, falha parcial,
+timeout, reconciliação, determinismo, transições e bloqueio arquitetural de
+dependências reais. Esta subfase não habilita flags, não registra adapter real,
+não acessa Chatwoot e não cria migration. A persistência operacional e o
+controle de revisão serão ligados ao orquestrador Shadow somente após a
+validação específica de 7.1H-B/7.1I.

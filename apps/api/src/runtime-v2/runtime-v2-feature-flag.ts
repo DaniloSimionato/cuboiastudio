@@ -7,6 +7,7 @@ export type RuntimeV2ActionStateMode = "OFF" | "SHADOW_STATE";
 export type RuntimeV2ToolObservationMode = "OFF" | "SHADOW_METADATA";
 export type RuntimeV2SyntheticExecutionMode = "OFF" | "SYNTHETIC_ONLY";
 export type RuntimeV2HandoffStateMode = "OFF" | "SHADOW_STATE";
+export type RuntimeV2HandoffExecutionMode = "OFF" | "CONTROLLED";
 
 export type RuntimeV2ShadowConfig = RuntimeV2FeatureConfig & {
   assistantId?: string | null;
@@ -94,6 +95,24 @@ export function resolveRuntimeV2HandoffStateMode(
   environment: NodeJS.ProcessEnv = process.env,
 ): RuntimeV2HandoffStateMode {
   return environment.RUNTIME_V2_HANDOFF_STATE_MODE === "SHADOW_STATE" ? "SHADOW_STATE" : "OFF";
+}
+
+export function resolveRuntimeV2HandoffExecutionMode(
+  environment: NodeJS.ProcessEnv = process.env,
+): RuntimeV2HandoffExecutionMode {
+  return environment.RUNTIME_V2_HANDOFF_EXECUTION_MODE === "CONTROLLED" ? "CONTROLLED" : "OFF";
+}
+
+export function resolveRuntimeV2HandoffExecutionAssistantIds(
+  environment: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return parseAllowlist(environment.RUNTIME_V2_HANDOFF_EXECUTION_ASSISTANT_IDS);
+}
+
+export function resolveRuntimeV2HandoffExecutionConversationIds(
+  environment: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return parseAllowlist(environment.RUNTIME_V2_HANDOFF_EXECUTION_CONVERSATION_IDS);
 }
 
 export function assertNoDualOutbound(input: {
