@@ -27,6 +27,7 @@ import {
   type ConversationStateStoreScope,
 } from "./conversation-state-store";
 import type { HandoffRequest, HandoffStateScope } from "./handoff-state";
+import type { ControlledChatwootReference } from "./controlled-chatwoot-reference";
 
 export const CONTROLLED_HANDOFF_COMMAND_CONTRACT_VERSION = 1 as const;
 export const CONTROLLED_HANDOFF_APPROVED_OPERATION = "PAUSE_AI_ONLY" as const;
@@ -61,12 +62,7 @@ export type ControlledHandoffCommandEvent = {
   redactionApplied: true;
 };
 
-export type ControlledHandoffConfigurationReference = {
-  available: boolean;
-  companyScoped: boolean;
-  assistantScoped: boolean;
-  inboxReferencePresent: boolean;
-};
+export type ControlledHandoffConfigurationReference = ControlledChatwootReference;
 
 export type ControlledHandoffCommandInput = {
   companyId: string;
@@ -102,10 +98,17 @@ export type ControlledHandoffCommandResult = {
   externalMutationPerformed: boolean;
   externalEffectMayHaveOccurred: boolean;
   credentialResolved: boolean;
+  structuralReferenceResolved: boolean;
+  configurationPresent: boolean;
+  channelBindingPresent: boolean;
+  scopeValid: boolean;
+  adapterResolved: boolean;
+  initialReadPerformed: boolean;
+  finalVerificationPerformed: boolean;
   redactionApplied: true;
 };
 
-type ControlledHandoffCommandDependencies = {
+export type ControlledHandoffCommandDependencies = {
   stateStore: ConversationStateStore;
   resolveConfigurationReference?: (
     scope: HandoffStateScope,
@@ -187,6 +190,13 @@ function baseResult(input: ControlledHandoffCommandInput): ControlledHandoffComm
     externalMutationPerformed: false,
     externalEffectMayHaveOccurred: false,
     credentialResolved: false,
+    structuralReferenceResolved: false,
+    configurationPresent: false,
+    channelBindingPresent: false,
+    scopeValid: false,
+    adapterResolved: false,
+    initialReadPerformed: false,
+    finalVerificationPerformed: false,
     redactionApplied: true,
   };
 }
@@ -245,8 +255,21 @@ function buildPlan(handoff: HandoffRequest, now: Date) {
   });
 }
 
-function planHash(plan: ReturnType<typeof buildPlan>): string {
-  return hashParts([plan.contractVersion, plan.executionId, plan.handoffId, plan.steps]);
+function planHashWithReference(
+  plan: ReturnType<typeof buildPlan>,
+  reference: ControlledHandoffConfigurationReference | null,
+): string {
+  return hashParts([
+    plan.contractVersion,
+    plan.executionId,
+    plan.handoffId,
+    plan.steps,
+    reference?.resolutionStatus ?? null,
+    reference?.scopeValid ?? false,
+    reference?.accountScopeHash ?? null,
+    reference?.inboxScopeHash ?? null,
+    reference?.externalConversationReferenceHash ?? null,
+  ]);
 }
 
 function isOnlyPauseAiPlan(plan: ReturnType<typeof buildPlan>): boolean {
@@ -264,6 +287,7 @@ function approvalMatches(
   input: ControlledHandoffCommandInput,
   handoff: HandoffRequest,
   now: Date,
+  expectedPlanHash: string,
 ): string | null {
   if (!input.approvalId) return "CONTROLLED_HANDOFF_APPROVAL_REQUIRED";
   if (!approval || approval.approvalId !== input.approvalId) {
@@ -283,9 +307,12 @@ function approvalMatches(
     approval.contextVersion !== input.contextVersion ||
     approval.expectedRevision !== input.expectedRevision ||
     approval.approvedOperation !== CONTROLLED_HANDOFF_APPROVED_OPERATION ||
+    approval.planHash !== expectedPlanHash ||
     approval.redactionApplied !== true
   ) {
-    return "CONTROLLED_HANDOFF_SCOPE_MISMATCH";
+    return approval.planHash !== expectedPlanHash
+      ? "CONTROLLED_HANDOFF_PLAN_HASH_MISMATCH"
+      : "CONTROLLED_HANDOFF_SCOPE_MISMATCH";
   }
   return null;
 }
@@ -398,6 +425,7 @@ export function createControlledExecutionApproval(input: {
   issuedAt: Date;
   expiresAt: Date;
   nonceHash: string;
+  planHash: string;
 }): ControlledExecutionApproval {
   if (!input.approvalId || !input.nonceHash)
     throw new Error("CONTROLLED_HANDOFF_APPROVAL_REQUIRED");
@@ -412,6 +440,7 @@ export function createControlledExecutionApproval(input: {
     conversationId: input.handoff.conversationId,
     contextVersion: input.handoff.contextVersion,
     expectedRevision: input.expectedRevision,
+    planHash: input.planHash,
     approvedOperation: CONTROLLED_HANDOFF_APPROVED_OPERATION,
     issuedAt: input.issuedAt.toISOString(),
     expiresAt: input.expiresAt.toISOString(),
@@ -476,7 +505,7 @@ export class RuntimeV2ControlledHandoffCommand {
     }
     const plan = buildPlan(handoff, this.now());
     result.executionId = plan.executionId;
-    result.planHash = planHash(plan);
+    result.planHash = planHashWithReference(plan, null);
     result.expectedOperation = isOnlyPauseAiPlan(plan)
       ? CONTROLLED_HANDOFF_APPROVED_OPERATION
       : null;
@@ -489,9 +518,16 @@ export class RuntimeV2ControlledHandoffCommand {
         ? await this.dependencies.resolveConfigurationReference(scope)
         : null);
     if (!configurationReference) {
-      addBlocker(result, "CONTROLLED_HANDOFF_CONFIGURATION_REFERENCE_UNAVAILABLE");
-    } else if (!isValidConfigurationReference(configurationReference)) {
-      addBlocker(result, "CONTROLLED_HANDOFF_SCOPE_MISMATCH");
+      addBlocker(result, "CONTROLLED_HANDOFF_REFERENCE_NOT_FOUND");
+    } else {
+      result.structuralReferenceResolved = true;
+      result.configurationPresent = configurationReference.configurationPresent;
+      result.channelBindingPresent = configurationReference.channelBindingPresent;
+      result.scopeValid = configurationReference.scopeValid;
+      result.planHash = planHashWithReference(plan, configurationReference);
+      if (!isValidConfigurationReference(configurationReference, scope)) {
+        addBlocker(result, configurationReferenceBlocker(configurationReference));
+      }
     }
     if (mode === "EXECUTE") {
       const approvalError = approvalMatches(
@@ -499,6 +535,7 @@ export class RuntimeV2ControlledHandoffCommand {
         input,
         handoff,
         this.now(),
+        result.planHash,
       );
       if (approvalError) addBlocker(result, approvalError);
       if (!this.dependencies.resolveAdapter) {
@@ -536,6 +573,7 @@ export class RuntimeV2ControlledHandoffCommand {
       result.resultCode = "CONTROLLED_HANDOFF_ADAPTER_UNAVAILABLE";
       return result;
     }
+    result.adapterResolved = true;
 
     const initialRevision = state.revision;
     const pendingTime = this.now();
@@ -678,6 +716,8 @@ export class RuntimeV2ControlledHandoffCommand {
     result.humanAlreadyActive = execution.status === "HUMAN_ALREADY_ACTIVE";
     result.reconciliationRequired = execution.reconciliationStatus !== "NOT_REQUIRED";
     result.externalReadPerformed = execution.attemptedSteps.includes("VERIFY_CONVERSATION");
+    result.initialReadPerformed = result.externalReadPerformed;
+    result.finalVerificationPerformed = execution.attemptedSteps.includes("VERIFY_FINAL_STATE");
     result.externalMutationPerformed = result.pauseAiAttempted;
     result.externalEffectMayHaveOccurred = execution.externalEffectMayHaveOccurred;
     result.credentialResolved = result.externalReadPerformed;
@@ -770,11 +810,43 @@ const EXECUTION_REASON_CODES = new Set<HandoffRequest["reasonCode"]>([
 
 function isValidConfigurationReference(
   reference: ControlledHandoffConfigurationReference,
+  scope: HandoffStateScope,
 ): boolean {
   return (
-    reference.available &&
-    reference.companyScoped &&
-    reference.assistantScoped &&
-    reference.inboxReferencePresent
+    reference.companyId === scope.companyId &&
+    reference.assistantId === scope.assistantId &&
+    reference.internalConversationId === scope.conversationId &&
+    reference.contextVersion === scope.contextVersion &&
+    reference.resolutionStatus === "RESOLVED" &&
+    reference.scopeValid &&
+    reference.channelBindingPresent &&
+    reference.configurationPresent &&
+    reference.configurationActive &&
+    reference.redactionApplied === true
   );
+}
+
+function configurationReferenceBlocker(reference: ControlledHandoffConfigurationReference): string {
+  switch (reference.resolutionStatus) {
+    case "REFERENCE_NOT_FOUND":
+      return "CONTROLLED_HANDOFF_REFERENCE_NOT_FOUND";
+    case "CHANNEL_BINDING_MISSING":
+      return "CONTROLLED_HANDOFF_CHANNEL_BINDING_MISSING";
+    case "CONFIGURATION_MISSING":
+      return "CONTROLLED_HANDOFF_CHATWOOT_CONFIGURATION_MISSING";
+    case "CONFIGURATION_INACTIVE":
+      return "CONTROLLED_HANDOFF_CHATWOOT_CONFIGURATION_INACTIVE";
+    case "SCOPE_AMBIGUOUS":
+      return "CONTROLLED_HANDOFF_CHATWOOT_SCOPE_AMBIGUOUS";
+    default:
+      return "CONTROLLED_HANDOFF_SCOPE_MISMATCH";
+  }
+}
+
+export function createControlledHandoffPlanHash(
+  handoff: HandoffRequest,
+  now: Date,
+  reference: ControlledHandoffConfigurationReference,
+): string {
+  return planHashWithReference(buildPlan(handoff, now), reference);
 }

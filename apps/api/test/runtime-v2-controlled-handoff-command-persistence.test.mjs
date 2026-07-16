@@ -35,6 +35,21 @@ const environment = {
   RUNTIME_V2_HANDOFF_EXECUTION_ASSISTANT_IDS: scope.assistantId,
   RUNTIME_V2_HANDOFF_EXECUTION_CONVERSATION_IDS: scope.conversationId,
 };
+const structuralReference = {
+  companyId: scope.companyId,
+  assistantId: scope.assistantId,
+  internalConversationId: scope.conversationId,
+  contextVersion: scope.contextVersion,
+  channelBindingPresent: true,
+  configurationPresent: true,
+  configurationActive: true,
+  accountScopeHash: "account-scope-hash",
+  inboxScopeHash: "inbox-scope-hash",
+  externalConversationReferenceHash: "conversation-scope-hash",
+  scopeValid: true,
+  resolutionStatus: "RESOLVED",
+  redactionApplied: true,
+};
 
 async function createFixture() {
   await prisma.company.create({ data: { id: scope.companyId, name: "Controlled Command Test" } });
@@ -174,6 +189,11 @@ test("PostgreSQL persists one-shot approval, execution and redacted event IDs", 
     issuedAt: now,
     expiresAt: new Date("2026-07-16T13:00:00.000Z"),
     nonceHash: "nonce-hash-only",
+    planHash: commandModule.createControlledHandoffPlanHash(
+      persistedInitial.state.handoffState.activeHandoff,
+      now,
+      structuralReference,
+    ),
   });
   const withApproval = await store.save({
     ...persistedInitial.state,
@@ -186,10 +206,7 @@ test("PostgreSQL persists one-shot approval, execution and redacted event IDs", 
     environment,
     now: () => now,
     resolveConfigurationReference: () => ({
-      available: true,
-      companyScoped: true,
-      assistantScoped: true,
-      inboxReferencePresent: true,
+      ...structuralReference,
     }),
     resolveAdapter: async () => adapter,
   });

@@ -34,3 +34,5 @@ export * from "./handoff-state";
 export * from "./chatwoot-handoff-executor";
 export * from "./operational-chatwoot-handoff-adapter";
 export * from "./controlled-handoff-command";
+export * from "./controlled-chatwoot-reference";
+export * from "./controlled-handoff-command-runner";

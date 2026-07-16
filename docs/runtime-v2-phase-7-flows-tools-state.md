@@ -1113,7 +1113,8 @@ ler Chatwoot, consumir aprovação, alterar estado operacional ou mudar a
 resposta V1.
 
 Sem uma referência estrutural retornada pela configuração oficial, o resultado
-é bloqueado como `CONTROLLED_HANDOFF_CONFIGURATION_REFERENCE_UNAVAILABLE`;
+é bloqueado como `CONTROLLED_HANDOFF_REFERENCE_NOT_FOUND` ou pelo erro
+sanitizado correspondente ao vínculo/configuração ausente;
 nenhuma referência é aceita por argumento manual.
 
 `ControlledExecutionApprovalState` é single-use, tem validade explícita,
@@ -1178,3 +1179,59 @@ status ou alteração `ai_active` é realizada nesta implementação.
 
 Google Calendar continua sendo APP opcional por empresa e não é pré-requisito
 do comando de handoff.
+
+## 22. Fase 7.1J-B — ligação estrutural do comando ao adapter Chatwoot
+
+O comando one-shot agora é executado por um `ControlledHandoffCommandRunner`.
+Ele reutiliza o `RuntimeV2ControlledHandoffCommand`, o
+`ControlledChatwootHandoffExecutor`, o `OperationalChatwootHandoffAdapter`, o
+`PrismaConversationStateStore`, o `ChatwootInboxConfigService` e o mecanismo
+oficial de descriptografia. Não há implementação HTTP paralela.
+
+O runner resolve primeiro uma `ControlledChatwootReference` metadata-only por
+empresa, assistente e conversa interna. A resolução consulta somente a
+referência de canal e a lista segura de configurações (`list`), sem
+descriptografar credencial. A referência contém apenas hashes de account,
+inbox e conversa externa, flags de presença/atividade e o resultado de escopo.
+Configuração ausente, inativa, ambígua ou vínculo de canal ausente bloqueia a
+operação sem fallback para outra empresa ou inbox.
+
+`DRY_RUN` pode consultar o PostgreSQL local para validar estado, revisão,
+`HANDOFF_READY`, planHash, vínculo Chatwoot e o plano de operação. Ele não
+resolve adapter, credencial ou transporte, não lê Chatwoot, não consome
+approval e não altera o `RuntimeHandoffState`. A saída é sanitizada e inclui
+`structuralReferenceResolved`, `configurationPresent`, `channelBindingPresent`,
+`scopeValid`, `adapterResolved`, `credentialResolved` e as flags de leitura e
+mutação externa.
+
+`EXECUTE` só pode prosseguir com as quatro flags controladas, allowlists exatas,
+estado e revisão esperados, razão autorizada e aprovação single-use vinculada
+ao `planHash` efetivamente resolvido. Somente então o runner resolve o adapter
+operacional, que obtém a configuração ativa oficial, descriptografa a
+credencial em memória e executa o fluxo `VERIFY_CONVERSATION`,
+`VERIFY_AI_ACTIVE`, `PAUSE_AI` e `VERIFY_FINAL_STATE`. Nenhum label,
+assignment, alteração de status, retomada de IA ou mensagem é acessível pelo
+plano inicial.
+
+O bootstrap CLI usa `NestFactory.createApplicationContext(AppModule)` sem
+importar `main.ts`, abrir porta ou registrar controller. O comando não é
+provider recorrente, não é conectado ao webhook e não é chamado pelo fluxo
+normal de mensagens. O adapter real só é construído após todos os bloqueios;
+com flags `OFF`, allowlists vazias ou dry-run não há leitura externa nem
+resolução de credencial.
+
+Timeout após possível envio mantém o efeito externo incerto e exige
+`reconcilePauseAi()` read-only antes de qualquer nova tentativa. Approval,
+revision, `executionId` e estado terminal continuam protegidos por persistência
+e optimistic concurrency. Os testes usam apenas fake adapter e transporte HTTP
+mockado; não há rede externa, Chatwoot real, provider ou outbound.
+
+### Limitações e plano técnico seguinte
+
+Esta subfase não ativa `EXECUTE`, não conecta o comando ao processamento normal
+e não habilita labels, assignments, status ou mensagens. A configuração oficial
+precisa existir para um dry-run estrutural resolvido; uma credencial só pode ser
+avaliada durante execução explicitamente autorizada. O próximo passo técnico é
+revisar o commit, fazer backup, realizar deploy fast-forward com todos os modos
+`OFF`, e somente depois preparar o procedimento de execução controlada com
+approval e allowlists temporárias.

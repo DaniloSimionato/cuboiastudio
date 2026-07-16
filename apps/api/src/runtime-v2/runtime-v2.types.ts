@@ -137,6 +137,7 @@ export type ControlledExecutionApprovalState = {
   conversationId: string;
   contextVersion: number;
   expectedRevision: number;
+  planHash: string;
   approvedOperation: "PAUSE_AI_ONLY";
   issuedAt: string;
   expiresAt: string;

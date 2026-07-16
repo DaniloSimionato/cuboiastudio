@@ -23,6 +23,21 @@ const controlledEnvironment = {
   RUNTIME_V2_HANDOFF_EXECUTION_ASSISTANT_IDS: scope.assistantId,
   RUNTIME_V2_HANDOFF_EXECUTION_CONVERSATION_IDS: scope.conversationId,
 };
+const structuralReference = {
+  companyId: scope.companyId,
+  assistantId: scope.assistantId,
+  internalConversationId: scope.conversationId,
+  contextVersion: scope.contextVersion,
+  channelBindingPresent: true,
+  configurationPresent: true,
+  configurationActive: true,
+  accountScopeHash: "account-scope-hash",
+  inboxScopeHash: "inbox-scope-hash",
+  externalConversationReferenceHash: "conversation-scope-hash",
+  scopeValid: true,
+  resolutionStatus: "RESOLVED",
+  redactionApplied: true,
+};
 
 function observation() {
   return runtime.createV1HandoffObservation({
@@ -83,6 +98,7 @@ async function fixture({ approval = false, handoffOverrides = {}, stateOverrides
       issuedAt: now,
       expiresAt: new Date("2026-07-16T13:00:00.000Z"),
       nonceHash: "nonce-hash-only",
+      planHash: commandModule.createControlledHandoffPlanHash(handoff, now, structuralReference),
     });
     state = await store.save(
       { ...state, controlledExecutionApproval: approvalState, revision: state.revision + 1 },
@@ -165,10 +181,7 @@ function command(store, environment = controlledEnvironment, adapter = null, clo
   return new commandModule.RuntimeV2ControlledHandoffCommand({
     stateStore: store,
     resolveConfigurationReference: async () => ({
-      available: true,
-      companyScoped: true,
-      assistantScoped: true,
-      inboxReferencePresent: true,
+      ...structuralReference,
     }),
     environment,
     now: () => new Date(clock),

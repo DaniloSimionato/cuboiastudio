@@ -1,10 +1,13 @@
-import { PrismaClient } from "@prisma/client";
+import { NestFactory } from "@nestjs/core";
+import { AppModule } from "./app.module";
+import { PrismaService } from "./database/prisma.service";
+import { ChatwootInboxConfigService } from "./chatwoot/chatwoot-inbox-config.service";
 import { PrismaConversationStateStore } from "./runtime-v2/prisma-conversation-state-store";
 import {
-  RuntimeV2ControlledHandoffCommand,
   type ControlledHandoffCommandInput,
   type ControlledHandoffCommandMode,
 } from "./runtime-v2/controlled-handoff-command";
+import { createOperationalControlledHandoffRunner } from "./runtime-v2/controlled-handoff-command-runner";
 
 type CliArguments = Omit<ControlledHandoffCommandInput, "mode"> & {
   mode: ControlledHandoffCommandMode;
@@ -76,16 +79,25 @@ export function parseControlledHandoffArguments(argv: string[]): CliArguments {
 }
 
 export async function runControlledHandoffCli(argv = process.argv.slice(2)): Promise<void> {
-  const prisma = new PrismaClient();
+  if (argv.includes("--help")) {
+    process.stdout.write(`${usage()}\n`);
+    return;
+  }
+
+  let app: Awaited<ReturnType<typeof NestFactory.createApplicationContext>> | null = null;
   try {
-    if (argv.includes("--help")) {
-      process.stdout.write(`${usage()}\n`);
-      return;
-    }
     const input = parseControlledHandoffArguments(argv);
-    const stateStore = new PrismaConversationStateStore(prisma as never);
-    const command = new RuntimeV2ControlledHandoffCommand({ stateStore });
-    const result = await command.run(input);
+    app = await NestFactory.createApplicationContext(AppModule, { logger: false });
+    const prisma = app.get(PrismaService);
+    const stateStore = app.get(PrismaConversationStateStore);
+    const chatwootInboxConfigService = app.get(ChatwootInboxConfigService);
+    const runner = createOperationalControlledHandoffRunner({
+      stateStore,
+      prisma,
+      chatwootInboxConfigService,
+      environment: process.env,
+    });
+    const result = await runner.run(input);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (!result.eligible && input.mode === "EXECUTE") process.exitCode = 2;
   } catch (error) {
@@ -93,7 +105,7 @@ export async function runControlledHandoffCli(argv = process.argv.slice(2)): Pro
     process.stderr.write(`${JSON.stringify({ errorCode: code, redactionApplied: true })}\n`);
     process.exitCode = 2;
   } finally {
-    await prisma.$disconnect();
+    await app?.close();
   }
 }
 
