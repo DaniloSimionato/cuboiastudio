@@ -93,6 +93,11 @@ import {
   createMemoryRetrievalObservation,
   type MemoryRetrievalObservation,
 } from "../runtime-v2/memory-evidence.adapter";
+import {
+  createV1ToolExecutionObservation,
+  isRuntimeV2ToolObservationEnabled,
+  type V1ToolExecutionObservation,
+} from "../runtime-v2/tool-observation";
 import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
 import {
   deriveExpectedAuthorityCategory,
@@ -2139,6 +2144,12 @@ export class AssistantConversationsService {
       return isReset;
     }
 
+    const toolObservations: V1ToolExecutionObservation[] = [];
+    const observeV1Tools = isRuntimeV2ToolObservationEnabled(
+      { assistantId: input.assistantId },
+      process.env,
+    );
+
     const attachmentSource: InboundMessageSource = source === "chatwoot" ? "chatwoot" : "tests";
     const persistedAttachments =
       input.preparedAttachments ??
@@ -3023,6 +3034,7 @@ export class AssistantConversationsService {
       memoryObservation:
         memoryObservation.contactId === "unresolved" ? null : memoryObservation,
       memoryNotExecutedReason: memoryObservation.notExecutedReason,
+      toolObservations: observeV1Tools ? toolObservations : [],
     };
 
     contextMetadata.contextManifest = {
@@ -3977,6 +3989,10 @@ export class AssistantConversationsService {
                 const toolName = this.normalizeCalendarToolName(toolCall.function.name);
                 const toolArgs = JSON.parse(toolCall.function.arguments);
                 let resultString = "";
+                const observationStartedAt = new Date();
+                let observationExecutionStarted = false;
+                let observationErrorCode: string | null = null;
+                let observationMetadata: Record<string, unknown> = {};
 
                 try {
                   const preparedTool = await this.prepareToolExecution({
@@ -3988,6 +4004,7 @@ export class AssistantConversationsService {
                   });
                   const effectiveToolArgs = preparedTool.args;
                   Object.assign(contextMetadata, preparedTool.metadata);
+                  observationMetadata = { ...preparedTool.metadata };
 
                   let requiresConfirmation = false;
                   if (toolName.startsWith("webhook_")) {
@@ -3996,6 +4013,11 @@ export class AssistantConversationsService {
                       where: { companyId: input.tenant.companyId, name: actionName, active: true },
                     });
                     if (action) {
+                      observationMetadata = {
+                        ...observationMetadata,
+                        webhookMethod: action.method,
+                        webhookOperationName: actionName,
+                      };
                       const appInst = await this.prisma.appInstallation.findFirst({
                         where: {
                           companyId: input.tenant.companyId,
@@ -4033,6 +4055,10 @@ export class AssistantConversationsService {
                         })
                       : null;
                     requiresConfirmation = override ? override.requiresConfirmation : isMutating;
+                    observationMetadata = {
+                      ...observationMetadata,
+                      inputSchemaVersion: "calendar-v1",
+                    };
                   }
 
                   if (requiresConfirmation) {
@@ -4062,6 +4088,7 @@ export class AssistantConversationsService {
                         args: effectiveToolArgs,
                         ...preparedTool.metadata,
                       });
+                      observationExecutionStarted = true;
                       resultString = await this.executeTool(
                         input.tenant.companyId,
                         toolName,
@@ -4072,6 +4099,7 @@ export class AssistantConversationsService {
                       );
                     }
                   } else {
+                    observationExecutionStarted = true;
                     resultString = await this.executeTool(
                       input.tenant.companyId,
                       toolName,
@@ -4086,6 +4114,7 @@ export class AssistantConversationsService {
                     err instanceof Error
                       ? err.message
                       : "Erro desconhecido na chamada da ferramenta.";
+                  observationErrorCode = errMsg;
                   if (errMsg.includes("outside selected flow calendar scope")) {
                     Object.assign(contextMetadata, {
                       blockedByToolScope: true,
@@ -4094,6 +4123,32 @@ export class AssistantConversationsService {
                     });
                   }
                   resultString = JSON.stringify({ error: errMsg });
+                }
+
+                if (observeV1Tools) {
+                  toolObservations.push(
+                    createV1ToolExecutionObservation({
+                      scope: {
+                        companyId: input.tenant.companyId,
+                        assistantId: input.assistantId,
+                        conversationId: conversation.id,
+                        contactId: conversation.externalContactId ?? null,
+                        contextVersion: conversation.currentContextVersion ?? 1,
+                      },
+                      internalMessageId: userMessage.id,
+                      executionAttemptId: toolCall.id,
+                      toolName,
+                      arguments: toolArgs,
+                      startedAt: observationStartedAt,
+                      completedAt: new Date(),
+                      timeoutMs: Number(observationMetadata.timeoutMs ?? 5000),
+                      result: resultString,
+                      errorCode: observationErrorCode,
+                      executionStarted: observationExecutionStarted,
+                      flowId: selectedFlow?.id ?? null,
+                      metadata: observationMetadata,
+                    }),
+                  );
                 }
 
                 if (isDebugLogsEnabled) {

@@ -64,6 +64,12 @@ import {
   type ActionProvenance,
 } from "./action-contracts";
 import {
+  observationToManifest,
+  toolObservationToEvidence,
+  type V1ToolExecutionObservation,
+} from "./tool-observation";
+import { resolveRuntimeV2ToolObservationMode } from "./runtime-v2-feature-flag";
+import {
   type ConversationState,
   type RuntimeV2Scope,
   type UsefulHistoryMessage,
@@ -123,6 +129,7 @@ export type RuntimeV2ShadowSnapshot = {
   confirmationSignal?: StructuredConfirmationSignal | null;
   actionReset?: boolean;
   actionCompatibility?: ActionCompatibilityInput | null;
+  toolObservations?: V1ToolExecutionObservation[];
 };
 
 export type RuntimeV2ShadowResult = {
@@ -185,6 +192,52 @@ function emptyContext() {
     knowledgeChunks: [],
     toolResults: [],
   };
+}
+
+function resolveToolObservationMode(environment: NodeJS.ProcessEnv) {
+  return resolveRuntimeV2ToolObservationMode(environment);
+}
+
+function correlateToolObservations(
+  observations: V1ToolExecutionObservation[],
+  state: ConversationState,
+): V1ToolExecutionObservation[] {
+  const active = state.actionState?.activeAction ?? null;
+  return observations.map((observation) => {
+    if (!active) return { ...observation, actionCorrelationStatus: "NO_ACTIVE_ACTION" };
+    if (
+      active.companyId !== observation.companyId ||
+      active.assistantId !== observation.assistantId ||
+      active.conversationId !== observation.conversationId
+    ) {
+      return { ...observation, actionCorrelationStatus: "SCOPE_MISMATCH" };
+    }
+    if (active.contextVersion !== observation.contextVersion) {
+      return { ...observation, actionCorrelationStatus: "CONTEXT_VERSION_MISMATCH" };
+    }
+    if (active.actionType !== observation.actionType) {
+      return { ...observation, actionCorrelationStatus: "ACTION_TYPE_MISMATCH" };
+    }
+    if (active.actionCategory !== observation.actionCategory) {
+      return { ...observation, actionCorrelationStatus: "CATEGORY_MISMATCH" };
+    }
+    if (active.argumentsHash !== observation.argumentsHash) {
+      return { ...observation, actionCorrelationStatus: "ARGUMENTS_HASH_MISMATCH" };
+    }
+    return {
+      ...observation,
+      linkedActionId: active.actionId,
+      actionCorrelationStatus: "MATCHED",
+    };
+  });
+}
+
+function buildToolObservationManifests(input: {
+  observations: V1ToolExecutionObservation[];
+  enabled: boolean;
+}) {
+  if (!input.enabled) return [];
+  return input.observations.map(observationToManifest);
 }
 
 function inferRelevantQuestionField(content: string): string | null {
@@ -689,6 +742,14 @@ export class RuntimeV2ShadowOrchestrator {
               errorCode: actionStateTurn.errorCode,
             })
           : undefined,
+      toolObservationMode: resolveToolObservationMode(this.environment),
+      toolObservations: buildToolObservationManifests({
+        observations:
+          resolveToolObservationMode(this.environment) === "SHADOW_METADATA"
+            ? correlateToolObservations(snapshot.toolObservations ?? [], nextState)
+            : [],
+        enabled: resolveToolObservationMode(this.environment) === "SHADOW_METADATA",
+      }),
     });
     return { enabled: true, mode: "SHADOW", state: nextState, manifest };
   }
@@ -809,10 +870,23 @@ export class RuntimeV2ShadowOrchestrator {
           state: input.state,
         });
     const sessionEvidence = sessionDetails.evidence;
+    const toolObservations =
+      resolveToolObservationMode(this.environment) === "SHADOW_METADATA"
+        ? correlateToolObservations(input.snapshot.toolObservations ?? [], input.state)
+        : [];
+    const toolEvidence = toolObservations.flatMap((observation) => {
+      const result = toolObservationToEvidence({
+        observation,
+        scope: input.snapshot.scope,
+        currentTime: input.now,
+      });
+      return result.evidence ? [result.evidence] : [];
+    });
     const allRawEvidence = [
       ...officialResult.evidence,
       ...(ragResult?.evidence ?? []),
       ...(memoryResult?.evidence ?? []),
+      ...(toolEvidence ?? []),
       ...customerEvidence,
       ...sessionEvidence,
     ];
@@ -824,6 +898,7 @@ export class RuntimeV2ShadowOrchestrator {
         officialEvidence: officialResult.evidence,
         ragEvidence: ragResult?.evidence,
         memoryEvidence: memoryResult?.evidence,
+        toolEvidence,
         customerEvidence,
         sessionEvidence,
         currentTime: input.now,
@@ -831,10 +906,18 @@ export class RuntimeV2ShadowOrchestrator {
           official: officialResult.adapterStatus,
           rag: ragResult?.adapterStatus ?? (ragAdapterFailed ? "FAILED" : "NOT_EXECUTED"),
           memory: memoryResult?.adapterStatus ?? (memoryAdapterFailed ? "FAILED" : "NOT_EXECUTED"),
+          ...(toolObservations.length ? { tool: "COMPLETED" as const } : {}),
           customer: customerEvidence.length ? "COMPLETED" : "EMPTY",
           session: sessionEvidence.length ? "COMPLETED" : "EMPTY",
         },
-        adapterExecutionOrder: ["official", "rag", "memory", "customer", "session"],
+        adapterExecutionOrder: [
+          "official",
+          "rag",
+          "memory",
+          ...(toolObservations.length ? ["tool"] : []),
+          "customer",
+          "session",
+        ],
       });
     } catch {
       return buildEvidenceManifestExtension({
@@ -872,6 +955,9 @@ export class RuntimeV2ShadowOrchestrator {
         ...(officialResult.scopeValidationFailures ?? []),
         ...(ragResult?.scopeValidationFailures ?? []),
         ...(memoryResult?.scopeValidationFailures ?? []),
+        ...toolObservations
+          .filter((observation) => observation.actionCorrelationStatus === "SCOPE_MISMATCH")
+          .map(() => "TOOL_OBSERVATION_SCOPE_MISMATCH"),
         ...combined.scopeValidationFailures,
       ],
       combined: combinedMetadata,

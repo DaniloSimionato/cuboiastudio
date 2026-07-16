@@ -28,3 +28,4 @@ export * from "./memory-evidence.adapter";
 export * from "./combined-evidence";
 export * from "./action-contracts";
 export * from "./action-state";
+export * from "./tool-observation";

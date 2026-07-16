@@ -9,10 +9,11 @@ import {
   type ConversationState,
   type RetrievalPlan,
 } from "./runtime-v2.types";
-import { type RuntimeV2Mode } from "./runtime-v2-feature-flag";
+import { type RuntimeV2Mode, type RuntimeV2ToolObservationMode } from "./runtime-v2-feature-flag";
 import { type EvidenceManifestExtension } from "./evidence-manifest";
 import { type RuntimeV2ActionManifest } from "./action-contracts";
 import { type ActionStateManifest } from "./action-state";
+import { type ToolObservationManifest } from "./tool-observation";
 
 export type RuntimeV2ShadowManifest = {
   runtimeVersion: "V2";
@@ -74,6 +75,37 @@ export type RuntimeV2ShadowManifest = {
   outboundSent: false;
   action?: RuntimeV2ActionManifest;
   actionState?: ActionStateManifest;
+  toolObservationMode: RuntimeV2ToolObservationMode;
+  v1ToolExecutionObserved: boolean;
+  toolObservationId: string | null;
+  executionAttemptId: string | null;
+  linkedActionId: string | null;
+  actionCorrelationStatus: string | null;
+  observedToolName: string | null;
+  observedOperationName: string | null;
+  observedActionType: string | null;
+  observedActionCategory: string | null;
+  observedEffectType: string | null;
+  observedExecutionStatus: string | null;
+  observedStartedAt: string | null;
+  observedCompletedAt: string | null;
+  observedDurationMs: number | null;
+  observedTimeoutMs: number | null;
+  observedArgumentsHash: string | null;
+  observedIdempotencyKeyHash: string | null;
+  observedResultHash: string | null;
+  observedAuthorityCategories: string[];
+  observedValidFrom: string | null;
+  observedValidUntil: string | null;
+  observedExternalReferenceHash: string | null;
+  observedExternalEffectMayHaveOccurred: boolean;
+  observedRetryCount: number;
+  observedDuplicateSuppressed: boolean;
+  observedReconciliationStatus: string | null;
+  observedErrorCode: string | null;
+  toolObservationPersisted: boolean;
+  toolObservationRedactionApplied: boolean;
+  toolObservations: ToolObservationManifest[];
   evidence?: EvidenceManifestExtension;
   v1Comparison: {
     selectedFlowId: string | null;
@@ -127,6 +159,8 @@ export function buildRuntimeV2ShadowManifest(input: {
   evidence?: EvidenceManifestExtension;
   action?: RuntimeV2ActionManifest;
   actionState?: ActionStateManifest;
+  toolObservationMode?: RuntimeV2ToolObservationMode;
+  toolObservations?: ToolObservationManifest[];
   v1Comparison?: Partial<RuntimeV2ShadowManifest["v1Comparison"]>;
 }): RuntimeV2ShadowManifest {
   const beforeFactKeys = Object.keys(input.beforeState.confirmedFacts);
@@ -142,6 +176,10 @@ export function buildRuntimeV2ShadowManifest(input: {
     (key) => beforeFactKeys.includes(key) && !preserved.includes(key),
   );
   const comparison = input.v1Comparison ?? {};
+  const toolObservations = [...(input.toolObservations ?? [])].sort((left, right) =>
+    left.observationId.localeCompare(right.observationId),
+  );
+  const firstToolObservation = toolObservations[0] ?? null;
 
   return {
     runtimeVersion: "V2",
@@ -206,6 +244,38 @@ export function buildRuntimeV2ShadowManifest(input: {
     providerCalled: false,
     toolCalls: 0,
     outboundSent: false,
+    toolObservationMode: input.toolObservationMode ?? "OFF",
+    v1ToolExecutionObserved: toolObservations.length > 0,
+    toolObservationId: firstToolObservation?.observationId ?? null,
+    executionAttemptId: firstToolObservation?.executionAttemptId ?? null,
+    linkedActionId: firstToolObservation?.linkedActionId ?? null,
+    actionCorrelationStatus: firstToolObservation?.actionCorrelationStatus ?? null,
+    observedToolName: firstToolObservation?.observedToolName ?? null,
+    observedOperationName: firstToolObservation?.observedOperationName ?? null,
+    observedActionType: firstToolObservation?.observedActionType ?? null,
+    observedActionCategory: firstToolObservation?.observedActionCategory ?? null,
+    observedEffectType: firstToolObservation?.observedEffectType ?? null,
+    observedExecutionStatus: firstToolObservation?.observedExecutionStatus ?? null,
+    observedStartedAt: firstToolObservation?.observedStartedAt ?? null,
+    observedCompletedAt: firstToolObservation?.observedCompletedAt ?? null,
+    observedDurationMs: firstToolObservation?.observedDurationMs ?? null,
+    observedTimeoutMs: firstToolObservation?.observedTimeoutMs ?? null,
+    observedArgumentsHash: firstToolObservation?.observedArgumentsHash ?? null,
+    observedIdempotencyKeyHash: firstToolObservation?.observedIdempotencyKeyHash ?? null,
+    observedResultHash: firstToolObservation?.observedResultHash ?? null,
+    observedAuthorityCategories: firstToolObservation?.observedAuthorityCategories ?? [],
+    observedValidFrom: firstToolObservation?.observedValidFrom ?? null,
+    observedValidUntil: firstToolObservation?.observedValidUntil ?? null,
+    observedExternalReferenceHash: firstToolObservation?.observedExternalReferenceHash ?? null,
+    observedExternalEffectMayHaveOccurred:
+      firstToolObservation?.observedExternalEffectMayHaveOccurred ?? false,
+    observedRetryCount: firstToolObservation?.observedRetryCount ?? 0,
+    observedDuplicateSuppressed: firstToolObservation?.observedDuplicateSuppressed ?? false,
+    observedReconciliationStatus: firstToolObservation?.observedReconciliationStatus ?? null,
+    observedErrorCode: firstToolObservation?.observedErrorCode ?? null,
+    toolObservationPersisted: toolObservations.length > 0,
+    toolObservationRedactionApplied: true,
+    toolObservations,
     ...(input.action ? { action: input.action } : {}),
     ...(input.actionState ? { actionState: input.actionState } : {}),
     ...(input.evidence ? { evidence: input.evidence } : {}),

@@ -671,3 +671,65 @@ reconciliação externa e handoff permanecem fora desta subfase.
 3. testar reconciliação sintética e timeout sem efeitos externos;
 4. somente depois avaliar integração operacional de leitura, confirmação e
    handoff, cada uma com flag e rollback próprios.
+
+## 15. Fase 7.1D — observação metadata-only das ferramentas V1
+
+### Ponto de execução auditado
+
+O caminho operacional V1 converge em
+`AssistantConversationsService.executeTool`. A validação de escopo, permissão
+do flow, configuração por assistente, execução de Calendar/Webhook e registro
+de `tool_call_requested`, `tool_call_completed` e `tool_call_failed` permanecem
+inalterados. A observação lateral é criada após o resultado, usando o instante
+capturado imediatamente antes da tentativa e sem repetir a chamada.
+
+Os caminhos Calendar observados são disponibilidade, criação, listagem,
+remarcação e cancelamento. Custom Webhook é classificado por método HTTP:
+`GET`/`HEAD` como leitura e demais métodos como mutação. Outbound normal do
+V1, labels, assignment e handoff proposto não são convertidos automaticamente
+em observação de ferramenta.
+
+### Contrato e mapeamento
+
+`V1ToolExecutionObservation` é versionado, determinístico e metadata-only.
+Preserva escopo, turno, flow, ferramenta, operação, tipo de ação, efeito,
+chaves e hash dos argumentos, duração, timeout, status, validade, hashes de
+resultado/referência, retry, duplicidade, reconciliação e códigos enumerados.
+Argumentos, payloads, URLs, headers, respostas, mensagens e credenciais não
+são persistidos.
+
+`SUCCEEDED`, `FAILED`, `REJECTED`, `DUPLICATE_SUPPRESSED` e
+`TIMED_OUT_UNKNOWN_EFFECT` são mapeados para `ToolExecutionResult`. Timeout de
+mutação marca `externalEffectMayHaveOccurred=true` e
+`RECONCILIATION_REQUIRED`; não produz evidência factual positiva. O conversor
+`toolObservationToEvidence` reutiliza `toolResultToEvidence` e só permite as
+categorias declaradas pela própria operação.
+
+### Shadow, correlação e persistência
+
+`RUNTIME_V2_TOOL_OBSERVATION_MODE` aceita `OFF` ou `SHADOW_METADATA` e fica
+`OFF` por padrão. A observação só entra no Shadow com `MODE=SHADOW`, assistente
+allowlisted e flag ativa. O manifesto e o log Runtime V2 registram a
+observação sanitizada; a persistência usa o mecanismo de logs/eventos já
+existente e não cria tabela ou migration.
+
+Quando há `SHADOW_STATE`, a correlação compara escopo, `contextVersion`, tipo,
+categoria e `argumentsHash`. O resultado é somente `MATCHED`,
+`NO_ACTIVE_ACTION` ou motivo de incompatibilidade; a observação não altera o
+estado da ação nem o status de execução.
+
+### Fail-safe e limites
+
+Falha da observação não bloqueia o V1, não executa retry, não altera argumentos
+ou resposta e não produz outbound. A flag `OFF` não cria snapshot nem evento.
+O V2 continua com `providerCalled=false`, `toolCalls=0`,
+`outboundSent=false` e sem executor registrado. A reconciliação real,
+idempotência externa e execução operacional ficam para a Fase 7.1E.
+
+### Validação
+
+Os testes de `runtime-v2-tool-observation.test.mjs` cobrem identidade,
+redaction, Calendar, Webhook read/write, timeout, efeito incerto, conversão em
+evidência, allowlist e Shadow sem execução. Os testes V1 existentes de Calendar,
+Custom Webhook, Chatwoot e escopo de flow permanecem regressões; nenhum provider
+ou endpoint externo é chamado pelos testes novos.

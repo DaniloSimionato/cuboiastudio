@@ -4,6 +4,7 @@ export type RuntimeV2Mode = "OFF" | "SHADOW";
 export type RuntimeV2StateStoreMode = "MEMORY" | "POSTGRES";
 export type RuntimeV2EvidenceMode = "OFF" | "SHADOW_METADATA";
 export type RuntimeV2ActionStateMode = "OFF" | "SHADOW_STATE";
+export type RuntimeV2ToolObservationMode = "OFF" | "SHADOW_METADATA";
 
 export type RuntimeV2ShadowConfig = RuntimeV2FeatureConfig & {
   assistantId?: string | null;
@@ -69,6 +70,14 @@ export function resolveRuntimeV2ActionStateMode(
   environment: NodeJS.ProcessEnv = process.env,
 ): RuntimeV2ActionStateMode {
   return environment.RUNTIME_V2_ACTION_STATE_MODE === "SHADOW_STATE" ? "SHADOW_STATE" : "OFF";
+}
+
+export function resolveRuntimeV2ToolObservationMode(
+  environment: NodeJS.ProcessEnv = process.env,
+): RuntimeV2ToolObservationMode {
+  return environment.RUNTIME_V2_TOOL_OBSERVATION_MODE === "SHADOW_METADATA"
+    ? "SHADOW_METADATA"
+    : "OFF";
 }
 
 export function assertNoDualOutbound(input: {
