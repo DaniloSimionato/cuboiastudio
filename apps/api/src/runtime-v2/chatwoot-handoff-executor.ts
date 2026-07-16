@@ -124,6 +124,13 @@ export type ChatwootHandoffExecutionPlan = {
   redactionApplied: true;
 };
 
+/**
+ * A plan is safe to construct during validation and DRY_RUN. It deliberately
+ * has no operational execution identity; that identity is added only by the
+ * execution-plan factory used after EXECUTE has passed its gates.
+ */
+export type ChatwootHandoffPlan = Omit<ChatwootHandoffExecutionPlan, "executionId">;
+
 export type ChatwootHandoffExecutionResult = {
   contractVersion: typeof CHATWOOT_HANDOFF_EXECUTION_CONTRACT_VERSION;
   executionId: string;
@@ -353,29 +360,18 @@ export function validateChatwootHandoffExecutionPreconditions(input: {
   return { ok: true };
 }
 
-export function createChatwootHandoffExecutionPlan(input: {
+export function createChatwootHandoffPlan(input: {
   handoff: HandoffRequest;
   currentTime: Date;
-  attemptNumber: number;
   configuration: ChatwootHandoffExecutionConfiguration;
-}): ChatwootHandoffExecutionPlan {
+}): ChatwootHandoffPlan {
   const steps: ChatwootHandoffStep[] = ["VERIFY_CONVERSATION", "VERIFY_AI_ACTIVE", "PAUSE_AI"];
   if (input.configuration.labelConfigured) steps.push("APPLY_LABEL");
   if (input.handoff.requestedTargetType === "TEAM") steps.push("ASSIGN_TEAM");
   if (input.handoff.requestedTargetType === "AGENT") steps.push("ASSIGN_AGENT");
   steps.push("VERIFY_FINAL_STATE");
-  const executionId = createChatwootHandoffExecutionId({
-    handoffId: input.handoff.handoffId,
-    companyId: input.handoff.companyId,
-    assistantId: input.handoff.assistantId,
-    conversationId: input.handoff.conversationId,
-    contextVersion: input.handoff.contextVersion,
-    idempotencyKey: input.handoff.idempotencyKey,
-    attemptNumber: input.attemptNumber,
-  });
   return {
     contractVersion: CHATWOOT_HANDOFF_EXECUTION_CONTRACT_VERSION,
-    executionId,
     handoffId: input.handoff.handoffId,
     companyId: input.handoff.companyId,
     assistantId: input.handoff.assistantId,
@@ -404,6 +400,31 @@ export function createChatwootHandoffExecutionPlan(input: {
     expiresAt: input.handoff.expiresAt,
     status: "PLANNED",
     redactionApplied: true,
+  };
+}
+
+export function createChatwootHandoffExecutionPlan(input: {
+  handoff: HandoffRequest;
+  currentTime: Date;
+  attemptNumber: number;
+  configuration: ChatwootHandoffExecutionConfiguration;
+}): ChatwootHandoffExecutionPlan {
+  const plan = createChatwootHandoffPlan({
+    handoff: input.handoff,
+    currentTime: input.currentTime,
+    configuration: input.configuration,
+  });
+  return {
+    ...plan,
+    executionId: createChatwootHandoffExecutionId({
+      handoffId: input.handoff.handoffId,
+      companyId: input.handoff.companyId,
+      assistantId: input.handoff.assistantId,
+      conversationId: input.handoff.conversationId,
+      contextVersion: input.handoff.contextVersion,
+      idempotencyKey: input.handoff.idempotencyKey,
+      attemptNumber: input.attemptNumber,
+    }),
   };
 }
 

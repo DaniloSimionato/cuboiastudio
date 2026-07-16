@@ -1123,6 +1123,15 @@ tenant, assistente, conversa, `contextVersion` e `expectedRevision`. Aprovação
 expirada, consumida ou de revisão diferente é rejeitada antes de qualquer
 resolução externa.
 
+O contrato de saída separa as identidades: `commandId` identifica a chamada e
+`planHash` identifica o plano sanitizado; nenhum dos dois é uma execução
+operacional. Em `DRY_RUN`, `executionId` fica ausente, não há
+`operationalExecutionCreated`, aprovação ou persistência operacional. O plano
+estrutural não cria identidade de execução. Em `EXECUTE`, o `executionId` só é
+gerado após as validações finais, aprovação válida e imediatamente antes da
+transição persistida para execução. Assim, duas validações equivalentes
+mantêm o mesmo `planHash` sem antecipar uma identidade operacional.
+
 ### Execução autorizada
 
 Uma futura chamada `EXECUTE` precisa simultaneamente de Runtime V2 `SHADOW`,
@@ -1149,7 +1158,9 @@ payloads não são gravados. Dry-run não altera o estado operacional.
 `PAUSE_AI_ONLY` é idempotente quando a IA já está pausada ou um humano já
 assumiu. Timeout após possível envio exige reconciliação e não permite retry
 cego. Uma revisão concorrente vence por optimistic concurrency; approval,
-executionId e handoff terminal não podem ser reutilizados.
+executionId e handoff terminal não podem ser reutilizados. A ausência de
+`executionId` em `DRY_RUN` é parte do contrato tipado, não apenas uma regra de
+redaction da saída.
 
 ### Limites e validação
 

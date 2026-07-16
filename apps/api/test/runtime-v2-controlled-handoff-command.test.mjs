@@ -198,8 +198,27 @@ test("default mode is DRY_RUN and performs no external read or state write", asy
   assert.equal(result.eligible, true);
   assert.equal(result.externalReadPerformed, false);
   assert.equal(result.credentialResolved, false);
+  assert.equal("executionId" in result, false);
+  assert.equal(result.operationalExecutionCreated, false);
+  assert.equal(result.commandId.length > 0, true);
+  assert.equal(result.planHash.length > 0, true);
   assert.deepEqual(adapter.calls, []);
   assert.equal((await store.load(scope)).revision, state.revision);
+});
+
+test("equivalent DRY_RUN calls have the same plan identity and no operational identity", async () => {
+  const { store, handoff } = await fixture();
+  const first = await command(store).run(input(handoff));
+  const second = await command(store).run(input(handoff));
+  assert.equal(first.mode, "DRY_RUN");
+  assert.equal(second.mode, "DRY_RUN");
+  assert.equal(first.planHash, second.planHash);
+  assert.equal(first.commandId, second.commandId);
+  assert.equal("executionId" in first, false);
+  assert.equal("executionId" in second, false);
+  assert.equal(first.operationalExecutionCreated, false);
+  assert.equal(second.operationalExecutionCreated, false);
+  assert.equal((await store.load(scope)).controlledExecution, null);
 });
 
 test("flags OFF, missing approval and allowlist mismatches fail closed", async () => {
@@ -251,6 +270,8 @@ test("EXECUTE consumes approval once and pauses AI through the fake adapter", as
   assert.equal(result.externalReadPerformed, true);
   assert.equal(result.externalMutationPerformed, true);
   assert.equal(result.externalEffectMayHaveOccurred, false);
+  assert.equal(result.executionId.length > 0, true);
+  assert.equal(result.operationalExecutionCreated, true);
   assert.equal(adapter.calls.filter((call) => call === "pauseAi").length, 1);
   assert.equal(adapter.calls.includes("applyLabel"), false);
   assert.equal(adapter.calls.includes("assignTeam"), false);

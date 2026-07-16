@@ -4,8 +4,10 @@ import {
   ChatwootHandoffAdapter,
   ChatwootHandoffExecutionConfiguration,
   ControlledChatwootHandoffExecutor,
-  createChatwootHandoffExecutionPlan,
+  createChatwootHandoffExecutionId,
+  createChatwootHandoffPlan,
   createHandoffExecutionStateEvent,
+  type ChatwootHandoffPlan,
 } from "./chatwoot-handoff-executor";
 import {
   resolveRuntimeV2HandoffAdapterMode,
@@ -76,12 +78,10 @@ export type ControlledHandoffCommandInput = {
   configurationReference?: ControlledHandoffConfigurationReference;
 };
 
-export type ControlledHandoffCommandResult = {
+type ControlledHandoffCommandResultBase = {
   contractVersion: typeof CONTROLLED_HANDOFF_COMMAND_CONTRACT_VERSION;
   commandId: string;
-  mode: ControlledHandoffCommandMode;
   eligible: boolean;
-  executionId: string | null;
   handoffId: string;
   status: string;
   resultCode: string | null;
@@ -106,6 +106,27 @@ export type ControlledHandoffCommandResult = {
   initialReadPerformed: boolean;
   finalVerificationPerformed: boolean;
   redactionApplied: true;
+};
+
+export type ControlledHandoffDryRunResult = ControlledHandoffCommandResultBase & {
+  mode: "DRY_RUN";
+  executionId?: never;
+  operationalExecutionCreated: false;
+};
+
+export type ControlledHandoffExecuteResult = ControlledHandoffCommandResultBase & {
+  mode: "EXECUTE";
+  executionId: string | null;
+  operationalExecutionCreated: boolean;
+};
+
+export type ControlledHandoffCommandResult =
+  ControlledHandoffDryRunResult | ControlledHandoffExecuteResult;
+
+type MutableControlledHandoffCommandResult = ControlledHandoffCommandResultBase & {
+  mode: ControlledHandoffCommandMode;
+  executionId?: string | null;
+  operationalExecutionCreated: boolean;
 };
 
 export type ControlledHandoffCommandDependencies = {
@@ -167,13 +188,12 @@ function scopeFromInput(input: ControlledHandoffCommandInput): CommandScope {
   };
 }
 
-function baseResult(input: ControlledHandoffCommandInput): ControlledHandoffCommandResult {
+function baseResult(input: ControlledHandoffCommandInput): MutableControlledHandoffCommandResult {
   return {
     contractVersion: CONTROLLED_HANDOFF_COMMAND_CONTRACT_VERSION,
     commandId: commandId(input),
     mode: input.mode ?? "DRY_RUN",
     eligible: false,
-    executionId: null,
     handoffId: input.handoffId,
     status: "REJECTED",
     resultCode: null,
@@ -197,12 +217,27 @@ function baseResult(input: ControlledHandoffCommandInput): ControlledHandoffComm
     adapterResolved: false,
     initialReadPerformed: false,
     finalVerificationPerformed: false,
+    operationalExecutionCreated: false,
     redactionApplied: true,
   };
 }
 
-function addBlocker(result: ControlledHandoffCommandResult, blocker: string): void {
+function addBlocker(result: MutableControlledHandoffCommandResult, blocker: string): void {
   if (!result.blockers.includes(blocker)) result.blockers.push(blocker);
+}
+
+function finalizeResult(
+  result: MutableControlledHandoffCommandResult,
+): ControlledHandoffCommandResult {
+  if (result.mode === "DRY_RUN") {
+    const { executionId: _executionId, ...dryRunResult } = result;
+    return {
+      ...dryRunResult,
+      mode: "DRY_RUN",
+      operationalExecutionCreated: false,
+    };
+  }
+  return { ...result, mode: "EXECUTE", executionId: result.executionId ?? null };
 }
 
 function flagsBlockers(environment: NodeJS.ProcessEnv, scope: HandoffStateScope): string[] {
@@ -240,11 +275,10 @@ function scopeMatches(handoff: HandoffRequest, scope: HandoffStateScope): boolea
   );
 }
 
-function buildPlan(handoff: HandoffRequest, now: Date) {
-  return createChatwootHandoffExecutionPlan({
+function buildPlan(handoff: HandoffRequest, now: Date): ChatwootHandoffPlan {
+  return createChatwootHandoffPlan({
     handoff,
     currentTime: now,
-    attemptNumber: 1,
     configuration: {
       configured: true,
       inboxMatches: true,
@@ -256,14 +290,23 @@ function buildPlan(handoff: HandoffRequest, now: Date) {
 }
 
 function planHashWithReference(
-  plan: ReturnType<typeof buildPlan>,
+  plan: ChatwootHandoffPlan,
   reference: ControlledHandoffConfigurationReference | null,
 ): string {
   return hashParts([
     plan.contractVersion,
-    plan.executionId,
     plan.handoffId,
+    plan.companyId,
+    plan.assistantId,
+    plan.conversationId,
+    plan.contextVersion,
+    plan.internalMessageId,
+    plan.targetType,
+    plan.targetIdHash,
+    plan.reasonCode,
     plan.steps,
+    plan.idempotencyKey,
+    plan.expectedPreconditions,
     reference?.resolutionStatus ?? null,
     reference?.scopeValid ?? false,
     reference?.accountScopeHash ?? null,
@@ -272,7 +315,7 @@ function planHashWithReference(
   ]);
 }
 
-function isOnlyPauseAiPlan(plan: ReturnType<typeof buildPlan>): boolean {
+function isOnlyPauseAiPlan(plan: ChatwootHandoffPlan): boolean {
   return (
     plan.steps.length === 4 &&
     plan.steps[0] === "VERIFY_CONVERSATION" &&
@@ -472,7 +515,7 @@ export class RuntimeV2ControlledHandoffCommand {
     if (!state) {
       addBlocker(result, "CONTROLLED_HANDOFF_SCOPE_MISMATCH");
       result.resultCode = "CONTROLLED_HANDOFF_SCOPE_MISMATCH";
-      return result;
+      return finalizeResult(result);
     }
     result.revisionBefore = state.revision;
     const handoff = state.handoffState?.activeHandoff ?? null;
@@ -480,11 +523,11 @@ export class RuntimeV2ControlledHandoffCommand {
       if (state.controlledExecution?.handoffId === input.handoffId) {
         addBlocker(result, "CONTROLLED_HANDOFF_EXECUTION_DUPLICATE");
         result.resultCode = "CONTROLLED_HANDOFF_EXECUTION_DUPLICATE";
-        return result;
+        return finalizeResult(result);
       }
       addBlocker(result, "CONTROLLED_HANDOFF_NOT_READY");
       result.resultCode = "CONTROLLED_HANDOFF_NOT_READY";
-      return result;
+      return finalizeResult(result);
     }
     if (handoff.handoffId !== input.handoffId) {
       addBlocker(result, "CONTROLLED_HANDOFF_HANDOFF_ID_MISMATCH");
@@ -504,7 +547,6 @@ export class RuntimeV2ControlledHandoffCommand {
       addBlocker(result, "CONTROLLED_HANDOFF_REASON_NOT_AUTHORIZED");
     }
     const plan = buildPlan(handoff, this.now());
-    result.executionId = plan.executionId;
     result.planHash = planHashWithReference(plan, null);
     result.expectedOperation = isOnlyPauseAiPlan(plan)
       ? CONTROLLED_HANDOFF_APPROVED_OPERATION
@@ -546,21 +588,21 @@ export class RuntimeV2ControlledHandoffCommand {
       result.eligible = result.blockers.length === 0;
       result.status = result.eligible ? "DRY_RUN_APPROVED" : "DRY_RUN_BLOCKED";
       result.resultCode = result.eligible ? null : (result.blockers[0] ?? null);
-      return result;
+      return finalizeResult(result);
     }
     if (mode !== "EXECUTE") {
       addBlocker(result, "CONTROLLED_HANDOFF_DRY_RUN_REQUIRED");
       result.resultCode = "CONTROLLED_HANDOFF_DRY_RUN_REQUIRED";
-      return result;
+      return finalizeResult(result);
     }
     if (result.blockers.length > 0) {
       result.resultCode = result.blockers[0] ?? "CONTROLLED_HANDOFF_DISABLED";
-      return result;
+      return finalizeResult(result);
     }
     if (state.controlledExecution?.handoffId === handoff.handoffId) {
       addBlocker(result, "CONTROLLED_HANDOFF_EXECUTION_DUPLICATE");
       result.resultCode = "CONTROLLED_HANDOFF_EXECUTION_DUPLICATE";
-      return result;
+      return finalizeResult(result);
     }
 
     const adapter = await this.dependencies.resolveAdapter!({
@@ -571,9 +613,21 @@ export class RuntimeV2ControlledHandoffCommand {
     if (!adapter) {
       result.blockers.push("CONTROLLED_HANDOFF_ADAPTER_UNAVAILABLE");
       result.resultCode = "CONTROLLED_HANDOFF_ADAPTER_UNAVAILABLE";
-      return result;
+      return finalizeResult(result);
     }
     result.adapterResolved = true;
+
+    // Create the operational identity only after all EXECUTE gates passed.
+    // DRY_RUN never reaches this branch and therefore never calls this helper.
+    const executionId = createChatwootHandoffExecutionId({
+      handoffId: handoff.handoffId,
+      companyId: handoff.companyId,
+      assistantId: handoff.assistantId,
+      conversationId: handoff.conversationId,
+      contextVersion: handoff.contextVersion,
+      idempotencyKey: handoff.idempotencyKey,
+      attemptNumber: 1,
+    });
 
     const initialRevision = state.revision;
     const pendingTime = this.now();
@@ -594,7 +648,7 @@ export class RuntimeV2ControlledHandoffCommand {
       eventType: "HANDOFF_EXECUTION_PENDING",
       timestamp: pendingTime,
       reasonCode: handoff.reasonCode,
-      metadata: { executionId: plan.executionId, operation: CONTROLLED_HANDOFF_APPROVED_OPERATION },
+      metadata: { executionId, operation: CONTROLLED_HANDOFF_APPROVED_OPERATION },
     });
     const pendingHandoffState = applyHandoffExecutionEvent(state.handoffState!, pendingEvent, {
       scope: resolvedScope,
@@ -611,7 +665,7 @@ export class RuntimeV2ControlledHandoffCommand {
         handoffState: pendingHandoffState,
         controlledExecutionApproval: pendingApproval,
         controlledExecution: executionRecord({
-          executionId: plan.executionId,
+          executionId,
           handoffId: handoff.handoffId,
           status: "EXECUTION_PENDING",
           resultCode: null,
@@ -632,8 +686,11 @@ export class RuntimeV2ControlledHandoffCommand {
           ? "CONTROLLED_HANDOFF_REVISION_MISMATCH"
           : "CONTROLLED_HANDOFF_APPROVAL_ALREADY_CONSUMED";
       addBlocker(result, result.resultCode);
-      return result;
+      return finalizeResult(result);
     }
+
+    result.executionId = executionId;
+    result.operationalExecutionCreated = true;
 
     const startedTime = this.now();
     const startedHandoff = currentState.handoffState!.activeHandoff!;
@@ -654,7 +711,7 @@ export class RuntimeV2ControlledHandoffCommand {
       eventType: "HANDOFF_EXECUTION_STARTED",
       timestamp: startedTime,
       reasonCode: startedHandoff.reasonCode,
-      metadata: { executionId: plan.executionId },
+      metadata: { executionId },
     });
     const startedHandoffState = applyHandoffExecutionEvent(
       currentState.handoffState!,
@@ -669,7 +726,7 @@ export class RuntimeV2ControlledHandoffCommand {
         ...currentState,
         handoffState: startedHandoffState,
         controlledExecution: executionRecord({
-          executionId: plan.executionId,
+          executionId,
           handoffId: handoff.handoffId,
           status: "EXECUTING",
           resultCode: null,
@@ -686,7 +743,7 @@ export class RuntimeV2ControlledHandoffCommand {
     } catch {
       result.resultCode = "CONTROLLED_HANDOFF_REVISION_MISMATCH";
       addBlocker(result, result.resultCode);
-      return result;
+      return finalizeResult(result);
     }
 
     const executor = new ControlledChatwootHandoffExecutor(adapter);
@@ -790,14 +847,14 @@ export class RuntimeV2ControlledHandoffCommand {
     try {
       const persisted = await this.dependencies.stateStore.save(finalState, currentState.revision);
       result.revisionAfter = persisted.revision;
-      return result;
+      return finalizeResult(result);
     } catch {
       result.status = "RECONCILIATION_REQUIRED";
       result.resultCode = "CONTROLLED_HANDOFF_RECONCILIATION_REQUIRED";
       result.reconciliationRequired = true;
       result.externalEffectMayHaveOccurred = result.externalMutationPerformed;
       addBlocker(result, result.resultCode);
-      return result;
+      return finalizeResult(result);
     }
   }
 }
