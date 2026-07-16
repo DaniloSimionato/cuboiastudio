@@ -1,3 +1,5 @@
+import type { RuntimeActionState } from "./action-state";
+
 export type RuntimeVersion = "V1" | "V2";
 
 export type ConversationStatus = "ACTIVE" | "WAITING_CUSTOMER" | "WAITING_HUMAN" | "COMPLETED";
@@ -80,6 +82,7 @@ export type ConversationState = {
   selectedFlowId: string | null;
   flowStage: string | null;
   status: ConversationStatus;
+  actionState?: RuntimeActionState | null;
   updatedAt: Date;
   expiresAt: Date | null;
 };

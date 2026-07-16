@@ -7,6 +7,7 @@ import {
   type JsonValue,
   type SerializedConversationState,
 } from "./runtime-v2.types";
+import { redactRuntimeActionState } from "./action-state";
 
 export const CONVERSATION_STATE_VERSION = "conversation-state-v2";
 
@@ -135,13 +136,16 @@ export function serializeConversationState(state: ConversationState): Serialized
     assertIsoDate(state.expiresAt, "expiresAt");
   }
 
+  const stateForSerialization = state.actionState
+    ? { ...state, actionState: redactRuntimeActionState(state.actionState) }
+    : state;
   const serializable = toJsonValue(
     {
-      ...state,
-      sessionStartedAt: state.sessionStartedAt.toISOString(),
-      createdAt: state.createdAt.toISOString(),
-      updatedAt: state.updatedAt.toISOString(),
-      expiresAt: state.expiresAt?.toISOString() ?? null,
+      ...stateForSerialization,
+      sessionStartedAt: stateForSerialization.sessionStartedAt.toISOString(),
+      createdAt: stateForSerialization.createdAt.toISOString(),
+      updatedAt: stateForSerialization.updatedAt.toISOString(),
+      expiresAt: stateForSerialization.expiresAt?.toISOString() ?? null,
     },
     "conversation state",
   ) as SerializedConversationState;

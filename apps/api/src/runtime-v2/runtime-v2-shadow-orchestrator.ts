@@ -7,6 +7,7 @@ import {
   isRuntimeV2ShadowEnabled,
   resolveRuntimeV2Mode,
   resolveRuntimeV2EvidenceMode,
+  resolveRuntimeV2ActionStateMode,
   type RuntimeV2Mode,
 } from "./runtime-v2-feature-flag";
 import { buildResponsePlan } from "./response-plan";
@@ -44,6 +45,24 @@ import {
   deriveRequestedEvidenceCategories,
 } from "./combined-evidence";
 import { type SourceEvidence } from "./evidence-contracts";
+import {
+  applyActionExpiration,
+  applyStructuredConfirmation,
+  buildActionStateManifest,
+  createEmptyRuntimeActionState,
+  invalidateAction,
+  proposePendingAction,
+  evaluateActionCompatibility,
+  type ActionStateManifest,
+  type ActionCompatibilityInput,
+  type RuntimeActionState,
+  type StructuredConfirmationSignal,
+} from "./action-state";
+import {
+  type FlowActionProposal,
+  type ActionJsonValue,
+  type ActionProvenance,
+} from "./action-contracts";
 import {
   type ConversationState,
   type RuntimeV2Scope,
@@ -95,6 +114,15 @@ export type RuntimeV2ShadowSnapshot = {
     flowCandidateCount?: number;
     intentChangedFromPreviousTurn?: boolean;
   };
+  actionProposal?: FlowActionProposal | null;
+  actionProposalArguments?: Record<string, ActionJsonValue>;
+  actionProposalCollectedParameterKeys?: string[];
+  actionProposalMissingParameters?: string[];
+  actionProposalExpiresAt?: string | null;
+  actionProposalProvenance?: ActionProvenance;
+  confirmationSignal?: StructuredConfirmationSignal | null;
+  actionReset?: boolean;
+  actionCompatibility?: ActionCompatibilityInput | null;
 };
 
 export type RuntimeV2ShadowResult = {
@@ -183,6 +211,169 @@ export function isActionableAssistantQuestion(content: string): boolean {
   if (!normalized.includes("?")) return false;
   if (/(?:preciso confirmar|como posso ajudar|o que posso fazer)/.test(normalized)) return false;
   return inferRelevantQuestionField(content) !== null;
+}
+
+function actionStateForTurn(input: {
+  mode: "OFF" | "SHADOW_STATE";
+  state: ConversationState;
+  snapshot: RuntimeV2ShadowSnapshot;
+  now: Date;
+}): {
+  state: ConversationState;
+  before: RuntimeActionState | null;
+  after: RuntimeActionState | null;
+  eventIds: string[];
+  errorCode: ActionStateManifest["actionErrorCode"];
+  compatibility: ReturnType<typeof evaluateActionCompatibility> | null;
+} {
+  const before = input.state.actionState ?? null;
+  if (input.mode === "OFF") {
+    return {
+      state: input.state,
+      before,
+      after: before,
+      eventIds: [],
+      errorCode: null,
+      compatibility: null,
+    };
+  }
+  let actionState = input.state.actionState ?? createEmptyRuntimeActionState(input.now);
+  const eventIds: string[] = [];
+  let errorCode: ActionStateManifest["actionErrorCode"] = null;
+  let compatibility: ReturnType<typeof evaluateActionCompatibility> | null = null;
+  const context = {
+    scope: {
+      ...input.snapshot.scope,
+      runtimeVersion: "V2" as const,
+      mode: "SHADOW" as const,
+    },
+    currentTime: input.now,
+  };
+
+  try {
+    const expiration = applyActionExpiration(
+      actionState,
+      context,
+      input.snapshot.internalMessageId,
+    );
+    actionState = expiration.state;
+    if (expiration.event) eventIds.push(expiration.event.eventId);
+
+    if (input.snapshot.confirmationSignal) {
+      const confirmation = applyStructuredConfirmation(
+        actionState,
+        input.snapshot.confirmationSignal,
+        context,
+      );
+      actionState = confirmation.state;
+      if (confirmation.event) eventIds.push(confirmation.event.eventId);
+    }
+
+    if (input.snapshot.actionReset && actionState.activeAction) {
+      const invalidated = invalidateAction(
+        actionState,
+        context,
+        input.snapshot.internalMessageId,
+        "ACTION_INVALIDATED_BY_RESET",
+        "RESET_OCCURRED",
+      );
+      actionState = invalidated.state;
+      if (invalidated.event) eventIds.push(invalidated.event.eventId);
+      compatibility = "RESET";
+    } else if (input.snapshot.actionCompatibility) {
+      compatibility = evaluateActionCompatibility(
+        actionState.activeAction,
+        input.snapshot.actionCompatibility,
+      );
+      if (compatibility === "HUMAN_TAKEOVER" || compatibility === "INCOMPATIBLE_INTENT") {
+        const invalidated = invalidateAction(
+          actionState,
+          context,
+          input.snapshot.internalMessageId,
+          "ACTION_INVALIDATED_BY_INTENT_CHANGE",
+          compatibility === "HUMAN_TAKEOVER" ? "HUMAN_TAKEOVER" : "INTENT_CHANGED",
+        );
+        actionState = invalidated.state;
+        if (invalidated.event) eventIds.push(invalidated.event.eventId);
+      }
+    }
+
+    if (input.snapshot.actionProposal) {
+      const proposalInput = proposePendingAction({
+        scope: context.scope,
+        proposal: input.snapshot.actionProposal,
+        internalMessageId: input.snapshot.internalMessageId,
+        currentTime: input.now,
+        expiresAt:
+          input.snapshot.actionProposalExpiresAt ??
+          new Date(input.now.getTime() + 15 * 60 * 1000).toISOString(),
+        normalizedArguments: input.snapshot.actionProposalArguments ?? {},
+        collectedParameterKeys: input.snapshot.actionProposalCollectedParameterKeys ?? [],
+        missingParameters:
+          input.snapshot.actionProposalMissingParameters ??
+          input.snapshot.actionProposal.missingParameters,
+        provenance:
+          input.snapshot.actionProposalProvenance ?? input.snapshot.actionProposal.provenance,
+      });
+      const active = actionState.activeAction;
+      if (
+        active?.actionId === proposalInput.request.actionId &&
+        active.argumentsHash === proposalInput.request.argumentsHash
+      ) {
+        return {
+          state: { ...input.state, actionState },
+          before,
+          after: actionState,
+          eventIds,
+          errorCode,
+          compatibility,
+        };
+      }
+      if (active) {
+        const invalidated = invalidateAction(
+          actionState,
+          context,
+          input.snapshot.internalMessageId,
+          "ACTION_INVALIDATED_BY_INTENT_CHANGE",
+          active.sourceIntent === proposalInput.request.sourceIntent
+            ? "PARAMETERS_CHANGED"
+            : "INTENT_CHANGED",
+        );
+        actionState = invalidated.state;
+        if (invalidated.event) eventIds.push(invalidated.event.eventId);
+      }
+      const proposalEvents = proposalInput.events;
+      actionState = {
+        ...proposalInput.state,
+        recentTerminalActions: actionState.recentTerminalActions,
+        recentActionEvents: [...actionState.recentActionEvents, ...proposalEvents]
+          .sort(
+            (left, right) =>
+              left.timestamp.localeCompare(right.timestamp) ||
+              left.eventId.localeCompare(right.eventId),
+          )
+          .slice(-32),
+        lastActionEventId: proposalEvents.at(-1)?.eventId ?? actionState.lastActionEventId,
+        updatedAt: input.now.toISOString(),
+      };
+      eventIds.push(...proposalEvents.map((event) => event.eventId));
+    }
+  } catch (error) {
+    errorCode =
+      error instanceof Error && /^[A-Z][A-Z0-9_:-]{2,79}$/.test(error.message)
+        ? (error.message as ActionStateManifest["actionErrorCode"])
+        : "ACTION_STATE_REDACTION_FAILURE";
+    actionState = input.state.actionState ?? createEmptyRuntimeActionState(input.now);
+  }
+
+  return {
+    state: { ...input.state, actionState },
+    before,
+    after: actionState,
+    eventIds,
+    errorCode,
+    compatibility,
+  };
 }
 
 export class RuntimeV2ShadowOrchestrator {
@@ -300,6 +491,20 @@ export class RuntimeV2ShadowOrchestrator {
           MAX_SHADOW_STATE_TTL_MS,
         ),
     );
+
+    const actionStateMode = resolveRuntimeV2ActionStateMode(this.environment);
+    const actionStateBefore = state.actionState ?? null;
+    const actionStateTurn = !messageAlreadyProcessedBeforeLoad
+      ? actionStateForTurn({ mode: actionStateMode, state, snapshot, now })
+      : {
+          state,
+          before: actionStateBefore,
+          after: actionStateBefore,
+          eventIds: [],
+          errorCode: null as ActionStateManifest["actionErrorCode"],
+          compatibility: null,
+        };
+    state = actionStateTurn.state;
 
     const stateBeforeQuestionSync = state;
     const snapshotQuestion = snapshot.lastRelevantQuestion;
@@ -471,6 +676,19 @@ export class RuntimeV2ShadowOrchestrator {
             ? "ASSISTANT_OBJECTIVE_QUESTION"
             : "UNCHANGED",
       evidence: evidenceManifest,
+      actionState:
+        actionStateMode === "SHADOW_STATE"
+          ? buildActionStateManifest({
+              mode: actionStateMode,
+              before: actionStateTurn.before,
+              after: nextState.actionState,
+              revisionBefore: beforeState.revision,
+              revisionAfter: nextState.revision,
+              compatibility: actionStateTurn.compatibility,
+              persisted: actionStateTurn.eventIds.length > 0 && persistenceResult !== "DUPLICATE",
+              errorCode: actionStateTurn.errorCode,
+            })
+          : undefined,
     });
     return { enabled: true, mode: "SHADOW", state: nextState, manifest };
   }

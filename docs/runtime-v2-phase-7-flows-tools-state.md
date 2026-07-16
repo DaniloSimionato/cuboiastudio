@@ -610,6 +610,64 @@ Os testes em `apps/api/test/runtime-v2-action-contracts.test.mjs` cobrem
 determinismo, escopo, confirmação, estados terminais, timeout/reconciliação,
 resultado de ferramenta, redaction, serialização e eventos.
 
-Ainda não existe persistência de ação pendente, executor, outbox ou
-reconciliação real. Esses itens permanecem no escopo da Fase 7.1C e seguintes;
-nenhuma migration foi criada nesta fase.
+Ainda não existe executor, outbox ou reconciliação real. Esses itens permanecem
+nas subfases seguintes; nenhuma migration foi criada.
+
+## 14. Fase 7.1C — estado persistente e seguro de ação pendente
+
+O estado pendente foi incorporado opcionalmente a `ConversationState` como
+`actionState`, dentro do mesmo `stateJson` já persistido por
+`PrismaConversationStateStore`. Nenhuma tabela nova ou migration é necessária.
+
+### RuntimeActionState e redaction
+
+`RuntimeActionState` contém apenas `activeAction`, referências de ações
+terminais recentes, `lastActionEventId`, `updatedAt` e um histórico limitado de
+eventos sanitizados. `PendingActionState` preserva chaves de parâmetros,
+hashes, escopo, validade, status, confirmação e proveniência; não preserva
+`normalizedArguments` nem texto livre. A lista de ações terminais fica limitada
+a 10 referências e os eventos recentes a 32.
+
+O serializador do estado aplica redaction por schema antes de produzir JSON.
+Argumentos, payloads, prompts, mensagens, tokens, credenciais, telefone,
+e-mail e valores livres não entram no estado nem nos eventos persistidos.
+
+### Reducer e confirmação
+
+`reduceRuntimeActionState` é puro, determinístico e valida escopo,
+`contextVersion`, ordem temporal, idempotência de evento e transições do
+contrato 7.1B. Estados terminais não retornam à execução. Propostas são
+criadas por `proposePendingAction`; confirmações passam por
+`StructuredConfirmationSignal` e geram `ActionConfirmation` somente quando há
+ação pendente, hash e escopo compatíveis. Rejeição, expiração, reset, troca de
+intenção e takeover humano terminalizam a referência anterior.
+
+### Persistência e concorrência
+
+Quando habilitado, o estado de ação acompanha a mesma transação `saveTurn` que
+persiste o estado de conversa e o evento de turno. O controle de revisão
+existente continua sendo a autoridade de concorrência; retry de mensagem
+duplicada não cria novo evento de ação. Restart recarrega o `actionState` do
+PostgreSQL. Redis não é fonte canônica.
+
+### Feature flag e limites operacionais
+
+`RUNTIME_V2_ACTION_STATE_MODE` aceita `OFF` ou `SHADOW_STATE` e permanece `OFF`
+por padrão. Em `OFF`, nenhum estado ou evento de ação é criado. Em
+`SHADOW_STATE`, propostas e confirmações atualizam somente o estado V2 e o
+manifesto; `toolExecutionPerformed`, `providerCalled`, `toolCalls` e
+`outboundSent` permanecem desativados.
+
+O manifesto registra status, hashes, revisão, compatibilidade, IDs de eventos,
+expiração e decisão de confirmação sem parâmetros ou conteúdo integral. Os
+testes unitários, Shadow local e PostgreSQL cobrem restart, idempotência,
+expiração, reset, escopo e confirmação. Execução de ferramentas, outbox,
+reconciliação externa e handoff permanecem fora desta subfase.
+
+### Plano da Fase 7.1D
+
+1. observar propostas e resultados de ferramentas V1 como metadata-only;
+2. validar `TOOL_RESULT` no resolvedor da Fase 6 sem executar pelo V2;
+3. testar reconciliação sintética e timeout sem efeitos externos;
+4. somente depois avaliar integração operacional de leitura, confirmação e
+   handoff, cada uma com flag e rollback próprios.

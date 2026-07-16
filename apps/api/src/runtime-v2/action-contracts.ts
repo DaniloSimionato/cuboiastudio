@@ -73,6 +73,9 @@ export type ActionEventType =
   | "EXECUTION_TIMED_OUT"
   | "ACTION_EXPIRED"
   | "ACTION_CANCELLED"
+  | "ACTION_SUPERSEDED"
+  | "ACTION_INVALIDATED_BY_RESET"
+  | "ACTION_INVALIDATED_BY_INTENT_CHANGE"
   | "RECONCILIATION_STARTED"
   | "RECONCILIATION_SUCCEEDED"
   | "RECONCILIATION_FAILED";
@@ -440,7 +443,10 @@ export function createActionEventId(input: {
   ])}`;
 }
 
-export function validateActionRequest(action: ActionRequest): void {
+export function validateActionRequest(
+  action: ActionRequest,
+  options: { allowMissingParameters?: boolean } = {},
+): void {
   assertVersion(action.contractVersion);
   assertNonEmpty(action.actionId, "ACTION_ID");
   assertNonEmpty(action.companyId, "COMPANY_ID");
@@ -469,9 +475,11 @@ export function validateActionRequest(action: ActionRequest): void {
   if (hashActionArguments(action.normalizedArguments) !== action.argumentsHash) {
     throw new Error("ARGUMENTS_HASH_MISMATCH");
   }
-  for (const parameter of action.requiredParameters) {
-    if (!Object.prototype.hasOwnProperty.call(action.normalizedArguments, parameter)) {
-      throw new Error("MISSING_PARAMETER");
+  if (!options.allowMissingParameters) {
+    for (const parameter of action.requiredParameters) {
+      if (!Object.prototype.hasOwnProperty.call(action.normalizedArguments, parameter)) {
+        throw new Error("MISSING_PARAMETER");
+      }
     }
   }
 }
@@ -517,6 +525,12 @@ export function transitionActionStatus(
 
   if (event === "ACTION_EXPIRED") return "EXPIRED";
   if (event === "ACTION_CANCELLED") return "CANCELLED";
+  if (
+    event === "ACTION_SUPERSEDED" ||
+    event === "ACTION_INVALIDATED_BY_RESET" ||
+    event === "ACTION_INVALIDATED_BY_INTENT_CHANGE"
+  )
+    return "CANCELLED";
 
   if (currentStatus === "ACTION_PROPOSED") {
     if (event === "CUSTOMER_CONFIRMATION_REQUESTED") return "AWAITING_CUSTOMER_CONFIRMATION";
