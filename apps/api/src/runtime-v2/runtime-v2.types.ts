@@ -87,6 +87,8 @@ export type ConversationState = {
   handoffState?: RuntimeHandoffState | null;
   controlledExecutionApproval?: ControlledExecutionApprovalState | null;
   controlledExecution?: ControlledExecutionRecord | null;
+  candidateResponses?: RuntimeV2CandidateResponse[];
+  responseComparisons?: RuntimeResponseComparison[];
   updatedAt: Date;
   expiresAt: Date | null;
 };
@@ -127,6 +129,72 @@ export type SerializedConversationState = {
   handoffState?: JsonValue;
   controlledExecutionApproval?: JsonValue;
   controlledExecution?: JsonValue;
+  candidateResponses?: JsonValue;
+  responseComparisons?: JsonValue;
+};
+
+export type RuntimeV2CandidateResponseStatus =
+  | "CANDIDATE_APPROVED"
+  | "CANDIDATE_BLOCKED"
+  | "CANDIDATE_REQUIRES_HANDOFF"
+  | "CANDIDATE_GENERATION_FAILED";
+
+export type RuntimeV2CandidateResponse = {
+  schemaVersion: "runtime-v2-candidate-response-v1";
+  companyId: string;
+  assistantId: string;
+  conversationId: string;
+  contextVersion: number;
+  originatingInternalMessageId: string;
+  responsePlanId: string;
+  generationId: string;
+  status: RuntimeV2CandidateResponseStatus;
+  responseTextRedacted: string | null;
+  provider: string | null;
+  model: string | null;
+  finishReason: "STOP" | "BLOCKED" | "FAILED";
+  latencyMs: number;
+  promptCompilerVersion: string;
+  flowIdsUsed: string[];
+  candidateFlowIds: string[];
+  flowSelectionReason: string | null;
+  flowSelectionConfidence: number | null;
+  evidenceIdsUsed: string[];
+  memoryIdsUsed: string[];
+  officialDataKeysUsed: string[];
+  toolPlan: string[];
+  handoffDecision: "NONE" | "REQUIRES_HANDOFF";
+  safetyDecision: "PASS" | "BLOCK";
+  qualitySignals: string[];
+  generatedAt: string;
+  idempotencyKey: string;
+  redactionApplied: true;
+  outboundAttempted: false;
+  outboundPerformed: false;
+};
+
+export type RuntimeResponseComparison = {
+  schemaVersion: "runtime-v2-response-comparison-v1";
+  generationId: string;
+  originatingInternalMessageId: string;
+  v1ResponseAvailable: boolean;
+  v2CandidateAvailable: boolean;
+  intentAgreement: boolean | null;
+  flowAgreement: boolean | null;
+  handoffAgreement: boolean | null;
+  factualAuthorityAgreement: boolean | null;
+  answerabilityAgreement: boolean | null;
+  languageAgreement: boolean | null;
+  toneAgreement: boolean | null;
+  repetitionRisk: boolean;
+  contradictionRisk: boolean;
+  unsupportedClaimRisk: boolean;
+  missingRequiredQuestionRisk: boolean;
+  excessiveLengthRisk: boolean;
+  qualityGateResult: RuntimeV2CandidateResponseStatus;
+  qualityGateReasons: string[];
+  generatedAt: string;
+  redactionApplied: true;
 };
 
 export type ControlledExecutionApprovalState = {

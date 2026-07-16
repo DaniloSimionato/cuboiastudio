@@ -9,6 +9,7 @@ import {
   MissingInternalMessageIdError,
   StatePayloadTooLargeError,
   StateRevisionConflictError,
+  appendCandidateTelemetry,
   createEmptyConversationState,
   resolveRuntimeV2StateStoreMode,
   sanitizeConversationStateForPersistence,
@@ -185,6 +186,41 @@ test("stateJson preserva IDs estruturais mesmo quando parecem números de telefo
   assert.equal(loaded.assistantId, scope.assistantId);
   assert.equal(loaded.conversationId, scope.conversationId);
   assert.equal(loaded.lastProcessedMessageId, message.id);
+});
+
+test("PostgreSQL mantém candidata V2 limitada e redigida após restart", async () => {
+  const scope = await createFixture();
+  const message = await createMessage(scope, `${prefix}-candidate-message`);
+  const store = new PrismaConversationStateStore(prisma);
+  const persistedTurn = await store.saveTurn(nextState(scope, message), 0, {
+    internalMessageId: message.id,
+  });
+  const state = appendCandidateTelemetry({
+    state: persistedTurn.state,
+    candidate: {
+      schemaVersion: "runtime-v2-candidate-response-v1",
+      companyId: scope.companyId, assistantId: scope.assistantId, conversationId: scope.conversationId,
+      contextVersion: scope.contextVersion, originatingInternalMessageId: message.id,
+      responsePlanId: "plan-candidate", generationId: "generation-candidate",
+      status: "CANDIDATE_APPROVED", responseTextRedacted: "Contato [REDACTED]",
+      provider: "fake", model: "fake-model", finishReason: "STOP", latencyMs: 1,
+      promptCompilerVersion: "test", flowIdsUsed: [], candidateFlowIds: [],
+      flowSelectionReason: null, flowSelectionConfidence: null, evidenceIdsUsed: [], memoryIdsUsed: [],
+      officialDataKeysUsed: [], toolPlan: [], handoffDecision: "NONE", safetyDecision: "PASS",
+      qualitySignals: [], generatedAt: "2026-07-20T12:00:00.000Z", idempotencyKey: "candidate-key",
+      redactionApplied: true, outboundAttempted: false, outboundPerformed: false,
+    },
+    comparison: null,
+  });
+  state.revision = persistedTurn.state.revision + 1;
+  const saved = await store.save(state, persistedTurn.state.revision);
+  const restarted = await new PrismaConversationStateStore(prisma).load(storeScope(scope));
+  assert.equal(saved.candidateResponses.length, 1);
+  assert.equal(restarted.candidateResponses[0].generationId, "generation-candidate");
+  assert.equal(restarted.candidateResponses[0].outboundPerformed, false);
+  const raw = JSON.stringify(sanitizeConversationStateForPersistence(restarted).json);
+  assert.equal(raw.includes("Contato [REDACTED]"), true);
+  assert.equal(raw.includes("67999999999"), false);
 });
 
 test("redaction preserva IDs estruturais e sanitiza texto livre aninhado", () => {

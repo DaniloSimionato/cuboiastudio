@@ -45,6 +45,8 @@ export function createEmptyConversationState(
     handoffState: null,
     controlledExecutionApproval: null,
     controlledExecution: null,
+    candidateResponses: [],
+    responseComparisons: [],
   };
 }
 
@@ -210,6 +212,8 @@ export function deserializeConversationState(input: unknown): ConversationState 
       mutableHandoffState.recentHandoffEvents = [];
     }
   }
+  if (!Array.isArray(state.candidateResponses)) state.candidateResponses = [];
+  if (!Array.isArray(state.responseComparisons)) state.responseComparisons = [];
   if (state.lastProcessedMessageId !== null && typeof state.lastProcessedMessageId !== "string") {
     throw new Error("lastProcessedMessageId must be a string or null");
   }

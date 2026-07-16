@@ -5,6 +5,8 @@ import {
 } from "./conversation-state";
 import {
   isRuntimeV2ShadowEnabled,
+  isRuntimeV2ResponseGenerationEnabled,
+  resolveRuntimeV2ResponseComparisonMode,
   resolveRuntimeV2Mode,
   resolveRuntimeV2EvidenceMode,
   resolveRuntimeV2ActionStateMode,
@@ -12,6 +14,11 @@ import {
   type RuntimeV2Mode,
   type RuntimeV2HandoffStateMode,
 } from "./runtime-v2-feature-flag";
+import {
+  appendCandidateTelemetry,
+  RuntimeV2CandidateResponseGenerator,
+  type RuntimeV2CandidateContext,
+} from "./candidate-response";
 import { buildResponsePlan } from "./response-plan";
 import { buildRetrievalPlan } from "./retrieval-plan";
 import {
@@ -80,6 +87,7 @@ import {
 } from "./handoff-state";
 import {
   type ConversationState,
+  type RetrievedContext,
   type RuntimeV2Scope,
   type UsefulHistoryMessage,
 } from "./runtime-v2.types";
@@ -140,6 +148,8 @@ export type RuntimeV2ShadowSnapshot = {
   actionCompatibility?: ActionCompatibilityInput | null;
   toolObservations?: V1ToolExecutionObservation[];
   v1HandoffObservation?: V1HandoffObservation | null;
+  /** Ephemeral V1-resolved context. It is never written to the V2 state or runtime log. */
+  candidateContext?: RuntimeV2CandidateContext | null;
 };
 
 export type RuntimeV2ShadowResult = {
@@ -194,7 +204,7 @@ function toStoreScope(scope: RuntimeV2Scope): ConversationStateStoreScope {
   return { ...scope, runtimeVersion: "V2", mode: "SHADOW" };
 }
 
-function emptyContext() {
+function emptyContext(): RetrievedContext {
   return {
     identityMemories: [],
     thematicMemories: [],
@@ -202,6 +212,31 @@ function emptyContext() {
     knowledgeChunks: [],
     toolResults: [],
   };
+}
+
+function retrievedContextFromEvidence(evidence: SourceEvidence[]): RetrievedContext {
+  const context = emptyContext();
+  for (const item of evidence) {
+    const retrieved = {
+      id: item.evidenceId,
+      sourceType: item.sourceType,
+      category: item.category,
+      confidence: item.confidence,
+      selectionReason: item.provenance.selectionReason ?? "AUTHORIZED_EVIDENCE",
+      scope: "CURRENT_TURN",
+      authoritativeFor: item.isAuthoritative ? [item.category] : [],
+    };
+    if (item.sourceType === "OFFICIAL_STRUCTURED" || item.sourceType === "OFFICIAL_DOCUMENT") {
+      context.officialFacts.push(retrieved);
+    } else if (item.sourceType === "RAG_DOCUMENT") {
+      context.knowledgeChunks.push(retrieved);
+    } else if (item.sourceType === "TOOL_RESULT") {
+      context.toolResults.push(retrieved);
+    } else if (item.sourceType === "CONTACT_MEMORY" || item.sourceType === "TEMPORARY_MEMORY") {
+      context.thematicMemories.push(retrieved);
+    }
+  }
+  return context;
 }
 
 function resolveToolObservationMode(environment: NodeJS.ProcessEnv) {
@@ -519,6 +554,7 @@ export class RuntimeV2ShadowOrchestrator {
     private readonly officialEvidenceAdapter?: OfficialStructuredEvidenceReader,
     private readonly ragEvidenceAdapter?: RagEvidenceAdapter,
     private readonly memoryEvidenceAdapter?: MemoryEvidenceAdapter,
+    private readonly candidateResponseGenerator?: RuntimeV2CandidateResponseGenerator,
   ) {}
 
   getMetrics(): RuntimeV2ShadowMetrics {
@@ -751,7 +787,7 @@ export class RuntimeV2ShadowOrchestrator {
     let responsePlan = buildResponsePlan({
       understanding,
       state: nextState,
-      retrievedContext: emptyContext(),
+      retrievedContext: evidenceManifest.retrievedContext,
     });
     if (evidenceManifest.evidenceMode === "SHADOW_METADATA") {
       responsePlan = {
@@ -770,6 +806,41 @@ export class RuntimeV2ShadowOrchestrator {
       responsePlan,
       conversationState: nextState,
     });
+    let candidateResponse = null;
+    let responseComparison = null;
+    if (
+      !messageAlreadyProcessed &&
+      snapshot.source === "CUSTOMER" &&
+      snapshot.candidateContext &&
+      this.candidateResponseGenerator &&
+      isRuntimeV2ResponseGenerationEnabled(snapshot.scope, this.environment)
+    ) {
+      const generated = await this.candidateResponseGenerator.generate({
+        state: nextState,
+        responsePlan,
+        context: snapshot.candidateContext,
+      });
+      candidateResponse = generated.candidate;
+      responseComparison =
+        resolveRuntimeV2ResponseComparisonMode(this.environment) === "SHADOW"
+          ? generated.comparison
+          : null;
+      const candidateState = appendCandidateTelemetry({
+        state: nextState,
+        candidate: generated.candidate,
+        comparison: responseComparison,
+      });
+      candidateState.revision = nextState.revision + 1;
+      candidateState.updatedAt = now;
+      try {
+        nextState = await this.stateStore.save(candidateState, nextState.revision);
+      } catch (error) {
+        if (error instanceof StateRevisionConflictError && attempt < 2) {
+          return this.processWithRetry(snapshot, startedAt, attempt + 1, deadlineAt);
+        }
+        throw error;
+      }
+    }
     const manifest = buildRuntimeV2ShadowManifest({
       scope: snapshot.scope,
       mode: "SHADOW",
@@ -847,6 +918,8 @@ export class RuntimeV2ShadowOrchestrator {
             : [],
         enabled: resolveToolObservationMode(this.environment) === "SHADOW_METADATA",
       }),
+      candidateResponse,
+      responseComparison,
     });
     return { enabled: true, mode: "SHADOW", state: nextState, manifest };
   }
@@ -883,7 +956,7 @@ export class RuntimeV2ShadowOrchestrator {
       adapterDurationMs: 0,
       requestedCategoryDerivation: input.requestedCategoryDerivation,
     });
-    if (evidenceMode !== "SHADOW_METADATA") return skipped;
+    if (evidenceMode !== "SHADOW_METADATA") return { ...skipped, retrievedContext: emptyContext() };
 
     const officialResult = this.officialEvidenceAdapter
       ? await this.officialEvidenceAdapter
@@ -1017,23 +1090,26 @@ export class RuntimeV2ShadowOrchestrator {
         ],
       });
     } catch {
-      return buildEvidenceManifestExtension({
-        evidenceMode,
-        requestedCategories,
-        decisions: requestedCategories.map((category) =>
-          resolveAuthority({
-            requestedCategory: category,
-            candidates: [],
-            scope: input.snapshot.scope,
-            policy: DEFAULT_EVIDENCE_POLICIES[category],
-            currentTime: input.now,
-          }),
-        ),
-        evidence: [],
-        adapterStatus: "FAILED",
-        adapterDurationMs: 0,
-        evidencePipelineError: "EVIDENCE_PIPELINE_ERROR",
-      });
+      return {
+        ...buildEvidenceManifestExtension({
+          evidenceMode,
+          requestedCategories,
+          decisions: requestedCategories.map((category) =>
+            resolveAuthority({
+              requestedCategory: category,
+              candidates: [],
+              scope: input.snapshot.scope,
+              policy: DEFAULT_EVIDENCE_POLICIES[category],
+              currentTime: input.now,
+            }),
+          ),
+          evidence: [],
+          adapterStatus: "FAILED",
+          adapterDurationMs: 0,
+          evidencePipelineError: "EVIDENCE_PIPELINE_ERROR",
+        }),
+        retrievedContext: emptyContext(),
+      };
     }
     const combinedMetadata = buildCombinedEvidenceManifest(
       combined,
@@ -1110,6 +1186,7 @@ export class RuntimeV2ShadowOrchestrator {
               null,
           }
         : extension.memory,
+      retrievedContext: retrievedContextFromEvidence(combined.evidence),
     };
   }
 

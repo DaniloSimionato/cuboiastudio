@@ -101,6 +101,7 @@ import {
 import { createV1HandoffObservation } from "../runtime-v2/handoff-state";
 import { deriveHumanHandoffSignal } from "../runtime-v2/turn-understanding";
 import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
+import type { RuntimeV2CandidateContext } from "../runtime-v2/candidate-response";
 import {
   deriveExpectedAuthorityCategory,
   validateV1AnswerAuthority,
@@ -3034,8 +3035,7 @@ export class AssistantConversationsService {
       // customer message remain in the V1 pipeline and are never persisted by V2.
       customerEvidenceFields: extractedCustomerFields.knownFieldKeys,
       ragObservation,
-      memoryObservation:
-        memoryObservation.contactId === "unresolved" ? null : memoryObservation,
+      memoryObservation: memoryObservation.contactId === "unresolved" ? null : memoryObservation,
       memoryNotExecutedReason: memoryObservation.notExecutedReason,
       toolObservations: observeV1Tools ? toolObservations : [],
     };
@@ -4706,8 +4706,50 @@ export class AssistantConversationsService {
 
     // O cliente já foi persistido e o V1 concluiu sua própria persistência e
     // outbound. O shadow permanece assíncrono e não participa da resposta V1.
+    const candidateContext: RuntimeV2CandidateContext = {
+      // This object is deliberately ephemeral: it is passed only to the
+      // asynchronous Shadow worker and is never serialized into stateJson/logs.
+      promptInput: {
+        assistant: {
+          ...assistant,
+          instructions: promptInstructions,
+        },
+        behavior: assistant.behavior,
+        flow: selectedFlowForAuthority,
+        securityRules: activeSecurityRules,
+        knowledgeItems,
+        historyMessages: priorHistory,
+        currentMessage: customerIntentText,
+        officialBusinessContext,
+        calendarContext: null,
+        memoryContextBlock,
+        currentTurnPriorityInstruction: [
+          "PRIORIDADE DO TURNO SHADOW:",
+          "Responda à mensagem atual usando somente fatos autorizados.",
+          "Não afirme execução de ferramenta, reserva, consulta ou alteração.",
+          "Nunca envie mensagens: esta é uma resposta candidata interna.",
+        ].join("\n"),
+      },
+      model: resolvedModel.model ?? null,
+      temperature,
+      v1ResponseAvailable: Boolean(assistantMessage.content.trim()),
+      selectedFlowId: selectedFlowForAuthority?.id ?? null,
+      candidateFlowIds: contextMetadata.candidateFlowIds ?? [],
+      flowSelectionReason: contextMetadata.detectedIntent ?? null,
+      flowSelectionConfidence: contextMetadata.flowConfidence ?? null,
+      evidenceIds: [
+        ...(ragObservation.items ?? []).map((item) => item.chunkId),
+        ...(memoryObservation.items ?? []).map((item) => item.memoryItemId),
+      ],
+      memoryIds: selectedMemoryManifest
+        .map((item) => item.id)
+        .filter((id): id is string => typeof id === "string"),
+      officialDataKeys: ["business_hours", "address", "official_contact", "company_identity"],
+    };
+
     this.scheduleRuntimeV2Shadow({
       ...shadowSnapshot,
+      candidateContext,
       v1HandoffObservation:
         contextMetadata.handoffPending ||
         humanHandoffSignal.requested ||
@@ -4717,15 +4759,14 @@ export class AssistantConversationsService {
               assistantId: assistant.id,
               conversationId: conversation.id,
               contactId:
-                memoryObservation.contactId === "unresolved"
-                  ? null
-                  : memoryObservation.contactId,
+                memoryObservation.contactId === "unresolved" ? null : memoryObservation.contactId,
               contextVersion: conversation.currentContextVersion ?? 1,
               internalMessageId: userMessage.id,
               flowId: contextMetadata.selectedFlowId ?? null,
               handoffPendingObserved: Boolean(contextMetadata.handoffPending),
               reasonCode: contextMetadata.handoffPending
-                ? contextMetadata.finalAction === "handoff" || selectedFlowForAuthority?.requiresHuman
+                ? contextMetadata.finalAction === "handoff" ||
+                  selectedFlowForAuthority?.requiresHuman
                   ? "FLOW_REQUIRED_HANDOFF"
                   : humanHandoffSignal.requested
                     ? (humanHandoffSignal.reasonCode ?? "CUSTOMER_REQUESTED_HUMAN")
@@ -4737,8 +4778,7 @@ export class AssistantConversationsService {
               humanActiveObserved: Boolean(conversation.pausedByHuman),
               aiActiveObserved: Boolean(conversation.aiActive),
               pausedByHumanObserved: Boolean(conversation.pausedByHuman),
-              requestedTargetType:
-                humanHandoffSignal.requestedTargetType ?? "ANY_HUMAN",
+              requestedTargetType: humanHandoffSignal.requestedTargetType ?? "ANY_HUMAN",
               requestedTargetIdHash: null,
               collectedContextKeys: [
                 ...(contextMetadata.handoffPending ? ["handoff_pending"] : []),

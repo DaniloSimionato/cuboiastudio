@@ -36,3 +36,5 @@ export * from "./operational-chatwoot-handoff-adapter";
 export * from "./controlled-handoff-command";
 export * from "./controlled-chatwoot-reference";
 export * from "./controlled-handoff-command-runner";
+export * from "./candidate-response";
+export * from "./runtime-v2-candidate-response-provider";

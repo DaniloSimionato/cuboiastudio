@@ -21,6 +21,9 @@ import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shad
 import { OfficialStructuredEvidenceAdapter } from "../runtime-v2/official-structured-evidence.adapter";
 import { RagEvidenceAdapter } from "../runtime-v2/rag-evidence.adapter";
 import { MemoryEvidenceAdapter } from "../runtime-v2/memory-evidence.adapter";
+import { RuntimeV2CandidateResponseProvider } from "../runtime-v2/runtime-v2-candidate-response-provider";
+import { RuntimeV2CandidateResponseGenerator } from "../runtime-v2/candidate-response";
+import { PromptCompilerService } from "../prompt-compiler/prompt-compiler.service";
 
 @Module({
   imports: [
@@ -41,6 +44,7 @@ import { MemoryEvidenceAdapter } from "../runtime-v2/memory-evidence.adapter";
     OfficialStructuredEvidenceAdapter,
     RagEvidenceAdapter,
     MemoryEvidenceAdapter,
+    RuntimeV2CandidateResponseProvider,
     {
       provide: RUNTIME_V2_STATE_STORE,
       useFactory: (
@@ -56,6 +60,8 @@ import { MemoryEvidenceAdapter } from "../runtime-v2/memory-evidence.adapter";
         officialEvidenceAdapter: OfficialStructuredEvidenceAdapter,
         ragEvidenceAdapter: RagEvidenceAdapter,
         memoryEvidenceAdapter: MemoryEvidenceAdapter,
+        candidateProvider: RuntimeV2CandidateResponseProvider,
+        promptCompiler: PromptCompilerService,
       ) =>
         new RuntimeV2ShadowOrchestrator(
           stateStore,
@@ -64,12 +70,15 @@ import { MemoryEvidenceAdapter } from "../runtime-v2/memory-evidence.adapter";
           officialEvidenceAdapter,
           ragEvidenceAdapter,
           memoryEvidenceAdapter,
+          new RuntimeV2CandidateResponseGenerator(candidateProvider, promptCompiler),
         ),
       inject: [
         RUNTIME_V2_STATE_STORE,
         OfficialStructuredEvidenceAdapter,
         RagEvidenceAdapter,
         MemoryEvidenceAdapter,
+        RuntimeV2CandidateResponseProvider,
+        PromptCompilerService,
       ],
     },
     RuntimeV2ShadowIntegrationService,

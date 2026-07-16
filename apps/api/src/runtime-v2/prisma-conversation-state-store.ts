@@ -89,6 +89,8 @@ const STRUCTURAL_STATE_KEYS = new Set([
   "lastRelevantQuestionContextVersion",
   "sourceMessageId",
   "selectedFlowId",
+  "responsePlanId",
+  "generationId",
 ]);
 
 function redactStateValue(value: unknown, key = ""): JsonValue | undefined {

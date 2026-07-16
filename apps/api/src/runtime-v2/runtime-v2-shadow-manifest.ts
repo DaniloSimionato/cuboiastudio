@@ -16,6 +16,7 @@ import { type ActionStateManifest } from "./action-state";
 import { type ToolObservationManifest } from "./tool-observation";
 import type { SyntheticExecutionManifest } from "./synthetic-execution";
 import type { HandoffStateManifest } from "./handoff-state";
+import type { RuntimeResponseComparison, RuntimeV2CandidateResponse } from "./runtime-v2.types";
 
 export type RuntimeV2ShadowManifest = {
   runtimeVersion: "V2";
@@ -72,7 +73,7 @@ export type RuntimeV2ShadowManifest = {
     | "ERROR";
   processingDurationMs: number;
   shadowErrorCode: string | null;
-  providerCalled: false;
+  providerCalled: boolean;
   toolCalls: 0;
   outboundSent: false;
   action?: RuntimeV2ActionManifest;
@@ -110,6 +111,8 @@ export type RuntimeV2ShadowManifest = {
   toolObservationRedactionApplied: boolean;
   toolObservations: ToolObservationManifest[];
   syntheticExecution: SyntheticExecutionManifest | null;
+  candidateResponse: RuntimeV2CandidateResponse | null;
+  responseComparison: RuntimeResponseComparison | null;
   evidence?: EvidenceManifestExtension;
   v1Comparison: {
     selectedFlowId: string | null;
@@ -167,6 +170,8 @@ export function buildRuntimeV2ShadowManifest(input: {
   toolObservationMode?: RuntimeV2ToolObservationMode;
   toolObservations?: ToolObservationManifest[];
   syntheticExecution?: SyntheticExecutionManifest | null;
+  candidateResponse?: RuntimeV2CandidateResponse | null;
+  responseComparison?: RuntimeResponseComparison | null;
   v1Comparison?: Partial<RuntimeV2ShadowManifest["v1Comparison"]>;
 }): RuntimeV2ShadowManifest {
   const beforeFactKeys = Object.keys(input.beforeState.confirmedFacts);
@@ -247,7 +252,7 @@ export function buildRuntimeV2ShadowManifest(input: {
     persistenceResult: input.persistenceResult,
     processingDurationMs: Math.max(0, Math.round(input.processingDurationMs)),
     shadowErrorCode: input.shadowErrorCode ?? null,
-    providerCalled: false,
+    providerCalled: Boolean(input.candidateResponse?.provider),
     toolCalls: 0,
     outboundSent: false,
     toolObservationMode: input.toolObservationMode ?? "OFF",
@@ -283,6 +288,8 @@ export function buildRuntimeV2ShadowManifest(input: {
     toolObservationRedactionApplied: true,
     toolObservations,
     syntheticExecution: input.syntheticExecution ?? null,
+    candidateResponse: input.candidateResponse ?? null,
+    responseComparison: input.responseComparison ?? null,
     ...(input.action ? { action: input.action } : {}),
     ...(input.actionState ? { actionState: input.actionState } : {}),
     ...(input.handoff ? { handoff: input.handoff } : {}),

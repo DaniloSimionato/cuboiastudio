@@ -9,6 +9,8 @@ export type RuntimeV2SyntheticExecutionMode = "OFF" | "SYNTHETIC_ONLY";
 export type RuntimeV2HandoffStateMode = "OFF" | "SHADOW_STATE";
 export type RuntimeV2HandoffExecutionMode = "OFF" | "CONTROLLED";
 export type RuntimeV2HandoffAdapterMode = "OFF" | "CHATWOOT_CONTROLLED";
+export type RuntimeV2ResponseGenerationMode = "OFF" | "SHADOW";
+export type RuntimeV2ResponseComparisonMode = "OFF" | "SHADOW";
 
 export type RuntimeV2ShadowConfig = RuntimeV2FeatureConfig & {
   assistantId?: string | null;
@@ -122,6 +124,42 @@ export function resolveRuntimeV2HandoffAdapterMode(
   return environment.RUNTIME_V2_HANDOFF_ADAPTER_MODE === "CHATWOOT_CONTROLLED"
     ? "CHATWOOT_CONTROLLED"
     : "OFF";
+}
+
+export function resolveRuntimeV2ResponseGenerationMode(
+  environment: NodeJS.ProcessEnv = process.env,
+): RuntimeV2ResponseGenerationMode {
+  return environment.RUNTIME_V2_RESPONSE_GENERATION_MODE === "SHADOW" ? "SHADOW" : "OFF";
+}
+
+export function resolveRuntimeV2ResponseComparisonMode(
+  environment: NodeJS.ProcessEnv = process.env,
+): RuntimeV2ResponseComparisonMode {
+  return environment.RUNTIME_V2_RESPONSE_COMPARISON_MODE === "SHADOW" ? "SHADOW" : "OFF";
+}
+
+export function resolveRuntimeV2ResponseAssistantIds(
+  environment: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return parseAllowlist(environment.RUNTIME_V2_RESPONSE_ASSISTANT_IDS);
+}
+
+export function resolveRuntimeV2ResponseConversationIds(
+  environment: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return parseAllowlist(environment.RUNTIME_V2_RESPONSE_CONVERSATION_IDS);
+}
+
+export function isRuntimeV2ResponseGenerationEnabled(
+  input: { assistantId: string; conversationId: string },
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return (
+    isRuntimeV2ShadowEnabled({ assistantId: input.assistantId }, environment) &&
+    resolveRuntimeV2ResponseGenerationMode(environment) === "SHADOW" &&
+    resolveRuntimeV2ResponseAssistantIds(environment).includes(input.assistantId) &&
+    resolveRuntimeV2ResponseConversationIds(environment).includes(input.conversationId)
+  );
 }
 
 export function assertNoDualOutbound(input: {
