@@ -257,6 +257,28 @@ export type HandoffStateManifest = {
   handoffReconciliationStatus: string | null;
   handoffExecutionPersisted: boolean;
   handoffExecutionRedactionApplied: boolean;
+  handoffAdapterMode: "OFF" | "CHATWOOT_CONTROLLED";
+  operationalAdapterEligible: boolean;
+  operationalAdapterResolved: boolean;
+  chatwootConfigurationResolved: boolean;
+  chatwootScopeValidated: boolean;
+  chatwootConversationReadAttempted: boolean;
+  chatwootConversationReadSucceeded: boolean;
+  chatwootAiActiveBefore: boolean | null;
+  chatwootPauseAiAttempted: boolean;
+  chatwootPauseAiHttpOutcome: string | null;
+  chatwootFinalVerificationAttempted: boolean;
+  chatwootFinalVerificationStatus: string | null;
+  chatwootAiActiveAfter: boolean | null;
+  chatwootReconciliationReadOnly: boolean;
+  chatwootExternalEffectMayHaveOccurred: boolean;
+  chatwootAdapterErrorCode: string | null;
+  chatwootPayloadPersisted: false;
+  chatwootTokenPersisted: false;
+  chatwootMessageSent: false;
+  chatwootLabelApplied: false;
+  chatwootAssignmentChanged: false;
+  chatwootStatusChanged: false;
 };
 
 function canonicalize(value: unknown): unknown {
@@ -1098,5 +1120,27 @@ export function buildHandoffStateManifest(input: {
     handoffReconciliationStatus: null,
     handoffExecutionPersisted: false,
     handoffExecutionRedactionApplied: true,
+    handoffAdapterMode: "OFF",
+    operationalAdapterEligible: false,
+    operationalAdapterResolved: false,
+    chatwootConfigurationResolved: false,
+    chatwootScopeValidated: false,
+    chatwootConversationReadAttempted: false,
+    chatwootConversationReadSucceeded: false,
+    chatwootAiActiveBefore: null,
+    chatwootPauseAiAttempted: false,
+    chatwootPauseAiHttpOutcome: null,
+    chatwootFinalVerificationAttempted: false,
+    chatwootFinalVerificationStatus: null,
+    chatwootAiActiveAfter: null,
+    chatwootReconciliationReadOnly: false,
+    chatwootExternalEffectMayHaveOccurred: false,
+    chatwootAdapterErrorCode: null,
+    chatwootPayloadPersisted: false,
+    chatwootTokenPersisted: false,
+    chatwootMessageSent: false,
+    chatwootLabelApplied: false,
+    chatwootAssignmentChanged: false,
+    chatwootStatusChanged: false,
   };
 }

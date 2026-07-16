@@ -8,6 +8,7 @@ export type RuntimeV2ToolObservationMode = "OFF" | "SHADOW_METADATA";
 export type RuntimeV2SyntheticExecutionMode = "OFF" | "SYNTHETIC_ONLY";
 export type RuntimeV2HandoffStateMode = "OFF" | "SHADOW_STATE";
 export type RuntimeV2HandoffExecutionMode = "OFF" | "CONTROLLED";
+export type RuntimeV2HandoffAdapterMode = "OFF" | "CHATWOOT_CONTROLLED";
 
 export type RuntimeV2ShadowConfig = RuntimeV2FeatureConfig & {
   assistantId?: string | null;
@@ -113,6 +114,14 @@ export function resolveRuntimeV2HandoffExecutionConversationIds(
   environment: NodeJS.ProcessEnv = process.env,
 ): string[] {
   return parseAllowlist(environment.RUNTIME_V2_HANDOFF_EXECUTION_CONVERSATION_IDS);
+}
+
+export function resolveRuntimeV2HandoffAdapterMode(
+  environment: NodeJS.ProcessEnv = process.env,
+): RuntimeV2HandoffAdapterMode {
+  return environment.RUNTIME_V2_HANDOFF_ADAPTER_MODE === "CHATWOOT_CONTROLLED"
+    ? "CHATWOOT_CONTROLLED"
+    : "OFF";
 }
 
 export function assertNoDualOutbound(input: {

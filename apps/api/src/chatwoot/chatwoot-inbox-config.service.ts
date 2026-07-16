@@ -620,6 +620,32 @@ export class ChatwootInboxConfigService {
     return record ? this.toResolvedConfig(record) : null;
   }
 
+  async resolveActiveForAssistantConversation(input: {
+    companyId: string;
+    assistantId: string;
+    accountId: string;
+    inboxId: string;
+  }): Promise<ResolvedChatwootInboxConfig | null> {
+    const records = await this.prisma.chatwootInboxConfig.findMany({
+      where: {
+        companyId: input.companyId,
+        assistantId: input.assistantId,
+        accountId: input.accountId,
+        inboxId: input.inboxId,
+      },
+      select: chatwootInboxConfigSelect,
+      orderBy: [{ createdAt: "asc" }],
+    });
+
+    const activeRecords = records.filter((record) => record.isActive);
+    if (activeRecords.length > 1) {
+      throw new BadRequestException("CHATWOOT_SCOPE_AMBIGUOUS");
+    }
+
+    const record = activeRecords[0] ?? records[0] ?? null;
+    return record ? this.toResolvedConfig(record) : null;
+  }
+
   async isWebhookSecureModeAllowed(): Promise<boolean> {
     const nodeEnv = this.configService.get<string>("NODE_ENV")?.trim() ?? "development";
     if (nodeEnv !== "production") {

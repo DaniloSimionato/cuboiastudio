@@ -71,6 +71,9 @@ export type ChatwootHandoffExecutionConfiguration = {
 };
 
 export type ChatwootHandoffConversationState = {
+  conversationExists?: boolean;
+  accountScopeValid?: boolean;
+  inboxScopeValid?: boolean;
   companyId: string;
   assistantId: string;
   conversationId: string;
@@ -80,6 +83,12 @@ export type ChatwootHandoffConversationState = {
   configReady: boolean;
   aiActive: boolean;
   humanActive: boolean;
+  humanActivityDetected?: boolean;
+  assigneePresent?: boolean;
+  teamPresent?: boolean;
+  conversationStatus?: string | null;
+  fetchedAt?: string;
+  stateHash?: string;
   labelApplied: boolean;
   teamAssigned: boolean;
   agentAssigned: boolean;
@@ -137,6 +146,7 @@ export type ChatwootHandoffExecutionResult = {
 export type ChatwootHandoffAdapterContext = {
   plan: ChatwootHandoffExecutionPlan;
   handoff: HandoffRequest;
+  conversationState?: ChatwootHandoffConversationState;
 };
 
 export interface ChatwootHandoffAdapter {
@@ -440,7 +450,7 @@ export class ControlledChatwootHandoffExecutor {
     });
     if (!staticPreconditions.ok) return { ...result, errorCode: staticPreconditions.errorCode };
 
-    const context = { plan, handoff: input.handoff };
+    const context: ChatwootHandoffAdapterContext = { plan, handoff: input.handoff };
     let state: ChatwootHandoffConversationState;
     try {
       state = await this.adapter.getConversationState(context);
@@ -468,6 +478,7 @@ export class ControlledChatwootHandoffExecutor {
         finalStateVerified: true,
       };
     }
+    context.conversationState = state;
 
     const attemptedSteps: ChatwootHandoffStep[] = ["VERIFY_CONVERSATION", "VERIFY_AI_ACTIVE"];
     const confirmedSteps: ChatwootHandoffStep[] = ["VERIFY_CONVERSATION", "VERIFY_AI_ACTIVE"];
@@ -508,6 +519,24 @@ export class ControlledChatwootHandoffExecutor {
       attemptedSteps.push("VERIFY_FINAL_STATE");
       const finalState = await this.adapter.verifyFinalState(context);
       confirmedSteps.push("VERIFY_FINAL_STATE");
+      if (finalState.humanActive) {
+        return {
+          ...result,
+          status: "HUMAN_ALREADY_ACTIVE",
+          attemptedSteps,
+          confirmedSteps,
+          aiActiveBefore,
+          aiActiveAfter: finalState.aiActive,
+          finalStateVerified: true,
+        };
+      }
+      if (finalState.aiActive) {
+        throw new ChatwootHandoffAdapterError(
+          "HANDOFF_RECONCILIATION_REQUIRED",
+          "AFTER_MUTATION",
+          true,
+        );
+      }
       return {
         ...result,
         status: "SUCCEEDED",
@@ -523,13 +552,16 @@ export class ControlledChatwootHandoffExecutor {
       const adapterError = error instanceof ChatwootHandoffAdapterError ? error : null;
       const uncertain = Boolean(adapterError?.externalEffectMayHaveOccurred);
       const partialMutation = confirmedSteps.includes("PAUSE_AI");
+      const requiresReconciliation = adapterError?.code === "HANDOFF_RECONCILIATION_REQUIRED";
       return {
         ...result,
-        status: uncertain
-          ? "TIMED_OUT_UNKNOWN_EFFECT"
-          : partialMutation
-            ? "FAILED_AFTER_PARTIAL_MUTATION"
-            : "FAILED_BEFORE_MUTATION",
+        status: requiresReconciliation
+          ? "RECONCILIATION_REQUIRED"
+          : uncertain
+            ? "TIMED_OUT_UNKNOWN_EFFECT"
+            : partialMutation
+              ? "FAILED_AFTER_PARTIAL_MUTATION"
+              : "FAILED_BEFORE_MUTATION",
         attemptedSteps,
         confirmedSteps,
         aiActiveBefore,

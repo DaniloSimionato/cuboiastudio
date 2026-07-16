@@ -997,3 +997,63 @@ dependências reais. Esta subfase não habilita flags, não registra adapter rea
 não acessa Chatwoot e não cria migration. A persistência operacional e o
 controle de revisão serão ligados ao orquestrador Shadow somente após a
 validação específica de 7.1H-B/7.1I.
+
+## 19. Fase 7.1H-B — conexão segura do adapter operacional Chatwoot
+
+### Segunda barreira e factory
+
+`RUNTIME_V2_HANDOFF_ADAPTER_MODE` aceita `OFF` ou `CHATWOOT_CONTROLLED` e
+permanece `OFF` por padrão. A factory só cria o adapter operacional quando
+Runtime V2 está em `SHADOW`, Handoff State em `SHADOW_STATE`, Handoff Execution
+em `CONTROLLED`, Adapter Mode em `CHATWOOT_CONTROLLED`, ambas as allowlists
+contêm o escopo e o handoff está pronto e autorizado. Com qualquer condição
+ausente, a factory retorna adapter nulo, não lê configuração, não inicializa
+transporte HTTP e não acessa credencial.
+
+### Services e resolução segura
+
+O adapter reutiliza `ChatwootInboxConfigService` para resolver a configuração
+ativa por `companyId`, `assistantId`, `accountId` e `inboxId`; a nova resolução
+rejeita múltiplos vínculos ativos como `CHATWOOT_SCOPE_AMBIGUOUS`. O registro
+interno `AssistantConversation` fornece os identificadores externos somente
+por vínculo persistido e escopado; account/inbox nunca vêm do modelo, flow ou
+mensagem. O mecanismo existente `setExternalConversationAiActive` permanece
+no V1, mas não é reutilizado como executor porque absorve erros e não confirma
+estado final. O adapter usa transporte injetável para expor resultados HTTP
+sanitizados e não lê tokens por conta própria.
+
+### Escopo inicial e ordem
+
+`OperationalChatwootHandoffAdapter` implementa leitura da conversa, pausa de
+IA, verificação final e reconciliação read-only. A única mutação permitida é
+`ai_active=false`; label, assignment, status e mensagens retornam
+`OPERATION_NOT_ENABLED` sem chamada externa. A ordem é leitura, validação de
+tenant/account/inbox e atividade humana, pausa quando necessário e nova leitura
+confirmatória. `ai_active` ausente nunca é interpretado como falso.
+
+### Timeout, idempotência e reconciliação
+
+Resposta com `ai_active=false` é sucesso idempotente e não gera PUT. Humano
+ativo impede mutação. Timeout ou erro de transporte após possível envio produz
+`TIMED_OUT_UNKNOWN_EFFECT` e exige reconciliação; não há retry automático.
+PUT bem-sucedido sem confirmação posterior também produz
+`RECONCILIATION_REQUIRED`. `reconcilePauseAi` somente lê o estado atual e pode
+confirmar sucesso, atividade humana, falha ou estado inconclusivo.
+
+### Manifesto, testes e limites
+
+O manifesto registra modo do adapter, elegibilidade, resolução de configuração,
+escopo, leitura, estado de IA antes/depois, resultado HTTP sanitizado,
+verificação final, reconciliação e efeito incerto. Mantém
+`chatwootPayloadPersisted=false`, `chatwootTokenPersisted=false`,
+`chatwootMessageSent=false`, `chatwootLabelApplied=false`,
+`chatwootAssignmentChanged=false`, `chatwootStatusChanged=false`,
+`providerCalled=false` e `outboundSent=false`.
+
+Os testes HTTP usam somente transporte mockado e cobrem sucesso, já pausada,
+humano ativo, erro antes da mutação, timeout incerto, verificação final
+inconclusiva e divergência account/inbox. O adapter operacional não importa
+Calendar, Webhook, providers ou serviços de outbound. A integração permanece
+desligada e sem operação real; a próxima etapa é a validação Shadow controlada
+com allowlists explícitas, seguida da ativação operacional somente após revisão
+de rollback.
