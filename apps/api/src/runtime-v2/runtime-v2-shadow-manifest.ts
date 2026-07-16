@@ -11,6 +11,7 @@ import {
 } from "./runtime-v2.types";
 import { type RuntimeV2Mode } from "./runtime-v2-feature-flag";
 import { type EvidenceManifestExtension } from "./evidence-manifest";
+import { type RuntimeV2ActionManifest } from "./action-contracts";
 
 export type RuntimeV2ShadowManifest = {
   runtimeVersion: "V2";
@@ -70,6 +71,7 @@ export type RuntimeV2ShadowManifest = {
   providerCalled: false;
   toolCalls: 0;
   outboundSent: false;
+  action?: RuntimeV2ActionManifest;
   evidence?: EvidenceManifestExtension;
   v1Comparison: {
     selectedFlowId: string | null;
@@ -121,6 +123,7 @@ export function buildRuntimeV2ShadowManifest(input: {
   messageAlreadyProcessed: boolean;
   shadowErrorCode?: string | null;
   evidence?: EvidenceManifestExtension;
+  action?: RuntimeV2ActionManifest;
   v1Comparison?: Partial<RuntimeV2ShadowManifest["v1Comparison"]>;
 }): RuntimeV2ShadowManifest {
   const beforeFactKeys = Object.keys(input.beforeState.confirmedFacts);
@@ -200,6 +203,7 @@ export function buildRuntimeV2ShadowManifest(input: {
     providerCalled: false,
     toolCalls: 0,
     outboundSent: false,
+    ...(input.action ? { action: input.action } : {}),
     ...(input.evidence ? { evidence: input.evidence } : {}),
     v1Comparison: {
       selectedFlowId: comparison.selectedFlowId ?? null,
