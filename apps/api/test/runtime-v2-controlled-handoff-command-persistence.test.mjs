@@ -200,6 +200,13 @@ test("PostgreSQL persists one-shot approval, execution and redacted event IDs", 
     controlledExecutionApproval: approval,
     revision: 2,
   }, 1);
+  const persistedApproval = await store.load(storeScope);
+  assert.equal(persistedApproval?.controlledExecutionApproval?.approvalId, approval.approvalId);
+  assert.equal(persistedApproval?.controlledExecutionApproval?.status, "ISSUED");
+  assert.deepEqual(
+    persistedApproval?.handoffState?.activeHandoff,
+    persistedInitial.state.handoffState.activeHandoff,
+  );
   const adapter = new FakeAdapter();
   const command = new commandModule.RuntimeV2ControlledHandoffCommand({
     stateStore: store,
@@ -220,7 +227,12 @@ test("PostgreSQL persists one-shot approval, execution and redacted event IDs", 
     mode: "EXECUTE",
     approvalId: approval.approvalId,
   });
-  assert.equal(result.status, "SUCCEEDED");
+  assert.equal(
+    result.status,
+    "SUCCEEDED",
+    `status=${result.status}; blockers=${result.blockers.join(",")}; resultCode=${result.resultCode}`,
+  );
+  assert.equal(result.revisionChanged, true);
   assert.equal(adapter.calls.filter((call) => call === "pauseAi").length, 1);
   const restarted = await new runtime.PrismaConversationStateStore(prisma).load(storeScope);
   assert.equal(restarted.controlledExecution.status, "SUCCEEDED");

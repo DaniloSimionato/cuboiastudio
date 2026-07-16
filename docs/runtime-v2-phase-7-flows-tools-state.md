@@ -1132,6 +1132,13 @@ gerado após as validações finais, aprovação válida e imediatamente antes d
 transição persistida para execução. Assim, duas validações equivalentes
 mantêm o mesmo `planHash` sem antecipar uma identidade operacional.
 
+Quando o `DRY_RUN` não tenta nenhuma escrita, `revisionBefore` é a revisão lida,
+`revisionAfter` é `null` e `revisionChanged` é `false`. Esse `null` significa
+`NOT_APPLICABLE`, não falha de leitura nem perda de revisão. O resultado de
+`EXECUTE` passa a marcar `revisionChanged=true` somente após a primeira escrita
+persistida e retorna a revisão final quando a persistência terminal é
+confirmada.
+
 ### Execução autorizada
 
 Uma futura chamada `EXECUTE` precisa simultaneamente de Runtime V2 `SHADOW`,
@@ -1246,3 +1253,28 @@ avaliada durante execução explicitamente autorizada. O próximo passo técnico
 revisar o commit, fazer backup, realizar deploy fast-forward com todos os modos
 `OFF`, e somente depois preparar o procedimento de execução controlada com
 approval e allowlists temporárias.
+
+## 23. Fase 7.1J-E2 — isolamento da suíte e semântica de revisão
+
+A execução histórica monolítica dos arquivos `apps/api/test/*.mjs` usava um
+único schema e um único processo lógico de teste. A comparação reproduzida em
+`15bf3c1` e `7e5127a` mostrou as mesmas falhas: guards de testes PostgreSQL que
+exigiam nomes de banco fixos e a persistência do one-shot colidindo com o
+estado compartilhado durante a execução concorrente. O teste de persistência
+passa isoladamente em ambos os commits; portanto a falha não foi introduzida
+pela separação de identidade do `DRY_RUN`.
+
+O comando estabilizado é `npm run test:full:isolated` dentro de `apps/api`.
+Ele cria um template local com as migrations versionadas existentes e um banco
+descartável por arquivo de teste, executa cada arquivo em processo separado,
+passa o nome do banco por `RUNTIME_V2_TEST_DATABASE_NAME` e remove o banco no
+`finally`. O runner exige PostgreSQL em loopback e um nome de banco de teste;
+não usa banco operacional, `db push`, `migrate dev`, truncates globais ou
+retries. Isso isola schema, ambiente, cache de módulos, processo, portas e
+cleanup sem reduzir assertions. Os testes de HTTP e evidência aceitam o nome
+descartável explicitamente, mantendo a proteção contra banco incorreto.
+
+Nesta subfase, a semântica do `DRY_RUN` é: `revisionBefore` é a revisão
+observada, `revisionAfter=null`, `revisionChanged=false`, sem alteração no
+`RuntimeHandoffState`, sem aprovação e sem identidade operacional. Uma futura
+execução só pode marcar a revisão alterada depois da escrita otimista confirmada.

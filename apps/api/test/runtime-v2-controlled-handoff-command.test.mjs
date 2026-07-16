@@ -198,6 +198,8 @@ test("default mode is DRY_RUN and performs no external read or state write", asy
   assert.equal(result.eligible, true);
   assert.equal(result.externalReadPerformed, false);
   assert.equal(result.credentialResolved, false);
+  assert.equal(result.revisionAfter, null);
+  assert.equal(result.revisionChanged, false);
   assert.equal("executionId" in result, false);
   assert.equal(result.operationalExecutionCreated, false);
   assert.equal(result.commandId.length > 0, true);
@@ -218,6 +220,10 @@ test("equivalent DRY_RUN calls have the same plan identity and no operational id
   assert.equal("executionId" in second, false);
   assert.equal(first.operationalExecutionCreated, false);
   assert.equal(second.operationalExecutionCreated, false);
+  assert.equal(first.revisionAfter, null);
+  assert.equal(second.revisionAfter, null);
+  assert.equal(first.revisionChanged, false);
+  assert.equal(second.revisionChanged, false);
   assert.equal((await store.load(scope)).controlledExecution, null);
 });
 
@@ -272,6 +278,7 @@ test("EXECUTE consumes approval once and pauses AI through the fake adapter", as
   assert.equal(result.externalEffectMayHaveOccurred, false);
   assert.equal(result.executionId.length > 0, true);
   assert.equal(result.operationalExecutionCreated, true);
+  assert.equal(result.revisionChanged, true);
   assert.equal(adapter.calls.filter((call) => call === "pauseAi").length, 1);
   assert.equal(adapter.calls.includes("applyLabel"), false);
   assert.equal(adapter.calls.includes("assignTeam"), false);

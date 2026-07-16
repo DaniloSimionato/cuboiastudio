@@ -90,6 +90,7 @@ type ControlledHandoffCommandResultBase = {
   planHash: string | null;
   revisionBefore: number | null;
   revisionAfter: number | null;
+  revisionChanged: boolean;
   pauseAiAttempted: boolean;
   pauseAiConfirmed: boolean;
   humanAlreadyActive: boolean;
@@ -202,6 +203,7 @@ function baseResult(input: ControlledHandoffCommandInput): MutableControlledHand
     planHash: null,
     revisionBefore: null,
     revisionAfter: null,
+    revisionChanged: false,
     pauseAiAttempted: false,
     pauseAiConfirmed: false,
     humanAlreadyActive: false,
@@ -689,6 +691,7 @@ export class RuntimeV2ControlledHandoffCommand {
       return finalizeResult(result);
     }
 
+    result.revisionChanged = true;
     result.executionId = executionId;
     result.operationalExecutionCreated = true;
 
@@ -847,6 +850,7 @@ export class RuntimeV2ControlledHandoffCommand {
     try {
       const persisted = await this.dependencies.stateStore.save(finalState, currentState.revision);
       result.revisionAfter = persisted.revision;
+      result.revisionChanged = true;
       return finalizeResult(result);
     } catch {
       result.status = "RECONCILIATION_REQUIRED";

@@ -24,7 +24,8 @@
     "test:apps": "npm run build && node --test test/app-store.test.mjs test/assistant-calendar-tools.test.mjs",
     "test:attachments": "npm run build && node --test test/attachment-pipeline.test.mjs",
     "test:chatwoot": "npm run build && node --test test/chatwoot-webhook-and-runtime.test.mjs",
-    "test:studio-users": "npm run build && node --test test/studio-users-auth.test.mjs"
+    "test:studio-users": "npm run build && node --test test/studio-users-auth.test.mjs",
+    "test:full:isolated": "node scripts/run-full-test-suite-isolated.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",

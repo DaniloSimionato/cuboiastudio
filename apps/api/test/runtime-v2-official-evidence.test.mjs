@@ -21,8 +21,10 @@ if (!databaseUrl) {
 }
 
 const databaseName = new URL(databaseUrl).pathname.replace(/^\//, "");
-if (databaseName !== "cubo_ai_studio_test_phase_6_1b1") {
-  throw new Error("official evidence tests require the disposable phase 6.1B2 database");
+const expectedDatabaseName =
+  process.env.RUNTIME_V2_TEST_DATABASE_NAME ?? "cubo_ai_studio_test_phase_6_1b1";
+if (databaseName !== expectedDatabaseName) {
+  throw new Error(`official evidence tests require ${expectedDatabaseName}`);
 }
 
 const prisma = new PrismaClient();
