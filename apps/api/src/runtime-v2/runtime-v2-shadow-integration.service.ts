@@ -341,6 +341,7 @@ export class RuntimeV2ShadowIntegrationService {
       toolObservationPersisted: manifest?.toolObservationPersisted ?? false,
       toolObservationRedactionApplied: manifest?.toolObservationRedactionApplied ?? true,
       toolObservations: manifest?.toolObservations ?? [],
+      syntheticExecution: manifest?.syntheticExecution ?? null,
       evidenceMode: manifest?.evidence?.evidenceMode ?? "OFF",
       evidenceContractVersion: manifest?.evidence?.evidenceContractVersion ?? null,
       requestedEvidenceCategories: manifest?.evidence?.requestedEvidenceCategories ?? [],

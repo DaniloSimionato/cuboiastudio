@@ -733,3 +733,72 @@ redaction, Calendar, Webhook read/write, timeout, efeito incerto, conversão em
 evidência, allowlist e Shadow sem execução. Os testes V1 existentes de Calendar,
 Custom Webhook, Chatwoot e escopo de flow permanecem regressões; nenhum provider
 ou endpoint externo é chamado pelos testes novos.
+
+## 16. Fase 7.1E — execução sintética sem efeitos externos
+
+### Flag e isolamento
+
+`RUNTIME_V2_SYNTHETIC_EXECUTION_MODE` aceita `OFF` ou `SYNTHETIC_ONLY` e fica
+`OFF` por padrão. A execução só é elegível quando Runtime V2 está em `SHADOW`,
+`RUNTIME_V2_ACTION_STATE_MODE=SHADOW_STATE`, o assistente está allowlisted e a
+flag sintética está em `SYNTHETIC_ONLY`.
+
+O `SyntheticToolRegistry` aceita exclusivamente nomes com prefixo
+`synthetic.`. O registro padrão contém `synthetic.availability`,
+`synthetic.booking`, `synthetic.webhook_read` e `synthetic.webhook_write`.
+Nenhum service Calendar, Webhook, Chatwoot, cliente HTTP ou provider é
+importado ou injetado pelo módulo sintético.
+
+### Ciclo, estado e fila
+
+`RuntimeV2SyntheticExecutionOrchestrator` usa o `ConversationStateStore` já
+existente. A transição é `ACTION_CONFIRMED` ou ação de leitura sem confirmação
+→ `EXECUTION_QUEUED` → `EXECUTING` → resultado terminal. Timeout de mutação
+produz `RECONCILIATION_REQUIRED`; não há retry automático.
+
+O `executionId` é determinístico por ação, ferramenta, versão, hash dos
+argumentos, tentativa e `contextVersion`. O estado e os eventos sanitizados
+são gravados no mesmo `stateJson`, com revisão otimista; não há worker, Redis,
+outbox, tabela ou migration nova. Concorrência vencida retorna conflito
+explícito. Ações terminais são suprimidas sem segunda execução.
+
+### Resultados e evidências
+
+Os adapters falsos usam fixtures tipadas e marcam sempre
+`executionEnvironment=SYNTHETIC` e `sourceVersion=SYNTHETIC_RUNTIME_V2`.
+Availability autoriza somente `AVAILABILITY`, booking somente `BOOKING` e
+webhook somente sua categoria declarada. Falha, timeout incerto e duplicidade
+não geram evidência positiva. Reconciliação sintética pode produzir
+`RECONCILED_SUCCEEDED`, `RECONCILED_FAILED` ou permanecer pendente.
+
+O manifesto registra somente hashes, enums, contagens, status, revisões,
+validade e duração. Mantém `realToolExecutionPerformed=false`,
+`externalNetworkCallPerformed=false`, `providerCalled=false` e
+`outboundSent=false`. A execução sintética não cria
+`V1ToolExecutionObservation`.
+
+### Validação PostgreSQL local e limitação ambiental
+
+Os testes unitários cobrem flag, allowlist, registry, disponibilidade, booking,
+webhook, confirmação, falha, timeout, reconciliação, duplicidade,
+cancelamento, concorrência, determinismo e bloqueio de imports reais. O banco
+primário local não continha as tabelas Runtime V2, embora o schema Prisma e a
+migration versionada estivessem presentes. A validação foi concluída em banco
+local descartável, usando somente `prisma migrate deploy` e a migration
+`20260713164733_add_runtime_v2_persistence`; nenhuma migration nova, `db push`
+ou alteração do banco operacional foi necessária.
+
+O banco migrado foi validado com state, eventos, logs, revision,
+`contextVersion`, `stateJson`, índices, constraints e histórico de migrations.
+Os testes PostgreSQL de persistência, concorrência, restart, idempotência,
+isolamento, HTTP e evidência oficial passaram três vezes. A suíte não-DB passou
+433/433 em cada uma de três execuções. A sanitização de estado preserva IDs e
+hashes canônicos para impedir que a redaction de padrões numéricos altere a
+identidade de uma ação após restart.
+
+### Plano da Fase 7.1F
+
+1. validar leitura de disponibilidade real em Shadow, ainda sem outbound;
+2. comparar `TOOL_RESULT` real V1 com resultado sintético;
+3. preparar confirmação e booking operacional apenas após reconciliação,
+   rollback e isolamento aprovados.

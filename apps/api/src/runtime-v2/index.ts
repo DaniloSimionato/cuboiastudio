@@ -29,3 +29,4 @@ export * from "./combined-evidence";
 export * from "./action-contracts";
 export * from "./action-state";
 export * from "./tool-observation";
+export * from "./synthetic-execution";

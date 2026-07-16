@@ -14,6 +14,7 @@ import { type EvidenceManifestExtension } from "./evidence-manifest";
 import { type RuntimeV2ActionManifest } from "./action-contracts";
 import { type ActionStateManifest } from "./action-state";
 import { type ToolObservationManifest } from "./tool-observation";
+import type { SyntheticExecutionManifest } from "./synthetic-execution";
 
 export type RuntimeV2ShadowManifest = {
   runtimeVersion: "V2";
@@ -106,6 +107,7 @@ export type RuntimeV2ShadowManifest = {
   toolObservationPersisted: boolean;
   toolObservationRedactionApplied: boolean;
   toolObservations: ToolObservationManifest[];
+  syntheticExecution: SyntheticExecutionManifest | null;
   evidence?: EvidenceManifestExtension;
   v1Comparison: {
     selectedFlowId: string | null;
@@ -161,6 +163,7 @@ export function buildRuntimeV2ShadowManifest(input: {
   actionState?: ActionStateManifest;
   toolObservationMode?: RuntimeV2ToolObservationMode;
   toolObservations?: ToolObservationManifest[];
+  syntheticExecution?: SyntheticExecutionManifest | null;
   v1Comparison?: Partial<RuntimeV2ShadowManifest["v1Comparison"]>;
 }): RuntimeV2ShadowManifest {
   const beforeFactKeys = Object.keys(input.beforeState.confirmedFacts);
@@ -276,6 +279,7 @@ export function buildRuntimeV2ShadowManifest(input: {
     toolObservationPersisted: toolObservations.length > 0,
     toolObservationRedactionApplied: true,
     toolObservations,
+    syntheticExecution: input.syntheticExecution ?? null,
     ...(input.action ? { action: input.action } : {}),
     ...(input.actionState ? { actionState: input.actionState } : {}),
     ...(input.evidence ? { evidence: input.evidence } : {}),

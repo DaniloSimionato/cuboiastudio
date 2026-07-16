@@ -5,6 +5,7 @@ export type RuntimeV2StateStoreMode = "MEMORY" | "POSTGRES";
 export type RuntimeV2EvidenceMode = "OFF" | "SHADOW_METADATA";
 export type RuntimeV2ActionStateMode = "OFF" | "SHADOW_STATE";
 export type RuntimeV2ToolObservationMode = "OFF" | "SHADOW_METADATA";
+export type RuntimeV2SyntheticExecutionMode = "OFF" | "SYNTHETIC_ONLY";
 
 export type RuntimeV2ShadowConfig = RuntimeV2FeatureConfig & {
   assistantId?: string | null;
@@ -77,6 +78,14 @@ export function resolveRuntimeV2ToolObservationMode(
 ): RuntimeV2ToolObservationMode {
   return environment.RUNTIME_V2_TOOL_OBSERVATION_MODE === "SHADOW_METADATA"
     ? "SHADOW_METADATA"
+    : "OFF";
+}
+
+export function resolveRuntimeV2SyntheticExecutionMode(
+  environment: NodeJS.ProcessEnv = process.env,
+): RuntimeV2SyntheticExecutionMode {
+  return environment.RUNTIME_V2_SYNTHETIC_EXECUTION_MODE === "SYNTHETIC_ONLY"
+    ? "SYNTHETIC_ONLY"
     : "OFF";
 }
 

@@ -51,6 +51,12 @@ function isForbiddenStateKey(key: string): boolean {
 
 const STRUCTURAL_STATE_KEYS = new Set([
   "id",
+  "actionId",
+  "argumentsHash",
+  "idempotencyKeyHash",
+  "confirmationId",
+  "confirmingMessageId",
+  "executionId",
   "stateId",
   "eventId",
   "runtimeLogId",

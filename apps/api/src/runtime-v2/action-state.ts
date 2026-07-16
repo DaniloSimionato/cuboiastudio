@@ -48,7 +48,17 @@ export type ActionStateReason =
   | "ACTION_STATE_REVISION_CONFLICT"
   | "ACTION_STATE_INVALID_TRANSITION"
   | "ACTION_STATE_IDEMPOTENCY_CONFLICT"
-  | "ACTION_STATE_REDACTION_FAILURE";
+  | "ACTION_STATE_REDACTION_FAILURE"
+  | "EXECUTION_QUEUED"
+  | "EXECUTION_STARTED"
+  | "EXECUTION_SUCCEEDED"
+  | "EXECUTION_FAILED"
+  | "EXECUTION_TIMED_OUT"
+  | "RECONCILIATION_REQUIRED"
+  | "RECONCILIATION_STARTED"
+  | "RECONCILIATION_SUCCEEDED"
+  | "RECONCILIATION_FAILED"
+  | "ACTION_CANCELLED";
 
 export type ConfirmationState = {
   required: boolean;
@@ -61,11 +71,11 @@ export type ConfirmationState = {
 };
 
 export type ExecutionState = {
-  executionPlanned: false;
-  executionQueued: false;
-  executionStarted: false;
-  executionPerformed: false;
-  externalEffectMayHaveOccurred: false;
+  executionPlanned: boolean;
+  executionQueued: boolean;
+  executionStarted: boolean;
+  executionPerformed: boolean;
+  externalEffectMayHaveOccurred: boolean;
 };
 
 export type PendingActionState = {
@@ -125,6 +135,17 @@ export type RuntimeActionStateEvent = {
   reason: ActionStateReason;
   metadata: Record<string, ActionJsonValue>;
   action?: PendingActionState | null;
+};
+
+export type RuntimeActionEventInput = {
+  scope: ActionStateScope;
+  action: PendingActionState;
+  eventType: ActionEventType;
+  nextStatus: ActionStatus;
+  internalMessageId: string;
+  timestamp: string;
+  reason: ActionStateReason;
+  metadata?: Record<string, ActionJsonValue>;
 };
 
 export type RuntimeActionState = {
@@ -502,6 +523,15 @@ function makeEvent(input: {
   };
 }
 
+export function createRuntimeActionStateEvent(
+  input: RuntimeActionEventInput,
+): RuntimeActionStateEvent {
+  return makeEvent({
+    ...input,
+    previousStatus: input.action.status,
+  });
+}
+
 export function proposePendingAction(input: ActionStateProposalInput): ActionStateProposalResult {
   assertIso(input.expiresAt, "EXPIRES_AT");
   if (!input.internalMessageId.trim()) throw new Error("INTERNAL_MESSAGE_ID_REQUIRED");
@@ -616,6 +646,13 @@ function transitionForEvent(event: RuntimeActionStateEvent): ActionStatus {
     event.eventType === "ACTION_INVALIDATED_BY_INTENT_CHANGE"
   )
     return "CANCELLED";
+  if (
+    event.previousStatus === "ACTION_PROPOSED" &&
+    event.eventType === "EXECUTION_REQUESTED" &&
+    event.metadata.confirmationPolicy === "NONE"
+  ) {
+    return "EXECUTION_QUEUED";
+  }
   return transitionActionStatus(event.previousStatus, event.eventType);
 }
 
@@ -666,6 +703,31 @@ export function reduceRuntimeActionState(
         event.eventType === "HUMAN_CONFIRMED" ||
         active.confirmationState.accepted,
       rejected: event.eventType === "CONFIRMATION_REJECTED" || active.confirmationState.rejected,
+    },
+    executionState: {
+      ...active.executionState,
+      executionPlanned:
+        event.eventType === "EXECUTION_REQUESTED" || active.executionState.executionPlanned,
+      executionQueued:
+        event.eventType === "EXECUTION_REQUESTED"
+          ? true
+          : event.eventType === "EXECUTION_STARTED"
+            ? false
+            : active.executionState.executionQueued,
+      executionStarted:
+        event.eventType === "EXECUTION_STARTED"
+          ? true
+          : event.eventType === "EXECUTION_SUCCEEDED" ||
+              event.eventType === "EXECUTION_FAILED" ||
+              event.eventType === "EXECUTION_TIMED_OUT"
+            ? false
+            : active.executionState.executionStarted,
+      executionPerformed:
+        event.eventType === "EXECUTION_SUCCEEDED" ? true : active.executionState.executionPerformed,
+      externalEffectMayHaveOccurred:
+        event.eventType === "EXECUTION_TIMED_OUT"
+          ? true
+          : active.executionState.externalEffectMayHaveOccurred,
     },
   } satisfies PendingActionState;
   const terminal = isTerminalActionStatus(nextStatus);

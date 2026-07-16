@@ -11,6 +11,8 @@ import {
   proposePendingAction,
   RuntimeV2ShadowIntegrationService,
   RuntimeV2ShadowOrchestrator,
+  RuntimeV2SyntheticExecutionOrchestrator,
+  createDefaultSyntheticToolRegistry,
 } from "../dist/runtime-v2/index.js";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -254,4 +256,75 @@ test("PostgreSQL registra observação de ferramenta somente como metadata", asy
   assert.equal(metadata.v1ToolExecutionObserved, true);
   assert.equal(JSON.stringify(metadata).includes("2026-07-20T14:00:00.000Z"), false);
   assert.equal(JSON.stringify(metadata).includes("startAt"), false);
+});
+
+test("PostgreSQL persiste execução sintética no stateJson sem payload e recupera após restart", async () => {
+  const fixture = await createFixture();
+  const scope = storeScope(fixture.scope);
+  const args = { date: "2026-07-20" };
+  const proposal = proposePendingAction({
+    scope,
+    proposal: {
+      contractVersion: 1,
+      flowId: "flow-availability",
+      intent: "availability",
+      proposedActionType: "READ_AVAILABILITY",
+      requiredParameters: [],
+      collectedParameters: ["date"],
+      missingParameters: [],
+      confirmationPolicy: "NONE",
+      toolContext: null,
+      provenance: { source: "V2_SHADOW", sourceFlowId: "flow-availability", sourceVersion: "test" },
+    },
+    internalMessageId: fixture.message.id,
+    currentTime: now,
+    expiresAt: "2026-07-15T12:15:00.000Z",
+    normalizedArguments: args,
+    collectedParameterKeys: ["date"],
+    missingParameters: [],
+    provenance: { source: "V2_SHADOW", sourceFlowId: "flow-availability", sourceVersion: "test" },
+  });
+  const state = {
+    ...createEmptyConversationState(fixture.scope, now),
+    actionState: proposal.state,
+  };
+  const store = new PrismaConversationStateStore(prisma);
+  await store.create(state);
+  const environment = {
+    RUNTIME_V2_MODE: "SHADOW",
+    RUNTIME_V2_ACTION_STATE_MODE: "SHADOW_STATE",
+    RUNTIME_V2_SYNTHETIC_EXECUTION_MODE: "SYNTHETIC_ONLY",
+    RUNTIME_V2_SHADOW_ASSISTANT_IDS: fixture.scope.assistantId,
+  };
+  const result = await new RuntimeV2SyntheticExecutionOrchestrator(
+    store,
+    createDefaultSyntheticToolRegistry(),
+    environment,
+    () => now,
+  ).execute({
+    scope,
+    actionId: proposal.request.actionId,
+    normalizedArguments: args,
+    internalMessageId: `${fixture.fixturePrefix}-synthetic-execution`,
+    currentTime: now,
+  });
+  assert.equal(result.result.status, "SUCCEEDED");
+  const restarted = await new PrismaConversationStateStore(prisma).load(scope);
+  assert.equal(restarted.actionState.activeAction, null);
+  assert.equal(restarted.actionState.recentTerminalActions[0].finalStatus, "SUCCEEDED");
+  assert.equal(restarted.actionState.recentActionEvents.length, 4);
+  const row = await prisma.assistantConversationStateV2.findUnique({
+    where: {
+      companyId_assistantId_conversationId_contextVersion_mode: {
+        ...fixture.scope,
+        mode: "SHADOW",
+      },
+    },
+    select: { stateJson: true, revision: true },
+  });
+  const serialized = JSON.stringify(row.stateJson);
+  assert.equal(serialized.includes("2026-07-20"), false);
+  assert.equal(serialized.includes("synthetic-reference"), false);
+  assert.equal(serialized.includes("normalizedArguments"), false);
+  assert.equal(row.revision, 3);
 });
