@@ -8,7 +8,9 @@ import {
   resolveRuntimeV2Mode,
   resolveRuntimeV2EvidenceMode,
   resolveRuntimeV2ActionStateMode,
+  resolveRuntimeV2HandoffStateMode,
   type RuntimeV2Mode,
+  type RuntimeV2HandoffStateMode,
 } from "./runtime-v2-feature-flag";
 import { buildResponsePlan } from "./response-plan";
 import { buildRetrievalPlan } from "./retrieval-plan";
@@ -70,6 +72,13 @@ import {
 } from "./tool-observation";
 import { resolveRuntimeV2ToolObservationMode } from "./runtime-v2-feature-flag";
 import {
+  applyHandoffTurn,
+  buildHandoffStateManifest,
+  type HandoffCompatibility,
+  type RuntimeHandoffState,
+  type V1HandoffObservation,
+} from "./handoff-state";
+import {
   type ConversationState,
   type RuntimeV2Scope,
   type UsefulHistoryMessage,
@@ -130,6 +139,7 @@ export type RuntimeV2ShadowSnapshot = {
   actionReset?: boolean;
   actionCompatibility?: ActionCompatibilityInput | null;
   toolObservations?: V1ToolExecutionObservation[];
+  v1HandoffObservation?: V1HandoffObservation | null;
 };
 
 export type RuntimeV2ShadowResult = {
@@ -429,6 +439,64 @@ function actionStateForTurn(input: {
   };
 }
 
+function handoffStateForTurn(input: {
+  mode: RuntimeV2HandoffStateMode;
+  state: ConversationState;
+  snapshot: RuntimeV2ShadowSnapshot;
+  now: Date;
+}): {
+  state: ConversationState;
+  before: RuntimeHandoffState | null;
+  after: RuntimeHandoffState | null;
+  eventIds: string[];
+  errorCode: string | null;
+  compatibility: HandoffCompatibility | null;
+  observation: V1HandoffObservation | null;
+} {
+  const before = input.state.handoffState ?? null;
+  const observation = input.snapshot.v1HandoffObservation ?? null;
+  if (input.mode === "OFF") {
+    return {
+      state: input.state,
+      before,
+      after: before,
+      eventIds: [],
+      errorCode: null,
+      compatibility: null,
+      observation: null,
+    };
+  }
+  const result = applyHandoffTurn({
+    scope: {
+      ...input.snapshot.scope,
+      runtimeVersion: "V2",
+      mode: "SHADOW",
+    },
+    state: input.state.handoffState,
+    observation,
+    currentTime: input.now,
+    actionId:
+      input.state.actionState?.activeAction?.actionType === "CHATWOOT_HANDOFF"
+        ? input.state.actionState.activeAction.actionId
+        : null,
+    reset: input.snapshot.actionReset,
+    internalMessageId: input.snapshot.internalMessageId,
+  });
+  const after =
+    !observation && !before && result.events.length === 0
+      ? (input.state.handoffState ?? null)
+      : result.after;
+  return {
+    state: { ...input.state, handoffState: after },
+    before,
+    after,
+    eventIds: result.events.map((event) => event.eventId),
+    errorCode: result.errorCode,
+    compatibility: result.compatibility,
+    observation: result.observation,
+  };
+}
+
 export class RuntimeV2ShadowOrchestrator {
   private activeExecutions = 0;
 
@@ -558,6 +626,20 @@ export class RuntimeV2ShadowOrchestrator {
           compatibility: null,
         };
     state = actionStateTurn.state;
+
+    const handoffStateMode = resolveRuntimeV2HandoffStateMode(this.environment);
+    const handoffStateTurn = !messageAlreadyProcessedBeforeLoad
+      ? handoffStateForTurn({ mode: handoffStateMode, state, snapshot, now })
+      : {
+          state,
+          before: state.handoffState ?? null,
+          after: state.handoffState ?? null,
+          eventIds: [],
+          errorCode: null,
+          compatibility: null,
+          observation: null,
+        };
+    state = handoffStateTurn.state;
 
     const stateBeforeQuestionSync = state;
     const snapshotQuestion = snapshot.lastRelevantQuestion;
@@ -740,6 +822,21 @@ export class RuntimeV2ShadowOrchestrator {
               compatibility: actionStateTurn.compatibility,
               persisted: actionStateTurn.eventIds.length > 0 && persistenceResult !== "DUPLICATE",
               errorCode: actionStateTurn.errorCode,
+            })
+          : undefined,
+      handoff:
+        handoffStateMode === "SHADOW_STATE"
+          ? buildHandoffStateManifest({
+              mode: handoffStateMode,
+              observation: handoffStateTurn.observation,
+              before: handoffStateTurn.before,
+              after: nextState.handoffState,
+              revisionBefore: beforeState.revision,
+              revisionAfter: nextState.revision,
+              compatibility: handoffStateTurn.compatibility,
+              eventIds: handoffStateTurn.eventIds,
+              persisted: handoffStateTurn.eventIds.length > 0 && persistenceResult !== "DUPLICATE",
+              errorCode: handoffStateTurn.errorCode,
             })
           : undefined,
       toolObservationMode: resolveToolObservationMode(this.environment),

@@ -98,6 +98,7 @@ import {
   isRuntimeV2ToolObservationEnabled,
   type V1ToolExecutionObservation,
 } from "../runtime-v2/tool-observation";
+import { createV1HandoffObservation } from "../runtime-v2/handoff-state";
 import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
 import {
   deriveExpectedAuthorityCategory,
@@ -399,6 +400,7 @@ const assistantConversationSafeSelect = {
   externalContactId: true,
   externalChannelId: true,
   externalInboxId: true,
+  aiActive: true,
   pausedByHuman: true,
   lastMessageAt: true,
   status: true,
@@ -2566,6 +2568,10 @@ export class AssistantConversationsService {
     }
 
     let triageMode = isMultiNeedTriageMessage(customerIntentText);
+    const customerRequestedHuman =
+      /(humano|atendente|atendimento\s+humano|falar\s+com\s+alguém|falar\s+com\s+alguem)/i.test(
+        customerIntentText,
+      );
     const isExplicitPriceQuery =
       /(quanto\s+fica|quanto\s+custa|valores?|preços?|custos?|precos?|tabela|orçamento|orcamento)/i.test(
         customerIntentText,
@@ -2606,9 +2612,7 @@ export class AssistantConversationsService {
         /\b(me\s+)?(envie|mande|passa|quero|lista|quais|tabela)\b.*\b(lista|serviços|opções|opcoes|catalogo|catálogo)\b/i.test(
           customerIntentText,
         );
-      const isHandoffQuery = /(humano|atendente|atendimento\s+humano|falar\s+com\s+alguém)/i.test(
-        customerIntentText,
-      );
+      const isHandoffQuery = customerRequestedHuman;
 
       if (
         !customerUnableToAnswer &&
@@ -4705,6 +4709,50 @@ export class AssistantConversationsService {
     // outbound. O shadow permanece assíncrono e não participa da resposta V1.
     this.scheduleRuntimeV2Shadow({
       ...shadowSnapshot,
+      v1HandoffObservation:
+        contextMetadata.handoffPending ||
+        customerRequestedHuman ||
+        Boolean(conversation.pausedByHuman)
+          ? createV1HandoffObservation({
+              companyId: input.tenant.companyId,
+              assistantId: assistant.id,
+              conversationId: conversation.id,
+              contactId: memoryObservation.contactId === "unresolved" ? null : memoryObservation.contactId,
+              contextVersion: conversation.currentContextVersion ?? 1,
+              internalMessageId: userMessage.id,
+              flowId: contextMetadata.selectedFlowId ?? null,
+              handoffPendingObserved: Boolean(contextMetadata.handoffPending),
+              reasonCode: contextMetadata.handoffPending
+                ? contextMetadata.finalAction === "handoff" || selectedFlowForAuthority?.requiresHuman
+                  ? "FLOW_REQUIRED_HANDOFF"
+                  : customerRequestedHuman
+                    ? "CUSTOMER_REQUESTED_HUMAN"
+                    : "OTHER_STRUCTURED_REASON"
+                : customerRequestedHuman
+                  ? "CUSTOMER_REQUESTED_HUMAN"
+                  : "HUMAN_ALREADY_ACTIVE",
+              customerRequested: customerRequestedHuman,
+              humanActiveObserved: Boolean(conversation.pausedByHuman),
+              aiActiveObserved: Boolean(conversation.aiActive),
+              pausedByHumanObserved: Boolean(conversation.pausedByHuman),
+              requestedTargetType: "ANY_HUMAN",
+              requestedTargetIdHash: null,
+              collectedContextKeys: [
+                ...(contextMetadata.handoffPending ? ["handoff_pending"] : []),
+                ...(customerRequestedHuman ? ["customer_requested_human"] : []),
+                ...(contextMetadata.selectedFlowId ? ["selected_flow"] : []),
+                ...(conversation.pausedByHuman ? ["paused_by_human"] : []),
+              ],
+              contextHash: "",
+              provenance: {
+                source: "V1_PIPELINE",
+                sourceMessageId: userMessage.id,
+                sourceFlowId: contextMetadata.selectedFlowId ?? null,
+                sourceVersion: "handoff-v1-observation",
+                reasonCode: null,
+              },
+            })
+          : null,
       v1Comparison: {
         selectedFlowId: contextMetadata.selectedFlowId ?? null,
         selectedIntent: contextMetadata.detectedIntent ?? null,

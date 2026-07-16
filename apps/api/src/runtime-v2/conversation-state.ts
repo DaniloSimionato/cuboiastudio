@@ -8,6 +8,7 @@ import {
   type SerializedConversationState,
 } from "./runtime-v2.types";
 import { redactRuntimeActionState } from "./action-state";
+import { HANDOFF_CONTRACT_VERSION } from "./handoff-state";
 
 export const CONVERSATION_STATE_VERSION = "conversation-state-v2";
 
@@ -41,6 +42,7 @@ export function createEmptyConversationState(
     status: "ACTIVE",
     updatedAt: now,
     expiresAt: null,
+    handoffState: null,
   };
 }
 
@@ -189,6 +191,22 @@ export function deserializeConversationState(input: unknown): ConversationState 
   assertStateIdentity(state);
   if (state.schemaVersion !== CONVERSATION_STATE_VERSION) {
     throw new Error("unsupported conversation state schemaVersion");
+  }
+  if (state.handoffState !== undefined && state.handoffState !== null) {
+    const handoffState = state.handoffState as { contractVersion?: unknown };
+    if (handoffState.contractVersion !== HANDOFF_CONTRACT_VERSION) {
+      throw new Error("unsupported handoff state contractVersion");
+    }
+    const mutableHandoffState = state.handoffState as {
+      recentHandoffEventIds?: unknown;
+      recentHandoffEvents?: unknown;
+    };
+    if (!Array.isArray(mutableHandoffState.recentHandoffEventIds)) {
+      mutableHandoffState.recentHandoffEventIds = [];
+    }
+    if (!Array.isArray(mutableHandoffState.recentHandoffEvents)) {
+      mutableHandoffState.recentHandoffEvents = [];
+    }
   }
   if (state.lastProcessedMessageId !== null && typeof state.lastProcessedMessageId !== "string") {
     throw new Error("lastProcessedMessageId must be a string or null");

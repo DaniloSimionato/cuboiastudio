@@ -15,6 +15,7 @@ import { type RuntimeV2ActionManifest } from "./action-contracts";
 import { type ActionStateManifest } from "./action-state";
 import { type ToolObservationManifest } from "./tool-observation";
 import type { SyntheticExecutionManifest } from "./synthetic-execution";
+import type { HandoffStateManifest } from "./handoff-state";
 
 export type RuntimeV2ShadowManifest = {
   runtimeVersion: "V2";
@@ -76,6 +77,7 @@ export type RuntimeV2ShadowManifest = {
   outboundSent: false;
   action?: RuntimeV2ActionManifest;
   actionState?: ActionStateManifest;
+  handoff?: HandoffStateManifest;
   toolObservationMode: RuntimeV2ToolObservationMode;
   v1ToolExecutionObserved: boolean;
   toolObservationId: string | null;
@@ -161,6 +163,7 @@ export function buildRuntimeV2ShadowManifest(input: {
   evidence?: EvidenceManifestExtension;
   action?: RuntimeV2ActionManifest;
   actionState?: ActionStateManifest;
+  handoff?: HandoffStateManifest;
   toolObservationMode?: RuntimeV2ToolObservationMode;
   toolObservations?: ToolObservationManifest[];
   syntheticExecution?: SyntheticExecutionManifest | null;
@@ -282,6 +285,7 @@ export function buildRuntimeV2ShadowManifest(input: {
     syntheticExecution: input.syntheticExecution ?? null,
     ...(input.action ? { action: input.action } : {}),
     ...(input.actionState ? { actionState: input.actionState } : {}),
+    ...(input.handoff ? { handoff: input.handoff } : {}),
     ...(input.evidence ? { evidence: input.evidence } : {}),
     v1Comparison: {
       selectedFlowId: comparison.selectedFlowId ?? null,

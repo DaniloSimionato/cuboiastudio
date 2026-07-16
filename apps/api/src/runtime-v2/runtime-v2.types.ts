@@ -1,4 +1,5 @@
 import type { RuntimeActionState } from "./action-state";
+import type { RuntimeHandoffState } from "./handoff-state";
 
 export type RuntimeVersion = "V1" | "V2";
 
@@ -83,6 +84,7 @@ export type ConversationState = {
   flowStage: string | null;
   status: ConversationStatus;
   actionState?: RuntimeActionState | null;
+  handoffState?: RuntimeHandoffState | null;
   updatedAt: Date;
   expiresAt: Date | null;
 };
@@ -119,6 +121,8 @@ export type SerializedConversationState = {
   selectedFlowId: string | null;
   flowStage: string | null;
   status: ConversationStatus;
+  actionState?: JsonValue;
+  handoffState?: JsonValue;
 };
 
 export type TurnUnderstanding = {

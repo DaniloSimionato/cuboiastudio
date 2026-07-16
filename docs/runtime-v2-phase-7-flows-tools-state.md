@@ -162,12 +162,30 @@ V2.
 
 ### Status
 
-- Google Calendar: operacional no V1, com leitura e mutações externas;
+- Google Calendar: capability operacional no V1, mas opcional por empresa/app;
 - custom webhook: operacional no V1, com efeitos externos conforme método;
 - Chatwoot outbound/`ai_active`: operacional no V1, fora do V2;
 - handoff: parcial;
 - execução de ferramentas pelo V2: inexistente por desenho;
 - adapters fake do V2: apenas testes, sem conexão operacional.
+
+### Escopo por empresa e app
+
+Google Calendar não é requisito global do Runtime V2. A capability somente pode
+ser considerada disponível quando a empresa possuir a instalação ativa, a
+credencial OAuth descriptografável, o recurso/calendário configurado e o flow
+permitir explicitamente a operação read-only correspondente.
+
+A preparação operacional para a FG foi cancelada deliberadamente: não devem
+ser criados credencial, recurso, flow ou configuração artificial de agenda para
+essa empresa. A configuração e a validação real do APP Google Calendar ficam
+adiadas para a implantação do APP da Drimo.
+
+Ausência de OAuth ou de recurso Google Calendar na FG não bloqueia o núcleo do
+Runtime V2. Adapters reais devem ser habilitados por empresa/app, nunca como
+dependência global. Quando o app não estiver instalado/configurado, Google
+Calendar permanece proibido por padrão e nenhuma ferramenta correspondente é
+exposta ou executada.
 
 ## 3. Caminho de execução V1
 
@@ -462,17 +480,18 @@ confirmação, idempotência, freshness, conflitos e reset.
 Avaliar integração controlada de disponibilidade. Primeiro exigir resultado
 atual, escopado e metadata-only; não permitir booking.
 
-### 7.1G — booking com confirmação
+### 7.1G — contratos e estado de handoff Chatwoot
 
-Somente após outbox/reconciliação, ação pendente persistida e testes de retry,
-timeout, reset e sucesso parcial. Confirmação obrigatória e sem override por
-flow nessa etapa.
+Definir contrato genérico de handoff, independente de Google Calendar, com
+escopo por empresa, assistente, conversa e `contextVersion`. O estado deve
+separar proposta, confirmação, execução, conclusão, cancelamento e intervenção
+humana, sem persistir mensagens ou payloads integrais.
 
-### 7.1H — handoff Chatwoot
+### 7.1H — execução controlada de handoff
 
-Implementar primeiro solicitação metadata-only e sincronização de `ai_active`/
-estado humano. Aplicação de labels/assignment deve ter contrato próprio e
-idempotência.
+Executar somente a operação Chatwoot aprovada e escopada, com idempotência,
+kill switch, reconciliação de `aiActive` e prevenção de concorrência entre IA e
+humano. Nenhuma dependência de agenda ou outro app deve ser introduzida.
 
 ### 7.1I — validação Shadow
 
@@ -483,6 +502,19 @@ outbound V2, com cenários de falha parcial e multi-tenant.
 
 Só depois de aprovação de segurança, healthchecks, rollback operacional e
 confirmação explícita do escopo de ferramentas permitidas.
+
+### Plano revisado após a decisão de escopo
+
+1. **7.1G — Handoff Chatwoot:** contratos canônicos, estado pendente,
+   confirmação, escopo e idempotência genéricos para todos os clientes.
+2. **7.1H — Execução controlada:** integração mínima e reversível do handoff,
+   sem Google Calendar e sem ativação ampla de ferramentas.
+3. **7.1I — Validação Shadow:** observar propostas, transições e resultados
+   metadata-only, mantendo provider, ferramenta e outbound V2 desligados.
+4. **7.1J — Ativação controlada:** allowlist mínima, rollout gradual,
+   healthchecks e rollback explícito.
+5. **Trilha futura de APP:** configurar e validar Google Calendar somente para
+   a Drimo, como capability opcional e independente do núcleo do Runtime V2.
 
 ## 11. Critérios para qualquer execução futura
 
@@ -504,7 +536,10 @@ Antes de uma ferramenta V2 poder ser chamada, devem existir:
 ## 12. Conclusão
 
 O V1 possui capacidade operacional real para Google Calendar, custom webhook e
-Chatwoot, mas a semântica de ação ainda está acoplada ao ciclo do provider.
+Chatwoot, mas a semântica de ação ainda está acoplada ao ciclo do provider. O
+Google Calendar é uma capability opcional por empresa/app e não um requisito do
+núcleo do Runtime V2; sua ausência na FG foi aceita e a integração foi adiada
+para a implantação do APP da Drimo.
 O V2 está corretamente sem execução operacional. A maior barreira para a
 Fase 7 não é descobrir novas ferramentas: é introduzir um contrato persistido
 de ação, confirmação, idempotência e reconciliação sem alterar o outbound do
@@ -802,3 +837,82 @@ identidade de uma ação após restart.
 2. comparar `TOOL_RESULT` real V1 com resultado sintético;
 3. preparar confirmação e booking operacional apenas após reconciliação,
    rollback e isolamento aprovados.
+
+## 17. Fase 7.1G — estado persistente de handoff Chatwoot
+
+### Decisão de escopo
+
+Google Calendar permanece uma capability opcional por empresa/app. A
+integração operacional foi adiada para a implantação do APP da Drimo. A
+ausência de OAuth ou recurso de calendário na FG não bloqueia o núcleo do
+Runtime V2; nenhuma credencial, recurso ou flow de agenda foi criado para ela.
+Adapters reais só poderão ser habilitados por empresa/app após configuração,
+escopo e validação próprios. Google Calendar continua proibido por padrão
+quando não estiver instalado e configurado.
+
+### Contratos e motivos
+
+`HandoffRequest` é um contrato versionado, metadata-only, vinculado a empresa,
+assistente, conversa, contato, `contextVersion`, mensagem de origem, motivo,
+urgência, destino e hashes de contexto/idempotência. Os motivos são enums como
+`CUSTOMER_REQUESTED_HUMAN`, `LOW_CONFIDENCE`, `AUTHORITY_CONFLICT`,
+`TOOL_FAILED`, `FLOW_REQUIRED_HANDOFF` e `HUMAN_ALREADY_ACTIVE`; o manifesto
+não carrega texto livre. Destinos são `ANY_HUMAN`, `TEAM`, `AGENT`,
+`SPECIALIZED_QUEUE` e `EXISTING_ASSIGNEE`, sempre metadata-only.
+
+O ciclo de vida inclui `HANDOFF_PROPOSED`, `HANDOFF_READY`, estados de
+execução futuros e os terminais `HANDOFF_CANCELLED`, `HANDOFF_EXPIRED` e
+`HANDOFF_SUPERSEDED`. Nesta fase, somente proposta, prontidão e invalidação
+são alcançáveis. Nenhum estado Chatwoot operacional é alterado.
+
+### Estado, escopo e idempotência
+
+`RuntimeHandoffState` vive no `stateJson` de Runtime V2 junto do estado de
+ação, sem tabela ou migration nova. Há no máximo um handoff ativo por
+empresa/assistente/conversa/`contextVersion`; referências terminais ficam
+limitadas a dez. `handoffId`, `observationId` e eventos são determinísticos,
+com hashes estáveis; os últimos eventos metadata-only ficam limitados a 32 e
+mensagens duplicadas não criam propostas adicionais.
+Revisão otimista, isolamento de escopo e recuperação após restart reutilizam o
+repositório PostgreSQL existente. Redis não é fonte canônica.
+
+### Observação V1 e correlação
+
+`V1HandoffObservation` captura somente `handoffPending`, pedido estruturado de
+humano, atividade humana, `aiActive` e `pausedByHuman`, além de chaves,
+categorias, hashes e proveniência. A observação não pausa/ativa IA, não chama
+Chatwoot e não envia mensagem. Quando houver `CHATWOOT_HANDOFF` no Action State,
+a correlação exige o mesmo escopo, contexto, ação e turno; ela não transiciona
+automaticamente a ação para execução.
+
+### Feature flag, manifesto e fail-safe
+
+`RUNTIME_V2_HANDOFF_STATE_MODE` aceita `OFF` ou `SHADOW_STATE` e permanece
+`OFF` por padrão. Com `OFF`, não há observação, proposta, evento ou alteração
+de estado. Com `SHADOW_STATE`, somente metadata sanitizada é persistida. O
+manifesto registra presença, status, motivo, destino, compatibilidade,
+revisões, IDs de eventos e hashes, mantendo `handoffExecutionPerformed=false`,
+`chatwootMutationPerformed=false`, `labelApplied=false`,
+`assignmentChanged=false`, `conversationStatusChanged=false`,
+`aiActiveChanged=false` e `outboundSent=false`.
+
+Falha de redaction, escopo, revisão ou persistência é sanitizada, não bloqueia
+o V1 e não dispara retry infinito. Intervenção humana, reset e mudança de
+`contextVersion` invalidam proposta antiga de forma determinística.
+
+### Validação e limitações
+
+Os contratos puros, reducer, observação V1, correlação, redaction,
+concorrência, persistência PostgreSQL descartável e Shadow local devem provar
+idempotência e isolamento sem qualquer operação Chatwoot. A execução futura,
+pausa/ativação de IA, labels, assignment, status, equipe/agente, confirmação
+operacional e reconciliação ficam explicitamente fora desta fase.
+
+### Plano da Fase 7.1H
+
+1. definir o adapter e o contrato de execução Chatwoot sem registrar executor
+   no Runtime V2;
+2. validar confirmação, escopo, idempotência e reconciliação em fixtures;
+3. observar sinais reais do V1 sem mutação V2;
+4. executar handoff controlado somente após Shadow, rollback e isolamento
+   aprovados, com flags independentes e sem dependência de Google Calendar.
