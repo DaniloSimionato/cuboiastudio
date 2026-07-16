@@ -85,6 +85,8 @@ export type ConversationState = {
   status: ConversationStatus;
   actionState?: RuntimeActionState | null;
   handoffState?: RuntimeHandoffState | null;
+  controlledExecutionApproval?: ControlledExecutionApprovalState | null;
+  controlledExecution?: ControlledExecutionRecord | null;
   updatedAt: Date;
   expiresAt: Date | null;
 };
@@ -123,6 +125,41 @@ export type SerializedConversationState = {
   status: ConversationStatus;
   actionState?: JsonValue;
   handoffState?: JsonValue;
+  controlledExecutionApproval?: JsonValue;
+  controlledExecution?: JsonValue;
+};
+
+export type ControlledExecutionApprovalState = {
+  approvalId: string;
+  handoffId: string;
+  companyId: string;
+  assistantId: string;
+  conversationId: string;
+  contextVersion: number;
+  expectedRevision: number;
+  approvedOperation: "PAUSE_AI_ONLY";
+  issuedAt: string;
+  expiresAt: string;
+  nonceHash: string;
+  consumedAt: string | null;
+  status: "ISSUED" | "CONSUMED" | "EXPIRED" | "REJECTED";
+  redactionApplied: true;
+};
+
+export type ControlledExecutionRecord = {
+  executionId: string;
+  handoffId: string;
+  status: string;
+  resultCode: string | null;
+  revisionBefore: number;
+  revisionAfter: number | null;
+  pauseAiAttempted: boolean;
+  pauseAiConfirmed: boolean;
+  humanAlreadyActive: boolean;
+  reconciliationRequired: boolean;
+  externalEffectMayHaveOccurred: boolean;
+  eventIds: string[];
+  redactionApplied: true;
 };
 
 export type TurnUnderstanding = {

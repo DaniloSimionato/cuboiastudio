@@ -114,7 +114,7 @@ export type ChatwootHandoffExecutionPlan = {
     assistantId: string;
     conversationId: string;
     contextVersion: number;
-    handoffStatus: "HANDOFF_READY";
+    handoffStatus: "HANDOFF_READY" | "HANDOFF_EXECUTION_PENDING" | "HANDOFF_EXECUTING";
     inboxRequired: true;
     humanMustBeInactive: true;
   };
@@ -301,7 +301,11 @@ export function validateChatwootHandoffExecutionPreconditions(input: {
   ) {
     return { ok: false, errorCode: "HANDOFF_CONVERSATION_NOT_ALLOWLISTED" };
   }
-  if (input.handoff.status !== "HANDOFF_READY") {
+  if (
+    input.handoff.status !== "HANDOFF_READY" &&
+    input.handoff.status !== "HANDOFF_EXECUTION_PENDING" &&
+    input.handoff.status !== "HANDOFF_EXECUTING"
+  ) {
     return { ok: false, errorCode: "HANDOFF_NOT_READY" };
   }
   if (isExpired(input.handoff, input.currentTime)) {
@@ -388,7 +392,11 @@ export function createChatwootHandoffExecutionPlan(input: {
       assistantId: input.handoff.assistantId,
       conversationId: input.handoff.conversationId,
       contextVersion: input.handoff.contextVersion,
-      handoffStatus: "HANDOFF_READY",
+      handoffStatus:
+        input.handoff.status === "HANDOFF_EXECUTION_PENDING" ||
+        input.handoff.status === "HANDOFF_EXECUTING"
+          ? input.handoff.status
+          : "HANDOFF_READY",
       inboxRequired: true,
       humanMustBeInactive: true,
     },

@@ -1090,3 +1090,91 @@ com sinal operacional, duplicidade, contexto novo, manifesto após persistência
 redaction e ausência de mutação Chatwoot. O reteste real deve ocorrer em nova
 conversa ou `contextVersion` comprovadamente novo, com Handoff Execution e
 Adapter ainda `OFF`.
+
+## 21. Fase 7.1J-A — comando one-shot de handoff controlado
+
+Esta subfase adiciona somente um entrypoint interno de aplicação/CLI,
+compilado junto da API mas não importado por `main.ts`, pelo webhook Chatwoot
+ou pelo processamento normal de mensagens. Não existe rota HTTP pública nem
+execução automática após um turno.
+
+O formato exige `companyId`, `assistantId`, `conversationId`, `contextVersion`,
+`handoffId`, `expectedRevision` e `mode`. `EXECUTE` também exige `approvalId`
+correspondente à aprovação persistida. Account, inbox, token, URL, contato e
+credenciais não são argumentos aceitos; account/inbox continuam derivados
+exclusivamente da configuração oficial pelo adapter futuro.
+
+### Dry-run e aprovação
+
+O default é `DRY_RUN`; a ausência de `--mode` nunca significa execução. O
+dry-run valida estado, escopo, handoff ativo, revisão, motivo, allowlists,
+flags, plano e referência estrutural de configuração sem resolver credencial,
+ler Chatwoot, consumir aprovação, alterar estado operacional ou mudar a
+resposta V1.
+
+Sem uma referência estrutural retornada pela configuração oficial, o resultado
+é bloqueado como `CONTROLLED_HANDOFF_CONFIGURATION_REFERENCE_UNAVAILABLE`;
+nenhuma referência é aceita por argumento manual.
+
+`ControlledExecutionApprovalState` é single-use, tem validade explícita,
+operação fixa `PAUSE_AI_ONLY`, nonce somente como hash e vínculo com handoff,
+tenant, assistente, conversa, `contextVersion` e `expectedRevision`. Aprovação
+expirada, consumida ou de revisão diferente é rejeitada antes de qualquer
+resolução externa.
+
+### Execução autorizada
+
+Uma futura chamada `EXECUTE` precisa simultaneamente de Runtime V2 `SHADOW`,
+Handoff State `SHADOW_STATE`, Handoff Execution `CONTROLLED`, Adapter
+`CHATWOOT_CONTROLLED`, allowlists não vazias e exatas, handoff
+`HANDOFF_READY`, razão autorizada, revisão exata e aprovação válida. O plano
+aceito contém exatamente `VERIFY_CONVERSATION`, `VERIFY_AI_ACTIVE`, `PAUSE_AI`
+e `VERIFY_FINAL_STATE`. Label, assignment, status, mensagens, `RESUME_AI` e
+operações compostas são rejeitados antes da execução.
+
+O ciclo persistido no `stateJson` usa revisão otimista:
+`HANDOFF_READY → HANDOFF_EXECUTION_PENDING → HANDOFF_EXECUTING`, seguido de
+sucesso ou reconciliação. O `ControlledExecutionRecord` guarda somente status,
+códigos, revisões, flags de efeito, resultado da pausa e hashes de eventos.
+Os eventos de auditoria são determinísticos e metadata-only:
+`CONTROLLED_HANDOFF_DRY_RUN`, `CONTROLLED_HANDOFF_EXECUTION_APPROVED`,
+`CONTROLLED_HANDOFF_EXECUTION_STARTED`,
+`CONTROLLED_HANDOFF_EXECUTION_COMPLETED`,
+`CONTROLLED_HANDOFF_EXECUTION_REJECTED` e
+`CONTROLLED_HANDOFF_RECONCILIATION_REQUIRED`. A cadeia persistida do execute
+mantém os IDs desses eventos e os eventos de transição do Handoff State;
+payloads não são gravados. Dry-run não altera o estado operacional.
+
+`PAUSE_AI_ONLY` é idempotente quando a IA já está pausada ou um humano já
+assumiu. Timeout após possível envio exige reconciliação e não permite retry
+cego. Uma revisão concorrente vence por optimistic concurrency; approval,
+executionId e handoff terminal não podem ser reutilizados.
+
+### Limites e validação
+
+Os testes locais cobrem default dry-run, flags e allowlists, escopo exato,
+aprovação, plano com operações proibidas, fake adapter, IA já pausada,
+humano ativo, timeout incerto, redaction, duplicidade, restart e duas chamadas
+concorrentes. O teste arquitetural confirma que o entrypoint não está ligado
+ao bootstrap normal. Testes PostgreSQL devem usar somente banco local
+descartável com migrations já existentes; esta subfase não cria tabela nem
+migration.
+
+Todas as flags e allowlists permanecem `OFF`/vazias por padrão. Nenhuma
+operação Chatwoot real, provider, outbound, rede externa, label, assignment,
+status ou alteração `ai_active` é realizada nesta implementação.
+
+### Plano da Fase 7.1J-B
+
+1. preparar aprovação operacional de uso único e procedimento de rollback;
+2. executar um único dry-run contra estado controlado;
+3. habilitar temporariamente as quatro flags e duas allowlists para uma
+   conversa explicitamente aprovada;
+4. executar somente `PAUSE_AI_ONLY` com adapter operacional e verificação
+   final;
+5. reconciliar qualquer timeout antes de nova tentativa;
+6. restaurar todas as flags e allowlists para `OFF`/vazias e comparar as
+   evidências antes/depois.
+
+Google Calendar continua sendo APP opcional por empresa e não é pré-requisito
+do comando de handoff.

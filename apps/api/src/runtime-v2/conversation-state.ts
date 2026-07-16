@@ -43,6 +43,8 @@ export function createEmptyConversationState(
     updatedAt: now,
     expiresAt: null,
     handoffState: null,
+    controlledExecutionApproval: null,
+    controlledExecution: null,
   };
 }
 
