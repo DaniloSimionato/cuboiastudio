@@ -39,12 +39,20 @@ import {
 import { validateResponse } from "./response-validator-v2";
 import { understandTurn } from "./turn-understanding";
 import { type OfficialStructuredEvidenceReader } from "./official-structured-evidence.adapter";
-import { type RagEvidenceAdapter, type RagRetrievalObservation } from "./rag-evidence.adapter";
+import {
+  createRagRetrievalObservation,
+  type RagEvidenceAdapter,
+  type RagRetrievalObservation,
+} from "./rag-evidence.adapter";
 import {
   type MemoryEvidenceAdapter,
   type MemoryRetrievalObservation,
 } from "./memory-evidence.adapter";
-import { DEFAULT_EVIDENCE_POLICIES } from "./authority-evidence-policy";
+import {
+  allowsRagDocumentAuthority,
+  DEFAULT_EVIDENCE_POLICIES,
+  type EvidenceCategory,
+} from "./authority-evidence-policy";
 import { resolveAuthority } from "./authority-evidence-resolver";
 import { buildEvidenceManifestExtension } from "./evidence-manifest";
 import {
@@ -153,6 +161,28 @@ export type RuntimeV2ShadowSnapshot = {
   candidateContext?: RuntimeV2CandidateContext | null;
 };
 
+/** Scoped retrieval is injected so Shadow can retrieve only after its base gate passes. */
+export type RuntimeV2ScopedRagRetriever = {
+  searchRelevantKnowledge(input: {
+    companyId: string;
+    assistantId: string;
+    query: string;
+    topK: number;
+    tenant: { companyId: string };
+  }): Promise<{
+    scoreThreshold: number;
+    scoreThresholdSource: string;
+    results: Array<{
+      knowledgeId: string;
+      knowledgeTitle: string;
+      chunkId: string;
+      contentPreview: string;
+      score: number;
+      metadata?: unknown;
+    }>;
+  }>;
+};
+
 export type RuntimeV2ShadowResult = {
   enabled: boolean;
   mode: RuntimeV2Mode;
@@ -244,6 +274,31 @@ function hasRecentBusinessHoursTopic(history: UsefulHistoryMessage[] | undefined
       mentionsOperatingHours || (mentionsBusinessDay && /\b(?:atende|atendem)\b/.test(normalized))
     );
   });
+}
+
+function singleRagAuthorityCategory(categories: string[]): EvidenceCategory | null {
+  if (categories.length !== 1) return null;
+  const category = categories[0] as EvidenceCategory;
+  return allowsRagDocumentAuthority(category) ? category : null;
+}
+
+function appendAuthorizedRagKnowledge(input: {
+  context: RuntimeV2CandidateContext;
+  items: Array<{ id: string; title: string; content: string }>;
+}): RuntimeV2CandidateContext {
+  if (input.items.length === 0) return input.context;
+  const existing = new Map(input.context.promptInput.knowledgeItems.map((item) => [item.id, item]));
+  for (const item of input.items) existing.set(item.id, item);
+  return {
+    ...input.context,
+    promptInput: {
+      ...input.context.promptInput,
+      knowledgeItems: [...existing.values()],
+    },
+    evidenceIds: [
+      ...new Set([...input.context.evidenceIds, ...input.items.map((item) => item.id)]),
+    ],
+  };
 }
 
 function retrievedContextFromEvidence(evidence: SourceEvidence[]): RetrievedContext {
@@ -588,6 +643,7 @@ export class RuntimeV2ShadowOrchestrator {
     private readonly ragEvidenceAdapter?: RagEvidenceAdapter,
     private readonly memoryEvidenceAdapter?: MemoryEvidenceAdapter,
     private readonly candidateResponseGenerator?: RuntimeV2CandidateResponseGenerator,
+    private readonly ragRetriever?: RuntimeV2ScopedRagRetriever,
   ) {}
 
   getMetrics(): RuntimeV2ShadowMetrics {
@@ -836,10 +892,14 @@ export class RuntimeV2ShadowOrchestrator {
       this.candidateResponseGenerator &&
       isRuntimeV2ResponseGenerationEnabled(snapshot.scope, this.environment)
     ) {
+      const candidateContext = appendAuthorizedRagKnowledge({
+        context: snapshot.candidateContext,
+        items: evidenceManifest.candidateKnowledgeItems,
+      });
       const generated = await this.candidateResponseGenerator.generate({
         state: nextState,
         responsePlan,
-        context: snapshot.candidateContext,
+        context: candidateContext,
         generationTimeoutMs: resolveRuntimeV2CandidateGenerationTimeoutMs(this.environment),
       });
       candidateResponse = generated.candidate;
@@ -881,6 +941,12 @@ export class RuntimeV2ShadowOrchestrator {
         evidenceManifest.evidenceMode === "SHADOW_METADATA"
           ? evidenceManifest.unavailableCategories
           : responsePlan.factsMissing,
+      authorityConflictDetected: evidenceManifest.conflictDetected,
+      authorityConflictCategories: evidenceManifest.conflictCategories,
+      winningSourceTypes: evidenceManifest.winningSourceTypes,
+      rejectedSourceTypes: Object.keys(evidenceManifest.evidenceCountsBySourceType).filter(
+        (sourceType) => !evidenceManifest.winningSourceTypes.includes(sourceType),
+      ),
       responsePlanAction: responsePlan.action,
       repeatedQuestionDetected: validation.repeatedQuestionDetected,
       validationResult: validation.result,
@@ -985,7 +1051,7 @@ export class RuntimeV2ShadowOrchestrator {
       requestedCategoryDerivation: input.requestedCategoryDerivation,
     });
     if (evidenceMode !== "SHADOW_METADATA" && !shouldResolveOfficialAuthority) {
-      return { ...skipped, retrievedContext: emptyContext() };
+      return { ...skipped, retrievedContext: emptyContext(), candidateKnowledgeItems: [] };
     }
 
     const officialResult = this.officialEvidenceAdapter
@@ -1015,6 +1081,50 @@ export class RuntimeV2ShadowOrchestrator {
           durationMs: 0,
         };
     let ragAdapterFailed = false;
+    let v2RagKnowledgeItems: Array<{ id: string; title: string; content: string }> = [];
+    let ragObservation = input.snapshot.ragObservation;
+    const ragAuthorityCategory = singleRagAuthorityCategory(requestedCategories);
+    const needsScopedRagRetrieval =
+      evidenceMode === "SHADOW_METADATA" &&
+      ragAuthorityCategory !== null &&
+      (!ragObservation?.retrievalExecuted || ragObservation.queryCategory !== ragAuthorityCategory);
+    if (needsScopedRagRetrieval && this.ragRetriever) {
+      try {
+        const search = await this.ragRetriever.searchRelevantKnowledge({
+          companyId: input.snapshot.scope.companyId,
+          assistantId: input.snapshot.scope.assistantId,
+          query: input.snapshot.currentMessage,
+          topK: 3,
+          tenant: { companyId: input.snapshot.scope.companyId },
+        });
+        ragObservation = createRagRetrievalObservation({
+          companyId: input.snapshot.scope.companyId,
+          assistantId: input.snapshot.scope.assistantId,
+          internalMessageId: input.snapshot.internalMessageId,
+          queryCategory: ragAuthorityCategory,
+          retrievalExecuted: true,
+          threshold: search.scoreThreshold,
+          thresholdSource: search.scoreThresholdSource,
+          results: search.results,
+        });
+        v2RagKnowledgeItems = search.results.map((item) => ({
+          id: item.chunkId,
+          title: item.knowledgeTitle,
+          content: item.contentPreview,
+        }));
+      } catch {
+        ragAdapterFailed = true;
+        ragObservation = createRagRetrievalObservation({
+          companyId: input.snapshot.scope.companyId,
+          assistantId: input.snapshot.scope.assistantId,
+          internalMessageId: input.snapshot.internalMessageId,
+          queryCategory: ragAuthorityCategory,
+          retrievalExecuted: false,
+          notExecutedReason: "PIPELINE_ERROR",
+          results: [],
+        });
+      }
+    }
     const ragResult =
       evidenceMode === "SHADOW_METADATA" && this.ragEvidenceAdapter
         ? (() => {
@@ -1022,7 +1132,7 @@ export class RuntimeV2ShadowOrchestrator {
               return this.ragEvidenceAdapter!.read({
                 scope: input.snapshot.scope,
                 requestedCategories,
-                observation: input.snapshot.ragObservation,
+                observation: ragObservation,
                 currentTime: input.now,
               });
             } catch {
@@ -1147,6 +1257,7 @@ export class RuntimeV2ShadowOrchestrator {
           evidencePipelineError: "EVIDENCE_PIPELINE_ERROR",
         }),
         retrievedContext: emptyContext(),
+        candidateKnowledgeItems: [],
       };
     }
     const combinedMetadata = buildCombinedEvidenceManifest(
@@ -1190,6 +1301,7 @@ export class RuntimeV2ShadowOrchestrator {
           }
         : undefined,
     });
+    const selectedRagChunkIds = new Set(ragResult?.manifest.ragChunkIds ?? []);
     return {
       ...extension,
       missingCategories: [
@@ -1225,6 +1337,9 @@ export class RuntimeV2ShadowOrchestrator {
           }
         : extension.memory,
       retrievedContext: retrievedContextFromEvidence(combined.evidence),
+      candidateKnowledgeItems: v2RagKnowledgeItems.filter((item) =>
+        selectedRagChunkIds.has(item.id),
+      ),
     };
   }
 

@@ -47,7 +47,19 @@ export type RuntimeV2ShadowManifest = {
   resolutionConfidence: number | null;
   ambiguityDetected: boolean;
   topicChanged: boolean;
+  previousTopic: string | null;
+  currentTopic: string | null;
+  topicChangeReason: string | null;
+  inheritedTopicSuppressed: boolean;
   resolutionReasonCode: string | null;
+  humanRequested: boolean;
+  humanRequestConfidence: number;
+  handoffRequired: boolean;
+  handoffReason: string | null;
+  handoffExecutionAllowed: false;
+  handoffExecutionAttempted: false;
+  handoffExecuted: false;
+  handoffStatus: "NOT_REQUIRED" | "REQUIRED_NOT_EXECUTED";
   objectiveAction: ObjectiveAction;
   currentObjective: string | null;
   previousObjective: string | null;
@@ -231,7 +243,21 @@ export function buildRuntimeV2ShadowManifest(input: {
     resolutionConfidence: input.understanding.resolutionConfidence ?? null,
     ambiguityDetected: input.understanding.ambiguityDetected ?? false,
     topicChanged: input.understanding.topicChanged ?? false,
+    previousTopic: input.understanding.previousTopic ?? null,
+    currentTopic: input.understanding.currentTopic ?? null,
+    topicChangeReason: input.understanding.topicChangeReason ?? null,
+    inheritedTopicSuppressed: input.understanding.inheritedTopicSuppressed ?? false,
     resolutionReasonCode: input.understanding.resolutionReasonCode ?? null,
+    humanRequested: input.understanding.humanHandoffSignal.requested,
+    humanRequestConfidence: input.understanding.humanHandoffSignal.confidence,
+    handoffRequired: input.understanding.humanHandoffSignal.requested,
+    handoffReason: input.understanding.humanHandoffSignal.reasonCode,
+    handoffExecutionAllowed: false,
+    handoffExecutionAttempted: false,
+    handoffExecuted: false,
+    handoffStatus: input.understanding.humanHandoffSignal.requested
+      ? "REQUIRED_NOT_EXECUTED"
+      : "NOT_REQUIRED",
     objectiveAction: input.understanding.objectiveAction,
     currentObjective: input.afterState.objective?.key ?? null,
     previousObjective: input.beforeState.objective?.key ?? null,

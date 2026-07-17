@@ -286,6 +286,11 @@ export type TurnUnderstanding = {
   resolutionConfidence?: number | null;
   ambiguityDetected?: boolean;
   topicChanged?: boolean;
+  /** Redacted topics used only to explain a deterministic explicit topic change. */
+  previousTopic?: string | null;
+  currentTopic?: string | null;
+  topicChangeReason?: string | null;
+  inheritedTopicSuppressed?: boolean;
   resolutionReasonCode?: string | null;
   requestedAction?: string;
   nextQuestion?: RelevantQuestion | null;

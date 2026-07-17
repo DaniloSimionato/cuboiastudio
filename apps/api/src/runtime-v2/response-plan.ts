@@ -20,6 +20,24 @@ export function buildResponsePlan(input: {
     policy: input.authorityPolicy,
   });
   const factsAvailable = Object.keys(state.confirmedFacts);
+  if (understanding.humanHandoffSignal.requested) {
+    return {
+      currentObjective: state.objective?.key ?? null,
+      turnIntent: "human_support_request",
+      selectedFlowId: state.selectedFlowId,
+      flowStage: state.flowStage,
+      factsAvailable,
+      factsMissing: [],
+      claimsAllowed: [],
+      claimsForbidden: [],
+      toolsAllowed: [],
+      action: "HANDOFF",
+      responseGoal:
+        "Reconhecer o pedido explícito de atendimento humano sem alegar que o encaminhamento foi executado.",
+      shouldHandoff: true,
+      reasonCodes: ["EXPLICIT_CUSTOMER_REQUEST", "HANDOFF_REQUIRED_NOT_EXECUTED"],
+    };
+  }
   if (understanding.requiresClarification) {
     return {
       currentObjective: state.objective?.key ?? null,
@@ -55,6 +73,7 @@ export function buildResponsePlan(input: {
         "booking",
         "exceptionRequest",
         "commercialPolicy",
+        "technicalInformation",
       ].includes(category),
     );
 

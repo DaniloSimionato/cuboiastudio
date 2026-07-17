@@ -37,6 +37,22 @@ export type CategoryEvidencePolicy = {
 
 const official = ["OFFICIAL_STRUCTURED", "OFFICIAL_DOCUMENT"] satisfies SourceType[];
 
+/**
+ * Only stable policies and technical guidance may use an active, scoped RAG
+ * document as factual authority. Quotes, availability and bookings still
+ * require structured data or a tool result.
+ */
+export const RAG_DOCUMENT_AUTHORITY_CATEGORIES = [
+  "WARRANTY",
+  "TECHNICAL_INFORMATION",
+  "COMMERCIAL_POLICY",
+  "PICKUP_DELIVERY",
+] as const satisfies readonly EvidenceCategory[];
+
+export function allowsRagDocumentAuthority(category: EvidenceCategory): boolean {
+  return (RAG_DOCUMENT_AUTHORITY_CATEGORIES as readonly string[]).includes(category);
+}
+
 function policy(
   category: EvidenceCategory,
   authoritativeSourceTypes: SourceType[],
@@ -92,13 +108,20 @@ export const DEFAULT_EVIDENCE_POLICIES: Record<EvidenceCategory, CategoryEvidenc
   PICKUP_DELIVERY: policy("PICKUP_DELIVERY", [
     "OFFICIAL_STRUCTURED",
     "OFFICIAL_DOCUMENT",
+    "RAG_DOCUMENT",
     "TOOL_RESULT",
   ]),
   DEADLINE: policy("DEADLINE", ["OFFICIAL_STRUCTURED", "OFFICIAL_DOCUMENT", "TOOL_RESULT"]),
-  WARRANTY: policy("WARRANTY", ["OFFICIAL_STRUCTURED", "OFFICIAL_DOCUMENT", "TOOL_RESULT"]),
+  WARRANTY: policy("WARRANTY", [
+    "OFFICIAL_STRUCTURED",
+    "OFFICIAL_DOCUMENT",
+    "RAG_DOCUMENT",
+    "TOOL_RESULT",
+  ]),
   COMMERCIAL_POLICY: policy("COMMERCIAL_POLICY", [
     "OFFICIAL_STRUCTURED",
     "OFFICIAL_DOCUMENT",
+    "RAG_DOCUMENT",
     "TOOL_RESULT",
   ]),
   TECHNICAL_INFORMATION: policy(
@@ -106,6 +129,7 @@ export const DEFAULT_EVIDENCE_POLICIES: Record<EvidenceCategory, CategoryEvidenc
     [
       "OFFICIAL_STRUCTURED",
       "OFFICIAL_DOCUMENT",
+      "RAG_DOCUMENT",
       "TOOL_RESULT",
       "CUSTOMER_PROVIDED",
       "SESSION_FACT",

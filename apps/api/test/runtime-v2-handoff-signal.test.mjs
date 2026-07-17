@@ -23,14 +23,14 @@ test("pedido explícito de humano gera sinal operacional canônico", () => {
   }
 });
 
-test("general_request preserva o sinal operacional sem trocar a intenção primária", () => {
+test("pedido explícito de humano tem prioridade sobre a intenção geral", () => {
   const understanding = understandTurn({
     message: "Quero falar com um atendente humano, por favor.",
     messageId: "message-handoff-signal",
     contextVersion: 1,
   });
 
-  assert.equal(understanding.turnIntent, "general_request");
+  assert.equal(understanding.turnIntent, "human_support_request");
   assert.equal(understanding.humanHandoffSignal.requested, true);
   assert.equal(understanding.humanHandoffSignal.source, "EXPLICIT_CUSTOMER_REQUEST");
   assert.equal(understanding.reasonCodes.includes("EXPLICIT_HUMAN_HANDOFF_REQUEST"), true);

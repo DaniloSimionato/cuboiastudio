@@ -215,7 +215,9 @@ export function buildSessionEvidenceDetails(input: SessionEvidenceInput): Sessio
   });
   const unique = new Map<string, SourceEvidence>();
   let duplicateRejectedCount = 0;
-  for (const item of rawEvidence.sort((left, right) => left.evidenceId.localeCompare(right.evidenceId))) {
+  for (const item of rawEvidence.sort((left, right) =>
+    left.evidenceId.localeCompare(right.evidenceId),
+  )) {
     const key = [
       item.category,
       item.fieldKey,
@@ -229,7 +231,9 @@ export function buildSessionEvidenceDetails(input: SessionEvidenceInput): Sessio
     }
     unique.set(key, item);
   }
-  const evidence = [...unique.values()].sort((left, right) => left.evidenceId.localeCompare(right.evidenceId));
+  const evidence = [...unique.values()].sort((left, right) =>
+    left.evidenceId.localeCompare(right.evidenceId),
+  );
   return {
     evidence,
     rawCandidateCount: rawEvidence.length,
@@ -261,6 +265,10 @@ export function deriveRequestedEvidenceCategories(input: {
     booking: "BOOKING",
     pickup: "PICKUP_DELIVERY",
     delivery: "PICKUP_DELIVERY",
+    warranty: "WARRANTY",
+    garantia: "WARRANTY",
+    commercial_policy: "COMMERCIAL_POLICY",
+    commercialpolicy: "COMMERCIAL_POLICY",
     technical_information: "TECHNICAL_INFORMATION",
     technicalinformation: "TECHNICAL_INFORMATION",
     contact_preference: "CONTACT_PREFERENCE",
@@ -388,7 +396,9 @@ export function combineEvidence(input: {
       ["CONVERSATION_HISTORY", "EXTERNAL_METADATA", "MODEL_GENERATED"].includes(item.sourceType),
     ),
     adapterStatuses: Object.fromEntries(
-      Object.entries(input.adapterStatuses ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+      Object.entries(input.adapterStatuses ?? {}).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
     ),
     adapterExecutionOrder: [...new Set(input.adapterExecutionOrder ?? [])].sort(),
     conflicts: decisions.filter((decision) => decision.conflictDetected),
@@ -405,7 +415,9 @@ export function combineEvidence(input: {
     invalidEvidenceCount,
     scopeValidationFailures: [...scopeFailures].sort(),
     adapterStatuses: Object.fromEntries(
-      Object.entries(input.adapterStatuses ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+      Object.entries(input.adapterStatuses ?? {}).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
     ),
     adapterExecutionOrder: [...new Set(input.adapterExecutionOrder ?? [])].sort(),
     conflicts: bundle.conflicts,
@@ -474,7 +486,10 @@ export type CombinedEvidenceManifestMetadata = ReturnType<typeof buildEvidenceDe
 export function buildCombinedEvidenceManifest(
   result: CombinedEvidenceResult,
   rawEvidenceCount: number,
-  sessionStats?: Pick<SessionEvidenceDetails, "rawCandidateCount" | "deduplicatedCount" | "duplicateRejectedCount">,
+  sessionStats?: Pick<
+    SessionEvidenceDetails,
+    "rawCandidateCount" | "deduplicatedCount" | "duplicateRejectedCount"
+  >,
 ): CombinedEvidenceManifestMetadata {
   const decisionMetadata = buildEvidenceDecisionMetadata(result);
   const evidenceCountsBySourceType: Record<string, number> = {};
@@ -513,25 +528,35 @@ export function buildCombinedEvidenceManifest(
     deduplicatedEvidenceCount: result.evidence.length,
     duplicateEvidenceRejected: result.duplicateEvidenceRejected,
     evidenceCountsBySourceType: Object.fromEntries(
-      Object.entries(evidenceCountsBySourceType).sort(([left], [right]) => left.localeCompare(right)),
+      Object.entries(evidenceCountsBySourceType).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
     ),
     evidenceCountsByCategory: Object.fromEntries(
       Object.entries(evidenceCountsByCategory).sort(([left], [right]) => left.localeCompare(right)),
     ),
     authorityDecisionsByCategory: Object.fromEntries(
-      Object.entries(authorityDecisionsByCategory).sort(([left], [right]) => left.localeCompare(right)),
+      Object.entries(authorityDecisionsByCategory).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
     ),
     decisionStatusCounts: Object.fromEntries(
       Object.entries(decisionStatusCounts).sort(([left], [right]) => left.localeCompare(right)),
     ),
     winningEvidenceIdsByCategory: Object.fromEntries(
-      Object.entries(winningEvidenceIdsByCategory).sort(([left], [right]) => left.localeCompare(right)),
+      Object.entries(winningEvidenceIdsByCategory).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
     ),
     rejectedEvidenceIdsByCategory: Object.fromEntries(
-      Object.entries(rejectedEvidenceIdsByCategory).sort(([left], [right]) => left.localeCompare(right)),
+      Object.entries(rejectedEvidenceIdsByCategory).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
     ),
     winningSourceTypesByCategory: Object.fromEntries(
-      Object.entries(winningSourceTypesByCategory).sort(([left], [right]) => left.localeCompare(right)),
+      Object.entries(winningSourceTypesByCategory).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
     ),
     missingCategories: [...result.missingCategories].sort(),
     conflictDetected: result.conflicts.length > 0,
@@ -543,8 +568,10 @@ export function buildCombinedEvidenceManifest(
     invalidEvidenceCount: result.invalidEvidenceCount,
     customerEvidenceCount: result.bundle.customerEvidence.length,
     sessionEvidenceCount: result.bundle.sessionEvidence.length,
-    sessionRawCandidateCount: sessionStats?.rawCandidateCount ?? result.bundle.sessionEvidence.length,
-    sessionDeduplicatedCount: sessionStats?.deduplicatedCount ?? result.bundle.sessionEvidence.length,
+    sessionRawCandidateCount:
+      sessionStats?.rawCandidateCount ?? result.bundle.sessionEvidence.length,
+    sessionDeduplicatedCount:
+      sessionStats?.deduplicatedCount ?? result.bundle.sessionEvidence.length,
     sessionDuplicateRejectedCount: sessionStats?.duplicateRejectedCount ?? 0,
     ragContentPersisted: false,
     memoryContentPersisted: false,

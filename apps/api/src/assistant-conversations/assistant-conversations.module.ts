@@ -4,6 +4,7 @@ import { AttachmentInterpreterModule } from "../attachments/attachment-interpret
 import { ChatwootModule } from "../chatwoot/chatwoot.module";
 import { AppsModule } from "../apps/apps.module";
 import { AssistantKnowledgeModule } from "../assistant-knowledge/assistant-knowledge.module";
+import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
 import { PromptCompilerModule } from "../prompt-compiler/prompt-compiler.module";
 import { IntentRouterModule } from "../intent-router/intent-router.module";
 import { AssistantSecurityRulesModule } from "../assistant-security-rules/assistant-security-rules.module";
@@ -62,6 +63,7 @@ import { PromptCompilerService } from "../prompt-compiler/prompt-compiler.servic
         memoryEvidenceAdapter: MemoryEvidenceAdapter,
         candidateProvider: RuntimeV2CandidateResponseProvider,
         promptCompiler: PromptCompilerService,
+        knowledgeRetrieval: AssistantKnowledgeRetrievalService,
       ) =>
         new RuntimeV2ShadowOrchestrator(
           stateStore,
@@ -71,6 +73,7 @@ import { PromptCompilerService } from "../prompt-compiler/prompt-compiler.servic
           ragEvidenceAdapter,
           memoryEvidenceAdapter,
           new RuntimeV2CandidateResponseGenerator(candidateProvider, promptCompiler),
+          knowledgeRetrieval,
         ),
       inject: [
         RUNTIME_V2_STATE_STORE,
@@ -79,6 +82,7 @@ import { PromptCompilerService } from "../prompt-compiler/prompt-compiler.servic
         MemoryEvidenceAdapter,
         RuntimeV2CandidateResponseProvider,
         PromptCompilerService,
+        AssistantKnowledgeRetrievalService,
       ],
     },
     RuntimeV2ShadowIntegrationService,

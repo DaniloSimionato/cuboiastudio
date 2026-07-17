@@ -453,6 +453,14 @@ export class RuntimeV2ShadowIntegrationService {
       handoffEventIds: manifest?.handoff?.handoffEventIds ?? [],
       handoffStatePersisted: manifest?.handoff?.handoffStatePersisted ?? false,
       handoffExecutionPerformed: false,
+      humanRequested: manifest?.humanRequested ?? false,
+      humanRequestConfidence: manifest?.humanRequestConfidence ?? 0,
+      handoffRequired: manifest?.handoffRequired ?? false,
+      handoffReason: manifest?.handoffReason ?? null,
+      handoffExecutionAllowed: manifest?.handoffExecutionAllowed ?? false,
+      handoffExecutionAttempted: manifest?.handoffExecutionAttempted ?? false,
+      handoffExecuted: manifest?.handoffExecuted ?? false,
+      handoffStatus: manifest?.handoffStatus ?? "NOT_REQUIRED",
       chatwootMutationPerformed: false,
       labelApplied: false,
       assignmentChanged: false,
@@ -478,6 +486,10 @@ export class RuntimeV2ShadowIntegrationService {
       resolutionConfidence: manifest?.resolutionConfidence ?? null,
       ambiguityDetected: manifest?.ambiguityDetected ?? false,
       topicChanged: manifest?.topicChanged ?? false,
+      previousTopic: manifest?.previousTopic ?? null,
+      currentTopic: manifest?.currentTopic ?? null,
+      topicChangeReason: manifest?.topicChangeReason ?? null,
+      inheritedTopicSuppressed: manifest?.inheritedTopicSuppressed ?? false,
       resolutionReasonCode: manifest?.resolutionReasonCode ?? null,
       objectiveAction: manifest?.objectiveAction ?? null,
       previousObjective: manifest?.previousObjective ?? null,
@@ -647,6 +659,24 @@ export class RuntimeV2ShadowIntegrationService {
       ragAdapterDurationMs: manifest?.evidence?.rag?.ragAdapterDurationMs ?? 0,
       ragContentPersisted: false,
       ragNotExecutedReason: manifest?.evidence?.rag?.ragNotExecutedReason ?? null,
+      // Compatibility-safe aliases for the evidence decision. They retain only
+      // redacted identifiers and aggregate counts, never query or chunk text.
+      evidenceModeEffective: manifest?.evidence?.evidenceMode ?? "OFF",
+      retrievalAttempted: manifest?.evidence?.rag?.ragRetrievalExecuted ?? false,
+      retrievalQueryFingerprint: manifest?.currentMessageHash ?? null,
+      candidateDocumentCount: manifest?.evidence?.rag?.ragDocumentIds.length ?? 0,
+      candidateChunkCount: manifest?.evidence?.rag?.ragResultCount ?? 0,
+      selectedChunkCount: manifest?.evidence?.rag?.ragChunkIds.length ?? 0,
+      selectedChunkFingerprints: manifest?.evidence?.rag?.ragEvidenceIds ?? [],
+      evidenceSufficiency:
+        (manifest?.evidence?.rag?.ragEvidenceCount ?? 0) > 0 ? "SUFFICIENT" : "INSUFFICIENT",
+      selectedAuthorityType: manifest?.evidence?.winningSourceTypes ?? [],
+      evidenceBlockReason:
+        (manifest?.evidence?.rag?.ragEvidenceCount ?? 0) > 0
+          ? null
+          : (manifest?.evidence?.rag?.ragNotExecutedReason ??
+            manifest?.evidence?.missingCategories[0] ??
+            null),
       memoryObservationReceived: manifest?.evidence?.memory?.memoryObservationReceived ?? false,
       memoryRetrievalExecuted: manifest?.evidence?.memory?.memoryRetrievalExecuted ?? false,
       memoryResultCount: manifest?.evidence?.memory?.memoryResultCount ?? 0,

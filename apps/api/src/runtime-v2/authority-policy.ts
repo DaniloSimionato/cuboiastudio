@@ -13,7 +13,7 @@ export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = {
   },
   warranty: {
     category: "warranty",
-    authorizedSourceTypes: ["OFFICIAL_CONTEXT", "TOOL"],
+    authorizedSourceTypes: ["OFFICIAL_CONTEXT", "KNOWLEDGE", "TOOL"],
     required: true,
   },
   deadline: {
@@ -23,12 +23,12 @@ export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = {
   },
   pickup: {
     category: "pickup",
-    authorizedSourceTypes: ["OFFICIAL_CONTEXT", "TOOL"],
+    authorizedSourceTypes: ["OFFICIAL_CONTEXT", "KNOWLEDGE", "TOOL"],
     required: true,
   },
   delivery: {
     category: "delivery",
-    authorizedSourceTypes: ["OFFICIAL_CONTEXT", "TOOL"],
+    authorizedSourceTypes: ["OFFICIAL_CONTEXT", "KNOWLEDGE", "TOOL"],
     required: true,
   },
   payment: {
@@ -68,7 +68,12 @@ export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = {
   },
   commercialPolicy: {
     category: "commercialPolicy",
-    authorizedSourceTypes: ["OFFICIAL_CONTEXT", "TOOL"],
+    authorizedSourceTypes: ["OFFICIAL_CONTEXT", "KNOWLEDGE", "TOOL"],
+    required: true,
+  },
+  technicalInformation: {
+    category: "technicalInformation",
+    authorizedSourceTypes: ["OFFICIAL_CONTEXT", "KNOWLEDGE", "TOOL"],
     required: true,
   },
 };

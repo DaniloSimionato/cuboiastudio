@@ -6,7 +6,11 @@ import {
   type FreshnessStatus,
   type SourceEvidence,
 } from "./evidence-contracts";
-import { EVIDENCE_CATEGORIES, type EvidenceCategory } from "./authority-evidence-policy";
+import {
+  allowsRagDocumentAuthority,
+  EVIDENCE_CATEGORIES,
+  type EvidenceCategory,
+} from "./authority-evidence-policy";
 import { evaluateFreshness } from "./evidence-freshness";
 import { validateEvidenceScope, type ScopeValidationStatus } from "./evidence-scope";
 import type { ScopeContext } from "./evidence-contracts";
@@ -146,6 +150,15 @@ function declaredCategory(metadata: Record<string, unknown>): EvidenceCategory |
     normalizeCategory(metadata.authorityCategory) ??
     normalizeCategory(metadata.factCategory)
   );
+}
+
+function observationCategory(input: {
+  observation: RagRetrievalObservation;
+  requestedCategories: string[];
+}): EvidenceCategory | null {
+  const category = normalizeCategory(input.observation.queryCategory);
+  if (!category || !input.requestedCategories.includes(category)) return null;
+  return allowsRagDocumentAuthority(category) ? category : null;
 }
 
 function isExplicitOfficial(metadata: Record<string, unknown>): boolean {
@@ -367,7 +380,9 @@ export class RagEvidenceAdapter {
       const sourceType = isExplicitOfficial(item.sourceMetadata ?? {})
         ? "OFFICIAL_DOCUMENT"
         : "RAG_DOCUMENT";
-      const category = item.category ? normalizeCategory(item.category) : null;
+      const category =
+        (item.category ? normalizeCategory(item.category) : null) ??
+        observationCategory({ observation, requestedCategories: input.requestedCategories });
       const evidenceId = createEvidenceId({
         sourceType,
         sourceId: item.chunkId,
@@ -441,7 +456,10 @@ export class RagEvidenceAdapter {
         fieldKey: `rag:${item.knowledgeId}:${item.chunkId}`,
         valueHash: item.contentHash ?? undefined,
         confidence: clampScore(item.similarityScore),
-        authorityLevel: sourceType === "OFFICIAL_DOCUMENT" ? "AUTHORITATIVE" : "CONTEXTUAL",
+        authorityLevel:
+          sourceType === "OFFICIAL_DOCUMENT" || allowsRagDocumentAuthority(category)
+            ? "AUTHORITATIVE"
+            : "CONTEXTUAL",
         observedAt: observation.observedAt,
         validFrom:
           typeof item.sourceMetadata?.validFrom === "string" ? item.sourceMetadata.validFrom : null,
@@ -463,7 +481,7 @@ export class RagEvidenceAdapter {
           selectionReason: "V1_PIPELINE_RAG_OBSERVATION",
         },
         isSensitive: false,
-        isAuthoritative: sourceType === "OFFICIAL_DOCUMENT",
+        isAuthoritative: sourceType === "OFFICIAL_DOCUMENT" || allowsRagDocumentAuthority(category),
         sourceStatus: "READY",
       };
       evidence.push(sourceEvidence);

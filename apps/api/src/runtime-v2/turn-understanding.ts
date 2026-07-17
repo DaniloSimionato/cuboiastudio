@@ -65,10 +65,34 @@ function isBusinessHoursText(value: string): boolean {
   );
 }
 
-function isExplicitTopicChange(value: string): boolean {
+type ExplicitTopicChange = {
+  changed: boolean;
+  reasonCode: "EXPLICIT_TOPIC_CHANGE" | null;
+};
+
+function detectExplicitTopicChange(value: string): ExplicitTopicChange {
   const normalized = normalizeCategoryText(value);
-  return /(?:quanto custa|preco|valor|orcamento|prazo|fica pronto|entregam|entrega|visita|agendar|agendamento|notebook nao liga|falar com (?:uma )?pessoa|atendente|humano)/.test(
-    normalized,
+  const explicitMarker =
+    /(?:\bagora\s+(?:outro\s+)?assunto\b|\bmudando\s+de\s+assunto\b|\bfalando\s+de\s+outra\s+coisa\b|\btenho\s+outra\s+duvida\b|\besquece\s+isso\b)/.test(
+      normalized,
+    );
+  return {
+    changed: explicitMarker,
+    reasonCode: explicitMarker ? "EXPLICIT_TOPIC_CHANGE" : null,
+  };
+}
+
+function isExplicitTopicChange(value: string): boolean {
+  return detectExplicitTopicChange(value).changed;
+}
+
+function isRecentCompetingTopic(value: string): boolean {
+  const normalized = normalizeCategoryText(value);
+  return (
+    isExplicitTopicChange(normalized) ||
+    /(?:quanto custa|preco|valor|orcamento|prazo|fica pronto|entregam|entrega|visita|agendar|agendamento|notebook nao liga|falar com (?:uma )?pessoa|atendente|humano)/.test(
+      normalized,
+    )
   );
 }
 
@@ -85,6 +109,20 @@ function resolveImplicitFollowUp(input: {
 }): FollowUpResolution {
   const current = normalizeCategoryText(input.currentMessage.trim().replace(/\s+/g, " "));
   const history = (input.history ?? []).slice(-6);
+  const explicitTopicChange = detectExplicitTopicChange(current);
+  if (explicitTopicChange.changed) {
+    return {
+      detected: false,
+      status: "NOT_APPLICABLE",
+      topic: null,
+      historyMessagesConsidered: history.length,
+      sourceFingerprint: null,
+      confidence: null,
+      ambiguityDetected: false,
+      topicChanged: true,
+      reasonCode: explicitTopicChange.reasonCode,
+    };
+  }
   if (!isEllipticalFollowUp(current) || isBusinessHoursText(current)) {
     return {
       detected: false,
@@ -98,21 +136,8 @@ function resolveImplicitFollowUp(input: {
       reasonCode: null,
     };
   }
-  if (isExplicitTopicChange(current)) {
-    return {
-      detected: true,
-      status: "REJECTED",
-      topic: null,
-      historyMessagesConsidered: history.length,
-      sourceFingerprint: null,
-      confidence: 1,
-      ambiguityDetected: false,
-      topicChanged: true,
-      reasonCode: "EXPLICIT_TOPIC_CHANGE",
-    };
-  }
   const businessHoursMessages = history.filter((item) => isBusinessHoursText(item.content));
-  const competingTopic = history.some((item) => isExplicitTopicChange(item.content));
+  const competingTopic = history.some((item) => isRecentCompetingTopic(item.content));
   if ((businessHoursMessages.length === 0 && !input.fallbackBusinessHoursTopic) || competingTopic) {
     return {
       detected: true,
@@ -156,14 +181,22 @@ export function deriveHumanHandoffSignal(message: string): HumanHandoffSignal {
     /\b(?:pode|podem)\s+(?:me\s+)?(?:chamar|transferir)\s+(?:para\s+)?(?:um[a]?\s+)?(?:atendente|humano|pessoa|alguem)\b/.test(
       categoryText,
     );
+  const explicitPreference =
+    /\bprefiro\s+(?:falar|conversar)\s+com\s+(?:um[a]?\s+)?(?:atendente|humano|pessoa|alguem)\b/.test(
+      categoryText,
+    ) ||
+    /\bnao\s+quero\s+(?:continuar|falar)\s+com\s+(?:a\s+)?ia\b/.test(categoryText) ||
+    /\bquero\s+falar\s+com\s+(?:o\s+)?suporte\b/.test(categoryText) ||
+    /\btem\s+(?:alguem|uma\s+pessoa)\s+para\s+me\s+atender\b/.test(categoryText);
+  const requested = explicitCustomerRequest || explicitPreference;
 
   return {
-    requested: explicitCustomerRequest,
-    source: explicitCustomerRequest ? "EXPLICIT_CUSTOMER_REQUEST" : null,
-    confidence: explicitCustomerRequest ? 0.99 : 0,
-    reasonCode: explicitCustomerRequest ? "CUSTOMER_REQUESTED_HUMAN" : null,
-    requestedTargetType: explicitCustomerRequest ? "ANY_HUMAN" : null,
-    customerRequested: explicitCustomerRequest,
+    requested,
+    source: requested ? "EXPLICIT_CUSTOMER_REQUEST" : null,
+    confidence: requested ? 0.99 : 0,
+    reasonCode: requested ? "CUSTOMER_REQUESTED_HUMAN" : null,
+    requestedTargetType: requested ? "ANY_HUMAN" : null,
+    customerRequested: requested,
     derivedAtStage: "TURN_UNDERSTANDING",
     redactionApplied: true,
   };
@@ -322,8 +355,14 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
   const exceptionRequest = /(?:esperar|aguardar|depois de fechar|apos o horario)/.test(
     categoryText,
   );
-  const requestedInformationCategories = [
-    ...(includesAny(categoryText, ["quanto custa", "preco", "valor", "orcamento"])
+  let requestedInformationCategories = [
+    ...(includesAny(categoryText, [
+      "quanto custa",
+      "quanto vai custar",
+      "preco",
+      "valor",
+      "orcamento",
+    ])
       ? ["price"]
       : []),
     ...(includesAny(categoryText, ["endereco"]) ? ["address"] : []),
@@ -341,6 +380,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
     ...(asksOfficialContact && !asksContactPreference ? ["officialContact"] : []),
     ...(asksContactPreference ? ["contactPreference"] : []),
     ...(asksTechnicalInformation ? ["technicalInformation"] : []),
+    ...(/\bgarantia\b/.test(categoryText) ? ["warranty"] : []),
     ...(asksAvailability ? ["availability"] : []),
     ...(asksBooking ? ["booking"] : []),
     ...(weekdayMentioned &&
@@ -368,6 +408,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
       ? ["exceptionRequest"]
       : []),
   ];
+  if (humanHandoffSignal.requested) requestedInformationCategories = [];
   const requestedCategoryDerivation: Record<string, string> = {};
   for (const category of requestedInformationCategories) {
     requestedCategoryDerivation[category] =
@@ -381,11 +422,13 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
             ? "EXPLICIT_CONTACT_PREFERENCE_LANGUAGE"
             : category === "technicalInformation"
               ? "TECHNICAL_SERVICE_OR_EQUIPMENT_LANGUAGE"
-              : category === "availability"
-                ? "EXPLICIT_AVAILABILITY_LANGUAGE"
-                : category === "booking"
-                  ? "EXPLICIT_RESERVATION_LANGUAGE"
-                  : "EXPLICIT_CATEGORY_ALIAS";
+              : category === "warranty"
+                ? "EXPLICIT_WARRANTY_LANGUAGE"
+                : category === "availability"
+                  ? "EXPLICIT_AVAILABILITY_LANGUAGE"
+                  : category === "booking"
+                    ? "EXPLICIT_RESERVATION_LANGUAGE"
+                    : "EXPLICIT_CATEGORY_ALIAS";
   }
 
   if (customerUnableToAnswer && input.lastRelevantQuestion) {
@@ -621,7 +664,8 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
       : "NONE";
 
   let turnIntent = "general_request";
-  if (requestedInformationCategories.includes("price")) turnIntent = "ask_price";
+  if (humanHandoffSignal.requested) turnIntent = "human_support_request";
+  else if (requestedInformationCategories.includes("price")) turnIntent = "ask_price";
   else if (weekdayMentioned && !asksBusinessHours && !asksAvailability && !asksBooking)
     turnIntent = "request_booking_date";
   else if (requestedInformationCategories.includes("businessHours"))
@@ -630,6 +674,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
     turnIntent = "ask_official_contact";
   else if (requestedInformationCategories.includes("contactPreference"))
     turnIntent = "ask_contact_preference";
+  else if (requestedInformationCategories.includes("warranty")) turnIntent = "ask_warranty";
   else if (requestedInformationCategories.includes("technicalInformation"))
     turnIntent = "technical_information";
   else if (requestedInformationCategories.includes("availability")) turnIntent = "ask_availability";
@@ -646,11 +691,27 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
         : isSideQuestion
           ? "provide_official_information"
           : undefined;
+  const priorBusinessHoursTopic = (input.recentHistory ?? [])
+    .slice(-6)
+    .some((item) => isBusinessHoursText(item.content));
+  const currentTopic =
+    turnIntent === "human_support_request"
+      ? "HUMAN_SUPPORT"
+      : turnIntent === "technical_information"
+        ? "TECHNICAL_INFORMATION"
+        : requestedInformationCategories.includes("warranty")
+          ? "WARRANTY"
+          : null;
 
   return {
     turnIntent,
     confidence:
-      objective || isSideQuestion || requestedInformationCategories.length > 0 ? 0.9 : 0.65,
+      humanHandoffSignal.requested ||
+      objective ||
+      isSideQuestion ||
+      requestedInformationCategories.length > 0
+        ? 0.9
+        : 0.65,
     humanHandoffSignal,
     objectiveAction,
     objective: objective ?? input.existingObjective ?? null,
@@ -669,6 +730,11 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
     resolutionConfidence: implicitFollowUp.confidence,
     ambiguityDetected: implicitFollowUp.ambiguityDetected,
     topicChanged: implicitFollowUp.topicChanged,
+    previousTopic:
+      implicitFollowUp.topicChanged && priorBusinessHoursTopic ? "BUSINESS_HOURS" : null,
+    currentTopic,
+    topicChangeReason: implicitFollowUp.topicChanged ? implicitFollowUp.reasonCode : null,
+    inheritedTopicSuppressed: implicitFollowUp.topicChanged && priorBusinessHoursTopic,
     resolutionReasonCode: implicitFollowUp.reasonCode,
     isSideQuestion,
     isNonFactualConversation,

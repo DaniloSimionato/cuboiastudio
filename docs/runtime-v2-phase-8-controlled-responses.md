@@ -217,3 +217,50 @@ O rollout deve começar com uma única conversa explicitamente allowlisted e man
 V1 como único outbound. Desligar os dois modos e limpar as allowlists interrompe
 novas gerações sem alterar candidatos já persistidos. Uma fase posterior deve
 validar comparações reais antes de qualquer decisão sobre resposta V2 ao cliente.
+
+## Matriz final: gaps corrigidos antes de outbound
+
+A matriz Shadow encontrou três lacunas sem efeito externo: uma pergunta de
+garantia documental não declarava categoria factual e não iniciava RAG; uma
+mudança explícita de assunto não era registrada como tal; e um pedido inequívoco
+de atendimento humano não chegava ao `ResponsePlan`. Nenhuma dessas execuções
+enviou mensagem V2, alterou `ai_active` ou executou handoff/ferramenta.
+
+### RAG documental autorizado
+
+Depois do `RuntimeV2ScopeGate`, Evidence em `SHADOW_METADATA` pode iniciar uma
+recuperação limitada ao mesmo `companyId` e `assistantId` quando a categoria
+documental é única e elegível (`WARRANTY`, `TECHNICAL_INFORMATION`,
+`COMMERCIAL_POLICY` ou `PICKUP_DELIVERY`). A recuperação usa o texto canônico
+do turno, somente chunks `ACTIVE` de documentos `READY`, top-K limitado e o
+threshold existente. Query, conteúdo e embedding não entram em telemetria.
+
+O manifesto registra somente se a recuperação ocorreu, contagens, threshold,
+fingerprints de documento/chunk, buckets de score, decisão de autoridade e motivo
+de bloqueio. Um documento RAG só se torna autoridade quando a categoria está
+declarada, o chunk está no escopo, ativo, acima do threshold e sem conflito. Para
+essas categorias estáveis, a autoridade vencedora é `RAG_DOCUMENT`; preço,
+disponibilidade e agendamento continuam exigindo fonte estruturada ou ferramenta.
+Sem chunk selecionado, o plano fica `SAFE_UNAVAILABLE`, a candidata é bloqueada
+antes do provider e não pode produzir afirmação factual.
+
+### Mudança explícita e pedido humano
+
+Marcadores como “agora outro assunto”, “mudando de assunto”, “falando de outra
+coisa”, “tenho outra dúvida” e “esquece isso” registram
+`topicChanged=true`, `topicChangeReason=EXPLICIT_TOPIC_CHANGE`, tópico anterior,
+tópico atual e supressão de herança. Eles não substituem follow-ups reais, que
+continuam limitados às seis mensagens da própria conversa.
+
+Pedidos inequívocos de humano, incluindo preferência por falar com pessoa ou
+atendente, suporte humano, recusa de continuar com IA ou pedido de transferência,
+produzem `humanRequested=true` e `handoffRequired=true`. Em Shadow, o plano é
+`HANDOFF` com `handoffStatus=REQUIRED_NOT_EXECUTED`: execução, pausa de IA,
+assignment, label, status e envio externo continuam inacessíveis. A candidata é
+marcada `CANDIDATE_REQUIRES_HANDOFF` antes do provider e não pode alegar que a
+transferência aconteceu.
+
+Os critérios para repetir os cenários A, C e D são: RAG vencedor e suportado por
+chunk autorizado; mudança explícita com herança factual suprimida; e pedido humano
+reconhecido sem execução. Preço sem diagnóstico e agendamento sem ferramenta
+continuam bloqueados ou limitados a esclarecimento seguro.
