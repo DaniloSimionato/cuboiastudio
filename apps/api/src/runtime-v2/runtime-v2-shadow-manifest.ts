@@ -36,6 +36,18 @@ export type RuntimeV2ShadowManifest = {
   messageAlreadyProcessed: boolean;
   turnIntent: string;
   intentConfidence: number;
+  explicitIntentDetected: boolean;
+  followUpDetected: boolean;
+  followUpResolutionStatus: string;
+  inheritedTopic: string | null;
+  historyMessagesConsidered: number;
+  inheritedFromMessageFingerprint: string | null;
+  inheritedFromConversationId: string | null;
+  inheritedFromRecentContext: boolean;
+  resolutionConfidence: number | null;
+  ambiguityDetected: boolean;
+  topicChanged: boolean;
+  resolutionReasonCode: string | null;
   objectiveAction: ObjectiveAction;
   currentObjective: string | null;
   previousObjective: string | null;
@@ -206,6 +218,20 @@ export function buildRuntimeV2ShadowManifest(input: {
     messageAlreadyProcessed: input.messageAlreadyProcessed,
     turnIntent: input.understanding.turnIntent,
     intentConfidence: input.understanding.confidence,
+    explicitIntentDetected: Object.values(
+      input.understanding.requestedCategoryDerivation ?? {},
+    ).some((reason) => reason.startsWith("EXPLICIT_")),
+    followUpDetected: input.understanding.followUpDetected ?? false,
+    followUpResolutionStatus: input.understanding.followUpResolutionStatus ?? "NOT_APPLICABLE",
+    inheritedTopic: input.understanding.inheritedTopic ?? null,
+    historyMessagesConsidered: input.understanding.historyMessagesConsidered ?? 0,
+    inheritedFromMessageFingerprint: input.understanding.inheritedFromMessageFingerprint ?? null,
+    inheritedFromConversationId: input.understanding.inheritedFromConversationId ?? null,
+    inheritedFromRecentContext: input.understanding.inheritedFromRecentContext ?? false,
+    resolutionConfidence: input.understanding.resolutionConfidence ?? null,
+    ambiguityDetected: input.understanding.ambiguityDetected ?? false,
+    topicChanged: input.understanding.topicChanged ?? false,
+    resolutionReasonCode: input.understanding.resolutionReasonCode ?? null,
     objectiveAction: input.understanding.objectiveAction,
     currentObjective: input.afterState.objective?.key ?? null,
     previousObjective: input.beforeState.objective?.key ?? null,

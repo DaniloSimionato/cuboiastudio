@@ -195,6 +195,22 @@ disponíveis, mas não chegava como autoridade selecionada ao `ResponsePlan`.
 Ela não altera o lifecycle assíncrono: o despacho continua curto, o V1 não
 aguarda a geração, e uma conclusão posterior atualiza o mesmo `generationId`.
 
+### Follow-up implícito e default deny factual
+
+Follow-ups elípticos, como “E nos outros dias?”, são resolvidos antes do
+`ResponsePlan` por regras determinísticas. O resolvedor observa no máximo seis
+mensagens cronológicas da mesma conversa e produz somente metadata redigida:
+detecção, status (`RESOLVED`, `AMBIGUOUS` ou `REJECTED`), tópico/categoria
+herdados, fingerprint da mensagem antecedente, confiança e motivo. Ele não usa
+memória global, resumos, outra conversa ou outro tenant.
+
+O tópico é herdado apenas quando não há mudança explícita de assunto nem tópicos
+recentes concorrentes. Em ambiguidade, o plano exige esclarecimento e não chama
+o provider para formular um fato. Da mesma forma, `general_request` sem
+classificação não-factual explícita não pode usar o amplo contexto oficial como
+atalho para afirmar horário, preço, prazo, endereço, serviço ou agenda: o plano
+fica `SAFE_UNAVAILABLE` até que uma autoridade seja selecionada antes da geração.
+
 ## Limites e rollback
 
 O rollout deve começar com uma única conversa explicitamente allowlisted e manter

@@ -83,6 +83,7 @@ export function runRuntimeV2Prototype(input: RuntimeV2PrototypeInput) {
     messageId: input.messageId,
     lastRelevantQuestion: input.state.lastRelevantQuestion,
     existingObjective: input.state.objective,
+    recentHistory: input.usefulHistory,
   });
   const nextState = applyTurnToConversationState(input.state, understanding);
   const retrievalPlan = buildRetrievalPlan({ understanding, state: nextState });

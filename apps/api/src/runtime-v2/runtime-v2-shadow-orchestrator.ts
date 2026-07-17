@@ -748,6 +748,7 @@ export class RuntimeV2ShadowOrchestrator {
           : null,
       existingObjective: state.objective,
       recentBusinessHoursTopic: hasRecentBusinessHoursTopic(snapshot.usefulHistory),
+      recentHistory: snapshot.usefulHistory,
     });
 
     let nextState = state;

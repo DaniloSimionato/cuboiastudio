@@ -270,9 +270,23 @@ export type TurnUnderstanding = {
    */
   requiresClarification?: boolean;
   isSideQuestion: boolean;
+  isNonFactualConversation?: boolean;
   explicitlyRequestsPreviousTopic: boolean;
   requestedInformationCategories: string[];
   requestedCategoryDerivation?: Record<string, string>;
+  /** Redacted, bounded explanation of an antecedent resolved from this conversation only. */
+  followUpDetected?: boolean;
+  followUpResolutionStatus?: "NOT_APPLICABLE" | "RESOLVED" | "AMBIGUOUS" | "REJECTED";
+  inheritedTopic?: "BUSINESS_HOURS" | null;
+  inheritedFactualCategory?: "BUSINESS_HOURS" | null;
+  historyMessagesConsidered?: number;
+  inheritedFromMessageFingerprint?: string | null;
+  inheritedFromConversationId?: string | null;
+  inheritedFromRecentContext?: boolean;
+  resolutionConfidence?: number | null;
+  ambiguityDetected?: boolean;
+  topicChanged?: boolean;
+  resolutionReasonCode?: string | null;
   requestedAction?: string;
   nextQuestion?: RelevantQuestion | null;
   reasonCodes: string[];

@@ -185,6 +185,70 @@ test("perguntas diretas e follow-up autorizado derivam BUSINESS_HOURS sem classi
   }
 });
 
+test("follow-up implícito herda BUSINESS_HOURS somente do histórico limitado da mesma conversa", () => {
+  const history = [
+    { id: "h1", role: "user", content: "Vocês atendem aos sábados?", relevance: "objective" },
+    {
+      id: "h2",
+      role: "assistant",
+      content: "Temos horário de atendimento aos sábados.",
+      relevance: "question-reference",
+    },
+    {
+      id: "h3",
+      role: "user",
+      content: "E durante a semana, qual é o horário de atendimento?",
+      relevance: "objective",
+    },
+    {
+      id: "h4",
+      role: "assistant",
+      content: "O funcionamento durante a semana segue o horário oficial.",
+      relevance: "question-reference",
+    },
+    { id: "h5", role: "user", content: "E vocês fecham para almoço?", relevance: "objective" },
+    {
+      id: "h6",
+      role: "assistant",
+      content: "O intervalo de almoço consta no horário oficial.",
+      relevance: "question-reference",
+    },
+  ];
+  const implicit = understandTurn({
+    message: "E nos outros dias?",
+    messageId: "implicit-hours",
+    recentHistory: history,
+  });
+  assert.equal(implicit.turnIntent, "ask_business_hours");
+  assert.equal(implicit.followUpDetected, true);
+  assert.equal(implicit.followUpResolutionStatus, "RESOLVED");
+  assert.equal(implicit.inheritedTopic, "BUSINESS_HOURS");
+  assert.equal(implicit.requestedCategoryDerivation.businessHours, "RECENT_BUSINESS_HOURS_TOPIC");
+  assert.equal(implicit.historyMessagesConsidered, 6);
+  assert.equal(implicit.ambiguityDetected, false);
+
+  const ambiguous = understandTurn({
+    message: "E nos outros dias?",
+    messageId: "ambiguous-implicit-hours",
+    recentHistory: [
+      ...history.slice(0, 4),
+      { id: "price", role: "user", content: "Quanto custa a formatação?", relevance: "objective" },
+    ],
+  });
+  assert.equal(ambiguous.followUpDetected, true);
+  assert.equal(ambiguous.followUpResolutionStatus, "AMBIGUOUS");
+  assert.equal(ambiguous.inheritedTopic, null);
+  assert.equal(ambiguous.requiresClarification, true);
+
+  const changed = understandTurn({
+    message: "E quanto custa a formatação?",
+    messageId: "changed-topic",
+    recentHistory: history,
+  });
+  assert.equal(changed.inheritedTopic, null);
+  assert.notEqual(changed.turnIntent, "ask_business_hours");
+});
+
 test("geração Shadow com Evidence OFF consulta somente autoridade oficial aplicável", async () => {
   const now = new Date("2026-07-17T00:00:00.000Z");
   let providerCalls = 0;
@@ -284,6 +348,35 @@ test("ausência de BUSINESS_HOURS bloqueia antes do provider mesmo com geração
     "FACTUAL_AUTHORITY_UNAVAILABLE",
   ]);
   assert.equal(result.manifest.candidateResponse.outboundPerformed, false);
+});
+
+test("follow-up factual sem antecedente não usa o contexto oficial como bypass", async () => {
+  let providerCalls = 0;
+  const generator = new RuntimeV2CandidateResponseGenerator({
+    async generate() {
+      providerCalls += 1;
+      throw new Error("provider must not be called");
+    },
+  });
+  const orchestrator = new RuntimeV2ShadowOrchestrator(
+    new InMemoryConversationStateStore(),
+    environment,
+    () => new Date("2026-07-17T00:00:00.000Z"),
+    officialReader(new Date("2026-07-17T00:00:00.000Z")),
+    undefined,
+    undefined,
+    generator,
+  );
+  const result = await orchestrator.process(snapshot("unclassified-request", "E nos outros dias?"));
+  assert.equal(result.manifest.turnIntent, "general_request");
+  assert.equal(result.manifest.responsePlanAction, "SAFE_UNAVAILABLE");
+  assert.equal(providerCalls, 0);
+  assert.equal(result.manifest.candidateResponse.status, "CANDIDATE_BLOCKED");
+  assert.ok(
+    result.manifest.candidateResponse.qualitySignals.includes(
+      "UNANSWERABLE_WITH_AUTHORIZED_EVIDENCE",
+    ),
+  );
 });
 
 test("dispatch não bloqueia V1 e reconcilia PENDING para COMPLETED com provider lento autorizado", async () => {

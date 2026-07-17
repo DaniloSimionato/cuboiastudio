@@ -4,6 +4,7 @@ import {
   type HumanHandoffSignal,
   type RelevantQuestion,
   type TurnUnderstanding,
+  type UsefulHistoryMessage,
 } from "./runtime-v2.types";
 
 export type TurnUnderstandingInput = {
@@ -18,6 +19,8 @@ export type TurnUnderstandingInput = {
    * It is used only to resolve short follow-ups such as "E durante a semana?".
    */
   recentBusinessHoursTopic?: boolean;
+  /** Up to six recent messages from the same scoped conversation, in chronological order. */
+  recentHistory?: UsefulHistoryMessage[];
 };
 
 const SHORT_CONFIRMATIONS =
@@ -41,6 +44,100 @@ function isBusinessHoursFollowUp(value: string): boolean {
   return /^(?:e\s+)?(?:durante\s+a\s+semana|nos?\s+dias\s+uteis|de\s+segunda\s+a\s+sexta)\??$/.test(
     value.trim(),
   );
+}
+
+type FollowUpResolution = {
+  detected: boolean;
+  status: "NOT_APPLICABLE" | "RESOLVED" | "AMBIGUOUS" | "REJECTED";
+  topic: "BUSINESS_HOURS" | null;
+  historyMessagesConsidered: number;
+  sourceFingerprint: string | null;
+  confidence: number | null;
+  ambiguityDetected: boolean;
+  topicChanged: boolean;
+  reasonCode: string | null;
+};
+
+function isBusinessHoursText(value: string): boolean {
+  const normalized = normalizeCategoryText(value);
+  return /(?:\bhorario\b|funcionamento|\babre\b|\babrem\b|\bfecha\b|\bfecham\b|que horas|almoco)/.test(
+    normalized,
+  );
+}
+
+function isExplicitTopicChange(value: string): boolean {
+  const normalized = normalizeCategoryText(value);
+  return /(?:quanto custa|preco|valor|orcamento|prazo|fica pronto|entregam|entrega|visita|agendar|agendamento|notebook nao liga|falar com (?:uma )?pessoa|atendente|humano)/.test(
+    normalized,
+  );
+}
+
+function isEllipticalFollowUp(value: string): boolean {
+  return /^(?:e\s+)?(?:nos?\s+(?:outros|demais)(?:\s+dias)?|durante\s+a\s+semana|nos?\s+dias\s+uteis|de\s+segunda\s+a\s+sexta|no\s+sabado|la|depois|nesse\s+caso)\??$/.test(
+    value.trim(),
+  );
+}
+
+function resolveImplicitFollowUp(input: {
+  currentMessage: string;
+  history?: UsefulHistoryMessage[];
+  fallbackBusinessHoursTopic?: boolean;
+}): FollowUpResolution {
+  const current = normalizeCategoryText(input.currentMessage.trim().replace(/\s+/g, " "));
+  const history = (input.history ?? []).slice(-6);
+  if (!isEllipticalFollowUp(current) || isBusinessHoursText(current)) {
+    return {
+      detected: false,
+      status: "NOT_APPLICABLE",
+      topic: null,
+      historyMessagesConsidered: history.length,
+      sourceFingerprint: null,
+      confidence: null,
+      ambiguityDetected: false,
+      topicChanged: false,
+      reasonCode: null,
+    };
+  }
+  if (isExplicitTopicChange(current)) {
+    return {
+      detected: true,
+      status: "REJECTED",
+      topic: null,
+      historyMessagesConsidered: history.length,
+      sourceFingerprint: null,
+      confidence: 1,
+      ambiguityDetected: false,
+      topicChanged: true,
+      reasonCode: "EXPLICIT_TOPIC_CHANGE",
+    };
+  }
+  const businessHoursMessages = history.filter((item) => isBusinessHoursText(item.content));
+  const competingTopic = history.some((item) => isExplicitTopicChange(item.content));
+  if ((businessHoursMessages.length === 0 && !input.fallbackBusinessHoursTopic) || competingTopic) {
+    return {
+      detected: true,
+      status: "AMBIGUOUS",
+      topic: null,
+      historyMessagesConsidered: history.length,
+      sourceFingerprint: null,
+      confidence: null,
+      ambiguityDetected: true,
+      topicChanged: false,
+      reasonCode: competingTopic ? "RECENT_TOPICS_CONFLICT" : "NO_RECENT_TOPIC",
+    };
+  }
+  const source = businessHoursMessages.at(-1) ?? null;
+  return {
+    detected: true,
+    status: "RESOLVED",
+    topic: "BUSINESS_HOURS",
+    historyMessagesConsidered: history.length,
+    sourceFingerprint: source?.id ?? null,
+    confidence: 0.94,
+    ambiguityDetected: false,
+    topicChanged: false,
+    reasonCode: "RECENT_BUSINESS_HOURS_TOPIC",
+  };
 }
 
 export function deriveHumanHandoffSignal(message: string): HumanHandoffSignal {
@@ -166,6 +263,8 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
       .trim(),
   );
   const customerUnableToAnswer = CUSTOMER_UNABLE_TO_ANSWER.test(normalized);
+  const isNonFactualConversation =
+    /^(?:obrigad[oa]|valeu|entendi|tudo bem|ok(?:ay)?|certo|beleza)[!.?\s]*$/i.test(normalized);
   const explicitlyRequestsPreviousTopic = /\b(continuar|voltar|retomar)\b/.test(lower);
   const isSideQuestion = includesAny(lower, [
     "endereço",
@@ -191,10 +290,14 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
       categoryText,
     ) ||
       (weekdayMentioned && /\b(?:atende|atendem)\b/.test(categoryText)));
+  const implicitFollowUp = resolveImplicitFollowUp({
+    currentMessage: normalized,
+    history: input.recentHistory,
+    fallbackBusinessHoursTopic: input.recentBusinessHoursTopic,
+  });
   const followsBusinessHoursTopic =
-    input.recentBusinessHoursTopic === true && isBusinessHoursFollowUp(categoryText);
-  const ambiguousBusinessHoursFollowUp =
-    input.recentBusinessHoursTopic !== true && isBusinessHoursFollowUp(categoryText);
+    implicitFollowUp.status === "RESOLVED" && implicitFollowUp.topic === "BUSINESS_HOURS";
+  const ambiguousBusinessHoursFollowUp = implicitFollowUp.status === "AMBIGUOUS";
   const asksBusinessHours = explicitBusinessHoursLanguage || followsBusinessHoursTopic;
   const asksOfficialContact =
     /(?:telefone oficial|whatsapp(?: oficial)?|numero(?: para contato| oficial)?|contato oficial|como falar com (?:voces|a empresa))/.test(
@@ -270,7 +373,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
     requestedCategoryDerivation[category] =
       category === "businessHours"
         ? followsBusinessHoursTopic
-          ? "RECENT_BUSINESS_HOURS_TOPIC"
+          ? (implicitFollowUp.reasonCode ?? "RECENT_BUSINESS_HOURS_TOPIC")
           : "EXPLICIT_OPERATING_HOURS_LANGUAGE"
         : category === "officialContact"
           ? "EXPLICIT_OFFICIAL_CONTACT_LANGUAGE"
@@ -555,7 +658,20 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
     correctedFactKeys: [],
     isShortConfirmation: false,
     requiresClarification: ambiguousBusinessHoursFollowUp,
+    followUpDetected: implicitFollowUp.detected,
+    followUpResolutionStatus: implicitFollowUp.status,
+    inheritedTopic: implicitFollowUp.topic,
+    inheritedFactualCategory: implicitFollowUp.topic,
+    historyMessagesConsidered: implicitFollowUp.historyMessagesConsidered,
+    inheritedFromMessageFingerprint: implicitFollowUp.sourceFingerprint,
+    inheritedFromConversationId: followsBusinessHoursTopic ? "CURRENT_CONVERSATION" : null,
+    inheritedFromRecentContext: followsBusinessHoursTopic,
+    resolutionConfidence: implicitFollowUp.confidence,
+    ambiguityDetected: implicitFollowUp.ambiguityDetected,
+    topicChanged: implicitFollowUp.topicChanged,
+    resolutionReasonCode: implicitFollowUp.reasonCode,
     isSideQuestion,
+    isNonFactualConversation,
     explicitlyRequestsPreviousTopic,
     requestedInformationCategories,
     requestedCategoryDerivation,
