@@ -159,6 +159,42 @@ Os resultados são `CANDIDATE_APPROVED`, `CANDIDATE_BLOCKED`,
 `CANDIDATE_REQUIRES_HANDOFF` ou `CANDIDATE_GENERATION_FAILED`. Mesmo o estado
 aprovado permanece exclusivamente em Shadow.
 
+## Autoridade factual para horário comercial
+
+Uma chave oficial disponível não é, por si só, uma autorização de resposta. Para
+cada categoria factual, a telemetria separa a disponibilidade da aplicabilidade
+e da decisão final: `authorityDecisionStatus`, categorias autorizadas,
+categorias indisponíveis, tipos de fonte vencedores e identificadores redigidos
+de evidência. Assim, `business_hours` só pode gerar uma resposta quando a
+evidência estruturada oficial passa escopo, frescor e política e se torna a
+autoridade vencedora `OFFICIAL_STRUCTURED_DATA`.
+
+O bridge entre Evidence V2 e `ResponsePlan` preserva essa decisão na fronteira
+assíncrona: `BUSINESS_HOURS` é convertido para a categoria de plano
+`businessHours`, e `OFFICIAL_STRUCTURED`/`OFFICIAL_DOCUMENT` para
+`OFFICIAL_CONTEXT`. A conversão carrega somente categoria, chave, tipo de fonte
+e identificadores redigidos; não duplica o valor do horário em `stateJson` ou
+telemetria.
+
+Com Response Generation em Shadow e Evidence Mode desligado, o runtime faz
+somente a leitura local, metadata-only, de evidência oficial necessária à
+categoria solicitada. RAG, memória, customer/session evidence, ferramentas e
+suas observações continuam desligados. Sem evidência oficial aplicável, ou com
+evidência incompleta/conflitante, o plano permanece `SAFE_UNAVAILABLE`, a
+candidata fica bloqueada e o provider não é chamado.
+
+Perguntas diretas sobre horário, dias úteis, sábado, abertura, fechamento e
+intervalo de almoço são classificadas como `BUSINESS_HOURS`. Follow-ups curtos,
+como “E durante a semana?”, só herdam essa categoria quando até seis mensagens
+recentes e autorizadas da mesma conversa indicam horário comercial. Sem esse
+antecedente, o plano pede esclarecimento seguro; ele não infere agenda
+individual, prazo de serviço, entrega específica ou visita não confirmada.
+
+Essa regra corrige o incidente em que `business_hours` aparecia entre as chaves
+disponíveis, mas não chegava como autoridade selecionada ao `ResponsePlan`.
+Ela não altera o lifecycle assíncrono: o despacho continua curto, o V1 não
+aguarda a geração, e uma conclusão posterior atualiza o mesmo `generationId`.
+
 ## Limites e rollback
 
 O rollout deve começar com uma única conversa explicitamente allowlisted e manter

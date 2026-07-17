@@ -205,17 +205,59 @@ function emptyContext(): RetrievedContext {
   };
 }
 
+function responseAuthorityCategory(category: string): string {
+  const categories: Record<string, string> = {
+    BUSINESS_HOURS: "businessHours",
+    OFFICIAL_CONTACT: "officialContact",
+    PICKUP_DELIVERY: "pickup",
+    COMMERCIAL_POLICY: "commercialPolicy",
+    TECHNICAL_INFORMATION: "technicalInformation",
+    CONTACT_PREFERENCE: "contactPreference",
+  };
+  return categories[category] ?? category.toLowerCase();
+}
+
+function responseAuthoritySourceType(sourceType: SourceEvidence["sourceType"]): string {
+  if (sourceType === "OFFICIAL_STRUCTURED" || sourceType === "OFFICIAL_DOCUMENT") {
+    return "OFFICIAL_CONTEXT";
+  }
+  if (sourceType === "TOOL_RESULT") return "TOOL";
+  if (sourceType === "RAG_DOCUMENT") return "KNOWLEDGE";
+  return sourceType;
+}
+
+function hasRecentBusinessHoursTopic(history: UsefulHistoryMessage[] | undefined): boolean {
+  return (history ?? []).slice(-6).some((item) => {
+    const normalized = item.content
+      .normalize("NFD")
+      .replace(/\p{Diacritic}/gu, "")
+      .toLowerCase();
+    const mentionsOperatingHours =
+      /(?:\bhorario\b|funcionamento|\babre\b|\babrem\b|\bfecha\b|\bfecham\b|que horas)/.test(
+        normalized,
+      );
+    const mentionsBusinessDay =
+      /\b(?:domingos?|segunda(?:-feira)?s?|terca(?:-feira)?s?|quarta(?:-feira)?s?|quinta(?:-feira)?s?|sexta(?:-feira)?s?|sabados?)\b/.test(
+        normalized,
+      );
+    return (
+      mentionsOperatingHours || (mentionsBusinessDay && /\b(?:atende|atendem)\b/.test(normalized))
+    );
+  });
+}
+
 function retrievedContextFromEvidence(evidence: SourceEvidence[]): RetrievedContext {
   const context = emptyContext();
   for (const item of evidence) {
     const retrieved = {
       id: item.evidenceId,
-      sourceType: item.sourceType,
-      category: item.category,
+      sourceType: responseAuthoritySourceType(item.sourceType),
+      category: responseAuthorityCategory(item.category),
+      fieldKey: item.fieldKey,
       confidence: item.confidence,
       selectionReason: item.provenance.selectionReason ?? "AUTHORIZED_EVIDENCE",
       scope: "CURRENT_TURN",
-      authoritativeFor: item.isAuthoritative ? [item.category] : [],
+      authoritativeFor: item.isAuthoritative ? [responseAuthorityCategory(item.category)] : [],
     };
     if (item.sourceType === "OFFICIAL_STRUCTURED" || item.sourceType === "OFFICIAL_DOCUMENT") {
       context.officialFacts.push(retrieved);
@@ -705,6 +747,7 @@ export class RuntimeV2ShadowOrchestrator {
           ? state.lastRelevantQuestion
           : null,
       existingObjective: state.objective,
+      recentBusinessHoursTopic: hasRecentBusinessHoursTopic(snapshot.usefulHistory),
     });
 
     let nextState = state;
@@ -763,7 +806,10 @@ export class RuntimeV2ShadowOrchestrator {
       state: nextState,
       retrievedContext: evidenceManifest.retrievedContext,
     });
-    if (evidenceManifest.evidenceMode === "SHADOW_METADATA") {
+    if (
+      evidenceManifest.evidenceMode === "SHADOW_METADATA" ||
+      isRuntimeV2ResponseGenerationEnabled(snapshot.scope, this.environment)
+    ) {
       responsePlan = {
         ...responsePlan,
         evidenceMetadata: {
@@ -914,6 +960,12 @@ export class RuntimeV2ShadowOrchestrator {
       ],
       includeContactIdentity: input.retrievalPlan.includeContactIdentity,
     });
+    const candidateGenerationEnabled = isRuntimeV2ResponseGenerationEnabled(
+      input.snapshot.scope,
+      this.environment,
+    );
+    const shouldResolveOfficialAuthority =
+      candidateGenerationEnabled && requestedCategories.length > 0;
     const skipped = buildEvidenceManifestExtension({
       evidenceMode,
       requestedCategories,
@@ -931,7 +983,9 @@ export class RuntimeV2ShadowOrchestrator {
       adapterDurationMs: 0,
       requestedCategoryDerivation: input.requestedCategoryDerivation,
     });
-    if (evidenceMode !== "SHADOW_METADATA") return { ...skipped, retrievedContext: emptyContext() };
+    if (evidenceMode !== "SHADOW_METADATA" && !shouldResolveOfficialAuthority) {
+      return { ...skipped, retrievedContext: emptyContext() };
+    }
 
     const officialResult = this.officialEvidenceAdapter
       ? await this.officialEvidenceAdapter
@@ -960,62 +1014,70 @@ export class RuntimeV2ShadowOrchestrator {
           durationMs: 0,
         };
     let ragAdapterFailed = false;
-    const ragResult = this.ragEvidenceAdapter
-      ? (() => {
-          try {
-            return this.ragEvidenceAdapter!.read({
-              scope: input.snapshot.scope,
-              requestedCategories,
-              observation: input.snapshot.ragObservation,
-              currentTime: input.now,
-            });
-          } catch {
-            ragAdapterFailed = true;
-            return null;
-          }
-        })()
-      : null;
+    const ragResult =
+      evidenceMode === "SHADOW_METADATA" && this.ragEvidenceAdapter
+        ? (() => {
+            try {
+              return this.ragEvidenceAdapter!.read({
+                scope: input.snapshot.scope,
+                requestedCategories,
+                observation: input.snapshot.ragObservation,
+                currentTime: input.now,
+              });
+            } catch {
+              ragAdapterFailed = true;
+              return null;
+            }
+          })()
+        : null;
     let memoryAdapterFailed = false;
-    const memoryResult = this.memoryEvidenceAdapter
-      ? (() => {
-          try {
-            return this.memoryEvidenceAdapter!.read({
-              scope: {
-                ...input.snapshot.scope,
-                contactId: input.snapshot.scope.contactId,
-              },
-              requestedCategories,
-              observation: input.snapshot.memoryObservation,
-              currentTime: input.now,
-            });
-          } catch {
-            memoryAdapterFailed = true;
-            return null;
-          }
-        })()
-      : null;
+    const memoryResult =
+      evidenceMode === "SHADOW_METADATA" && this.memoryEvidenceAdapter
+        ? (() => {
+            try {
+              return this.memoryEvidenceAdapter!.read({
+                scope: {
+                  ...input.snapshot.scope,
+                  contactId: input.snapshot.scope.contactId,
+                },
+                requestedCategories,
+                observation: input.snapshot.memoryObservation,
+                currentTime: input.now,
+              });
+            } catch {
+              memoryAdapterFailed = true;
+              return null;
+            }
+          })()
+        : null;
     const customerEvidence =
-      input.snapshot.customerEvidence ??
-      buildCustomerEvidence({
-        scope: input.snapshot.scope,
-        internalMessageId: input.snapshot.internalMessageId,
-        observedAt: input.now,
-        fieldKeys: input.snapshot.customerEvidenceFields ?? [],
-        requestedCategories,
-      });
-    const sessionDetails = input.snapshot.sessionEvidence
-      ? {
-          evidence: input.snapshot.sessionEvidence,
-          rawCandidateCount: input.snapshot.sessionEvidence.length,
-          deduplicatedCount: input.snapshot.sessionEvidence.length,
-          duplicateRejectedCount: 0,
-        }
-      : buildSessionEvidenceDetails({
-          scope: input.snapshot.scope,
-          state: input.state,
-        });
+      evidenceMode === "SHADOW_METADATA"
+        ? (input.snapshot.customerEvidence ??
+          buildCustomerEvidence({
+            scope: input.snapshot.scope,
+            internalMessageId: input.snapshot.internalMessageId,
+            observedAt: input.now,
+            fieldKeys: input.snapshot.customerEvidenceFields ?? [],
+            requestedCategories,
+          }))
+        : [];
+    const sessionDetails =
+      evidenceMode === "SHADOW_METADATA" && input.snapshot.sessionEvidence
+        ? {
+            evidence: input.snapshot.sessionEvidence,
+            rawCandidateCount: input.snapshot.sessionEvidence.length,
+            deduplicatedCount: input.snapshot.sessionEvidence.length,
+            duplicateRejectedCount: 0,
+          }
+        : evidenceMode === "SHADOW_METADATA"
+          ? buildSessionEvidenceDetails({
+              scope: input.snapshot.scope,
+              state: input.state,
+            })
+          : { evidence: [], rawCandidateCount: 0, deduplicatedCount: 0, duplicateRejectedCount: 0 };
     const sessionEvidence = sessionDetails.evidence;
     const toolObservations =
+      evidenceMode === "SHADOW_METADATA" &&
       resolveToolObservationMode(this.environment) === "SHADOW_METADATA"
         ? correlateToolObservations(input.snapshot.toolObservations ?? [], input.state)
         : [];

@@ -264,6 +264,11 @@ export type TurnUnderstanding = {
   answeredQuestionKey?: string;
   isShortConfirmation: boolean;
   confirmationAmbiguous?: boolean;
+  /**
+   * A short follow-up whose antecedent is unavailable in the bounded
+   * conversation history. It must not be answered by guessing a category.
+   */
+  requiresClarification?: boolean;
   isSideQuestion: boolean;
   explicitlyRequestsPreviousTopic: boolean;
   requestedInformationCategories: string[];
@@ -305,6 +310,7 @@ export type RetrievedItem = {
   id: string;
   sourceType: string;
   category: string;
+  fieldKey?: string;
   content?: string;
   confidence?: number;
   relevanceScore?: number;

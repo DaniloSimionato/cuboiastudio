@@ -20,6 +20,23 @@ export function buildResponsePlan(input: {
     policy: input.authorityPolicy,
   });
   const factsAvailable = Object.keys(state.confirmedFacts);
+  if (understanding.requiresClarification) {
+    return {
+      currentObjective: state.objective?.key ?? null,
+      turnIntent: understanding.turnIntent,
+      selectedFlowId: state.selectedFlowId,
+      flowStage: state.flowStage,
+      factsAvailable,
+      factsMissing: [],
+      claimsAllowed: [],
+      claimsForbidden: [],
+      toolsAllowed: [],
+      action: "SAFE_UNAVAILABLE",
+      responseGoal: "Pedir esclarecimento antes de inferir o assunto de um follow-up curto.",
+      shouldHandoff: false,
+      reasonCodes: ["AMBIGUOUS_BUSINESS_HOURS_FOLLOW_UP"],
+    };
+  }
   const missingCommercialAuthority =
     authority.missing.length > 0 &&
     authority.missing.some((category) =>
