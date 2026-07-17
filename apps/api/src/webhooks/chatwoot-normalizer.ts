@@ -68,6 +68,11 @@ function readString(value: unknown): string | null {
   return trimString(value);
 }
 
+/** Customer-authored message content must retain its display representation. */
+function readMessageContent(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
 function readMessageType(value: unknown): string | null {
   const raw =
     typeof value === "number" && Number.isFinite(value)
@@ -135,6 +140,15 @@ function pickFirstString(...values: unknown[]): string | null {
     if (text) {
       return text;
     }
+  }
+
+  return null;
+}
+
+function pickFirstMessageContent(...values: unknown[]): string | null {
+  for (const value of values) {
+    const text = readMessageContent(value);
+    if (text !== null) return text;
   }
 
   return null;
@@ -393,7 +407,7 @@ export function normalizeChatwootMessageCreatedPayload(
     ) ?? null;
 
   const dto: SendAssistantConversationMessageDto = {
-    message: pickFirstString(message.content, raw.content, raw.message, raw.text) ?? undefined,
+    message: pickFirstMessageContent(message.content, raw.content, raw.message, raw.text) ?? undefined,
     source: "chatwoot",
     externalMessageId:
       pickFirstIdentifier(message.id, raw.message_id, raw.external_message_id, data?.message_id) ?? undefined,
@@ -419,14 +433,11 @@ export function normalizeChatwootMessageCreatedPayload(
     externalInboxId: inboxId ?? undefined,
     messageType: readMessageType(message.message_type ?? raw.message_type ?? data?.message_type) ?? undefined,
     attachments: normalizedAttachmentDtos && normalizedAttachmentDtos.length > 0 ? normalizedAttachmentDtos : undefined,
-    contact:
-      pickFirstString(contact.name, contact.pushname) || pickFirstString(contact.phone_number, contact.phone)
-        ? {
-            name: pickFirstString(contact.name, contact.pushname) ?? "Contato do Chatwoot",
-            phone: pickFirstString(contact.phone_number, contact.phone) ?? "não informado",
-          }
-        : undefined,
-    location: normalizeLocation(message.location ?? raw.location ?? data?.location),
+    // Root-level contact/sender and location fields describe Chatwoot's
+    // conversation metadata. They are not proof that the customer shared a
+    // contact card or a location in this particular message.
+    contact: extractMessageContact(message, raw, data),
+    location: extractMessageLocation(message, raw, data),
   };
 
   return {
@@ -504,4 +515,53 @@ function normalizeLocation(value: unknown) {
     latitude,
     longitude,
   };
+}
+
+function extractMessageContact(
+  message: Record<string, unknown>,
+  raw: Record<string, unknown>,
+  data: Record<string, unknown> | null,
+) {
+  const messageAttributes =
+    readObject(message.content_attributes) ??
+    readObject(raw.content_attributes) ??
+    readObject(data?.content_attributes) ??
+    null;
+  const sharedContact =
+    readObject(message.shared_contact) ??
+    readObject(message.contact) ??
+    readObject(messageAttributes?.shared_contact) ??
+    readObject(messageAttributes?.contact) ??
+    null;
+
+  if (!sharedContact) return undefined;
+
+  const name = pickFirstString(sharedContact.name, sharedContact.pushname);
+  const phone = pickFirstString(sharedContact.phone_number, sharedContact.phone);
+  return name || phone
+    ? {
+        name: name ?? "Contato compartilhado",
+        phone: phone ?? "não informado",
+      }
+    : undefined;
+}
+
+function extractMessageLocation(
+  message: Record<string, unknown>,
+  raw: Record<string, unknown>,
+  data: Record<string, unknown> | null,
+) {
+  const messageAttributes =
+    readObject(message.content_attributes) ??
+    readObject(raw.content_attributes) ??
+    readObject(data?.content_attributes) ??
+    null;
+
+  return normalizeLocation(
+    message.location ??
+      messageAttributes?.location ??
+      (messageAttributes?.latitude !== undefined || messageAttributes?.longitude !== undefined
+        ? messageAttributes
+        : undefined),
+  );
 }

@@ -20,6 +20,10 @@ import { ChatwootInboxConfigService } from "../chatwoot/chatwoot-inbox-config.se
 import { PrismaService } from "../database/prisma.service";
 import { CacheService } from "../cache/cache.service";
 import {
+  createCanonicalInboundMessage,
+  toCanonicalInboundMessageTelemetry,
+} from "../inbound/canonical-inbound-message";
+import {
   persistInboundAttachment,
   type InboundAttachmentInput,
   type InboundAttachmentRecord,
@@ -71,7 +75,6 @@ import { decryptData, getOrMigrateWebhookCredentials } from "../common/encryptio
 import {
   buildPromptSectionManifest,
   DEFAULT_RAG_SCORE_THRESHOLD,
-  hashRuntimeText,
   normalizeRagScoreThreshold,
   RUNTIME_CONTEXT_MANIFEST_VERSION,
   resolveRuntimeFallbackAnswer,
@@ -1389,7 +1392,7 @@ export class AssistantConversationsService {
 
     // Compatibility with narrow test doubles and older adapters.
     return [
-      input.message?.trim() ?? "",
+      typeof input.message === "string" && input.message.trim() ? input.message : "",
       ...input.attachments
         .map((attachment) =>
           [attachment.transcript, attachment.extractedText, attachment.interpretedSummary].find(
@@ -1400,8 +1403,7 @@ export class AssistantConversationsService {
         .map((value) => value.trim()),
     ]
       .filter(Boolean)
-      .join("\n\n")
-      .trim();
+      .join("\n\n");
   }
 
   private toAttachmentInterpreterInput(input: {
@@ -2164,7 +2166,9 @@ export class AssistantConversationsService {
         attachments: input.dto.attachments,
       }));
     const initialContent =
-      input.dto.message?.trim() ||
+      (typeof input.dto.message === "string" && input.dto.message.trim()
+        ? input.dto.message
+        : "") ||
       (input.dto.messageType === "contact"
         ? "Contato recebido."
         : input.dto.messageType === "location"
@@ -2347,6 +2351,25 @@ export class AssistantConversationsService {
       contact: input.dto.contact ?? null,
       location: input.dto.location ?? null,
     });
+    const canonicalInboundMessage = createCanonicalInboundMessage({
+      companyId: input.tenant.companyId,
+      assistantId: input.assistantId,
+      conversationId: conversation.id,
+      internalMessageId: userMessage.id,
+      externalMessageReference: input.dto.externalMessageId ?? null,
+      contentType: messageType,
+      // This is the exact customer-authored representation shared by V1
+      // prompting and the ephemeral V2 Shadow snapshot.
+      displayContent: customerIntentText,
+      sourceSnapshotContent: input.dto.message ?? null,
+      receivedAt: new Date(),
+      attachmentMetadata: {
+        count: processedAttachments.length,
+        hasCaption: processedAttachments.some((attachment) => Boolean(attachment.caption?.trim())),
+        hasQuotedMessage: false,
+      },
+      quotedMessagePresent: false,
+    });
 
     await this.prisma.assistantConversationMessage.update({
       where: {
@@ -2374,6 +2397,7 @@ export class AssistantConversationsService {
           location: input.dto.location ?? null,
           attachments: processedAttachments,
           interpretedMessage,
+          canonicalInbound: toCanonicalInboundMessageTelemetry(canonicalInboundMessage),
         }),
       },
       select: {
@@ -2940,7 +2964,7 @@ export class AssistantConversationsService {
       memoryIds: selectedMemoryManifest.map((memory) => memory.id).filter(Boolean),
       memoryItems: selectedMemoryManifest,
       officialContextIncluded: Boolean(officialBusinessContext.promptBlock),
-      currentMessageHash: hashRuntimeText(interpretedMessage),
+      currentMessageHash: canonicalInboundMessage.canonicalComparisonHash,
       historyMessageIds: priorHistory
         .map((message) => message.id)
         .filter((id): id is string => typeof id === "string"),

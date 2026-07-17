@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { hashCanonicalInboundMessageContent } from "../inbound/canonical-inbound-message";
 import { CONVERSATION_STATE_VERSION } from "./conversation-state";
 import {
   type CompiledPrompt,
@@ -11,10 +11,6 @@ import {
   type TurnUnderstanding,
   type RetrievedContext,
 } from "./runtime-v2.types";
-
-function hashMessage(message: string): string | null {
-  return message.trim() ? createHash("sha256").update(message).digest("hex") : null;
-}
 
 export function buildRuntimeV2Manifest(input: {
   scope: RuntimeV2Scope;
@@ -35,7 +31,7 @@ export function buildRuntimeV2Manifest(input: {
     assistantId: input.scope.assistantId,
     conversationId: input.scope.conversationId,
     contextVersion: input.scope.contextVersion,
-    currentMessageHash: hashMessage(input.currentMessage),
+    currentMessageHash: hashCanonicalInboundMessageContent(input.currentMessage),
     currentObjective: input.state.objective?.key ?? null,
     objectiveAction: input.understanding.objectiveAction,
     turnIntent: input.understanding.turnIntent,

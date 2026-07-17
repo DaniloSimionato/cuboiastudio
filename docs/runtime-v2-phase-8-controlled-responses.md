@@ -36,6 +36,38 @@ abstração oficial `AiService` através de um adapter específico. Há no máxi
 chamada de provider por `generationId`; testes usam somente provider fake. O
 provider nunca é resolvido quando os bloqueios ou flags impedem a geração.
 
+## Inbound canônico e comparação V1×V2
+
+O turno é ancorado no snapshot textual recebido pelo webhook, não numa releitura
+posterior da API Chatwoot. `CanonicalInboundMessage`
+(`canonical-inbound-message-v1`) separa três representações:
+
+- `displayContent`: conteúdo autorizado entregue ao V1 e ao snapshot efêmero do
+  V2; para texto simples é o texto do cliente e, para mídia, pode incorporar
+  somente a interpretação autorizada da própria mídia;
+- `canonicalComparisonContent`: representação usada exclusivamente para
+  correspondência e idempotência;
+- telemetria redigida: hashes, versão de normalização e metadados estruturais;
+  nunca uma cópia adicional do conteúdo, prompt ou dados pessoais.
+
+`normalizeInboundMessageForComparison()` usa NFC, converte CRLF/CR em LF,
+normaliza espaço não separável e remove somente caracteres zero-width que não
+alteram a apresentação. Ela preserva caixa, acentos, palavras, pontuação,
+emojis (incluindo ZWJ e variation selectors) e quebras de linha relevantes. O
+hash de `currentMessage` em manifestos V1/V2 usa a mesma normalização.
+
+Metadados de remetente, contato da conversa e localização de nível raiz do
+payload Chatwoot não são conteúdo da mensagem. Um contato ou localização só
+entra no input quando vier explicitamente do objeto da mensagem. Assim, uma
+identidade de Chatwoot não é indevidamente interpretada como dado compartilhado
+pelo cliente.
+
+Quando Chatwoot expuser datas de atualização, a telemetria registra se a
+mensagem foi editada após o recebimento. Uma edição não sobrescreve o snapshot
+processado: a comparação mantém as versões apenas por hashes/metadados e uma
+nova mensagem deve ser usada antes de qualquer novo Shadow se houver divergência
+semântica.
+
 ## Contratos e persistência
 
 `RuntimeV2CandidateResponse` (`runtime-v2-candidate-response-v1`) contém apenas

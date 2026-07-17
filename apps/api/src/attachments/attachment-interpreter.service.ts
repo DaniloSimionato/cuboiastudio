@@ -759,7 +759,7 @@ export class AttachmentInterpreterService {
     const parts: string[] = [];
 
     if (input.rawText?.trim()) {
-      parts.push(input.rawText.trim());
+      parts.push(input.rawText);
     }
 
     if (input.contact) {
@@ -802,7 +802,7 @@ export class AttachmentInterpreterService {
       parts.push(lines.join("\n"));
     }
 
-    return parts.join("\n\n").trim();
+    return parts.join("\n\n");
   }
 
   /**
@@ -819,7 +819,7 @@ export class AttachmentInterpreterService {
     }>;
   }): string {
     const parts: string[] = [];
-    if (input.rawText?.trim()) parts.push(input.rawText.trim());
+    if (input.rawText?.trim()) parts.push(input.rawText);
     for (const attachment of input.attachments) {
       const interpreted = [
         attachment.transcript,
@@ -828,7 +828,7 @@ export class AttachmentInterpreterService {
       ].find((value) => Boolean(value?.trim()));
       if (interpreted?.trim()) parts.push(interpreted.trim());
     }
-    return parts.join("\n\n").trim();
+    return parts.join("\n\n");
   }
 
   async processAttachments(input: {

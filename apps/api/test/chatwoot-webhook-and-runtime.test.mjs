@@ -16,6 +16,7 @@ import {
   RuntimeV2ShadowOrchestrator,
 } from "../dist/runtime-v2/index.js";
 import { RuntimeV2ShadowIntegrationService } from "../dist/runtime-v2/runtime-v2-shadow-integration.service.js";
+import { hashCanonicalInboundMessageContent } from "../dist/inbound/canonical-inbound-message.js";
 
 function createMessageCreatedPayload(overrides = {}) {
   return {
@@ -2363,6 +2364,10 @@ test("pipeline Chatwoot completo preserva saída de triagem e drena o Shadow sem
   assert.doesNotMatch(assistantMessage?.content ?? "", /disponibilidade|horário|horario/i);
   assert.equal(calls.providerPayloads.length, 1);
   assert.equal(shadowLogs.length, 1);
+  assert.equal(
+    hashCanonicalInboundMessageContent(calls.providerPayloads[0].messages.at(-1).content),
+    shadowLogs[0].metadata.currentMessageHash,
+  );
   assert.equal(shadowLogs[0].metadata.status, "COMPLETED");
   assert.equal(shadowLogs[0].metadata.providerCalled, false);
   assert.equal(shadowLogs[0].metadata.toolCalls, 0);

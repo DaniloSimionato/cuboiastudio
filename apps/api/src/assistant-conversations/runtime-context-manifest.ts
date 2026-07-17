@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { hashCanonicalInboundMessageContent } from "../inbound/canonical-inbound-message";
 
 export const RUNTIME_CONTEXT_MANIFEST_VERSION = "runtime-context-v1";
 
@@ -19,10 +19,7 @@ export type RuntimeKnowledgeSearchResult = {
 export const DEFAULT_RAG_SCORE_THRESHOLD = 0.7;
 
 export function hashRuntimeText(value: string | null | undefined): string | null {
-  const normalized = typeof value === "string" ? value : "";
-  return normalized.trim().length > 0
-    ? createHash("sha256").update(normalized).digest("hex")
-    : null;
+  return hashCanonicalInboundMessageContent(value);
 }
 
 function labelPromptSection(message: { role: string; content?: unknown }): string {

@@ -1,6 +1,6 @@
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
-import { createHash } from "node:crypto";
+import { hashCanonicalInboundMessageContent } from "../inbound/canonical-inbound-message";
 import { PrismaService } from "../database/prisma.service";
 import { isRuntimeV2ShadowEnabled, resolveRuntimeV2Mode } from "./runtime-v2-feature-flag";
 import {
@@ -36,11 +36,6 @@ function safeErrorCode(value: unknown): string | null {
     .trim()
     .replace(/[^A-Za-z0-9_.:-]/g, "_")
     .slice(0, MAX_ERROR_CODE_LENGTH);
-}
-
-function hashMessage(value: string | undefined): string | null {
-  if (!value?.trim()) return null;
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function integrationKey(snapshot: RuntimeV2ShadowSnapshot): string {
@@ -288,7 +283,8 @@ export class RuntimeV2ShadowIntegrationService {
       aiActiveChanged: false,
       handoffRedactionApplied: manifest?.handoff?.handoffRedactionApplied ?? true,
       handoffErrorCode: manifest?.handoff?.handoffErrorCode ?? null,
-      currentMessageHash: manifest?.currentMessageHash ?? hashMessage(snapshot.currentMessage),
+      currentMessageHash:
+        manifest?.currentMessageHash ?? hashCanonicalInboundMessageContent(snapshot.currentMessage),
       status,
       revisionBefore: manifest?.revisionBefore ?? null,
       revisionAfter: manifest?.revisionAfter ?? null,

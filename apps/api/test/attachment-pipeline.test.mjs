@@ -513,10 +513,58 @@ test("normalizador do Chatwoot preserva anexos estruturados", () => {
   assert.equal(normalized.dto.attachments?.[0]?.dataUrl, "data:image/jpeg;base64,AA==");
   assert.equal(normalized.dto.attachments?.[0]?.thumbUrl, "https://example.com/thumb.jpg");
   assert.equal(normalized.dto.attachments?.[0]?.attachmentStoragePending, true);
-  assert.equal(normalized.dto.contact?.name, "Maria");
+  assert.equal(normalized.dto.contact, undefined);
   assert.equal(normalized.dto.location?.label, "Escritório");
   assert.equal(normalized.senderName, "Maria");
   assert.equal(normalized.conversationMetaSender, "Cliente final");
+});
+
+test("normalizador só trata contato como conteúdo quando ele vem da mensagem", () => {
+  const normalized = normalizeChatwootMessageCreatedPayload({
+    contact: {
+      id: "sender-contact",
+      name: "Remetente",
+      phone_number: "+5500000000000",
+    },
+    message: {
+      id: "msg_contact_1",
+      content: "Cartão compartilhado",
+      message_type: "incoming",
+      content_attributes: {
+        contact: {
+          name: "Contato compartilhado",
+          phone_number: "+5511111111111",
+        },
+      },
+    },
+    conversation: { id: "conv_contact_1" },
+  });
+
+  assert.equal(normalized.dto.contact?.name, "Contato compartilhado");
+  assert.equal(normalized.dto.contact?.phone, "+5511111111111");
+});
+
+test("normalizador não usa localização de metadados raiz como conteúdo da mensagem", () => {
+  const normalized = normalizeChatwootMessageCreatedPayload({
+    location: { label: "Metadado da conversa", latitude: -20, longitude: -54 },
+    message: { id: "msg_text_1", content: "Mensagem textual", message_type: "incoming" },
+    conversation: { id: "conv_text_1" },
+  });
+
+  assert.equal(normalized.dto.location, undefined);
+});
+
+test("normalizador preserva a forma de exibição do conteúdo textual do webhook", () => {
+  const normalized = normalizeChatwootMessageCreatedPayload({
+    message: {
+      id: "msg_whitespace_1",
+      content: "  Texto com bordas  ",
+      message_type: "incoming",
+    },
+    conversation: { id: "conv_whitespace_1" },
+  });
+
+  assert.equal(normalized.dto.message, "  Texto com bordas  ");
 });
 
 test("normalizador do Chatwoot extrai attachment do topo e infere tipo real do arquivo", () => {

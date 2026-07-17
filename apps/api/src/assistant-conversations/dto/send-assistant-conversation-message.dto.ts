@@ -17,6 +17,10 @@ function trimString(value: unknown): unknown {
   return typeof value === "string" ? value.trim() : value;
 }
 
+function preserveMessageDisplay(value: unknown): unknown {
+  return typeof value === "string" && value.trim().length > 0 ? value : value;
+}
+
 class SendAssistantConversationAttachmentDto {
   @IsIn(["image", "document", "audio", "video", "gif"])
   type!: "image" | "document" | "audio" | "video" | "gif";
@@ -118,7 +122,7 @@ class SendAssistantConversationLocationDto {
 
 export class SendAssistantConversationMessageDto {
   @IsOptional()
-  @Transform(({ value }) => trimString(value))
+  @Transform(({ value }) => preserveMessageDisplay(value))
   @IsString()
   @MaxLength(1000)
   message?: string;

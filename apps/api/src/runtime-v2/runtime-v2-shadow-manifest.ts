@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { hashCanonicalInboundMessageContent } from "../inbound/canonical-inbound-message";
 import { CONVERSATION_STATE_VERSION } from "./conversation-state";
 import {
   type ObjectiveAction,
@@ -128,10 +128,6 @@ export type RuntimeV2ShadowManifest = {
   };
 };
 
-function hashMessage(message: string): string | null {
-  return message.trim() ? createHash("sha256").update(message).digest("hex") : null;
-}
-
 export function buildRuntimeV2ShadowManifest(input: {
   scope: RuntimeV2Scope;
   mode: RuntimeV2Mode;
@@ -203,7 +199,7 @@ export function buildRuntimeV2ShadowManifest(input: {
     schemaVersion: input.afterState.schemaVersion,
     revisionBefore: input.beforeState.revision,
     revisionAfter: input.afterState.revision,
-    currentMessageHash: hashMessage(input.currentMessage),
+    currentMessageHash: hashCanonicalInboundMessageContent(input.currentMessage),
     audioMessage: input.audioMessage ?? false,
     transcriptionAvailable: input.transcriptionAvailable ?? false,
     transcriptionPersisted: input.transcriptionPersisted ?? false,
