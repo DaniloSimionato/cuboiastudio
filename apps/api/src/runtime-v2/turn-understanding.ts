@@ -330,6 +330,13 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
   });
   const followsBusinessHoursTopic =
     implicitFollowUp.status === "RESOLVED" && implicitFollowUp.topic === "BUSINESS_HOURS";
+  const inheritanceEvaluated = implicitFollowUp.detected || implicitFollowUp.topicChanged;
+  const inheritanceAllowed = followsBusinessHoursTopic && !implicitFollowUp.topicChanged;
+  const inheritanceBlockReason = implicitFollowUp.topicChanged
+    ? "EXPLICIT_TOPIC_CHANGE"
+    : implicitFollowUp.status === "AMBIGUOUS"
+      ? implicitFollowUp.reasonCode
+      : null;
   const ambiguousBusinessHoursFollowUp = implicitFollowUp.status === "AMBIGUOUS";
   const asksBusinessHours = explicitBusinessHoursLanguage || followsBusinessHoursTopic;
   const asksOfficialContact =
@@ -735,6 +742,9 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
     currentTopic,
     topicChangeReason: implicitFollowUp.topicChanged ? implicitFollowUp.reasonCode : null,
     inheritedTopicSuppressed: implicitFollowUp.topicChanged && priorBusinessHoursTopic,
+    inheritanceEvaluated,
+    inheritanceAllowed,
+    inheritanceBlockReason,
     resolutionReasonCode: implicitFollowUp.reasonCode,
     isSideQuestion,
     isNonFactualConversation,

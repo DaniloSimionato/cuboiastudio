@@ -27,6 +27,19 @@ function observation(overrides = {}) {
     queryCategory: "KNOWLEDGE",
     threshold: 0.7,
     thresholdSource: "default",
+    diagnostics: {
+      candidateDocumentCount: 2,
+      eligibleDocumentCount: 1,
+      candidateChunkCount: 4,
+      eligibleChunkCount: 3,
+      scoredChunkCount: 3,
+      dimensionMismatchCount: 0,
+      filteredOutCount: 2,
+      filteredOutScoreRange: { min: 0.12, max: 0.69 },
+      scoredScoreRange: { min: 0.12, max: 0.88 },
+      selectedScoreRange: { min: 0.88, max: 0.88 },
+      topK: 3,
+    },
     resultCount: 1,
     observedAt: now.toISOString(),
     items: [
@@ -78,6 +91,19 @@ test("observação sanitizada preserva somente IDs, score, status e hash", () =>
     retrievalExecuted: true,
     threshold: 0.7,
     thresholdSource: "default",
+    diagnostics: {
+      candidateDocumentCount: 2,
+      eligibleDocumentCount: 1,
+      candidateChunkCount: 4,
+      eligibleChunkCount: 3,
+      scoredChunkCount: 3,
+      dimensionMismatchCount: 0,
+      filteredOutCount: 2,
+      filteredOutScoreRange: { min: 0.12, max: 0.69 },
+      scoredScoreRange: { min: 0.12, max: 0.88 },
+      selectedScoreRange: { min: 0.88, max: 0.88 },
+      topK: 3,
+    },
     observedAt: now,
     results: [
       {
@@ -102,6 +128,7 @@ test("observação sanitizada preserva somente IDs, score, status e hash", () =>
   assert.match(serialized, /chunk-a/);
   assert.match(serialized, /validUntil/);
   assert.match(serialized, /contentHash/);
+  assert.match(serialized, /candidateDocumentCount/);
 });
 
 test("adapter aceita resultado acima do threshold e rejeita abaixo, status inválido e categoria ausente", () => {

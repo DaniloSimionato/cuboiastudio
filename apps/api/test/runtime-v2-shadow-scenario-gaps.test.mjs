@@ -92,6 +92,17 @@ test("RAG Shadow recupera garantia autorizada após o scope gate e conclui provi
       return {
         scoreThreshold: 0.7,
         scoreThresholdSource: "fixture",
+        candidateDocumentCount: 4,
+        eligibleDocumentCount: 3,
+        candidateChunkCount: 12,
+        eligibleChunkCount: 9,
+        scoredChunkCount: 9,
+        dimensionMismatchCount: 0,
+        filteredOutCount: 6,
+        filteredOutScoreRange: { min: 0.2, max: 0.69 },
+        scoredScoreRange: { min: 0.2, max: 0.91 },
+        selectedScoreRange: { min: 0.91, max: 0.91 },
+        topK: 3,
         results: [
           {
             knowledgeId: "knowledge-warranty",
@@ -126,6 +137,11 @@ test("RAG Shadow recupera garantia autorizada após o scope gate e conclui provi
   assert.deepEqual(result.manifest.winningSourceTypes, ["RAG_DOCUMENT"]);
   assert.equal(result.manifest.evidence.rag.ragRetrievalExecuted, true);
   assert.equal(result.manifest.evidence.rag.ragEvidenceCount, 1);
+  assert.equal(result.manifest.evidence.rag.ragCandidateDocumentCount, 4);
+  assert.equal(result.manifest.evidence.rag.ragEligibleChunkCount, 9);
+  assert.equal(result.manifest.evidence.rag.ragScoredChunkCount, 9);
+  assert.equal(result.manifest.evidence.rag.ragFilteredOutCount, 6);
+  assert.deepEqual(result.manifest.evidence.rag.ragSelectedScoreRange, { min: 0.91, max: 0.91 });
   assert.equal(result.manifest.candidateResponse.status, "CANDIDATE_APPROVED");
   assert.equal(
     result.manifest.candidateResponse.generationLifecycle.status,
@@ -187,6 +203,19 @@ test("mudança explícita suprime herança de horário sem marcar continuidade c
   assert.equal(changed.currentTopic, "TECHNICAL_INFORMATION");
   assert.equal(changed.inheritedTopic, null);
   assert.equal(changed.inheritedTopicSuppressed, true);
+  assert.equal(changed.inheritanceEvaluated, true);
+  assert.equal(changed.inheritanceAllowed, false);
+  assert.equal(changed.inheritanceBlockReason, "EXPLICIT_TOPIC_CHANGE");
+
+  const changedWithoutTrustedTopic = understandTurn({
+    message: "Agora outro assunto: meu notebook não liga. O que devo fazer?",
+    messageId: "topic-change-without-trusted-topic",
+  });
+  assert.equal(changedWithoutTrustedTopic.previousTopic, null);
+  assert.equal(changedWithoutTrustedTopic.inheritedTopicSuppressed, false);
+  assert.equal(changedWithoutTrustedTopic.inheritanceEvaluated, true);
+  assert.equal(changedWithoutTrustedTopic.inheritanceAllowed, false);
+  assert.equal(changedWithoutTrustedTopic.inheritanceBlockReason, "EXPLICIT_TOPIC_CHANGE");
 
   for (const message of [
     "E nos outros dias?",

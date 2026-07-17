@@ -235,9 +235,12 @@ documental é única e elegível (`WARRANTY`, `TECHNICAL_INFORMATION`,
 do turno, somente chunks `ACTIVE` de documentos `READY`, top-K limitado e o
 threshold existente. Query, conteúdo e embedding não entram em telemetria.
 
-O manifesto registra somente se a recuperação ocorreu, contagens, threshold,
-fingerprints de documento/chunk, buckets de score, decisão de autoridade e motivo
-de bloqueio. Um documento RAG só se torna autoridade quando a categoria está
+O manifesto registra somente se a recuperação ocorreu, contagens separadas de
+documentos/chunks candidatos, elegíveis, pontuados, rejeitados por threshold e
+incompatíveis por dimensão; registra também as faixas de score, top-K, threshold,
+fingerprints de documento/chunk, decisão de autoridade e motivo de bloqueio.
+Query, conteúdo, embeddings e documentos integrais continuam fora da telemetria.
+Um documento RAG só se torna autoridade quando a categoria está
 declarada, o chunk está no escopo, ativo, acima do threshold e sem conflito. Para
 essas categorias estáveis, a autoridade vencedora é `RAG_DOCUMENT`; preço,
 disponibilidade e agendamento continuam exigindo fonte estruturada ou ferramenta.
@@ -248,8 +251,12 @@ antes do provider e não pode produzir afirmação factual.
 
 Marcadores como “agora outro assunto”, “mudando de assunto”, “falando de outra
 coisa”, “tenho outra dúvida” e “esquece isso” registram
-`topicChanged=true`, `topicChangeReason=EXPLICIT_TOPIC_CHANGE`, tópico anterior,
-tópico atual e supressão de herança. Eles não substituem follow-ups reais, que
+`topicChanged=true`, `topicChangeReason=EXPLICIT_TOPIC_CHANGE`, tópico anterior
+quando confiável, tópico atual e a decisão explícita de herança
+(`inheritanceEvaluated`, `inheritanceAllowed` e `inheritanceBlockReason`).
+`inheritedTopicSuppressed` só é verdadeiro quando existia uma herança candidata
+que foi realmente suprimida; sua ausência não é interpretada como permissão.
+Eles não substituem follow-ups reais, que
 continuam limitados às seis mensagens da própria conversa.
 
 Pedidos inequívocos de humano, incluindo preferência por falar com pessoa ou

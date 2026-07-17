@@ -1,11 +1,14 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from "@nestjs/common";
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  BadRequestException,
+} from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
 import { AiService } from "../ai/ai.service";
 import { type AuthenticatedUser, type RequestTenant } from "../auth/auth.types";
 import { Status } from "@prisma/client";
-import {
-  normalizeRagScoreThreshold,
-} from "../assistant-conversations/runtime-context-manifest";
+import { normalizeRagScoreThreshold } from "../assistant-conversations/runtime-context-manifest";
 
 export interface AssistantKnowledgeSearchInput {
   companyId?: string;
@@ -19,12 +22,20 @@ export interface AssistantKnowledgeSearchInput {
 
 export interface AssistantKnowledgeSearchResult {
   query: string;
+  candidateDocumentCount: number;
+  eligibleDocumentCount: number;
+  candidateChunkCount: number;
+  eligibleChunkCount: number;
   totalChunksScanned: number;
   scoreThreshold: number;
   scoreThresholdSource: "default" | "explicit" | "default_invalid";
   scoredChunkCount: number;
+  dimensionMismatchCount: number;
   filteredOutCount: number;
   filteredOutScoreRange: { min: number; max: number } | null;
+  scoredScoreRange: { min: number; max: number } | null;
+  selectedScoreRange: { min: number; max: number } | null;
+  topK: number;
   results: Array<{
     knowledgeId: string;
     knowledgeTitle: string;
@@ -32,7 +43,7 @@ export interface AssistantKnowledgeSearchResult {
     chunkIndex: number;
     contentPreview: string;
     score: number;
-    metadata?: any;
+    metadata?: unknown;
   }>;
   warning?: string;
 }
@@ -94,45 +105,86 @@ export class AssistantKnowledgeRetrievalService {
 
     // 1. Fetch chunks that belong to ACTIVE and READY knowledge items.
     // Using findMany because we will do in-memory Cosine Similarity.
-    // Note: If chunks exceed ~50,000 this will be heavy on RAM. 
+    // Note: If chunks exceed ~50,000 this will be heavy on RAM.
     // In the future this should be replaced by a pgvector raw query.
-    const chunks = await this.prisma.assistantKnowledgeChunk.findMany({
-      where: {
-        companyId: input.tenant.companyId,
-        assistantId: input.assistantId,
-        status: Status.ACTIVE,
-        knowledge: {
-          status: Status.ACTIVE,
-          processingStatus: "READY",
-        },
-      },
-      select: {
-        id: true,
-        knowledgeId: true,
-        chunkIndex: true,
-        content: true,
-        embedding: true,
-        embeddingDimension: true,
-        knowledge: {
+    // Some isolated legacy tests provide a minimal retrieval Prisma mock. Counts are
+    // telemetry only, so preserve retrieval behavior when those optional delegates
+    // are absent while production Prisma always supplies the exact values.
+    const prismaForDiagnostics = this.prisma as unknown as {
+      assistantKnowledge?: { count?: (args: unknown) => Promise<number> };
+      assistantKnowledgeChunk?: { count?: (args: unknown) => Promise<number> };
+    };
+    const countDocuments = prismaForDiagnostics.assistantKnowledge?.count;
+    const countChunks = prismaForDiagnostics.assistantKnowledgeChunk?.count;
+    const [candidateDocumentCount, eligibleDocumentCount, candidateChunkCount, chunks] =
+      await Promise.all([
+        countDocuments
+          ? countDocuments({
+              where: { companyId: input.tenant.companyId, assistantId: input.assistantId },
+            })
+          : Promise.resolve(0),
+        countDocuments
+          ? countDocuments({
+              where: {
+                companyId: input.tenant.companyId,
+                assistantId: input.assistantId,
+                status: Status.ACTIVE,
+                processingStatus: "READY",
+              },
+            })
+          : Promise.resolve(0),
+        countChunks
+          ? countChunks({
+              where: { companyId: input.tenant.companyId, assistantId: input.assistantId },
+            })
+          : Promise.resolve(0),
+        this.prisma.assistantKnowledgeChunk.findMany({
+          where: {
+            companyId: input.tenant.companyId,
+            assistantId: input.assistantId,
+            status: Status.ACTIVE,
+            knowledge: {
+              status: Status.ACTIVE,
+              processingStatus: "READY",
+            },
+          },
           select: {
-            title: true,
-            metadata: true,
-          }
-        }
-      },
-    });
+            id: true,
+            knowledgeId: true,
+            chunkIndex: true,
+            content: true,
+            embedding: true,
+            embeddingDimension: true,
+            knowledge: {
+              select: {
+                title: true,
+                metadata: true,
+              },
+            },
+          },
+        }),
+      ]);
 
     if (chunks.length === 0) {
       return {
         query: trimmedQuery,
+        candidateDocumentCount,
+        eligibleDocumentCount,
+        candidateChunkCount,
+        eligibleChunkCount: 0,
         totalChunksScanned: 0,
         scoreThreshold: threshold,
         scoreThresholdSource: normalizedThreshold.source,
         scoredChunkCount: 0,
+        dimensionMismatchCount: 0,
         filteredOutCount: 0,
         filteredOutScoreRange: null,
+        scoredScoreRange: null,
+        selectedScoreRange: null,
+        topK,
         results: [],
-        warning: "Nenhum chunk de conhecimento ativo e preparado (READY) foi encontrado para este agente.",
+        warning:
+          "Nenhum chunk de conhecimento ativo e preparado (READY) foi encontrado para este agente.",
       };
     }
 
@@ -145,7 +197,7 @@ export class AssistantKnowledgeRetrievalService {
 
     // 3. Calculate similarities
     const scoredChunks = chunks
-      .map(chunk => {
+      .map((chunk) => {
         // Ensure dimensions match
         const chunkVector = chunk.embedding as number[];
         if (!chunkVector || chunkVector.length !== queryVector.length) {
@@ -158,7 +210,7 @@ export class AssistantKnowledgeRetrievalService {
           score,
         };
       })
-      .filter((item): item is { chunk: any; score: number } => item !== null);
+      .filter((item): item is { chunk: (typeof chunks)[number]; score: number } => item !== null);
 
     const filteredOut = scoredChunks.filter((item) => item.score < threshold);
     const filteredOutCount = filteredOut.length;
@@ -176,21 +228,38 @@ export class AssistantKnowledgeRetrievalService {
     // 5. Take topK
     const topResults = acceptedChunks.slice(0, topK);
 
+    const scoreRange = (values: number[]): { min: number; max: number } | null =>
+      values.length
+        ? {
+            min: Number(Math.min(...values).toFixed(4)),
+            max: Number(Math.max(...values).toFixed(4)),
+          }
+        : null;
+
     return {
       query: trimmedQuery,
+      candidateDocumentCount,
+      eligibleDocumentCount,
+      candidateChunkCount,
+      eligibleChunkCount: chunks.length,
       totalChunksScanned: chunks.length,
       scoreThreshold: threshold,
       scoreThresholdSource: normalizedThreshold.source,
       scoredChunkCount: scoredChunks.length,
+      dimensionMismatchCount: chunks.length - scoredChunks.length,
       filteredOutCount,
       filteredOutScoreRange,
-      results: topResults.map(res => ({
+      scoredScoreRange: scoreRange(scoredChunks.map((item) => item.score)),
+      selectedScoreRange: scoreRange(topResults.map((item) => item.score)),
+      topK,
+      results: topResults.map((res) => ({
         knowledgeId: res.chunk.knowledgeId,
         knowledgeTitle: res.chunk.knowledge.title,
         chunkId: res.chunk.id,
         chunkIndex: res.chunk.chunkIndex,
         // Preview de até 250 chars para não saturar resposta JSON (o frontend é só p/ debug)
-        contentPreview: res.chunk.content.substring(0, 250) + (res.chunk.content.length > 250 ? "..." : ""),
+        contentPreview:
+          res.chunk.content.substring(0, 250) + (res.chunk.content.length > 250 ? "..." : ""),
         score: Number(res.score.toFixed(4)),
         metadata: res.chunk.knowledge.metadata ?? undefined,
       })),

@@ -291,6 +291,10 @@ export type TurnUnderstanding = {
   currentTopic?: string | null;
   topicChangeReason?: string | null;
   inheritedTopicSuppressed?: boolean;
+  /** Explicit decision telemetry for bounded follow-up inheritance. */
+  inheritanceEvaluated?: boolean;
+  inheritanceAllowed?: boolean;
+  inheritanceBlockReason?: string | null;
   resolutionReasonCode?: string | null;
   requestedAction?: string;
   nextQuestion?: RelevantQuestion | null;

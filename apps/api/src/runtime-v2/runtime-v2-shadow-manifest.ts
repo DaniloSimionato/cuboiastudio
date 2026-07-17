@@ -51,6 +51,9 @@ export type RuntimeV2ShadowManifest = {
   currentTopic: string | null;
   topicChangeReason: string | null;
   inheritedTopicSuppressed: boolean;
+  inheritanceEvaluated: boolean;
+  inheritanceAllowed: boolean;
+  inheritanceBlockReason: string | null;
   resolutionReasonCode: string | null;
   humanRequested: boolean;
   humanRequestConfidence: number;
@@ -247,6 +250,9 @@ export function buildRuntimeV2ShadowManifest(input: {
     currentTopic: input.understanding.currentTopic ?? null,
     topicChangeReason: input.understanding.topicChangeReason ?? null,
     inheritedTopicSuppressed: input.understanding.inheritedTopicSuppressed ?? false,
+    inheritanceEvaluated: input.understanding.inheritanceEvaluated ?? false,
+    inheritanceAllowed: input.understanding.inheritanceAllowed ?? false,
+    inheritanceBlockReason: input.understanding.inheritanceBlockReason ?? null,
     resolutionReasonCode: input.understanding.resolutionReasonCode ?? null,
     humanRequested: input.understanding.humanHandoffSignal.requested,
     humanRequestConfidence: input.understanding.humanHandoffSignal.confidence,

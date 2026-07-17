@@ -57,6 +57,22 @@ export type RagRetrievalObservation = {
   observedAt: string;
   items: RagRetrievalObservationItem[];
   notExecutedReason?: RagNotExecutedReason;
+  diagnostics?: RagRetrievalDiagnostics;
+};
+
+/** Aggregate-only retrieval diagnostics. No query, chunk, or document content is retained. */
+export type RagRetrievalDiagnostics = {
+  candidateDocumentCount?: number;
+  eligibleDocumentCount?: number;
+  candidateChunkCount?: number;
+  eligibleChunkCount?: number;
+  scoredChunkCount?: number;
+  dimensionMismatchCount?: number;
+  filteredOutCount?: number;
+  filteredOutScoreRange?: { min: number; max: number } | null;
+  scoredScoreRange?: { min: number; max: number } | null;
+  selectedScoreRange?: { min: number; max: number } | null;
+  topK?: number;
 };
 
 export type RagEvidenceAdapterStatus =
@@ -68,6 +84,17 @@ export type RagEvidenceManifest = {
   ragThreshold: number | null;
   ragThresholdSource: string | null;
   ragResultCount: number;
+  ragCandidateDocumentCount: number;
+  ragEligibleDocumentCount: number;
+  ragCandidateChunkCount: number;
+  ragEligibleChunkCount: number;
+  ragScoredChunkCount: number;
+  ragDimensionMismatchCount: number;
+  ragFilteredOutCount: number;
+  ragFilteredOutScoreRange: { min: number; max: number } | null;
+  ragScoredScoreRange: { min: number; max: number } | null;
+  ragSelectedScoreRange: { min: number; max: number } | null;
+  ragTopK: number | null;
   ragEvidenceCount: number;
   ragRejectedCount: number;
   ragEvidenceIds: string[];
@@ -188,6 +215,7 @@ export function createRagRetrievalObservation(input: {
   notExecutedReason?: RagNotExecutedReason;
   threshold?: number | null;
   thresholdSource?: string | null;
+  diagnostics?: RagRetrievalDiagnostics;
   results?: Array<{
     knowledgeId: string;
     knowledgeTitle?: string;
@@ -233,6 +261,7 @@ export function createRagRetrievalObservation(input: {
           ? "EXECUTED_WITH_RESULTS"
           : "EXECUTED_EMPTY"
         : "NOT_REQUIRED"),
+    diagnostics: input.diagnostics,
   };
 }
 
@@ -265,6 +294,17 @@ function emptyManifest(input: {
     ragThreshold: observation?.threshold ?? null,
     ragThresholdSource: observation?.thresholdSource ?? null,
     ragResultCount: observation?.resultCount ?? 0,
+    ragCandidateDocumentCount: observation?.diagnostics?.candidateDocumentCount ?? 0,
+    ragEligibleDocumentCount: observation?.diagnostics?.eligibleDocumentCount ?? 0,
+    ragCandidateChunkCount: observation?.diagnostics?.candidateChunkCount ?? 0,
+    ragEligibleChunkCount: observation?.diagnostics?.eligibleChunkCount ?? 0,
+    ragScoredChunkCount: observation?.diagnostics?.scoredChunkCount ?? 0,
+    ragDimensionMismatchCount: observation?.diagnostics?.dimensionMismatchCount ?? 0,
+    ragFilteredOutCount: observation?.diagnostics?.filteredOutCount ?? 0,
+    ragFilteredOutScoreRange: observation?.diagnostics?.filteredOutScoreRange ?? null,
+    ragScoredScoreRange: observation?.diagnostics?.scoredScoreRange ?? null,
+    ragSelectedScoreRange: observation?.diagnostics?.selectedScoreRange ?? null,
+    ragTopK: observation?.diagnostics?.topK ?? null,
     ragEvidenceCount: input.evidence.length,
     ragRejectedCount: input.rejectedCount,
     ragEvidenceIds: input.evidence.map((item) => item.evidenceId).sort(),

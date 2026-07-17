@@ -172,6 +172,17 @@ export type RuntimeV2ScopedRagRetriever = {
   }): Promise<{
     scoreThreshold: number;
     scoreThresholdSource: string;
+    candidateDocumentCount?: number;
+    eligibleDocumentCount?: number;
+    candidateChunkCount?: number;
+    eligibleChunkCount?: number;
+    scoredChunkCount?: number;
+    dimensionMismatchCount?: number;
+    filteredOutCount?: number;
+    filteredOutScoreRange?: { min: number; max: number } | null;
+    scoredScoreRange?: { min: number; max: number } | null;
+    selectedScoreRange?: { min: number; max: number } | null;
+    topK?: number;
     results: Array<{
       knowledgeId: string;
       knowledgeTitle: string;
@@ -1105,6 +1116,19 @@ export class RuntimeV2ShadowOrchestrator {
           retrievalExecuted: true,
           threshold: search.scoreThreshold,
           thresholdSource: search.scoreThresholdSource,
+          diagnostics: {
+            candidateDocumentCount: search.candidateDocumentCount,
+            eligibleDocumentCount: search.eligibleDocumentCount,
+            candidateChunkCount: search.candidateChunkCount,
+            eligibleChunkCount: search.eligibleChunkCount,
+            scoredChunkCount: search.scoredChunkCount,
+            dimensionMismatchCount: search.dimensionMismatchCount,
+            filteredOutCount: search.filteredOutCount,
+            filteredOutScoreRange: search.filteredOutScoreRange,
+            scoredScoreRange: search.scoredScoreRange,
+            selectedScoreRange: search.selectedScoreRange,
+            topK: search.topK,
+          },
           results: search.results,
         });
         v2RagKnowledgeItems = search.results.map((item) => ({
