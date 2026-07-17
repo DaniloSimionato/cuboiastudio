@@ -213,6 +213,12 @@ test("PostgreSQL mantém candidata V2 limitada e redigida após restart", async 
       officialDataKeysUsed: [], toolPlan: [], handoffDecision: "NONE", safetyDecision: "PASS",
       qualitySignals: [], generatedAt: "2026-07-20T12:00:00.000Z", idempotencyKey: "candidate-key",
       redactionApplied: true, outboundAttempted: false, outboundPerformed: false,
+      generationLifecycle: {
+        status: "GENERATION_COMPLETED", generationStartedAt: "2026-07-20T12:00:00.000Z",
+        generationCompletedAt: "2026-07-20T12:00:00.001Z", generationLatencyMs: 1,
+        providerCalled: true, providerCallCount: 1, providerCancellationRequested: false,
+        lateResultDiscarded: false,
+      },
     },
     comparison: null,
   });

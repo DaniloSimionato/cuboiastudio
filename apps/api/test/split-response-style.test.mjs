@@ -562,9 +562,14 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
         },
       },
       runtimeV2ShadowIntegration: {
-        schedule: async (snapshot) => {
+        dispatch: (snapshot) => {
           shadowSnapshots.push(snapshot);
-          return { status: "COMPLETED", manifest: null, logId: null, logPersisted: false };
+          return {
+            status: "ACCEPTED",
+            generationStatus: "GENERATION_PENDING",
+            v1WaitReleased: true,
+            dispatchLatencyMs: 0,
+          };
         },
       },
       intentRouterService: {

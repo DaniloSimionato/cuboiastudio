@@ -45,6 +45,12 @@ function fakePrisma() {
         logs.push({ ...data, id });
         return select?.id ? { id } : logs.at(-1);
       },
+      async update({ where, data, select }) {
+        const index = logs.findIndex((entry) => entry.id === where.id);
+        if (index < 0) throw new Error("RUNTIME_LOG_NOT_FOUND");
+        logs[index] = { ...logs[index], ...data };
+        return select?.id ? { id: logs[index].id } : logs[index];
+      },
     },
   };
 }

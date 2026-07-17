@@ -43,6 +43,7 @@ export interface AiChatCompletionInput {
   companyId?: string;
   tools?: any[];
   response_format?: any;
+  signal?: AbortSignal;
 }
 
 export interface AiChatCompletionResult {

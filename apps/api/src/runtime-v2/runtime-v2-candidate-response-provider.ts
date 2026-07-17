@@ -13,6 +13,7 @@ export class RuntimeV2CandidateResponseProvider implements CandidateResponseProv
       ...(input.model ? { model: input.model } : {}),
       ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
       tools: [],
+      ...(input.signal ? { signal: input.signal } : {}),
     });
   }
 }

@@ -65,6 +65,41 @@ abstração oficial `AiService` através de um adapter específico. Há no máxi
 chamada de provider por `generationId`; testes usam somente provider fake. O
 provider nunca é resolvido quando os bloqueios ou flags impedem a geração.
 
+### Despacho assíncrono e timeout da geração
+
+O caminho que o V1 observa termina no despacho, não na geração. Há dois budgets
+distintos, ambos com fallback seguro quando a configuração está ausente ou é
+inválida:
+
+- `RUNTIME_V2_SHADOW_DISPATCH_BUDGET_MS` (padrão `250` ms): orçamento apenas
+  para validar o escopo, deduplicar e agendar o trabalho Shadow. A chamada do
+  V1 recebe controle de volta sem aguardar provider, quality gate, comparação
+  ou persistência final;
+- `RUNTIME_V2_CANDIDATE_GENERATION_TIMEOUT_MS` (padrão `10000` ms): timeout
+  real do ciclo de provider, quality gate, comparação e persistência. É limitado
+  a uma faixa finita e não pode produzir espera infinita.
+
+O `RuntimeV2ShadowIntegrationService` grava telemetria de despacho com
+`dispatchStatus=ACCEPTED`, `generationStatus=GENERATION_PENDING` e
+`v1WaitReleased=true`. A conclusão atualiza a mesma linha de Runtime log: não
+fica um `TIMEOUT` terminal coexistindo com uma candidata aprovada. O lifecycle
+versionado da candidata é um entre `NOT_STARTED`, `DISPATCHED`,
+`GENERATION_PENDING`, `GENERATION_COMPLETED`, `GENERATION_BLOCKED`,
+`GENERATION_FAILED`, `GENERATION_TIMED_OUT` ou `GENERATION_CANCELLED`.
+
+O timeout de despacho **não** é timeout do provider. Assim, uma geração que
+ultrapassa 250 ms e conclui antes do timeout de geração permanece válida, com
+`completedAfterV1Response=true` e exatamente uma chamada de provider. Quando o
+timeout real vence, o adapter recebe `AbortSignal` quando suportado; qualquer
+resultado tardio é descartado pelo lifecycle guard, não substitui o estado
+terminal e não gera outbound.
+
+Uma API reiniciada entre `GENERATION_PENDING` e a conclusão não reinicia o
+trabalho nem reprocessa mensagens antigas. O registro pendente requer
+reconciliação operacional (`INTERRUPTED_BEFORE_COMPLETION`), nunca aprovação por
+inferência. A deduplicação por `generationId` e `internalMessageId` impede uma
+segunda chamada concorrente ou replay após conclusão.
+
 ## Inbound canônico e comparação V1×V2
 
 O turno é ancorado no snapshot textual recebido pelo webhook, não numa releitura

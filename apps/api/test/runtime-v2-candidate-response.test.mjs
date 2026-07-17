@@ -7,6 +7,8 @@ import {
   RuntimeV2ShadowOrchestrator,
   createEmptyConversationState,
   isRuntimeV2ResponseGenerationEnabled,
+  resolveRuntimeV2CandidateGenerationTimeoutMs,
+  resolveRuntimeV2ShadowDispatchBudgetMs,
 } from "../dist/runtime-v2/index.js";
 
 const scope = {
@@ -78,6 +80,16 @@ test("flags de candidate response ficam OFF por padrão e exigem ambas allowlist
   );
 });
 
+test("budgets de despacho e geração têm defaults finitos para configurações ausentes ou inválidas", () => {
+  assert.equal(resolveRuntimeV2ShadowDispatchBudgetMs({}), 250);
+  assert.equal(resolveRuntimeV2CandidateGenerationTimeoutMs({}), 10_000);
+  assert.equal(resolveRuntimeV2ShadowDispatchBudgetMs({ RUNTIME_V2_SHADOW_DISPATCH_BUDGET_MS: "0" }), 250);
+  assert.equal(
+    resolveRuntimeV2CandidateGenerationTimeoutMs({ RUNTIME_V2_CANDIDATE_GENERATION_TIMEOUT_MS: "infinito" }),
+    10_000,
+  );
+});
+
 test("generator gera uma única candidata redigida, sem outbound", async () => {
   let calls = 0;
   const generator = new RuntimeV2CandidateResponseGenerator({
@@ -102,6 +114,154 @@ test("generator gera uma única candidata redigida, sem outbound", async () => {
   assert.equal(result.candidate.outboundPerformed, false);
   assert.equal(result.candidate.responseTextRedacted, "Atendemos em horário comercial.");
   assert.equal(result.comparison.v1ResponseAvailable, true);
+});
+
+test("geração lenta conclui após o despacho sem produzir timeout terminal", async () => {
+  let calls = 0;
+  let resolveProvider;
+  let clock = 0;
+  const generator = new RuntimeV2CandidateResponseGenerator(
+    {
+      async generate() {
+        calls += 1;
+        return new Promise((resolve) => {
+          resolveProvider = resolve;
+        });
+      },
+    },
+    undefined,
+    () => new Date(clock),
+  );
+  const state = { ...createEmptyConversationState(scope), lastProcessedMessageId: "slow-message" };
+  const pending = generator.generate({
+    state,
+    context: candidateContext(),
+    generationTimeoutMs: 10_000,
+    responsePlan: {
+      currentObjective: null, turnIntent: "general_request", selectedFlowId: null, flowStage: null,
+      factsAvailable: [], factsMissing: [], claimsAllowed: [], claimsForbidden: [], toolsAllowed: [],
+      action: "ANSWER", responseGoal: "Responder.", shouldHandoff: false, reasonCodes: [],
+    },
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(calls, 1);
+
+  clock = 1000;
+  resolveProvider({ provider: "fake", model: "fake-model", answer: "Atendemos no sábado.", durationMs: 1000 });
+  const result = await pending;
+
+  assert.equal(result.candidate.status, "CANDIDATE_APPROVED");
+  assert.equal(result.candidate.generationLifecycle.status, "GENERATION_COMPLETED");
+  assert.equal(result.candidate.generationLifecycle.generationLatencyMs, 1000);
+  assert.equal(result.candidate.generationLifecycle.providerCallCount, 1);
+  assert.equal(result.candidate.generationLifecycle.lateResultDiscarded, false);
+});
+
+test("timeout real cancela a geração e descarta conclusão tardia", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let calls = 0;
+  let lateResolve;
+  let aborted = false;
+  const generator = new RuntimeV2CandidateResponseGenerator({
+    async generate({ signal }) {
+      calls += 1;
+      signal?.addEventListener("abort", () => {
+        aborted = true;
+      });
+      return new Promise((resolve) => {
+        lateResolve = resolve;
+      });
+    },
+  });
+  const state = { ...createEmptyConversationState(scope), lastProcessedMessageId: "timed-out-message" };
+  const pending = generator.generate({
+    state,
+    context: candidateContext(),
+    generationTimeoutMs: 250,
+    responsePlan: {
+      currentObjective: null, turnIntent: "general_request", selectedFlowId: null, flowStage: null,
+      factsAvailable: [], factsMissing: [], claimsAllowed: [], claimsForbidden: [], toolsAllowed: [],
+      action: "ANSWER", responseGoal: "Responder.", shouldHandoff: false, reasonCodes: [],
+    },
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  t.mock.timers.tick(250);
+  const result = await pending;
+  lateResolve({ provider: "fake", model: "fake-model", answer: "resultado tardio", durationMs: 1000 });
+  await Promise.resolve();
+
+  assert.equal(calls, 1);
+  assert.equal(aborted, true);
+  assert.equal(result.candidate.status, "CANDIDATE_GENERATION_FAILED");
+  assert.equal(result.candidate.generationLifecycle.status, "GENERATION_TIMED_OUT");
+  assert.equal(result.candidate.generationLifecycle.providerCallCount, 1);
+  assert.equal(result.candidate.generationLifecycle.lateResultDiscarded, true);
+  assert.equal(result.candidate.outboundPerformed, false);
+});
+
+test("falhas e resposta vazia do provider possuem lifecycle terminal único", async () => {
+  const state = { ...createEmptyConversationState(scope), lastProcessedMessageId: "failed-message" };
+  const responsePlan = {
+    currentObjective: null, turnIntent: "general_request", selectedFlowId: null, flowStage: null,
+    factsAvailable: [], factsMissing: [], claimsAllowed: [], claimsForbidden: [], toolsAllowed: [],
+    action: "ANSWER", responseGoal: "Responder.", shouldHandoff: false, reasonCodes: [],
+  };
+  const failed = await new RuntimeV2CandidateResponseGenerator({
+    async generate() { throw new Error("fake provider failure"); },
+  }).generate({ state, context: candidateContext(), responsePlan });
+  assert.equal(failed.candidate.status, "CANDIDATE_GENERATION_FAILED");
+  assert.equal(failed.candidate.generationLifecycle.status, "GENERATION_FAILED");
+  assert.equal(failed.candidate.generationLifecycle.providerCallCount, 1);
+
+  const empty = await new RuntimeV2CandidateResponseGenerator({
+    async generate() { return { provider: "fake", model: "fake-model", answer: "", durationMs: 1 }; },
+  }).generate({ state: { ...state, lastProcessedMessageId: "empty-message" }, context: candidateContext(), responsePlan });
+  assert.equal(empty.candidate.status, "CANDIDATE_BLOCKED");
+  assert.equal(empty.candidate.generationLifecycle.status, "GENERATION_COMPLETED");
+  assert.deepEqual(empty.candidate.qualitySignals, ["EMPTY_RESPONSE"]);
+});
+
+test("resultado tardio não substitui no stateJson uma geração terminalmente expirada", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let calls = 0;
+  let lateResolve;
+  const generator = new RuntimeV2CandidateResponseGenerator({
+    async generate() {
+      calls += 1;
+      return new Promise((resolve) => {
+        lateResolve = resolve;
+      });
+    },
+  });
+  const store = new InMemoryConversationStateStore();
+  const orchestrator = new RuntimeV2ShadowOrchestrator(
+    store,
+    { ...environment, RUNTIME_V2_CANDIDATE_GENERATION_TIMEOUT_MS: "250" },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    generator,
+  );
+
+  const pending = orchestrator.process(snapshot("late-result-message"));
+  for (let attempt = 0; calls === 0 && attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(calls, 1);
+  t.mock.timers.tick(250);
+  const result = await pending;
+  lateResolve({ provider: "fake", model: "fake-model", answer: "resultado tardio", durationMs: 1000 });
+  await Promise.resolve();
+
+  assert.equal(result.manifest.candidateResponse.status, "CANDIDATE_GENERATION_FAILED");
+  assert.equal(result.manifest.candidateResponse.generationLifecycle.status, "GENERATION_TIMED_OUT");
+  const persisted = await store.load({ ...scope, runtimeVersion: "V2", mode: "SHADOW" });
+  assert.equal(persisted.candidateResponses.length, 1);
+  assert.equal(persisted.candidateResponses[0].status, "CANDIDATE_GENERATION_FAILED");
+  assert.equal(persisted.candidateResponses[0].generationLifecycle.status, "GENERATION_TIMED_OUT");
 });
 
 test("quality preconditions bloqueiam ferramenta e handoff sem chamar provider", async () => {

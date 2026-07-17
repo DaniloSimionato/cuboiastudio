@@ -17,6 +17,13 @@ export type RuntimeV2HandoffAdapterMode = "OFF" | "CHATWOOT_CONTROLLED";
 export type RuntimeV2ResponseGenerationMode = "OFF" | "SHADOW";
 export type RuntimeV2ResponseComparisonMode = "OFF" | "SHADOW";
 
+export const DEFAULT_RUNTIME_V2_SHADOW_DISPATCH_BUDGET_MS = 250;
+export const DEFAULT_RUNTIME_V2_CANDIDATE_GENERATION_TIMEOUT_MS = 10_000;
+const MIN_RUNTIME_V2_SHADOW_DISPATCH_BUDGET_MS = 10;
+const MAX_RUNTIME_V2_SHADOW_DISPATCH_BUDGET_MS = 5_000;
+const MIN_RUNTIME_V2_CANDIDATE_GENERATION_TIMEOUT_MS = 250;
+const MAX_RUNTIME_V2_CANDIDATE_GENERATION_TIMEOUT_MS = 60_000;
+
 export type RuntimeV2ShadowConfig = RuntimeV2FeatureConfig & {
   companyId?: string | null;
   assistantId?: string | null;
@@ -43,6 +50,49 @@ function parseAllowlist(value: string | undefined): string[] {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function readBoundedPositiveInteger(input: {
+  value: string | undefined;
+  fallback: number;
+  min: number;
+  max: number;
+}): number {
+  const parsed = Number(input.value);
+  if (!Number.isInteger(parsed) || parsed < input.min || parsed > input.max) {
+    return input.fallback;
+  }
+  return parsed;
+}
+
+/**
+ * Limits only the synchronous scheduling work that V1 may observe. It never
+ * classifies a running provider call as timed out.
+ */
+export function resolveRuntimeV2ShadowDispatchBudgetMs(
+  environment: NodeJS.ProcessEnv = process.env,
+): number {
+  return readBoundedPositiveInteger({
+    value: environment.RUNTIME_V2_SHADOW_DISPATCH_BUDGET_MS,
+    fallback: DEFAULT_RUNTIME_V2_SHADOW_DISPATCH_BUDGET_MS,
+    min: MIN_RUNTIME_V2_SHADOW_DISPATCH_BUDGET_MS,
+    max: MAX_RUNTIME_V2_SHADOW_DISPATCH_BUDGET_MS,
+  });
+}
+
+/**
+ * Limits the actual candidate provider lifecycle after Shadow has already
+ * released V1. Invalid or absent values default safely and never wait forever.
+ */
+export function resolveRuntimeV2CandidateGenerationTimeoutMs(
+  environment: NodeJS.ProcessEnv = process.env,
+): number {
+  return readBoundedPositiveInteger({
+    value: environment.RUNTIME_V2_CANDIDATE_GENERATION_TIMEOUT_MS,
+    fallback: DEFAULT_RUNTIME_V2_CANDIDATE_GENERATION_TIMEOUT_MS,
+    min: MIN_RUNTIME_V2_CANDIDATE_GENERATION_TIMEOUT_MS,
+    max: MAX_RUNTIME_V2_CANDIDATE_GENERATION_TIMEOUT_MS,
+  });
 }
 
 export function resolveRuntimeV2Mode(

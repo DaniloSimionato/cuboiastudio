@@ -675,7 +675,7 @@ export class AssistantConversationsService {
 
   private scheduleRuntimeV2Shadow(input: RuntimeV2ShadowSnapshot): void {
     if (!this.runtimeV2ShadowIntegration) return;
-    void this.runtimeV2ShadowIntegration.schedule(input);
+    this.runtimeV2ShadowIntegration.dispatch(input);
   }
 
   private async findExistingExternalMessage(input: {

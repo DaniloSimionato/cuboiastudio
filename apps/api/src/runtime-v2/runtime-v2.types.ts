@@ -139,6 +139,27 @@ export type RuntimeV2CandidateResponseStatus =
   | "CANDIDATE_REQUIRES_HANDOFF"
   | "CANDIDATE_GENERATION_FAILED";
 
+export type RuntimeV2CandidateGenerationStatus =
+  | "NOT_STARTED"
+  | "DISPATCHED"
+  | "GENERATION_PENDING"
+  | "GENERATION_COMPLETED"
+  | "GENERATION_BLOCKED"
+  | "GENERATION_FAILED"
+  | "GENERATION_TIMED_OUT"
+  | "GENERATION_CANCELLED";
+
+export type RuntimeV2CandidateGenerationLifecycle = {
+  status: RuntimeV2CandidateGenerationStatus;
+  generationStartedAt: string | null;
+  generationCompletedAt: string | null;
+  generationLatencyMs: number;
+  providerCalled: boolean;
+  providerCallCount: number;
+  providerCancellationRequested: boolean;
+  lateResultDiscarded: boolean;
+};
+
 export type RuntimeV2CandidateResponse = {
   schemaVersion: "runtime-v2-candidate-response-v1";
   companyId: string;
@@ -168,6 +189,7 @@ export type RuntimeV2CandidateResponse = {
   qualitySignals: string[];
   generatedAt: string;
   idempotencyKey: string;
+  generationLifecycle: RuntimeV2CandidateGenerationLifecycle;
   redactionApplied: true;
   outboundAttempted: false;
   outboundPerformed: false;

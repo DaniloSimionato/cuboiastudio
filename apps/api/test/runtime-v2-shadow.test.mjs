@@ -236,19 +236,23 @@ test("reset cria novo escopo e erro do shadow não bloqueia o V1", async () => {
   assert.equal(result.manifest.shadowErrorCode, "SHADOW_PROCESSING_ERROR");
 });
 
-test("timeout, capacidade e erro assíncrono são isolados do V1", async () => {
-  const slowStore = {
-    load: async () => {
+test("trabalho Shadow lento, capacidade e erro assíncrono são isolados do V1", async () => {
+  class SlowStore extends InMemoryConversationStateStore {
+    async load(storeScope) {
       await wait(100);
-      return null;
-    },
-  };
-  const timeoutOrchestrator = new RuntimeV2ShadowOrchestrator(slowStore, {
+      return super.load(storeScope);
+    }
+  }
+  const slowStore = new SlowStore();
+  const slowOrchestrator = new RuntimeV2ShadowOrchestrator(slowStore, {
     ...shadowEnvironment,
+    // The old shared timeout must not turn a valid non-provider Shadow turn
+    // into a terminal timeout. Provider lifecycle timeout is tested separately.
     RUNTIME_V2_SHADOW_TIMEOUT_MS: "25",
   });
-  const timeoutResult = await timeoutOrchestrator.process(snapshot("Oi", "timeout-message"));
-  assert.equal(timeoutResult.manifest.shadowErrorCode, "SHADOW_TIMEOUT");
+  const slowResult = await slowOrchestrator.process(snapshot("Oi", "slow-message"));
+  assert.equal(slowResult.manifest.shadowErrorCode, null);
+  assert.equal(slowResult.manifest.outboundSent, false);
 
   class DelayedStore extends InMemoryConversationStateStore {
     async load(storeScope) {
@@ -291,35 +295,24 @@ test("timeout, capacidade e erro assíncrono são isolados do V1", async () => {
   assert.equal(JSON.stringify(errorResult.manifest).includes("raw customer content"), false);
 });
 
-test("timeout não permite write tardio depois que a execução expira", async () => {
-  let releaseLoad;
+test("execução de Shadow não agenda retry ou escrita retroativa após conclusão", async () => {
   let writes = 0;
-  const loadGate = new Promise((resolve) => {
-    releaseLoad = resolve;
-  });
-  const delayedStore = {
+  const store = {
     load: async () => {
-      await loadGate;
       return null;
     },
     existsForMessage: async () => false,
-    saveTurn: async () => {
+    saveTurn: async (state) => {
       writes += 1;
-      throw new Error("write should not happen after timeout");
+      return { state, event: null, eventCreated: false };
     },
   };
-  const orchestrator = new RuntimeV2ShadowOrchestrator(delayedStore, {
-    ...shadowEnvironment,
-    RUNTIME_V2_SHADOW_TIMEOUT_MS: "25",
-  });
-
-  const resultPromise = orchestrator.process(snapshot("Oi", "timeout-write-message"));
-  const result = await resultPromise;
-  assert.equal(result.manifest.shadowErrorCode, "SHADOW_TIMEOUT");
-
-  releaseLoad();
+  const orchestrator = new RuntimeV2ShadowOrchestrator(store, shadowEnvironment);
+  const result = await orchestrator.process(snapshot("Oi", "single-write-message"));
+  assert.equal(result.manifest.shadowErrorCode, null);
+  assert.equal(writes, 1);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(writes, 0);
+  assert.equal(writes, 1);
 });
 
 test("retry de revisão recarrega o estado mais recente antes de persistir", async () => {

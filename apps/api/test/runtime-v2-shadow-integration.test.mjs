@@ -36,6 +36,12 @@ function fakePrisma() {
         logs.push({ ...data, id });
         return select?.id ? { id } : logs.at(-1);
       },
+      async update({ where, data, select }) {
+        const index = logs.findIndex((entry) => entry.id === where.id);
+        if (index < 0) throw new Error("RUNTIME_LOG_NOT_FOUND");
+        logs[index] = { ...logs[index], ...data };
+        return select?.id ? { id: logs[index].id } : logs[index];
+      },
     },
   };
 }
@@ -211,6 +217,85 @@ test("a mesma mensagem em voo não executa o orquestrador duas vezes", async () 
     new Set(["COMPLETED", "ALREADY_PROCESSED"]),
   );
   assert.equal(prisma.logs.length, 1);
+});
+
+test("dispatch libera V1 antes de uma geração Shadow pendente e reconcilia o mesmo log", async () => {
+  const prisma = fakePrisma();
+  let resolveGeneration;
+  let calls = 0;
+  const environment = {
+    RUNTIME_V2_MODE: "SHADOW",
+    RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+    RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
+    RUNTIME_V2_SHADOW_DISPATCH_BUDGET_MS: "250",
+  };
+  const orchestrator = {
+    process: async () => {
+      calls += 1;
+      await new Promise((resolve) => {
+        resolveGeneration = resolve;
+      });
+      return {
+        manifest: {
+          currentMessageHash: "slow-generation-hash",
+          messageAlreadyProcessed: false,
+          persistenceResult: "UPDATED",
+          validationResult: "PASS",
+          shadowErrorCode: null,
+          processingDurationMs: 1000,
+          candidateResponse: {
+            generationId: "generation-1",
+            responsePlanId: "plan-1",
+            status: "CANDIDATE_APPROVED",
+            provider: "fake",
+            model: "fake-model",
+            latencyMs: 1000,
+            redactionApplied: true,
+            generationLifecycle: {
+              status: "GENERATION_COMPLETED",
+              generationStartedAt: "2026-07-17T00:00:00.000Z",
+              generationCompletedAt: "2026-07-17T00:00:01.000Z",
+              generationLatencyMs: 1000,
+              providerCalled: true,
+              providerCallCount: 1,
+              providerCancellationRequested: false,
+              lateResultDiscarded: false,
+            },
+          },
+          responseComparison: { qualityGateResult: "CANDIDATE_APPROVED" },
+          v1Comparison: { selectedFlowId: null, selectedIntent: null, triageMode: null, toolsExposed: [] },
+        },
+      };
+    },
+  };
+  const integration = new RuntimeV2ShadowIntegrationService(prisma, orchestrator, environment);
+
+  const dispatch = integration.dispatch(snapshot("slow-generation"));
+  assert.deepEqual(dispatch, {
+    status: "ACCEPTED",
+    generationStatus: "GENERATION_PENDING",
+    v1WaitReleased: true,
+    dispatchLatencyMs: dispatch.dispatchLatencyMs,
+  });
+  assert.ok(dispatch.dispatchLatencyMs < 250);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1);
+  assert.equal(prisma.logs.length, 1);
+  assert.equal(prisma.logs[0].metadata.generationStatus, "GENERATION_PENDING");
+  assert.equal(prisma.logs[0].metadata.v1WaitReleased, true);
+
+  resolveGeneration();
+  await integration.drain();
+
+  assert.equal(prisma.logs.length, 1);
+  assert.equal(prisma.logs[0].status, "COMPLETED");
+  assert.equal(prisma.logs[0].metadata.generationStatus, "GENERATION_COMPLETED");
+  assert.equal(prisma.logs[0].metadata.finalGenerationStatus, "GENERATION_COMPLETED");
+  assert.equal(prisma.logs[0].metadata.completedAfterV1Response, true);
+  assert.equal(prisma.logs[0].metadata.providerCallCount, 1);
+  assert.equal(prisma.logs[0].metadata.outboundAttempted, false);
+  assert.equal(prisma.logs[0].metadata.outboundPerformed, false);
+  assert.notEqual(prisma.logs[0].metadata.generationStatus, "GENERATION_TIMED_OUT");
 });
 
 test("serializa uma sessão, mas mantém sessões diferentes em paralelo", async () => {

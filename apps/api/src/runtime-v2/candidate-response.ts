@@ -10,6 +10,7 @@ import type {
   ConversationState,
   ResponsePlan,
   RuntimeResponseComparison,
+  RuntimeV2CandidateGenerationLifecycle,
   RuntimeV2CandidateResponse,
 } from "./runtime-v2.types";
 
@@ -17,6 +18,9 @@ export const CANDIDATE_RESPONSE_SCHEMA_VERSION = "runtime-v2-candidate-response-
 export const RESPONSE_COMPARISON_SCHEMA_VERSION = "runtime-v2-response-comparison-v1" as const;
 export const MAX_RECENT_CANDIDATE_RESPONSES = 8;
 export const MAX_CANDIDATE_RESPONSE_TEXT_LENGTH = 1200;
+export const DEFAULT_CANDIDATE_GENERATION_TIMEOUT_MS = 10_000;
+export const MIN_CANDIDATE_GENERATION_TIMEOUT_MS = 250;
+export const MAX_CANDIDATE_GENERATION_TIMEOUT_MS = 60_000;
 
 export type RuntimeV2CandidateContext = {
   promptInput: PromptCompilerInput;
@@ -39,6 +43,7 @@ export type CandidateResponseProvider = {
     model: string | null;
     temperature: number | undefined;
     idempotencyKey: string;
+    signal?: AbortSignal;
   }): Promise<AiChatCompletionResult>;
 };
 
@@ -47,6 +52,13 @@ export type CandidateResponseGenerationResult = {
   comparison: RuntimeResponseComparison;
   messages: AiChatCompletionMessage[];
 };
+
+class CandidateGenerationTimeoutError extends Error {
+  constructor() {
+    super("CANDIDATE_GENERATION_TIMEOUT");
+    this.name = "CandidateGenerationTimeoutError";
+  }
+}
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -170,6 +182,14 @@ function buildComparison(input: {
   };
 }
 
+function boundedGenerationTimeout(value: number | undefined): number {
+  if (!Number.isInteger(value)) return DEFAULT_CANDIDATE_GENERATION_TIMEOUT_MS;
+  return Math.min(
+    MAX_CANDIDATE_GENERATION_TIMEOUT_MS,
+    Math.max(MIN_CANDIDATE_GENERATION_TIMEOUT_MS, value as number),
+  );
+}
+
 export class RuntimeV2CandidateResponseGenerator {
   constructor(
     private readonly provider: CandidateResponseProvider,
@@ -181,6 +201,7 @@ export class RuntimeV2CandidateResponseGenerator {
     state: ConversationState;
     responsePlan: ResponsePlan;
     context: RuntimeV2CandidateContext;
+    generationTimeoutMs?: number;
   }): Promise<CandidateResponseGenerationResult> {
     const { state, responsePlan, context } = input;
     const responsePlanId = createResponsePlanId({
@@ -195,6 +216,7 @@ export class RuntimeV2CandidateResponseGenerator {
       responsePlanId,
       internalMessageId: state.lastProcessedMessageId ?? "",
     });
+    const generatedAt = this.now().toISOString();
     const base = {
       schemaVersion: CANDIDATE_RESPONSE_SCHEMA_VERSION,
       companyId: state.companyId,
@@ -216,7 +238,7 @@ export class RuntimeV2CandidateResponseGenerator {
       handoffDecision: responsePlan.shouldHandoff
         ? ("REQUIRES_HANDOFF" as const)
         : ("NONE" as const),
-      generatedAt: this.now().toISOString(),
+      generatedAt,
       idempotencyKey: sha256(`${generationId}:provider-call`),
       redactionApplied: true as const,
       outboundAttempted: false as const,
@@ -224,6 +246,16 @@ export class RuntimeV2CandidateResponseGenerator {
     };
     const precondition = preconditionReasons({ plan: responsePlan, state, context });
     if (precondition) {
+      const lifecycle: RuntimeV2CandidateGenerationLifecycle = {
+        status: "GENERATION_BLOCKED",
+        generationStartedAt: null,
+        generationCompletedAt: generatedAt,
+        generationLatencyMs: 0,
+        providerCalled: false,
+        providerCallCount: 0,
+        providerCancellationRequested: false,
+        lateResultDiscarded: false,
+      };
       const candidate: RuntimeV2CandidateResponse = {
         ...base,
         status: precondition.status,
@@ -234,6 +266,7 @@ export class RuntimeV2CandidateResponseGenerator {
         latencyMs: 0,
         safetyDecision: "BLOCK",
         qualitySignals: precondition.reasons,
+        generationLifecycle: lifecycle,
       };
       return {
         candidate,
@@ -251,14 +284,49 @@ export class RuntimeV2CandidateResponseGenerator {
       ...context.promptInput,
       calendarContext: null,
     });
-    try {
-      const completion = await this.provider.generate({
+    const generationStartedAt = this.now();
+    const controller = new AbortController();
+    const generationTimeoutMs = boundedGenerationTimeout(input.generationTimeoutMs);
+    let providerCalled = false;
+    let providerCancellationRequested = false;
+    const providerPromise = Promise.resolve().then(() => {
+      providerCalled = true;
+      return this.provider.generate({
         companyId: state.companyId,
         messages,
         model: context.model,
         temperature: context.temperature,
         idempotencyKey: base.idempotencyKey,
+        signal: controller.signal,
       });
+    });
+    // A provider that cannot abort may still settle after the lifecycle has
+    // been terminally timed out. Consume that result without persisting it.
+    void providerPromise.catch(() => undefined);
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        providerCancellationRequested = true;
+        controller.abort();
+        reject(new CandidateGenerationTimeoutError());
+      }, generationTimeoutMs);
+    });
+    try {
+      const completion = await Promise.race([providerPromise, timeout]);
+      const generationCompletedAt = this.now();
+      const lifecycle: RuntimeV2CandidateGenerationLifecycle = {
+        status: "GENERATION_COMPLETED",
+        generationStartedAt: generationStartedAt.toISOString(),
+        generationCompletedAt: generationCompletedAt.toISOString(),
+        generationLatencyMs: Math.max(
+          0,
+          generationCompletedAt.getTime() - generationStartedAt.getTime(),
+        ),
+        providerCalled,
+        providerCallCount: providerCalled ? 1 : 0,
+        providerCancellationRequested,
+        lateResultDiscarded: false,
+      };
       const reasons = validateCandidateAnswer({ answer: completion.answer, responsePlan, state });
       const candidate: RuntimeV2CandidateResponse = {
         ...base,
@@ -270,14 +338,30 @@ export class RuntimeV2CandidateResponseGenerator {
         latencyMs: Math.max(0, Math.round(completion.durationMs)),
         safetyDecision: reasons.length ? "BLOCK" : "PASS",
         qualitySignals: reasons,
+        generationLifecycle: lifecycle,
       };
       return {
         candidate,
         comparison: buildComparison({ candidate, context, responsePlan, reasons }),
         messages,
       };
-    } catch {
-      const reasons = ["PROVIDER_GENERATION_FAILED"];
+    } catch (error) {
+      const timedOut = error instanceof CandidateGenerationTimeoutError;
+      const generationCompletedAt = this.now();
+      const reasons = [timedOut ? "PROVIDER_GENERATION_TIMED_OUT" : "PROVIDER_GENERATION_FAILED"];
+      const lifecycle: RuntimeV2CandidateGenerationLifecycle = {
+        status: timedOut ? "GENERATION_TIMED_OUT" : "GENERATION_FAILED",
+        generationStartedAt: generationStartedAt.toISOString(),
+        generationCompletedAt: generationCompletedAt.toISOString(),
+        generationLatencyMs: Math.max(
+          0,
+          generationCompletedAt.getTime() - generationStartedAt.getTime(),
+        ),
+        providerCalled,
+        providerCallCount: providerCalled ? 1 : 0,
+        providerCancellationRequested,
+        lateResultDiscarded: timedOut,
+      };
       const candidate: RuntimeV2CandidateResponse = {
         ...base,
         status: "CANDIDATE_GENERATION_FAILED",
@@ -288,12 +372,15 @@ export class RuntimeV2CandidateResponseGenerator {
         latencyMs: 0,
         safetyDecision: "BLOCK",
         qualitySignals: reasons,
+        generationLifecycle: lifecycle,
       };
       return {
         candidate,
         comparison: buildComparison({ candidate, context, responsePlan, reasons }),
         messages,
       };
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
   }
 }

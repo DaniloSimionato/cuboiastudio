@@ -2,7 +2,11 @@ import { Injectable, Logger, Optional } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { hashCanonicalInboundMessageContent } from "../inbound/canonical-inbound-message";
 import { PrismaService } from "../database/prisma.service";
-import { evaluateRuntimeV2BaseScopeGate, resolveRuntimeV2Mode } from "./runtime-v2-feature-flag";
+import {
+  evaluateRuntimeV2BaseScopeGate,
+  resolveRuntimeV2Mode,
+  resolveRuntimeV2ShadowDispatchBudgetMs,
+} from "./runtime-v2-feature-flag";
 import {
   RuntimeV2ShadowOrchestrator,
   type RuntimeV2ShadowResult,
@@ -19,6 +23,22 @@ export type RuntimeV2ShadowIntegrationStatus =
   | "TIMEOUT"
   | "CAPACITY_EXCEEDED"
   | "FAILED";
+
+export type RuntimeV2ShadowDispatchStatus = "ACCEPTED" | "REJECTED" | "DUPLICATE";
+
+export type RuntimeV2ShadowDispatchResult = {
+  status: RuntimeV2ShadowDispatchStatus;
+  generationStatus: "NOT_STARTED" | "GENERATION_PENDING";
+  v1WaitReleased: boolean;
+  dispatchLatencyMs: number;
+};
+
+type RuntimeV2ShadowDispatchMetadata = {
+  dispatchedAt: string;
+  dispatchLatencyMs: number;
+  dispatchBudgetMs: number;
+  v1WaitReleased: boolean;
+};
 
 export type RuntimeV2ShadowIntegrationResult = {
   status: RuntimeV2ShadowIntegrationStatus;
@@ -103,8 +123,62 @@ export class RuntimeV2ShadowIntegrationService {
     @Optional() private readonly environment?: NodeJS.ProcessEnv,
   ) {}
 
+  /**
+   * The V1 call site uses this non-blocking boundary. It performs only scope
+   * validation and scheduling, then releases V1 without waiting for provider
+   * generation or persistence completion.
+   */
+  dispatch(snapshot: RuntimeV2ShadowSnapshot | null | undefined): RuntimeV2ShadowDispatchResult {
+    const startedAt = Date.now();
+    if (!isValidSnapshot(snapshot)) {
+      return {
+        status: "REJECTED",
+        generationStatus: "NOT_STARTED",
+        v1WaitReleased: true,
+        dispatchLatencyMs: Date.now() - startedAt,
+      };
+    }
+    const environment = this.environment ?? process.env;
+    const scopeGate = evaluateRuntimeV2BaseScopeGate(snapshot.scope, environment);
+    const dispatchLatencyMs = Date.now() - startedAt;
+    if (!scopeGate.allowed) {
+      return {
+        status: "REJECTED",
+        generationStatus: "NOT_STARTED",
+        v1WaitReleased: true,
+        dispatchLatencyMs,
+      };
+    }
+    const messageKey = integrationKey(snapshot);
+    if (this.scheduledMessages.has(messageKey) || this.inFlight.has(messageKey)) {
+      return {
+        status: "DUPLICATE",
+        generationStatus: "GENERATION_PENDING",
+        v1WaitReleased: true,
+        dispatchLatencyMs,
+      };
+    }
+    const dispatch: RuntimeV2ShadowDispatchMetadata = {
+      dispatchedAt: new Date().toISOString(),
+      dispatchLatencyMs,
+      dispatchBudgetMs: resolveRuntimeV2ShadowDispatchBudgetMs(environment),
+      v1WaitReleased: true,
+    };
+    // schedule() captures every failure into reconciled telemetry. Keep this
+    // catch as a final safety net so the V1 fire-and-forget call is never an
+    // unhandled rejection.
+    void this.schedule(snapshot, dispatch).catch(() => undefined);
+    return {
+      status: "ACCEPTED",
+      generationStatus: "GENERATION_PENDING",
+      v1WaitReleased: true,
+      dispatchLatencyMs,
+    };
+  }
+
   schedule(
     snapshot: RuntimeV2ShadowSnapshot | null | undefined,
+    dispatch?: RuntimeV2ShadowDispatchMetadata,
   ): Promise<RuntimeV2ShadowIntegrationResult> {
     if (!isValidSnapshot(snapshot)) {
       return this.process(snapshot);
@@ -139,7 +213,7 @@ export class RuntimeV2ShadowIntegrationService {
     const previous = this.scopeTails.get(sessionKey) ?? Promise.resolve();
     const task = previous
       .catch(() => undefined)
-      .then(() => this.process(snapshot))
+      .then(() => this.process(snapshot, dispatch))
       .finally(() => {
         this.scheduledMessages.delete(messageKey);
       });
@@ -180,6 +254,7 @@ export class RuntimeV2ShadowIntegrationService {
 
   private async process(
     snapshot: RuntimeV2ShadowSnapshot | null | undefined,
+    dispatch?: RuntimeV2ShadowDispatchMetadata,
   ): Promise<RuntimeV2ShadowIntegrationResult> {
     if (!isValidSnapshot(snapshot)) {
       return { status: "SKIPPED_INVALID_INPUT", manifest: null, logId: null, logPersisted: false };
@@ -210,24 +285,112 @@ export class RuntimeV2ShadowIntegrationService {
     }
 
     this.inFlight.add(key);
+    const finalDispatch = dispatch ?? this.createDirectDispatchMetadata(environment);
+    let dispatchLogId: string | null = null;
     try {
+      dispatchLogId = await this.persistDispatch(snapshot, finalDispatch);
       const result = await this.orchestrator.process(snapshot);
       const status = classifyResult(result);
-      const logId = await this.persistResult(snapshot, result, status);
+      const logId = await this.persistCompletion(
+        snapshot,
+        result,
+        status,
+        finalDispatch,
+        dispatchLogId,
+      );
       return { status, manifest: result.manifest, logId, logPersisted: Boolean(logId) };
     } catch (error) {
       const status: RuntimeV2ShadowIntegrationStatus = "FAILED";
-      const logId = await this.persistResult(snapshot, null, status, error);
+      const logId = await this.persistCompletion(
+        snapshot,
+        null,
+        status,
+        finalDispatch,
+        dispatchLogId,
+        error,
+      );
       return { status, manifest: null, logId, logPersisted: Boolean(logId) };
     } finally {
       this.inFlight.delete(key);
     }
   }
 
-  private async persistResult(
+  private createDirectDispatchMetadata(
+    environment: NodeJS.ProcessEnv,
+  ): RuntimeV2ShadowDispatchMetadata {
+    return {
+      dispatchedAt: new Date().toISOString(),
+      dispatchLatencyMs: 0,
+      dispatchBudgetMs: resolveRuntimeV2ShadowDispatchBudgetMs(environment),
+      v1WaitReleased: false,
+    };
+  }
+
+  private async persistDispatch(
+    snapshot: RuntimeV2ShadowSnapshot,
+    dispatch: RuntimeV2ShadowDispatchMetadata,
+  ): Promise<string | null> {
+    try {
+      const log = await this.prisma.assistantRuntimeLog.create({
+        data: {
+          companyId: snapshot.scope.companyId,
+          assistantId: snapshot.scope.assistantId,
+          conversationId: snapshot.scope.conversationId,
+          userMessageId: snapshot.internalMessageId,
+          assistantMessageId: null,
+          mode: SHADOW_LOG_MODE,
+          status: "PENDING",
+          provider: null,
+          model: null,
+          configurationSource: "runtime-v2-shadow",
+          fallback: false,
+          fallbackReason: null,
+          outcome: "shadow_dispatched",
+          durationMs: dispatch.dispatchLatencyMs,
+          providerStatus: null,
+          providerErrorType: null,
+          providerErrorCode: null,
+          providerErrorMessage: null,
+          knowledgeCount: null,
+          historyMessagesUsed: null,
+          historyLimit: null,
+          initialMessageIncluded: false,
+          instructionsIncluded: false,
+          metadata: {
+            eventType: "RUNTIME_V2_SHADOW",
+            telemetryVersion: "runtime-v2-shadow-generation-v2",
+            dispatchStatus: "ACCEPTED",
+            generationStatus: "GENERATION_PENDING",
+            generationId: null,
+            responsePlanId: null,
+            originatingInternalMessageId: snapshot.internalMessageId,
+            dispatchedAt: dispatch.dispatchedAt,
+            dispatchLatencyMs: dispatch.dispatchLatencyMs,
+            dispatchBudgetMs: dispatch.dispatchBudgetMs,
+            scopeAllowed: true,
+            v1WaitReleased: dispatch.v1WaitReleased,
+            providerCalled: false,
+            providerCallCount: 0,
+            interruptionDisposition: "RECONCILIATION_REQUIRED_IF_PROCESS_EXIT",
+            outboundAttempted: false,
+            outboundPerformed: false,
+            redactionApplied: true,
+          },
+        },
+        select: { id: true },
+      });
+      return log.id;
+    } catch {
+      return null;
+    }
+  }
+
+  private async persistCompletion(
     snapshot: RuntimeV2ShadowSnapshot,
     result: RuntimeV2ShadowResult | null,
     status: RuntimeV2ShadowIntegrationStatus,
+    dispatch: RuntimeV2ShadowDispatchMetadata,
+    dispatchLogId: string | null,
     error?: unknown,
   ): Promise<string | null> {
     const manifest = result?.manifest ?? null;
@@ -344,7 +507,7 @@ export class RuntimeV2ShadowIntegrationService {
       persistenceResult: manifest?.persistenceResult ?? null,
       processingDurationMs: manifest?.processingDurationMs ?? null,
       errorCode: shadowErrorCode,
-      providerCalled: manifest?.providerCalled ?? false,
+      shadowProviderCalled: manifest?.providerCalled ?? false,
       toolCalls: 0,
       outboundSent: false,
       candidateResponseStatus: manifest?.candidateResponse?.status ?? null,
@@ -356,7 +519,42 @@ export class RuntimeV2ShadowIntegrationService {
       candidateOutboundAttempted: false,
       candidateOutboundPerformed: false,
       candidateRedactionApplied: manifest?.candidateResponse?.redactionApplied ?? true,
-      responseComparisonAvailable: manifest?.responseComparison !== null,
+      telemetryVersion: "runtime-v2-shadow-generation-v2",
+      dispatchStatus: "ACCEPTED",
+      dispatchedAt: dispatch.dispatchedAt,
+      dispatchLatencyMs: dispatch.dispatchLatencyMs,
+      dispatchBudgetMs: dispatch.dispatchBudgetMs,
+      scopeAllowed: true,
+      v1WaitReleased: dispatch.v1WaitReleased,
+      generationStatus:
+        manifest?.candidateResponse?.generationLifecycle.status ??
+        (status === "FAILED" ? "GENERATION_FAILED" : "NOT_STARTED"),
+      generationId: manifest?.candidateResponse?.generationId ?? null,
+      responsePlanId: manifest?.candidateResponse?.responsePlanId ?? null,
+      originatingInternalMessageId: snapshot.internalMessageId,
+      generationStartedAt:
+        manifest?.candidateResponse?.generationLifecycle.generationStartedAt ?? null,
+      generationCompletedAt:
+        manifest?.candidateResponse?.generationLifecycle.generationCompletedAt ?? null,
+      generationLatencyMs:
+        manifest?.candidateResponse?.generationLifecycle.generationLatencyMs ?? null,
+      providerCalled: manifest?.candidateResponse?.generationLifecycle.providerCalled ?? false,
+      providerCallCount: manifest?.candidateResponse?.generationLifecycle.providerCallCount ?? 0,
+      providerCancellationRequested:
+        manifest?.candidateResponse?.generationLifecycle.providerCancellationRequested ?? false,
+      lateResultDiscarded:
+        manifest?.candidateResponse?.generationLifecycle.lateResultDiscarded ?? false,
+      interruptionDisposition: null,
+      outboundAttempted: false,
+      outboundPerformed: false,
+      completedAfterV1Response: Boolean(
+        dispatch.v1WaitReleased &&
+        manifest?.candidateResponse?.generationLifecycle.generationCompletedAt,
+      ),
+      finalGenerationStatus:
+        manifest?.candidateResponse?.generationLifecycle.status ??
+        (status === "FAILED" ? "GENERATION_FAILED" : "NOT_STARTED"),
+      responseComparisonAvailable: Boolean(manifest?.responseComparison),
       responseQualityGateResult: manifest?.responseComparison?.qualityGateResult ?? null,
       toolObservationMode: manifest?.toolObservationMode ?? "OFF",
       v1ToolExecutionObserved: manifest?.v1ToolExecutionObserved ?? false,
@@ -493,40 +691,46 @@ export class RuntimeV2ShadowIntegrationService {
       sessionContentPersisted: false,
     } satisfies Prisma.InputJsonValue;
 
+    const data = {
+      companyId: snapshot.scope.companyId,
+      assistantId: snapshot.scope.assistantId,
+      conversationId: snapshot.scope.conversationId,
+      userMessageId: snapshot.internalMessageId,
+      assistantMessageId: null,
+      mode: SHADOW_LOG_MODE,
+      status,
+      provider: null,
+      model: null,
+      configurationSource: "runtime-v2-shadow",
+      fallback: false,
+      fallbackReason: null,
+      outcome: status === "COMPLETED" ? "shadow_completed" : `shadow_${status.toLowerCase()}`,
+      durationMs: manifest?.processingDurationMs ?? null,
+      providerStatus: null,
+      providerErrorType: null,
+      providerErrorCode: shadowErrorCode,
+      providerErrorMessage: null,
+      knowledgeCount: null,
+      historyMessagesUsed: null,
+      historyLimit: null,
+      initialMessageIncluded: false,
+      instructionsIncluded: false,
+      detectedIntent: manifest?.turnIntent ?? null,
+      selectedFlowId: manifest?.v1Comparison.selectedFlowId ?? null,
+      selectedFlowName: null,
+      intentConfidence: manifest?.intentConfidence ?? null,
+      metadata,
+    };
     try {
-      const log = await this.prisma.assistantRuntimeLog.create({
-        data: {
-          companyId: snapshot.scope.companyId,
-          assistantId: snapshot.scope.assistantId,
-          conversationId: snapshot.scope.conversationId,
-          userMessageId: snapshot.internalMessageId,
-          assistantMessageId: null,
-          mode: SHADOW_LOG_MODE,
-          status,
-          provider: null,
-          model: null,
-          configurationSource: "runtime-v2-shadow",
-          fallback: false,
-          fallbackReason: null,
-          outcome: status === "COMPLETED" ? "shadow_completed" : `shadow_${status.toLowerCase()}`,
-          durationMs: manifest?.processingDurationMs ?? null,
-          providerStatus: null,
-          providerErrorType: null,
-          providerErrorCode: shadowErrorCode,
-          providerErrorMessage: null,
-          knowledgeCount: null,
-          historyMessagesUsed: null,
-          historyLimit: null,
-          initialMessageIncluded: false,
-          instructionsIncluded: false,
-          detectedIntent: manifest?.turnIntent ?? null,
-          selectedFlowId: manifest?.v1Comparison.selectedFlowId ?? null,
-          selectedFlowName: null,
-          intentConfidence: manifest?.intentConfidence ?? null,
-          metadata,
-        },
-        select: { id: true },
-      });
+      if (dispatchLogId) {
+        const log = await this.prisma.assistantRuntimeLog.update({
+          where: { id: dispatchLogId },
+          data,
+          select: { id: true },
+        });
+        return log.id;
+      }
+      const log = await this.prisma.assistantRuntimeLog.create({ data, select: { id: true } });
       return log.id;
     } catch (logError) {
       this.logger.warn({

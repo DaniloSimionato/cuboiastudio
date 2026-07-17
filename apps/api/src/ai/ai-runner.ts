@@ -92,6 +92,9 @@ export async function runOpenAiCompatibleChatCompletion(
   const startedAt = Date.now();
   const controller = new AbortController();
   const timeoutHandle = setTimeout(() => controller.abort(), config.requestTimeoutMs);
+  const abortFromCaller = () => controller.abort();
+  if (input.signal?.aborted) abortFromCaller();
+  input.signal?.addEventListener("abort", abortFromCaller, { once: true });
 
   try {
     const response = await fetch(url, {
@@ -143,6 +146,7 @@ export async function runOpenAiCompatibleChatCompletion(
     throw new ServiceUnavailableException("AI provider request failed.");
   } finally {
     clearTimeout(timeoutHandle);
+    input.signal?.removeEventListener("abort", abortFromCaller);
   }
 }
 

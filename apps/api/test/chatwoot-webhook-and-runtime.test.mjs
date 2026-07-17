@@ -2293,7 +2293,14 @@ test("pipeline Chatwoot completo preserva saída de triagem e drena o Shadow sem
   const shadowPrisma = {
     assistantRuntimeLog: {
       create: async ({ data }) => {
-        shadowLogs.push(data);
+        const id = `shadow-log-${shadowLogs.length + 1}`;
+        shadowLogs.push({ ...data, id });
+        return { id };
+      },
+      update: async ({ where, data }) => {
+        const index = shadowLogs.findIndex((entry) => entry.id === where.id);
+        if (index < 0) throw new Error("RUNTIME_LOG_NOT_FOUND");
+        shadowLogs[index] = { ...shadowLogs[index], ...data };
         return { id: "shadow-log-1" };
       },
     },

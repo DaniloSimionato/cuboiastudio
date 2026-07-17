@@ -11,6 +11,7 @@ import {
   resolveRuntimeV2EvidenceMode,
   resolveRuntimeV2ActionStateMode,
   resolveRuntimeV2HandoffStateMode,
+  resolveRuntimeV2CandidateGenerationTimeoutMs,
   type RuntimeV2Mode,
   type RuntimeV2HandoffStateMode,
 } from "./runtime-v2-feature-flag";
@@ -171,7 +172,6 @@ export type RuntimeV2ShadowMetrics = {
   active: number;
 };
 
-export const DEFAULT_SHADOW_TIMEOUT_MS = 250;
 export const DEFAULT_SHADOW_MAX_CONCURRENT = 16;
 export const DEFAULT_SHADOW_STATE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -186,19 +186,10 @@ function sanitizeShadowErrorCode(error: unknown): string {
   return "SHADOW_PROCESSING_ERROR";
 }
 
-const MIN_SHADOW_TIMEOUT_MS = 25;
-const MAX_SHADOW_TIMEOUT_MS = 5_000;
 const MIN_SHADOW_MAX_CONCURRENT = 1;
 const MAX_SHADOW_MAX_CONCURRENT = 64;
 const MIN_SHADOW_STATE_TTL_MS = 60 * 60 * 1000;
 const MAX_SHADOW_STATE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-
-class ShadowTimeoutError extends Error {
-  constructor() {
-    super("SHADOW_TIMEOUT");
-    this.name = "ShadowTimeoutError";
-  }
-}
 
 function toStoreScope(scope: RuntimeV2Scope): ConversationStateStoreScope {
   return { ...scope, runtimeVersion: "V2", mode: "SHADOW" };
@@ -584,37 +575,24 @@ export class RuntimeV2ShadowOrchestrator {
     }
 
     const startedAt = this.now().getTime();
-    const timeoutMs = readBoundedEnvironmentInteger(
-      this.environment.RUNTIME_V2_SHADOW_TIMEOUT_MS,
-      DEFAULT_SHADOW_TIMEOUT_MS,
-      MIN_SHADOW_TIMEOUT_MS,
-      MAX_SHADOW_TIMEOUT_MS,
-    );
-    const deadlineAt = startedAt + timeoutMs;
     this.activeExecutions += 1;
     this.metrics.active = this.activeExecutions;
     this.metrics.started += 1;
     try {
-      const result = await this.withTimeout(
-        this.processWithRetry(snapshot, startedAt, 0, deadlineAt),
-        timeoutMs,
-      );
+      const result = await this.processWithRetry(snapshot, startedAt, 0);
       this.metrics.completed += 1;
       if (result.manifest?.messageAlreadyProcessed) this.metrics.duplicate += 1;
       return result;
     } catch (error) {
       const errorCode =
-        error instanceof ShadowTimeoutError
-          ? "SHADOW_TIMEOUT"
-          : error instanceof MissingInternalMessageIdError
-            ? "MISSING_INTERNAL_MESSAGE_ID"
-            : error instanceof StaleContextError
-              ? "STALE_CONTEXT"
-              : error instanceof Error && error.message === "STATE_PAYLOAD_TOO_LARGE"
-                ? "STATE_PAYLOAD_TOO_LARGE"
-                : sanitizeShadowErrorCode(error);
-      if (error instanceof ShadowTimeoutError) this.metrics.timeout += 1;
-      else this.metrics.processingError += 1;
+        error instanceof MissingInternalMessageIdError
+          ? "MISSING_INTERNAL_MESSAGE_ID"
+          : error instanceof StaleContextError
+            ? "STALE_CONTEXT"
+            : error instanceof Error && error.message === "STATE_PAYLOAD_TOO_LARGE"
+              ? "STATE_PAYLOAD_TOO_LARGE"
+              : sanitizeShadowErrorCode(error);
+      this.metrics.processingError += 1;
       return this.buildErrorResult(snapshot, errorCode, startedAt);
     } finally {
       this.activeExecutions = Math.max(0, this.activeExecutions - 1);
@@ -626,13 +604,10 @@ export class RuntimeV2ShadowOrchestrator {
     snapshot: RuntimeV2ShadowSnapshot,
     startedAt: number,
     attempt: number,
-    deadlineAt: number,
   ): Promise<RuntimeV2ShadowResult> {
-    this.assertBeforeDeadline(deadlineAt);
     const now = this.now();
     const scope = toStoreScope(snapshot.scope);
     let state = await this.stateStore.load(scope);
-    this.assertBeforeDeadline(deadlineAt);
     const messageAlreadyProcessedBeforeLoad = await this.stateStore.existsForMessage(
       scope,
       snapshot,
@@ -747,7 +722,6 @@ export class RuntimeV2ShadowOrchestrator {
           ),
       );
       try {
-        this.assertBeforeDeadline(deadlineAt);
         const persisted: ConversationStateSaveTurnResult = await this.stateStore.saveTurn(
           nextState,
           state.revision,
@@ -765,8 +739,8 @@ export class RuntimeV2ShadowOrchestrator {
             error instanceof StateAlreadyExistsError) &&
           attempt < 2
         ) {
-          await this.waitBeforeRetry(attempt, deadlineAt);
-          return this.processWithRetry(snapshot, startedAt, attempt + 1, deadlineAt);
+          await this.waitBeforeRetry(attempt);
+          return this.processWithRetry(snapshot, startedAt, attempt + 1);
         }
         throw error;
       }
@@ -819,6 +793,7 @@ export class RuntimeV2ShadowOrchestrator {
         state: nextState,
         responsePlan,
         context: snapshot.candidateContext,
+        generationTimeoutMs: resolveRuntimeV2CandidateGenerationTimeoutMs(this.environment),
       });
       candidateResponse = generated.candidate;
       responseComparison =
@@ -836,7 +811,7 @@ export class RuntimeV2ShadowOrchestrator {
         nextState = await this.stateStore.save(candidateState, nextState.revision);
       } catch (error) {
         if (error instanceof StateRevisionConflictError && attempt < 2) {
-          return this.processWithRetry(snapshot, startedAt, attempt + 1, deadlineAt);
+          return this.processWithRetry(snapshot, startedAt, attempt + 1);
         }
         throw error;
       }
@@ -1190,27 +1165,9 @@ export class RuntimeV2ShadowOrchestrator {
     };
   }
 
-  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new ShadowTimeoutError()), timeoutMs);
-    });
-    try {
-      return await Promise.race([promise, timeout]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
-
-  private assertBeforeDeadline(deadlineAt: number): void {
-    if (this.now().getTime() >= deadlineAt) throw new ShadowTimeoutError();
-  }
-
-  private async waitBeforeRetry(attempt: number, deadlineAt: number): Promise<void> {
+  private async waitBeforeRetry(attempt: number): Promise<void> {
     const delayMs = Math.min(25, 5 * (attempt + 1) + Math.floor(Math.random() * 5));
-    this.assertBeforeDeadline(deadlineAt - delayMs);
     await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-    this.assertBeforeDeadline(deadlineAt);
   }
 
   private buildErrorResult(
