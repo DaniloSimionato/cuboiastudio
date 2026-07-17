@@ -7,6 +7,7 @@ export * from "./response-plan";
 export * from "./prompt-compiler-v2";
 export * from "./response-validator-v2";
 export * from "./runtime-v2-feature-flag";
+export * from "./runtime-v2-scope-gate";
 export * from "./runtime-v2-manifest";
 export * from "./runtime-v2-prototype";
 export * from "./conversation-state-store";

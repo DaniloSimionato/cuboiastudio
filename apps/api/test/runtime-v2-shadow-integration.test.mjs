@@ -57,6 +57,7 @@ test("integração allowlisted registra somente manifesto sanitizado", async () 
   const environment = {
     RUNTIME_V2_MODE: "SHADOW",
     RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
   };
   const orchestrator = new RuntimeV2ShadowOrchestrator(
     new InMemoryConversationStateStore(),
@@ -94,6 +95,7 @@ test("integração persiste o Handoff State no manifesto metadata-only", async (
     RUNTIME_V2_MODE: "SHADOW",
     RUNTIME_V2_HANDOFF_STATE_MODE: "SHADOW_STATE",
     RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
   };
   const orchestrator = new RuntimeV2ShadowOrchestrator(
     new InMemoryConversationStateStore(),
@@ -164,6 +166,7 @@ test("falha do orquestrador é capturada e não gera rejeição não tratada", a
   const integration = new RuntimeV2ShadowIntegrationService(prisma, orchestrator, {
     RUNTIME_V2_MODE: "SHADOW",
     RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
   });
 
   const result = await integration.schedule(snapshot());
@@ -183,6 +186,7 @@ test("a mesma mensagem em voo não executa o orquestrador duas vezes", async () 
   const environment = {
     RUNTIME_V2_MODE: "SHADOW",
     RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
   };
   const orchestrator = {
     async process(message) {
@@ -222,6 +226,7 @@ test("serializa uma sessão, mas mantém sessões diferentes em paralelo", async
   const environment = {
     RUNTIME_V2_MODE: "SHADOW",
     RUNTIME_V2_SHADOW_ASSISTANT_IDS: `${scope.assistantId},other-assistant`,
+    RUNTIME_V2_SHADOW_CONVERSATION_IDS: `${scope.conversationId},other-conversation`,
   };
   const orchestrator = {
     async process(message) {
@@ -256,7 +261,11 @@ test("serializa uma sessão, mas mantém sessões diferentes em paralelo", async
   };
   const differentScope = {
     ...snapshot("different-scope"),
-    scope: { ...scope, assistantId: "other-assistant" },
+    scope: {
+      ...scope,
+      assistantId: "other-assistant",
+      conversationId: "other-conversation",
+    },
   };
 
   const first = integration.schedule(snapshot("same-scope-1"));

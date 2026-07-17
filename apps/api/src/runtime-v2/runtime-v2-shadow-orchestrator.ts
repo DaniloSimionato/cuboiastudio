@@ -567,7 +567,7 @@ export class RuntimeV2ShadowOrchestrator {
       this.metrics.ignoredOff += 1;
       return { enabled: false, mode, state: null, manifest: null };
     }
-    if (!isRuntimeV2ShadowEnabled({ assistantId: snapshot.scope.assistantId }, this.environment)) {
+    if (!isRuntimeV2ShadowEnabled(snapshot.scope, this.environment)) {
       this.metrics.ignoredAllowlist += 1;
       return { enabled: false, mode, state: null, manifest: null };
     }

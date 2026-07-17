@@ -29,6 +29,7 @@ const environment = {
   RUNTIME_V2_ACTION_STATE_MODE: "SHADOW_STATE",
   RUNTIME_V2_SYNTHETIC_EXECUTION_MODE: "SYNTHETIC_ONLY",
   RUNTIME_V2_SHADOW_ASSISTANT_IDS: baseScope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: baseScope.conversationId,
 };
 
 function createActionFixture({ actionType, confirmationPolicy, args, requiredParameters = [] }) {

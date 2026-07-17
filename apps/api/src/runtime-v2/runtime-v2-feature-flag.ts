@@ -1,4 +1,9 @@
 import { type RuntimeV2FeatureConfig, type RuntimeVersion } from "./runtime-v2.types";
+import {
+  evaluateRuntimeV2ScopeGate,
+  type RuntimeV2ScopeFeature,
+  type RuntimeV2ScopeGateResult,
+} from "./runtime-v2-scope-gate";
 
 export type RuntimeV2Mode = "OFF" | "SHADOW";
 export type RuntimeV2StateStoreMode = "MEMORY" | "POSTGRES";
@@ -13,7 +18,9 @@ export type RuntimeV2ResponseGenerationMode = "OFF" | "SHADOW";
 export type RuntimeV2ResponseComparisonMode = "OFF" | "SHADOW";
 
 export type RuntimeV2ShadowConfig = RuntimeV2FeatureConfig & {
+  companyId?: string | null;
   assistantId?: string | null;
+  conversationId?: string | null;
 };
 
 export function resolveRuntimeVersion(config: RuntimeV2FeatureConfig = {}): RuntimeVersion {
@@ -51,11 +58,38 @@ export function resolveRuntimeV2Mode(
 export function isRuntimeV2ShadowEnabled(
   input: RuntimeV2ShadowConfig = {},
   environment: NodeJS.ProcessEnv = process.env,
+  feature: RuntimeV2ScopeFeature = "BASE_SHADOW",
 ): boolean {
-  if (resolveRuntimeV2Mode(input, environment) !== "SHADOW") return false;
-  const allowlist =
-    input.shadowAssistantIds ?? parseAllowlist(environment.RUNTIME_V2_SHADOW_ASSISTANT_IDS);
-  return Boolean(input.assistantId && allowlist.includes(input.assistantId));
+  return evaluateRuntimeV2BaseScopeGate(input, environment, feature).allowed;
+}
+
+export function resolveRuntimeV2ShadowAssistantIds(
+  environment: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return parseAllowlist(environment.RUNTIME_V2_SHADOW_ASSISTANT_IDS);
+}
+
+export function resolveRuntimeV2ShadowConversationIds(
+  environment: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return parseAllowlist(environment.RUNTIME_V2_SHADOW_CONVERSATION_IDS);
+}
+
+export function evaluateRuntimeV2BaseScopeGate(
+  input: RuntimeV2ShadowConfig,
+  environment: NodeJS.ProcessEnv = process.env,
+  feature: RuntimeV2ScopeFeature = "BASE_SHADOW",
+): RuntimeV2ScopeGateResult {
+  return evaluateRuntimeV2ScopeGate({
+    mode: resolveRuntimeV2Mode(input, environment),
+    companyId: input.companyId,
+    assistantId: input.assistantId,
+    conversationId: input.conversationId,
+    feature,
+    assistantAllowlist: input.shadowAssistantIds ?? resolveRuntimeV2ShadowAssistantIds(environment),
+    conversationAllowlist: resolveRuntimeV2ShadowConversationIds(environment),
+    evaluatedAt: new Date().toISOString(),
+  });
 }
 
 export function resolveRuntimeV2StateStoreMode(
@@ -151,11 +185,11 @@ export function resolveRuntimeV2ResponseConversationIds(
 }
 
 export function isRuntimeV2ResponseGenerationEnabled(
-  input: { assistantId: string; conversationId: string },
+  input: { companyId?: string; assistantId: string; conversationId: string },
   environment: NodeJS.ProcessEnv = process.env,
 ): boolean {
   return (
-    isRuntimeV2ShadowEnabled({ assistantId: input.assistantId }, environment) &&
+    isRuntimeV2ShadowEnabled(input, environment, "RESPONSE_GENERATION") &&
     resolveRuntimeV2ResponseGenerationMode(environment) === "SHADOW" &&
     resolveRuntimeV2ResponseAssistantIds(environment).includes(input.assistantId) &&
     resolveRuntimeV2ResponseConversationIds(environment).includes(input.conversationId)

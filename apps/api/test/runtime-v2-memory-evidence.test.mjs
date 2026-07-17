@@ -363,6 +363,7 @@ test("Shadow Metadata combina memória sem provider, ferramenta ou outbound V2",
     {
       RUNTIME_V2_MODE: "SHADOW",
       RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
       RUNTIME_V2_EVIDENCE_MODE: "SHADOW_METADATA",
     },
     () => now,
@@ -409,7 +410,11 @@ test("OFF e SHADOW sem SHADOW_METADATA não observam memória", async () => {
   assert.equal((await off.process(snapshot)).manifest, null);
   const shadow = new RuntimeV2ShadowOrchestrator(
     new InMemoryConversationStateStore(),
-    { RUNTIME_V2_MODE: "SHADOW", RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId },
+    {
+      RUNTIME_V2_MODE: "SHADOW",
+      RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+      RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
+    },
     () => now,
     undefined,
     undefined,
@@ -423,7 +428,11 @@ test("OFF e SHADOW sem SHADOW_METADATA não observam memória", async () => {
 test("duplicidade do mesmo internalMessageId não cria segunda revisão", async () => {
   const orchestrator = new RuntimeV2ShadowOrchestrator(
     new InMemoryConversationStateStore(),
-    { RUNTIME_V2_MODE: "SHADOW", RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId },
+    {
+      RUNTIME_V2_MODE: "SHADOW",
+      RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+      RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
+    },
     () => now,
     undefined,
     undefined,

@@ -6,6 +6,8 @@ const handoffState = await import("../dist/runtime-v2/handoff-state.js");
 
 const env = {
   RUNTIME_V2_MODE: "SHADOW",
+  RUNTIME_V2_SHADOW_ASSISTANT_IDS: "assistant-1",
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: "conversation-1",
   RUNTIME_V2_HANDOFF_STATE_MODE: "SHADOW_STATE",
   RUNTIME_V2_HANDOFF_EXECUTION_MODE: "CONTROLLED",
   RUNTIME_V2_HANDOFF_EXECUTION_ASSISTANT_IDS: "assistant-1",

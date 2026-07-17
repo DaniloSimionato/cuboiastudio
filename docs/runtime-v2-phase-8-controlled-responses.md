@@ -11,16 +11,45 @@ nenhum caminho de outbound, nem executa ferramentas, handoff, Chatwoot, mudança
 
 Tudo começa desligado:
 
+- `RUNTIME_V2_MODE=OFF`
+- `RUNTIME_V2_SHADOW_ASSISTANT_IDS=`
+- `RUNTIME_V2_SHADOW_CONVERSATION_IDS=`
 - `RUNTIME_V2_RESPONSE_GENERATION_MODE=OFF`
 - `RUNTIME_V2_RESPONSE_COMPARISON_MODE=OFF`
 - `RUNTIME_V2_RESPONSE_ASSISTANT_IDS=`
 - `RUNTIME_V2_RESPONSE_CONVERSATION_IDS=`
 
-Uma candidata somente é elegível quando `RUNTIME_V2_MODE=SHADOW`, o assistente
-está também na allowlist geral de Shadow, geração está em `SHADOW` e as allowlists
-de assistente e conversa da resposta contêm o escopo exato. Comparação só é
-persistida quando seu modo também está em `SHADOW`. Não há reprocessamento de
-mensagens já registradas.
+Todo turno V2 passa primeiro pelo `RuntimeV2ScopeGate`
+(`runtime-v2-scope-gate-v1`), antes de carregar/criar `ConversationState`,
+entender o turno, consultar RAG ou memória, registrar evento/log ou chamar o
+provider. O gate é puro, versionado e default-deny: exige company, assistant e
+conversation internos válidos, `RUNTIME_V2_MODE=SHADOW`, o assistente em
+`RUNTIME_V2_SHADOW_ASSISTANT_IDS` e a conversa exata em
+`RUNTIME_V2_SHADOW_CONVERSATION_IDS`. Uma allowlist ausente ou vazia bloqueia.
+Não há wildcard, fallback de assistente para todas as suas conversas, nem uso da
+referência externa como substituta do `conversationId` interno.
+
+Uma candidata somente é elegível depois desse gate base, quando geração está em
+`SHADOW` e as allowlists de assistente e conversa da resposta também contêm o
+escopo exato. A allowlist de resposta é adicional: nunca substitui a allowlist
+base de Shadow. Comparação só é persistida quando seu modo também está em
+`SHADOW`. Não há reprocessamento de mensagens já registradas.
+
+O mesmo gate base é aplicado ao worker Shadow, Evidence, Action State, Tool
+Observation, Synthetic Execution, Handoff State/Execution e Response
+Generation/Comparison. Cada feature mantém bloqueios complementares, mas nenhuma
+pode iniciar processamento fora do escopo base.
+
+### Incidente e contenção de escopo
+
+Antes desse gate, uma execução Shadow allowlisted somente por assistente podia
+criar estado/evento de telemetria para outra conversa do mesmo assistente, antes
+de a allowlist de resposta bloquear a candidata. Esse registro histórico deve
+ser preservado somente como evidência com a classificação
+`NON_ALLOWLISTED_SHADOW_STATE_CREATED_BEFORE_SCOPE_GATE_FIX`; ele não é removido
+nem reescrito por esta correção. Após o gate, uma conversa fora do escopo retorna
+silenciosamente sem state, evento, Runtime log, RAG, memória, provider,
+candidata, comparação, outbound, handoff ou ferramenta.
 
 ## Contexto e geração
 

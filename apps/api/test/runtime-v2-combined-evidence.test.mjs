@@ -228,6 +228,7 @@ test("orquestrador Shadow persiste apenas decisões e metadata do bundle", async
     {
       RUNTIME_V2_MODE: "SHADOW",
       RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
       RUNTIME_V2_EVIDENCE_MODE: "SHADOW_METADATA",
     },
     () => now,
@@ -262,6 +263,7 @@ test("falha de adapter permanece fail-safe e não altera os sinais do V2", async
     {
       RUNTIME_V2_MODE: "SHADOW",
       RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
       RUNTIME_V2_EVIDENCE_MODE: "SHADOW_METADATA",
     },
     () => now,

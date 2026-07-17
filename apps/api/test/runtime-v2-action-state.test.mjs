@@ -250,6 +250,7 @@ test("Shadow State mantém uma ação por contexto, sobrevive a turnos e nunca e
   const environment = {
     RUNTIME_V2_MODE: "SHADOW",
     RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
     RUNTIME_V2_ACTION_STATE_MODE: "SHADOW_STATE",
     RUNTIME_V2_STATE_STORE: "MEMORY",
   };

@@ -113,6 +113,7 @@ test("flag OFF não habilita observação; allowlist exige Shadow", () => {
         RUNTIME_V2_MODE: "SHADOW",
         RUNTIME_V2_TOOL_OBSERVATION_MODE: "SHADOW_METADATA",
         RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
       },
     ),
     true,
@@ -127,6 +128,7 @@ test("Shadow observa metadata recebida sem executar ferramenta", async () => {
       RUNTIME_V2_EVIDENCE_MODE: "SHADOW_METADATA",
       RUNTIME_V2_TOOL_OBSERVATION_MODE: "SHADOW_METADATA",
       RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
     },
     () => now,
   );

@@ -10,6 +10,7 @@ import {
   type ChatwootHandoffPlan,
 } from "./chatwoot-handoff-executor";
 import {
+  isRuntimeV2ShadowEnabled,
   resolveRuntimeV2HandoffAdapterMode,
   resolveRuntimeV2HandoffExecutionAssistantIds,
   resolveRuntimeV2HandoffExecutionConversationIds,
@@ -255,6 +256,9 @@ function flagsBlockers(environment: NodeJS.ProcessEnv, scope: HandoffStateScope)
   }
   if (resolveRuntimeV2HandoffAdapterMode(environment) !== "CHATWOOT_CONTROLLED") {
     blockers.push("CONTROLLED_HANDOFF_DISABLED");
+  }
+  if (!isRuntimeV2ShadowEnabled(scope, environment, "HANDOFF_EXECUTION")) {
+    blockers.push("CONTROLLED_HANDOFF_NOT_ALLOWLISTED");
   }
   if (!resolveRuntimeV2HandoffExecutionAssistantIds(environment).includes(scope.assistantId)) {
     blockers.push("CONTROLLED_HANDOFF_NOT_ALLOWLISTED");

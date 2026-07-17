@@ -20,6 +20,7 @@ const scope = {
 const shadowEnvironment = {
   RUNTIME_V2_MODE: "SHADOW",
   RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
 };
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -54,21 +55,29 @@ test("InMemoryConversationStateStore serializa, isola escopo e aplica optimistic
   assert.equal(restored.schemaVersion, "conversation-state-v2");
 });
 
-test("feature flag fica OFF por padrão e SHADOW exige allowlist válida", () => {
-  assert.equal(isRuntimeV2ShadowEnabled({ assistantId: scope.assistantId }, {}), false);
+test("feature flag fica OFF por padrão e SHADOW exige allowlists de assistant e conversa", () => {
+  assert.equal(isRuntimeV2ShadowEnabled(scope, {}), false);
   assert.equal(
-    isRuntimeV2ShadowEnabled({ assistantId: scope.assistantId }, shadowEnvironment),
+    isRuntimeV2ShadowEnabled(scope, shadowEnvironment),
     true,
   );
   assert.equal(
     isRuntimeV2ShadowEnabled(
-      { assistantId: scope.assistantId },
-      { RUNTIME_V2_MODE: "OUTBOUND", RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId },
+      scope,
+      {
+        RUNTIME_V2_MODE: "OUTBOUND",
+        RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+        RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
+      },
     ),
     false,
   );
   assert.equal(
-    isRuntimeV2ShadowEnabled({ assistantId: "other-assistant" }, shadowEnvironment),
+    isRuntimeV2ShadowEnabled({ ...scope, assistantId: "other-assistant" }, shadowEnvironment),
+    false,
+  );
+  assert.equal(
+    isRuntimeV2ShadowEnabled({ ...scope, conversationId: "other-conversation" }, shadowEnvironment),
     false,
   );
 });

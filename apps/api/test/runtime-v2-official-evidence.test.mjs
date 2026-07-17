@@ -293,7 +293,11 @@ test("OFF e SHADOW sem metadata não consultam adapter; SHADOW_METADATA consulta
 
   const shadow = new RuntimeV2ShadowOrchestrator(
     new InMemoryConversationStateStore(),
-    { RUNTIME_V2_MODE: "SHADOW", RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId },
+    {
+      RUNTIME_V2_MODE: "SHADOW",
+      RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+      RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
+    },
     () => now,
     reader,
   );
@@ -308,6 +312,7 @@ test("OFF e SHADOW sem metadata não consultam adapter; SHADOW_METADATA consulta
     {
       RUNTIME_V2_MODE: "SHADOW",
       RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
       RUNTIME_V2_EVIDENCE_MODE: "SHADOW_METADATA",
     },
     () => now,
@@ -361,6 +366,7 @@ test("Shadow Metadata com adapter real persiste apenas manifesto sanitizado", as
     {
       RUNTIME_V2_MODE: "SHADOW",
       RUNTIME_V2_SHADOW_ASSISTANT_IDS: assistantId,
+      RUNTIME_V2_SHADOW_CONVERSATION_IDS: conversationId,
       RUNTIME_V2_EVIDENCE_MODE: "SHADOW_METADATA",
     },
     () => now,

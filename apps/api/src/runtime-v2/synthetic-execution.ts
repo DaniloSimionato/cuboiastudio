@@ -587,14 +587,14 @@ function duplicateResult(input: {
 }
 
 export function isRuntimeV2SyntheticExecutionEnabled(
-  scope: Pick<ActionStateScope, "assistantId">,
+  scope: Pick<ActionStateScope, "companyId" | "assistantId" | "conversationId">,
   environment: NodeJS.ProcessEnv = process.env,
 ): boolean {
   return (
     resolveRuntimeV2Mode({}, environment) === "SHADOW" &&
     resolveRuntimeV2ActionStateMode(environment) === "SHADOW_STATE" &&
     resolveRuntimeV2SyntheticExecutionMode(environment) === "SYNTHETIC_ONLY" &&
-    isRuntimeV2ShadowEnabled({ assistantId: scope.assistantId }, environment)
+    isRuntimeV2ShadowEnabled(scope, environment, "SYNTHETIC_EXECUTION")
   );
 }
 

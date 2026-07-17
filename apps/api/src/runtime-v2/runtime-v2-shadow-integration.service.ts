@@ -2,7 +2,7 @@ import { Injectable, Logger, Optional } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { hashCanonicalInboundMessageContent } from "../inbound/canonical-inbound-message";
 import { PrismaService } from "../database/prisma.service";
-import { isRuntimeV2ShadowEnabled, resolveRuntimeV2Mode } from "./runtime-v2-feature-flag";
+import { evaluateRuntimeV2BaseScopeGate, resolveRuntimeV2Mode } from "./runtime-v2-feature-flag";
 import {
   RuntimeV2ShadowOrchestrator,
   type RuntimeV2ShadowResult,
@@ -13,7 +13,7 @@ import type { RuntimeV2ShadowManifest } from "./runtime-v2-shadow-manifest";
 export type RuntimeV2ShadowIntegrationStatus =
   | "COMPLETED"
   | "SKIPPED_OFF"
-  | "SKIPPED_NOT_ALLOWLISTED"
+  | "SKIPPED_OUT_OF_SCOPE"
   | "SKIPPED_INVALID_INPUT"
   | "ALREADY_PROCESSED"
   | "TIMEOUT"
@@ -110,6 +110,20 @@ export class RuntimeV2ShadowIntegrationService {
       return this.process(snapshot);
     }
 
+    const environment = this.environment ?? process.env;
+    const scopeGate = evaluateRuntimeV2BaseScopeGate(snapshot.scope, environment);
+    if (!scopeGate.allowed) {
+      return Promise.resolve({
+        status:
+          scopeGate.reasonCode === "RUNTIME_V2_SCOPE_MODE_OFF"
+            ? "SKIPPED_OFF"
+            : "SKIPPED_OUT_OF_SCOPE",
+        manifest: null,
+        logId: null,
+        logPersisted: false,
+      });
+    }
+
     const messageKey = integrationKey(snapshot);
     if (this.scheduledMessages.has(messageKey)) {
       return Promise.resolve({
@@ -176,9 +190,9 @@ export class RuntimeV2ShadowIntegrationService {
     if (mode === "OFF") {
       return { status: "SKIPPED_OFF", manifest: null, logId: null, logPersisted: false };
     }
-    if (!isRuntimeV2ShadowEnabled({ assistantId: snapshot.scope.assistantId }, environment)) {
+    if (!evaluateRuntimeV2BaseScopeGate(snapshot.scope, environment).allowed) {
       return {
-        status: "SKIPPED_NOT_ALLOWLISTED",
+        status: "SKIPPED_OUT_OF_SCOPE",
         manifest: null,
         logId: null,
         logPersisted: false,

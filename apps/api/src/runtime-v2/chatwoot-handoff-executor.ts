@@ -10,6 +10,7 @@ import {
   transitionHandoffStatus,
 } from "./handoff-state";
 import {
+  isRuntimeV2ShadowEnabled,
   resolveRuntimeV2HandoffExecutionAssistantIds,
   resolveRuntimeV2HandoffExecutionConversationIds,
   resolveRuntimeV2HandoffExecutionMode,
@@ -295,6 +296,9 @@ export function validateChatwootHandoffExecutionPreconditions(input: {
     resolveRuntimeV2HandoffExecutionMode(environment) !== "CONTROLLED"
   ) {
     return { ok: false, errorCode: "HANDOFF_EXECUTION_DISABLED" };
+  }
+  if (!isRuntimeV2ShadowEnabled(input.scope, environment, "HANDOFF_EXECUTION")) {
+    return { ok: false, errorCode: "HANDOFF_CONVERSATION_NOT_ALLOWLISTED" };
   }
   if (
     !resolveRuntimeV2HandoffExecutionAssistantIds(environment).includes(input.scope.assistantId)

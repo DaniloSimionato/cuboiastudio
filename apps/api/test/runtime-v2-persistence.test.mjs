@@ -5,6 +5,7 @@ import { PrismaClient } from "@prisma/client";
 import {
   CONVERSATION_STATE_VERSION,
   PrismaConversationStateStore,
+  RuntimeV2ShadowIntegrationService,
   RuntimeV2ShadowOrchestrator,
   MissingInternalMessageIdError,
   StatePayloadTooLargeError,
@@ -102,6 +103,9 @@ before(async () => {
 });
 
 after(async () => {
+  await prisma.assistantRuntimeLog.deleteMany({
+    where: { companyId: { startsWith: prefix } },
+  });
   await prisma.assistantConversationStateV2Event.deleteMany({
     where: { companyId: { startsWith: prefix } },
   });
@@ -364,10 +368,12 @@ test("duas instâncias processam a mesma mensagem uma vez e mensagens diferentes
   const first = new RuntimeV2ShadowOrchestrator(new PrismaConversationStateStore(prisma), {
     ...shadowEnvironment,
     RUNTIME_V2_SHADOW_ASSISTANT_IDS: sameScope.assistantId,
+    RUNTIME_V2_SHADOW_CONVERSATION_IDS: sameScope.conversationId,
   });
   const second = new RuntimeV2ShadowOrchestrator(new PrismaConversationStateStore(prisma), {
     ...shadowEnvironment,
     RUNTIME_V2_SHADOW_ASSISTANT_IDS: sameScope.assistantId,
+    RUNTIME_V2_SHADOW_CONVERSATION_IDS: sameScope.conversationId,
   });
   const sameResults = await Promise.all([
     first.process(snapshot(sameScope, sameMessage)),
@@ -394,10 +400,12 @@ test("duas instâncias processam a mesma mensagem uma vez e mensagens diferentes
   const left = new RuntimeV2ShadowOrchestrator(new PrismaConversationStateStore(prisma), {
     ...shadowEnvironment,
     RUNTIME_V2_SHADOW_ASSISTANT_IDS: differentScope.assistantId,
+    RUNTIME_V2_SHADOW_CONVERSATION_IDS: differentScope.conversationId,
   });
   const right = new RuntimeV2ShadowOrchestrator(new PrismaConversationStateStore(prisma), {
     ...shadowEnvironment,
     RUNTIME_V2_SHADOW_ASSISTANT_IDS: differentScope.assistantId,
+    RUNTIME_V2_SHADOW_CONVERSATION_IDS: differentScope.conversationId,
   });
   const differentResults = await Promise.all([
     left.process(snapshot(differentScope, messageA, "Quero formatar")),
@@ -414,11 +422,69 @@ test("duas instâncias processam a mesma mensagem uma vez e mensagens diferentes
   assert.equal(finalState.revision, 2);
 });
 
+test("PostgreSQL não cria state, evento nem Runtime log para outra conversa do mesmo assistant", async () => {
+  const allowedScope = await createFixture();
+  const blockedConversationId = `${prefix}-conversation-not-allowlisted-${randomUUID().slice(0, 8)}`;
+  await prisma.assistantConversation.create({
+    data: {
+      id: blockedConversationId,
+      companyId: allowedScope.companyId,
+      assistantId: allowedScope.assistantId,
+      source: "SMOKE",
+      channelType: "UNKNOWN",
+      currentContextVersion: allowedScope.contextVersion,
+    },
+  });
+  const blockedScope = { ...allowedScope, conversationId: blockedConversationId };
+  const allowedMessage = await createMessage(allowedScope, `${prefix}-allowlisted-message`);
+  const blockedMessage = await createMessage(blockedScope, `${prefix}-blocked-message`);
+  const environment = {
+    ...shadowEnvironment,
+    RUNTIME_V2_SHADOW_ASSISTANT_IDS: allowedScope.assistantId,
+    RUNTIME_V2_SHADOW_CONVERSATION_IDS: allowedScope.conversationId,
+  };
+  const integration = new RuntimeV2ShadowIntegrationService(
+    prisma,
+    new RuntimeV2ShadowOrchestrator(new PrismaConversationStateStore(prisma), environment),
+    environment,
+  );
+
+  const before = await Promise.all([
+    prisma.assistantConversationStateV2.count({ where: { conversationId: blockedScope.conversationId } }),
+    prisma.assistantConversationStateV2Event.count({ where: { conversationId: blockedScope.conversationId } }),
+    prisma.assistantRuntimeLog.count({ where: { conversationId: blockedScope.conversationId } }),
+  ]);
+  const [allowedResult, blockedResult] = await Promise.all([
+    integration.schedule(snapshot(allowedScope, allowedMessage)),
+    integration.schedule(snapshot(blockedScope, blockedMessage)),
+  ]);
+  await integration.drain();
+  const after = await Promise.all([
+    prisma.assistantConversationStateV2.count({ where: { conversationId: blockedScope.conversationId } }),
+    prisma.assistantConversationStateV2Event.count({ where: { conversationId: blockedScope.conversationId } }),
+    prisma.assistantRuntimeLog.count({ where: { conversationId: blockedScope.conversationId } }),
+  ]);
+
+  assert.equal(allowedResult.status, "COMPLETED");
+  assert.equal(blockedResult.status, "SKIPPED_OUT_OF_SCOPE");
+  assert.deepEqual(after, before);
+  assert.equal(
+    await prisma.assistantConversationStateV2.count({
+      where: { conversationId: allowedScope.conversationId },
+    }),
+    1,
+  );
+});
+
 test("restart preserva idempotência, aceita externalMessageId ausente e não deduplica conteúdo igual", async () => {
   const scope = await createFixture();
   const firstMessage = await createMessage(scope, `${prefix}-restart-1`, "mesmo conteúdo");
   const secondMessage = await createMessage(scope, `${prefix}-restart-2`, "mesmo conteúdo");
-  const environment = { ...shadowEnvironment, RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId };
+  const environment = {
+    ...shadowEnvironment,
+    RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+    RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
+  };
   const firstRun = new RuntimeV2ShadowOrchestrator(
     new PrismaConversationStateStore(prisma),
     environment,
@@ -448,6 +514,7 @@ test("contextVersion incompatível é rejeitado sem atualizar o estado", async (
   const result = await new RuntimeV2ShadowOrchestrator(new PrismaConversationStateStore(prisma), {
     ...shadowEnvironment,
     RUNTIME_V2_SHADOW_ASSISTANT_IDS: staleScope.assistantId,
+    RUNTIME_V2_SHADOW_CONVERSATION_IDS: staleScope.conversationId,
   }).process(snapshot(staleScope, message, "mensagem antiga"));
   assert.equal(result.manifest.shadowErrorCode, "STALE_CONTEXT");
   assert.equal(

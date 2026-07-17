@@ -228,6 +228,7 @@ test("PostgreSQL registra observação de ferramenta somente como metadata", asy
     RUNTIME_V2_EVIDENCE_MODE: "SHADOW_METADATA",
     RUNTIME_V2_TOOL_OBSERVATION_MODE: "SHADOW_METADATA",
     RUNTIME_V2_SHADOW_ASSISTANT_IDS: fixture.scope.assistantId,
+    RUNTIME_V2_SHADOW_CONVERSATION_IDS: fixture.scope.conversationId,
   };
   const orchestrator = new RuntimeV2ShadowOrchestrator(
     new InMemoryConversationStateStore(),
@@ -295,6 +296,7 @@ test("PostgreSQL persiste execução sintética no stateJson sem payload e recup
     RUNTIME_V2_ACTION_STATE_MODE: "SHADOW_STATE",
     RUNTIME_V2_SYNTHETIC_EXECUTION_MODE: "SYNTHETIC_ONLY",
     RUNTIME_V2_SHADOW_ASSISTANT_IDS: fixture.scope.assistantId,
+    RUNTIME_V2_SHADOW_CONVERSATION_IDS: fixture.scope.conversationId,
   };
   const result = await new RuntimeV2SyntheticExecutionOrchestrator(
     store,

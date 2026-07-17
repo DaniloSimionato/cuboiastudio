@@ -2304,6 +2304,7 @@ test("pipeline Chatwoot completo preserva saída de triagem e drena o Shadow sem
     {
       RUNTIME_V2_MODE: "SHADOW",
       RUNTIME_V2_SHADOW_ASSISTANT_IDS: "assistant-1",
+      RUNTIME_V2_SHADOW_CONVERSATION_IDS: "conversation-1",
     },
   );
   const shadowIntegration = new RuntimeV2ShadowIntegrationService(
@@ -2312,6 +2313,7 @@ test("pipeline Chatwoot completo preserva saída de triagem e drena o Shadow sem
     {
       RUNTIME_V2_MODE: "SHADOW",
       RUNTIME_V2_SHADOW_ASSISTANT_IDS: "assistant-1",
+      RUNTIME_V2_SHADOW_CONVERSATION_IDS: "conversation-1",
     },
   );
   const { service, calls } = createAssistantServiceDeps({

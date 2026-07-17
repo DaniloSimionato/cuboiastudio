@@ -182,6 +182,7 @@ test("flag OFF não cria observação nem estado no Shadow", async () => {
       RUNTIME_V2_HANDOFF_STATE_MODE: "OFF",
       RUNTIME_V2_EVIDENCE_MODE: "OFF",
       RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
     },
     () => now,
   );
@@ -208,6 +209,7 @@ test("SHADOW_STATE persiste somente metadata e mantém todas as mutações Chatw
       RUNTIME_V2_HANDOFF_STATE_MODE: "SHADOW_STATE",
       RUNTIME_V2_EVIDENCE_MODE: "OFF",
       RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
     },
     () => now,
   );
@@ -240,6 +242,7 @@ test("SHADOW_STATE ocioso não materializa estado de handoff sem sinal V1", asyn
       RUNTIME_V2_HANDOFF_STATE_MODE: "SHADOW_STATE",
       RUNTIME_V2_EVIDENCE_MODE: "OFF",
       RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
     },
     () => now,
   );

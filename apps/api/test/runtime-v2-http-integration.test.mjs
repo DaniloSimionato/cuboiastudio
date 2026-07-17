@@ -116,6 +116,7 @@ async function createTestContext() {
   };
 
   process.env.RUNTIME_V2_SHADOW_ASSISTANT_IDS = context.fixture.assistantId;
+  process.env.RUNTIME_V2_SHADOW_CONVERSATION_IDS = context.fixture.conversationId;
   context.app = await NestFactory.create(AppModule, { logger: false });
   context.prisma = context.app.get(PrismaService);
   await seedFixture(context.prisma, context.fixture);

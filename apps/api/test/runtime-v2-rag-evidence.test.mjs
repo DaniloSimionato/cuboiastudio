@@ -291,6 +291,7 @@ test("Shadow Metadata combina observação RAG sem provider, ferramenta ou outbo
     {
       RUNTIME_V2_MODE: "SHADOW",
       RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
       RUNTIME_V2_EVIDENCE_MODE: "SHADOW_METADATA",
     },
     () => now,
@@ -336,7 +337,11 @@ test("OFF e SHADOW sem metadata não observam RAG", async () => {
   assert.equal((await off.process(snapshot)).manifest, null);
   const shadow = new RuntimeV2ShadowOrchestrator(
     new InMemoryConversationStateStore(),
-    { RUNTIME_V2_MODE: "SHADOW", RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId },
+    {
+      RUNTIME_V2_MODE: "SHADOW",
+      RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+      RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
+    },
     () => now,
     undefined,
     adapter,

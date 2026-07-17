@@ -17,6 +17,7 @@ const scope = {
 const environment = {
   RUNTIME_V2_MODE: "SHADOW",
   RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+  RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
 };
 
 function snapshot(id, message, extra = {}) {
@@ -145,7 +146,11 @@ test("pergunta objetiva distingue sim de não e não herda referente após reset
     contextVersion: 8,
     conversationId: "authority-conversation-reset",
   };
-  const resetResult = await orchestrator.process({
+  const resetOrchestrator = new RuntimeV2ShadowOrchestrator(store, {
+    ...environment,
+    RUNTIME_V2_SHADOW_CONVERSATION_IDS: `${scope.conversationId},${resetScope.conversationId}`,
+  });
+  const resetResult = await resetOrchestrator.process({
     ...snapshot("new-session", "Sim, isso mesmo."),
     scope: resetScope,
   });

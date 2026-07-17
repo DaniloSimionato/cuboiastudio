@@ -231,6 +231,7 @@ test("pipeline Shadow local reproduz os sete turnos sem provider ou outbound V2"
     RUNTIME_V2_MODE: "SHADOW",
     RUNTIME_V2_EVIDENCE_MODE: "SHADOW_METADATA",
     RUNTIME_V2_SHADOW_ASSISTANT_IDS: "assistant-seven-fixture",
+    RUNTIME_V2_SHADOW_CONVERSATION_IDS: "conversation-seven-fixture",
     RUNTIME_V2_SHADOW_TIMEOUT_MS: "1000",
   };
   const companyId = "company-seven-fixture";
