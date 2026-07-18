@@ -252,6 +252,28 @@ O executor retorna apenas o `ResponseExecutionEnvelope` V2; ele não persiste a
 mensagem assistant, não chama o sender, não atualiza `externalMessageId` e não
 consome a approval.
 
+As `AssistantSecurityRule` ativas são carregadas somente no escopo da mesma
+empresa e assistente. Além de entrarem no prompt, passam por um gate primário
+fail-closed: regra inválida, exigência de humano/handoff/ferramenta, proibição de
+resposta automática ou conflito com `businessHours` bloqueia V2 antes do
+provider. Regras fora do tenant/assistente não entram na avaliação. O quality
+gate verifica ainda divulgação interna, alegação de handoff e conteúdo comercial
+não autorizado. A approval nunca substitui essas regras; bloqueio pré-sender usa
+somente o fallback V1 já coordenado.
+
+O mecanismo administrativo interno `runtime-v2-response-execution` tem quatro
+comandos: `preflight`, `arm`, `status` e `cancel`. `preflight` calcula apenas o
+hash canônico em memória, valida escopo, estado operacional, contexto oficial,
+regras de segurança e ausência de execução pendente; ele não persiste nada nem
+altera flags/allowlists. `arm` executa o mesmo preflight, aceita exclusivamente
+`businessHours`/`OFFICIAL_CONTEXT`, dura de um a dez minutos e cria uma única
+approval `ARMED` por conversa. Só fingerprints, status e propósito sanitizado
+são persistidos — nunca a mensagem futura. `status` retorna apenas estados,
+datas, fingerprints e referências externas redigidas. `cancel` faz a transição
+somente em `ARMED` e uma repetição retorna o mesmo estado `CANCELLED`; claim,
+consumo, expiração e estados terminais não podem ser cancelados ou reativados. A CLI não habilita `CONTROLLED`, não preenche
+allowlists e não altera Shadow, Evidence, actions, tools ou handoff.
+
 Não há uma segunda geração Shadow nem comparação adicional para o mesmo turno
 primário: `PRIMARY_EXECUTION_NO_SHADOW_COMPARISON=true`. A candidata primária é
 efêmera até o tail; só seus fingerprints e metadados redigidos atravessam a

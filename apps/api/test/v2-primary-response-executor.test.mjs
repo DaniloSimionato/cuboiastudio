@@ -177,6 +177,32 @@ test("executor bloqueia preconditions, categoria e autoridade antes do provider"
   }
 });
 
+test("executor bloqueia regra ativa que exige ferramenta ou handoff antes do provider", async () => {
+  for (const instruction of [
+    "Use uma ferramenta externa antes de responder.",
+    "Encaminhe sempre ao atendente humano.",
+  ]) {
+    let calls = 0;
+    await assert.rejects(
+      () =>
+        executor({
+          async generate() {
+            calls += 1;
+            throw new Error("provider não deveria ser chamado");
+          },
+        }).execute(
+          input({
+            context: context({
+              securityRules: [{ name: "Regra", ruleType: "Segurança", instruction }],
+            }),
+          }),
+        ),
+      /V2_PRIMARY_SECURITY_RULE/,
+    );
+    assert.equal(calls, 0);
+  }
+});
+
 test("executor bloqueia qualidade insegura e nunca persiste ou envia", async () => {
   let calls = 0;
   await assert.rejects(

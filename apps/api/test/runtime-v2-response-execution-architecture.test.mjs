@@ -18,6 +18,11 @@ const primaryExecutorPath = new URL(
   "../src/assistant-conversations/v2-primary-response-executor.ts",
   import.meta.url,
 );
+const administrationPath = new URL(
+  "../src/runtime-v2/response-execution-administration.ts",
+  import.meta.url,
+);
+const cliPath = new URL("../src/runtime-v2-response-execution-cli.ts", import.meta.url);
 
 test("single-use execution remains default-deny until the router gates every V2 dependency", async () => {
   const source = await readFile(servicePath, "utf8");
@@ -49,4 +54,18 @@ test("isolated coordinator owns no production provider or Chatwoot transport", a
   assert.doesNotMatch(source, /fetch\(|Chatwoot|AiService|generateChatCompletion/);
   assert.match(source, /generateV2/);
   assert.match(source, /sendV2/);
+});
+
+test("single-use administrative CLI is local-only, redacted, and cannot activate execution", async () => {
+  const [administrationSource, cliSource] = await Promise.all([
+    readFile(administrationPath, "utf8"),
+    readFile(cliPath, "utf8"),
+  ]);
+  assert.match(cliSource, /preflight|arm|status|cancel/);
+  assert.match(administrationSource, /evaluateV2PrimarySecurityRules/);
+  assert.match(administrationSource, /hashCanonicalInboundMessageContent/);
+  assert.match(administrationSource, /durationMinutes > 10/);
+  assert.doesNotMatch(administrationSource, /Chatwoot|sendChatwootOutboundText|fetch\(/);
+  assert.doesNotMatch(cliSource, /Chatwoot|sendChatwootOutboundText|fetch\(/);
+  assert.doesNotMatch(administrationSource, /process\.env\.[A-Z_]+\s*=/);
 });

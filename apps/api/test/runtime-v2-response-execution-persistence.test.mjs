@@ -4,9 +4,11 @@ import { after, before, test } from "node:test";
 import { PrismaClient } from "@prisma/client";
 import { buildOfficialBusinessContext } from "../dist/assistants/official-business-context.js";
 import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
+import { hashCanonicalInboundMessageContent } from "../dist/inbound/canonical-inbound-message.js";
 import { ResponseGenerationRouter } from "../dist/assistant-conversations/response-generation-router.js";
 import { ResponseTailLifecycleHooks } from "../dist/assistant-conversations/response-tail-lifecycle-hooks.js";
 import { RuntimeV2PrimaryResponseExecutor } from "../dist/assistant-conversations/v2-primary-response-executor.js";
+import { RuntimeV2ResponseExecutionAdministrationService } from "../dist/runtime-v2/response-execution-administration.js";
 import {
   ConversationStateResponseExecutionStore,
   PrismaConversationStateStore,
@@ -35,6 +37,16 @@ async function fixture() {
       id: scope.assistantId,
       companyId: scope.companyId,
       name: "Response Execution Assistant",
+      timezone: "America/Sao_Paulo",
+      weeklySchedule: {
+        monday: [{ start: "09:00", end: "18:00" }],
+        tuesday: [{ start: "09:00", end: "18:00" }],
+        wednesday: [{ start: "09:00", end: "18:00" }],
+        thursday: [{ start: "09:00", end: "18:00" }],
+        friday: [{ start: "09:00", end: "18:00" }],
+        saturday: [],
+        sunday: [],
+      },
     },
   });
   await prisma.assistantConversation.create({
@@ -327,4 +339,94 @@ test("PostgreSQL allows one real V2 primary executor and one shared tail complet
   const persisted = await seedStore.load(turn);
   assert.equal(persisted.terminalStatus, "V2_OUTBOUND_SENT");
   assert.equal(persisted.externalMessageId, "fake-external-pg-primary");
+});
+
+test("PostgreSQL preflight and arm produce one claimed V2 turn with no configuration mutation", async () => {
+  const { scope, message } = await fixture();
+  const stateStore = new PrismaConversationStateStore(prisma);
+  const responseExecutionStore = new ConversationStateResponseExecutionStore(stateStore);
+  const executionCoordinator = new RuntimeV2ResponseExecutionCoordinator({
+    store: responseExecutionStore,
+  });
+  const administration = new RuntimeV2ResponseExecutionAdministrationService({
+    prisma,
+    securityRules: { findActiveForRuntime: async () => [] },
+    stateStore,
+    responseExecutionStore,
+    coordinator: executionCoordinator,
+    environment: {},
+  });
+  const futureMessage = "Qual é o horário de atendimento?";
+  const preflight = await administration.preflight({
+    companyId: scope.companyId,
+    assistantId: scope.assistantId,
+    conversationId: scope.conversationId,
+    message: futureMessage,
+    canonicalVersion: "canonical-inbound-message-v1",
+    allowedCategory: "businessHours",
+    allowedAuthority: "OFFICIAL_CONTEXT",
+  });
+  assert.equal(preflight.preflightStatus, "APPROVED");
+  assert.equal(preflight.executionConfiguration.mode, "OFF");
+  assert.equal(JSON.stringify(preflight).includes(futureMessage), false);
+
+  const armed = await administration.arm({
+    companyId: scope.companyId,
+    assistantId: scope.assistantId,
+    conversationId: scope.conversationId,
+    message: futureMessage,
+    canonicalVersion: "canonical-inbound-message-v1",
+    allowedCategory: "businessHours",
+    allowedAuthority: "OFFICIAL_CONTEXT",
+    durationMinutes: 2,
+    operatorPurpose: "postgres integration test",
+  });
+  assert.equal(armed.status, "ARMED");
+  const status = await administration.status({
+    companyId: scope.companyId,
+    assistantId: scope.assistantId,
+    conversationId: scope.conversationId,
+    approvalFingerprint: armed.approvalFingerprint,
+  });
+  assert.equal(status.status, "ARMED");
+  assert.equal(status.internalMessageIdFingerprint, null);
+
+  const persistedApproval = await responseExecutionStore.load({
+    ...scope,
+    internalMessageId: message.id,
+  });
+  const canonicalComparisonHash = hashCanonicalInboundMessageContent(futureMessage);
+  assert.ok(canonicalComparisonHash);
+  const claim = await executionCoordinator.claim({
+    ...scope,
+    internalMessageId: message.id,
+    canonicalComparisonHash,
+    approval: persistedApproval.approval,
+  });
+  assert.equal(claim.status, "CLAIMED");
+  const replay = await executionCoordinator.claim({
+    ...scope,
+    internalMessageId: message.id,
+    canonicalComparisonHash,
+    approval: persistedApproval.approval,
+  });
+  assert.equal(replay.status, "PENDING_OR_TERMINAL");
+  const afterClaim = await administration.status({
+    companyId: scope.companyId,
+    assistantId: scope.assistantId,
+    conversationId: scope.conversationId,
+    approvalFingerprint: armed.approvalFingerprint,
+  });
+  assert.equal(afterClaim.status, "CLAIMED");
+  assert.ok(afterClaim.internalMessageIdFingerprint);
+  await assert.rejects(
+    () =>
+      administration.cancel({
+        companyId: scope.companyId,
+        assistantId: scope.assistantId,
+        conversationId: scope.conversationId,
+        approvalFingerprint: armed.approvalFingerprint,
+      }),
+    /CANCEL_NOT_ARMED/,
+  );
 });

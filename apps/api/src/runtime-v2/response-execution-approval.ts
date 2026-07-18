@@ -24,6 +24,7 @@ export type RuntimeV2ResponseExecutionApproval = {
   allowedCategory: "businessHours";
   allowedAuthority: "OFFICIAL_CONTEXT";
   expiresAt: string;
+  createdAt?: string;
   maxUses: 1;
   status: "ARMED" | "CLAIMED" | "CONSUMED" | "CANCELLED" | "EXPIRED";
   claimedAt: string | null;
@@ -32,6 +33,10 @@ export type RuntimeV2ResponseExecutionApproval = {
   internalMessageId: string | null;
   creationFingerprint: string;
   operatorPurpose: string;
+  securityRulesFingerprint?: string | null;
+  securityRulesStatus?: "ALLOWED" | "NO_ACTIVE_RULES";
+  officialContextFingerprint?: string | null;
+  officialContextStatus?: "AVAILABLE";
   redactionApplied: true;
 };
 
@@ -51,6 +56,10 @@ export function createRuntimeV2ResponseExecutionApproval(input: {
   canonicalVersion: string;
   expiresAt: Date;
   operatorPurpose: string;
+  securityRulesFingerprint?: string | null;
+  securityRulesStatus?: "ALLOWED" | "NO_ACTIVE_RULES";
+  officialContextFingerprint?: string | null;
+  officialContextStatus?: "AVAILABLE";
   now?: Date;
 }): RuntimeV2ResponseExecutionApproval {
   const now = input.now ?? new Date();
@@ -71,6 +80,7 @@ export function createRuntimeV2ResponseExecutionApproval(input: {
     allowedCategory: "businessHours",
     allowedAuthority: "OFFICIAL_CONTEXT",
     expiresAt: input.expiresAt.toISOString(),
+    createdAt: now.toISOString(),
     maxUses: 1,
     status: "ARMED",
     claimedAt: null,
@@ -81,6 +91,18 @@ export function createRuntimeV2ResponseExecutionApproval(input: {
       `${approvalId}:${input.companyId}:${input.assistantId}:${input.conversationId}:${input.expectedCanonicalComparisonHash}`,
     ),
     operatorPurpose: input.operatorPurpose.slice(0, 120),
+    ...(input.securityRulesFingerprint !== undefined
+      ? { securityRulesFingerprint: input.securityRulesFingerprint }
+      : {}),
+    ...(input.securityRulesStatus !== undefined
+      ? { securityRulesStatus: input.securityRulesStatus }
+      : {}),
+    ...(input.officialContextFingerprint !== undefined
+      ? { officialContextFingerprint: input.officialContextFingerprint }
+      : {}),
+    ...(input.officialContextStatus !== undefined
+      ? { officialContextStatus: input.officialContextStatus }
+      : {}),
     redactionApplied: true,
   };
 }

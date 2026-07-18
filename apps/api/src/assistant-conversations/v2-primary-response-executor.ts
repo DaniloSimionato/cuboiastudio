@@ -20,6 +20,11 @@ import type {
 } from "../prompt-compiler/prompt-compiler.service";
 import type { RuntimeV2ResponseExecutionApproval } from "../runtime-v2/response-execution-approval";
 import type { ResponseExecutionTurn } from "./response-execution-envelope";
+import {
+  evaluateV2PrimarySecurityRules,
+  responseCompliesWithV2PrimarySecurityRules,
+  type V2PrimarySecurityRule,
+} from "./v2-primary-security-gate";
 
 export const V2_PRIMARY_RESPONSE_EXECUTOR = Symbol("V2_PRIMARY_RESPONSE_EXECUTOR");
 
@@ -37,7 +42,7 @@ export type V2PrimaryResponseExecutionContext = {
   >;
   assistant: V2PrimaryAssistantPromptContext;
   behavior?: V2PrimaryBehaviorPromptContext | null;
-  securityRules: Array<{ name: string; ruleType: string; instruction: string }>;
+  securityRules: V2PrimarySecurityRule[];
   officialBusinessContext: OfficialBusinessContext | null;
   recentHistory: UsefulHistoryMessage[];
   model: string | null;
@@ -82,6 +87,7 @@ export type V2PrimaryResponseExecutorResult = {
     providerCallCount: 1;
     toolCallCount: 0;
     officialDataFingerprint: string;
+    securityRulesFingerprint: string | null;
     primaryExecutionNoShadowComparison: true;
   };
 };
@@ -236,6 +242,12 @@ export class RuntimeV2PrimaryResponseExecutor implements V2PrimaryResponseExecut
     if (!context) throw primaryFailure("CONTEXT_REQUIRED");
     assertApprovalAndOwnership(input);
     assertOperationalPreconditions(context);
+    const securityRules = evaluateV2PrimarySecurityRules(context.securityRules, {
+      companyId: input.turn.companyId,
+      assistantId: input.turn.assistantId,
+    });
+    if (!securityRules.allowed)
+      throw primaryFailure(securityRules.blockers[0] ?? "SECURITY_BLOCKED");
     if (input.signal?.aborted) throw primaryFailure("ABORTED");
 
     const currentMessage = context.canonicalInbound.displayContent.trim();
@@ -347,7 +359,8 @@ export class RuntimeV2PrimaryResponseExecutor implements V2PrimaryResponseExecut
       !hasPortugueseSignal(responseText) ||
       !isBusinessHoursOnly(responseText) ||
       hasInternalStructure(responseText) ||
-      !responseUsesOnlyStructuredSchedule(responseText, context.officialBusinessContext!)
+      !responseUsesOnlyStructuredSchedule(responseText, context.officialBusinessContext!) ||
+      !responseCompliesWithV2PrimarySecurityRules({ responseText, evaluation: securityRules })
     ) {
       throw primaryFailure("QUALITY_GATE_BLOCKED");
     }
@@ -369,6 +382,7 @@ export class RuntimeV2PrimaryResponseExecutor implements V2PrimaryResponseExecut
         providerCallCount: 1,
         toolCallCount: 0,
         officialDataFingerprint: officialDataFingerprint.slice(0, 16),
+        securityRulesFingerprint: securityRules.rulesFingerprint,
         primaryExecutionNoShadowComparison: true,
       },
     };

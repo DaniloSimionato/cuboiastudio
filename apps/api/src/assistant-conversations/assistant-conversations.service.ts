@@ -4049,6 +4049,9 @@ export class AssistantConversationsService {
             },
             behavior: assistant.behavior,
             securityRules: activeSecurityRules.map((rule) => ({
+              id: rule.id,
+              companyId: rule.companyId,
+              assistantId: rule.assistantId,
               name: rule.name,
               ruleType: rule.ruleType,
               instruction: rule.instruction,

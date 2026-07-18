@@ -155,6 +155,30 @@ export class RuntimeV2ResponseExecutionCoordinator {
     );
   }
 
+  /** Cancellation is deliberately available only before any single-use claim. */
+  async cancel(input: ResponseExecutionScope & { approvalFingerprint: string }): Promise<boolean> {
+    const current = await this.dependencies.store.load(input);
+    if (
+      !current ||
+      !sameScope(current, input) ||
+      current.owner !== "V1_OWNED" ||
+      current.terminalStatus ||
+      current.approval.status !== "ARMED" ||
+      current.approval.creationFingerprint.slice(0, 16) !== input.approvalFingerprint ||
+      Date.parse(current.approval.expiresAt) <= Date.now()
+    ) {
+      return false;
+    }
+    return this.dependencies.store.compareAndSet({
+      expectedRevision: current.revision,
+      next: next(current, {
+        owner: "TERMINAL_BLOCKED",
+        terminalStatus: "TERMINAL_BLOCKED",
+        approval: { ...current.approval, status: "CANCELLED" },
+      }),
+    });
+  }
+
   async approveV2Candidate(
     input: ResponseExecutionScope & { generationId: string },
   ): Promise<boolean> {
