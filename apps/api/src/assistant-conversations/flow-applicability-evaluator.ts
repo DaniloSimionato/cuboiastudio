@@ -5,7 +5,30 @@ import { flowIntentKeyForFlow, scoreFlowCandidates } from "../intent-router/inte
 export type FlowConfigurationStatus = "FLOW_NOT_CONFIGURED" | "ACTIVE_FLOWS_PRESENT";
 export type FlowEvaluationStatus =
   "NO_MATCH" | "MATCHED_STANDARD_COMPATIBLE" | "MATCHED_BLOCKS_V2" | "INDETERMINATE";
-export type V2FlowCompatibility = "ALLOWED" | "BLOCKED";
+export type V2FlowCompatibility = "ALLOWED" | "ALLOWED_WITH_FLOW_CONTEXT" | "BLOCKED";
+
+/**
+ * Ephemeral, declarative-only input for the first controlled V2 primary
+ * response. It is never persisted in an approval; the approval retains only
+ * the fingerprints that bind this context to a future inbound turn.
+ */
+export type CompatibleFlowExecutionContext = {
+  flowFingerprint: string;
+  flowVersionFingerprint: string;
+  matchType: "KEYWORD_SCORED";
+  category: "businessHours";
+  declarativeInstructionFingerprint: string | null;
+  declarativeInstructions: string | null;
+  factualAuthorityType: "OFFICIAL_CONTEXT";
+  hasFixedMessage: false;
+  requiresHuman: false;
+  handoffRequired: false;
+  toolRequired: false;
+  actionRequired: false;
+  autoRespondAllowed: true;
+  compatibilityStatus: "STANDARD_COMPATIBLE";
+  redactionApplied: true;
+};
 
 export type FlowApplicabilityEvaluation = {
   flowConfigurationStatus: FlowConfigurationStatus;
@@ -13,7 +36,11 @@ export type FlowApplicabilityEvaluation = {
   flowEvaluationStatus: FlowEvaluationStatus;
   matchedFlowCount: number;
   selectedFlowFingerprint: string | null;
+  selectedFlowVersionFingerprint: string | null;
   selectedFlowType: string | null;
+  flowMatchType: "KEYWORD_SCORED" | null;
+  declarativeContextFingerprint: string | null;
+  compatibleFlowContext: CompatibleFlowExecutionContext | null;
   fixedMessageApplicable: boolean;
   requiresHuman: boolean;
   autoRespond: boolean | null;
@@ -24,7 +51,8 @@ export type FlowApplicabilityEvaluation = {
   v2Compatibility: V2FlowCompatibility;
   blockerCode:
     | "FLOW_APPLICABLE_BLOCKS_V2"
-    | "FLOW_APPLICABLE_STANDARD_COMPATIBLE"
+    | "FLOW_DECLARATIVE_CONTEXT_UNSUPPORTED"
+    | "FLOW_MATCH_AMBIGUOUS"
     | "FLOW_EVALUATION_INDETERMINATE"
     | null;
   redactionApplied: true;
@@ -42,6 +70,89 @@ function hasConfiguredHandoff(flow: AssistantFlow): boolean {
   return Boolean(flow.handoffTeamId?.trim() || flow.handoffTeamName?.trim());
 }
 
+function flowVersionFingerprint(flow: AssistantFlow): string {
+  return fingerprint({
+    id: flow.id,
+    updatedAt: flow.updatedAt?.toISOString?.() ?? String(flow.updatedAt ?? ""),
+    priority: flow.priority,
+    triggerKeywords: flow.triggerKeywords,
+    triggerDescription: flow.triggerDescription,
+    triggerExamples: flow.triggerExamples,
+    flowInstructions: flow.flowInstructions,
+    knowledgeScope: flow.knowledgeScope,
+    finalAction: flow.finalAction,
+    fixedMessage: flow.fixedMessage,
+    requiresHuman: flow.requiresHuman,
+    autoRespond: flow.autoRespond,
+    allowedToolSlugs: flow.allowedToolSlugs,
+    handoffTeamId: flow.handoffTeamId,
+    handoffTeamName: flow.handoffTeamName,
+    toolContext: flow.toolContext,
+  });
+}
+
+function isSafeDeclarativeInstruction(instruction: string): boolean {
+  if (instruction.length > 1200) return false;
+  return !/\b(?:ferramenta|tool|ação|acao|handoff|humano|atendente|encaminh|transfer|agend|calend[aá]rio|r\$|preço|preco|valor|estoque|garantia|prazo|documento|rag|base de conhecimento|mem[oó]ria|embedding|\b\d{1,2}:\d{2}\b)\b/i.test(
+    instruction,
+  );
+}
+
+function createCompatibleFlowExecutionContext(
+  flow: AssistantFlow,
+  matchType: "KEYWORD_SCORED",
+): CompatibleFlowExecutionContext | null {
+  const declarativeInstructions = flow.flowInstructions?.trim() || null;
+  if (
+    flowIntentKeyForFlow(flow) !== "company_information" ||
+    Boolean(flow.knowledgeScope?.trim()) ||
+    (declarativeInstructions !== null && !isSafeDeclarativeInstruction(declarativeInstructions))
+  ) {
+    return null;
+  }
+  return {
+    flowFingerprint: fingerprint(flow.id),
+    flowVersionFingerprint: flowVersionFingerprint(flow),
+    matchType,
+    category: "businessHours",
+    declarativeInstructionFingerprint: declarativeInstructions
+      ? fingerprint(declarativeInstructions)
+      : null,
+    declarativeInstructions,
+    factualAuthorityType: "OFFICIAL_CONTEXT",
+    hasFixedMessage: false,
+    requiresHuman: false,
+    handoffRequired: false,
+    toolRequired: false,
+    actionRequired: false,
+    autoRespondAllowed: true,
+    compatibilityStatus: "STANDARD_COMPATIBLE",
+    redactionApplied: true,
+  };
+}
+
+export function isCompatibleFlowExecutionContext(value: CompatibleFlowExecutionContext): boolean {
+  return (
+    value.matchType === "KEYWORD_SCORED" &&
+    value.category === "businessHours" &&
+    value.factualAuthorityType === "OFFICIAL_CONTEXT" &&
+    value.hasFixedMessage === false &&
+    value.requiresHuman === false &&
+    value.handoffRequired === false &&
+    value.toolRequired === false &&
+    value.actionRequired === false &&
+    value.autoRespondAllowed === true &&
+    value.compatibilityStatus === "STANDARD_COMPATIBLE" &&
+    value.redactionApplied === true &&
+    Boolean(value.flowFingerprint) &&
+    Boolean(value.flowVersionFingerprint) &&
+    (value.declarativeInstructions === null ||
+      (Boolean(value.declarativeInstructionFingerprint) &&
+        value.declarativeInstructionFingerprint === fingerprint(value.declarativeInstructions) &&
+        isSafeDeclarativeInstruction(value.declarativeInstructions)))
+  );
+}
+
 function configurationFingerprint(flows: AssistantFlow[]): string {
   return fingerprint(
     flows
@@ -53,6 +164,8 @@ function configurationFingerprint(flows: AssistantFlow[]): string {
         triggerKeywords: flow.triggerKeywords,
         triggerDescription: flow.triggerDescription,
         triggerExamples: flow.triggerExamples,
+        flowInstructions: flow.flowInstructions,
+        knowledgeScope: flow.knowledgeScope,
         finalAction: flow.finalAction,
         fixedMessage: flow.fixedMessage,
         requiresHuman: flow.requiresHuman,
@@ -78,7 +191,11 @@ function noMatch(input: {
     flowEvaluationStatus: input.status,
     matchedFlowCount: 0,
     selectedFlowFingerprint: null,
+    selectedFlowVersionFingerprint: null,
     selectedFlowType: null,
+    flowMatchType: null,
+    declarativeContextFingerprint: null,
+    compatibleFlowContext: null,
     fixedMessageApplicable: false,
     requiresHuman: false,
     autoRespond: null,
@@ -110,7 +227,11 @@ export function evaluateFlowApplicability(input: {
       flowEvaluationStatus: "NO_MATCH",
       matchedFlowCount: 0,
       selectedFlowFingerprint: null,
+      selectedFlowVersionFingerprint: null,
       selectedFlowType: null,
+      flowMatchType: null,
+      declarativeContextFingerprint: null,
+      compatibleFlowContext: null,
       fixedMessageApplicable: false,
       requiresHuman: false,
       autoRespond: null,
@@ -154,6 +275,20 @@ export function evaluateFlowApplicability(input: {
     autoRespond !== false &&
     !toolRequired &&
     !handoffRequired;
+  const equallyRanked = matched.filter(
+    (candidate) => candidate.score === selected.score && candidate.priority === selected.priority,
+  );
+  if (equallyRanked.length > 1) {
+    return {
+      ...noMatch({ status: "INDETERMINATE", activeFlows, flowConfigurationFingerprint }),
+      matchedFlowCount: matched.length,
+      blockerCode: "FLOW_MATCH_AMBIGUOUS",
+    };
+  }
+  const compatibleFlowContext = standardCompatible
+    ? createCompatibleFlowExecutionContext(selectedFlow, "KEYWORD_SCORED")
+    : null;
+  const flowBlockedByUnsupportedContext = standardCompatible && !compatibleFlowContext;
 
   return {
     flowConfigurationStatus: "ACTIVE_FLOWS_PRESENT",
@@ -161,7 +296,11 @@ export function evaluateFlowApplicability(input: {
     flowEvaluationStatus: standardCompatible ? "MATCHED_STANDARD_COMPATIBLE" : "MATCHED_BLOCKS_V2",
     matchedFlowCount: matched.length,
     selectedFlowFingerprint: fingerprint(selectedFlow.id),
+    selectedFlowVersionFingerprint: flowVersionFingerprint(selectedFlow),
     selectedFlowType: flowIntentKeyForFlow(selectedFlow),
+    flowMatchType: "KEYWORD_SCORED",
+    declarativeContextFingerprint: compatibleFlowContext?.declarativeInstructionFingerprint ?? null,
+    compatibleFlowContext,
     fixedMessageApplicable,
     requiresHuman,
     autoRespond,
@@ -169,11 +308,12 @@ export function evaluateFlowApplicability(input: {
     handoffRequired,
     categoryOverride: flowIntentKeyForFlow(selectedFlow),
     flowConfigurationFingerprint,
-    // The first primary outbound intentionally permits only no applicable flow.
-    v2Compatibility: "BLOCKED",
-    blockerCode: standardCompatible
-      ? "FLOW_APPLICABLE_STANDARD_COMPATIBLE"
-      : "FLOW_APPLICABLE_BLOCKS_V2",
+    v2Compatibility: compatibleFlowContext ? "ALLOWED_WITH_FLOW_CONTEXT" : "BLOCKED",
+    blockerCode: flowBlockedByUnsupportedContext
+      ? "FLOW_DECLARATIVE_CONTEXT_UNSUPPORTED"
+      : standardCompatible
+        ? null
+        : "FLOW_APPLICABLE_BLOCKS_V2",
     redactionApplied: true,
   };
 }

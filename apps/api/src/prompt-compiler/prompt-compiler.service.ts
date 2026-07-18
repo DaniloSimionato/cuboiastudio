@@ -225,6 +225,8 @@ export type PromptCompilerInput = {
   isSecondAttempt?: boolean;
   triageState?: TriageState | null;
   triageFlowContext?: TriageFlowContext | null;
+  /** A validated, declarative-only flow fragment for controlled V2 execution. */
+  controlledFlowInstruction?: string | null;
   currentTurnPriorityInstruction?: string | null;
 };
 
@@ -625,6 +627,13 @@ export class PromptCompilerService {
       messages.push({
         role: "system",
         content: `INSTRUÇÕES DO FLUXO ATUAL "${flow.name}":\n${flow.flowInstructions.trim()}\nExecute o objetivo do fluxo, mas mantenha a POLÍTICA DE CONVERSA: resposta progressiva, uma pergunta principal e somente os fatos necessários para o próximo passo.`,
+      });
+    }
+
+    if (input.controlledFlowInstruction?.trim()) {
+      messages.push({
+        role: "system",
+        content: `INSTRUÇÕES DECLARATIVAS DO FLUXO VALIDADO:\n${input.controlledFlowInstruction.trim()}\nSiga estas instruções somente quando forem compatíveis com as regras de segurança e com os fatos oficiais estruturados.`,
       });
     }
 

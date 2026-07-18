@@ -240,22 +240,31 @@ o ownership, o schedule estruturado, timezone e ausência de conflito antes de
 chamar o provider oficial via DI. Ele usa o mesmo `RuntimeV2CandidateResponseGenerator`,
 `ResponsePlan`, política de autoridade, timeout, `AbortSignal` e redaction do
 Shadow, mas fornece somente contexto oficial de horário. Não fornece RAG,
-memória factual, ferramentas, handoff, flow ou calendário. Antes de uma approval
-ser reclamada, o `FlowApplicabilityEvaluator` reutiliza a etapa determinística de
-seleção V1 sem provider nem side effect. Flows inexistentes ou ativos sem match
-determinístico e sem fallback semântico podem prosseguir; um match aplicável continua bloqueando o primeiro
-outbound V2, mesmo quando seria compatível com `STANDARD`. Quando o V1 precisaria
-do fallback semântico por IA, a avaliação é `INDETERMINATE` e bloqueia em
-fail-closed. O fingerprint redigido do conjunto de flows é registrado na approval,
-revalidado antes do claim e novamente após o claim; uma mudança nesse intervalo
-segue para fallback V1 antes de qualquer provider V2.
+memória factual, ferramentas, handoff, calendário ou contexto factual vindo de
+flow. Antes de uma approval ser reclamada, o `FlowApplicabilityEvaluator` reutiliza
+a etapa determinística de seleção V1 sem provider nem side effect. Flows inexistentes
+ou ativos sem match determinístico e sem fallback semântico podem prosseguir. O
+único match aplicável elegível é `MATCHED_STANDARD_COMPATIBLE`: um vencedor único,
+ativo e estável, de informações da empresa, sem resposta fixa, humano, handoff,
+ferramenta, ação, `autoRespond=false`, RAG/memória ou configuração desconhecida.
+Ele pode fornecer apenas instruções declarativas validadas; horários e outros fatos
+continuam exclusivamente no contexto estruturado oficial. Qualquer outro match,
+empate, contexto semântico, configuração desconhecida ou instrução factual/operacional
+bloqueia fail-closed. A approval guarda somente fingerprints do conjunto, vencedor,
+versão e contexto declarativo — nunca o conteúdo do flow — e o router revalida tudo
+antes do claim, depois do claim e novamente antes de entregar a candidata ao tail.
+Uma mudança antes do claim segue V1 normal; uma mudança após o claim segue para
+fallback V1 antes do provider ou, se ocorrer durante a geração, antes de qualquer
+persistência ou sender V2.
 
 O prompt primário aceita somente a mensagem canônica, até seis referências da
-mesma conversa, comportamento permitido e o contexto estruturado oficial. O
-quality gate bloqueia resposta vazia, estrutura interna, idioma/escopo impróprio,
-categorias comerciais não autorizadas e horários que não correspondam ao schedule
-oficial. Falha, timeout, abort, autoridade ausente/conflitante ou candidata
-bloqueada ainda ocorrem antes do sender e levam exclusivamente ao fallback V1.
+mesma conversa, comportamento permitido, o contexto estruturado oficial e, quando
+vinculado à approval, o fragmento declarativo validado do flow vencedor. O quality
+gate bloqueia resposta vazia, estrutura interna, idioma/escopo impróprio,
+categorias comerciais não autorizadas, efeitos operacionais e horários que não
+correspondam ao schedule oficial. Falha, timeout, abort, autoridade ausente/conflitante
+ou candidata bloqueada ainda ocorrem antes do sender e levam exclusivamente ao
+fallback V1.
 O executor retorna apenas o `ResponseExecutionEnvelope` V2; ele não persiste a
 mensagem assistant, não chama o sender, não atualiza `externalMessageId` e não
 consome a approval.

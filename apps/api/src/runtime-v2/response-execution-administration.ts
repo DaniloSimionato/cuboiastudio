@@ -62,11 +62,15 @@ export type RuntimeV2ResponseExecutionPreflightResult = {
     "NO_MATCH" | "MATCHED_STANDARD_COMPATIBLE" | "MATCHED_BLOCKS_V2" | "INDETERMINATE";
   matchedFlowCount: number;
   selectedFlowFingerprint: string | null;
-  v2FlowCompatibility: "ALLOWED" | "BLOCKED";
+  selectedFlowVersionFingerprint: string | null;
+  flowMatchType: "KEYWORD_SCORED" | null;
+  declarativeContextFingerprint: string | null;
+  v2FlowCompatibility: "ALLOWED" | "ALLOWED_WITH_FLOW_CONTEXT" | "BLOCKED";
   flowConfigurationFingerprint: string;
   flowBlockerCode:
     | "FLOW_APPLICABLE_BLOCKS_V2"
-    | "FLOW_APPLICABLE_STANDARD_COMPATIBLE"
+    | "FLOW_DECLARATIVE_CONTEXT_UNSUPPORTED"
+    | "FLOW_MATCH_AMBIGUOUS"
     | "FLOW_EVALUATION_INDETERMINATE"
     | null;
   executionConfiguration: {
@@ -435,6 +439,9 @@ export class RuntimeV2ResponseExecutionAdministrationService {
       flowEvaluationStatus: flowEvaluation.flowEvaluationStatus,
       matchedFlowCount: flowEvaluation.matchedFlowCount,
       selectedFlowFingerprint: flowEvaluation.selectedFlowFingerprint,
+      selectedFlowVersionFingerprint: flowEvaluation.selectedFlowVersionFingerprint,
+      flowMatchType: flowEvaluation.flowMatchType,
+      declarativeContextFingerprint: flowEvaluation.declarativeContextFingerprint,
       v2FlowCompatibility: flowEvaluation.v2Compatibility,
       flowConfigurationFingerprint: flowEvaluation.flowConfigurationFingerprint,
       flowBlockerCode: flowEvaluation.blockerCode,
@@ -478,6 +485,14 @@ export class RuntimeV2ResponseExecutionAdministrationService {
       officialContextFingerprint: preflight.officialContextFingerprint,
       officialContextStatus: "AVAILABLE",
       flowConfigurationFingerprint: preflight.flowConfigurationFingerprint,
+      expectedFlowFingerprint: preflight.selectedFlowFingerprint,
+      expectedFlowVersionFingerprint: preflight.selectedFlowVersionFingerprint,
+      expectedFlowMatchType: preflight.flowMatchType,
+      flowCompatibility:
+        preflight.v2FlowCompatibility === "ALLOWED_WITH_FLOW_CONTEXT"
+          ? "STANDARD_COMPATIBLE"
+          : null,
+      declarativeContextFingerprint: preflight.declarativeContextFingerprint,
       now: this.now(),
     });
     await this.dependencies.responseExecutionStore.arm({

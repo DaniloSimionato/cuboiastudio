@@ -11,6 +11,8 @@ function flow(overrides = {}) {
     triggerKeywords: "[]",
     triggerDescription: null,
     triggerExamples: null,
+    flowInstructions: null,
+    knowledgeScope: null,
     finalAction: "respond",
     fixedMessage: null,
     requiresHuman: false,
@@ -39,15 +41,26 @@ test("flow evaluator permits no configured flow or configured flows without dete
   assert.equal(JSON.stringify(noMatch).includes("Qual é o horário?"), false);
 });
 
-test("flow evaluator blocks every deterministic flow match for the first V2 outbound", () => {
+test("flow evaluator exposes only a safe declarative context for a compatible deterministic match", () => {
   const standard = evaluateFlowApplicability({
     message: "Qual é o horário de atendimento?",
-    flows: [flow({ triggerKeywords: '["horário"]' })],
+    flows: [
+      flow({
+        triggerKeywords: '["horário"]',
+        flowInstructions: "Responda de forma objetiva e cordial.",
+      }),
+    ],
   });
   assert.equal(standard.flowEvaluationStatus, "MATCHED_STANDARD_COMPATIBLE");
-  assert.equal(standard.v2Compatibility, "BLOCKED");
-  assert.equal(standard.blockerCode, "FLOW_APPLICABLE_STANDARD_COMPATIBLE");
+  assert.equal(standard.v2Compatibility, "ALLOWED_WITH_FLOW_CONTEXT");
+  assert.equal(standard.blockerCode, null);
   assert.equal(standard.fixedMessageApplicable, false);
+  assert.equal(standard.compatibleFlowContext.compatibilityStatus, "STANDARD_COMPATIBLE");
+  assert.equal(
+    standard.compatibleFlowContext.declarativeInstructions,
+    "Responda de forma objetiva e cordial.",
+  );
+  assert.equal(JSON.stringify(standard).includes("Qual é o horário?"), false);
 
   for (const overrides of [
     { finalAction: "fixed_message", fixedMessage: "fixed" },
@@ -64,6 +77,39 @@ test("flow evaluator blocks every deterministic flow match for the first V2 outb
     assert.equal(blocked.v2Compatibility, "BLOCKED");
     assert.equal(blocked.blockerCode, "FLOW_APPLICABLE_BLOCKS_V2");
   }
+});
+
+test("flow evaluator blocks non-declarative, factual, ambiguous, and knowledge-backed matches", () => {
+  for (const overrides of [
+    { flowInstructions: "Informe que abrimos às 08:30." },
+    { flowInstructions: "Use a ferramenta de agenda antes de responder." },
+    { knowledgeScope: '["knowledge-1"]' },
+  ]) {
+    const blocked = evaluateFlowApplicability({
+      message: "Qual é o horário de atendimento?",
+      flows: [flow({ triggerKeywords: '["horário"]', ...overrides })],
+    });
+    assert.equal(blocked.v2Compatibility, "BLOCKED");
+    assert.equal(blocked.blockerCode, "FLOW_DECLARATIVE_CONTEXT_UNSUPPORTED");
+    assert.equal(blocked.compatibleFlowContext, null);
+  }
+
+  const incompatibleCategory = evaluateFlowApplicability({
+    message: "Preciso de conserto.",
+    flows: [flow({ name: "Fluxo técnico", triggerKeywords: '["conserto"]' })],
+  });
+  assert.equal(incompatibleCategory.v2Compatibility, "BLOCKED");
+  assert.equal(incompatibleCategory.blockerCode, "FLOW_DECLARATIVE_CONTEXT_UNSUPPORTED");
+
+  const ambiguous = evaluateFlowApplicability({
+    message: "Qual é o horário de atendimento?",
+    flows: [
+      flow({ id: "flow-a", triggerKeywords: '["horário"]', priority: 10 }),
+      flow({ id: "flow-b", triggerKeywords: '["horário"]', priority: 10 }),
+    ],
+  });
+  assert.equal(ambiguous.flowEvaluationStatus, "INDETERMINATE");
+  assert.equal(ambiguous.blockerCode, "FLOW_MATCH_AMBIGUOUS");
 });
 
 test("flow evaluator remains fail-closed when V1 would need semantic routing", () => {

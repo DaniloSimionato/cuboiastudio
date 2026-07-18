@@ -86,7 +86,8 @@ function isEligibleForV2(input: ResponseGenerationRouterInput): boolean {
     input.v2Eligibility?.standardEligible === true &&
     input.v2Eligibility.category === "businessHours" &&
     input.v2Eligibility.authority === "OFFICIAL_CONTEXT" &&
-    input.v2Eligibility.flowEvaluation?.v2Compatibility === "ALLOWED"
+    (input.v2Eligibility.flowEvaluation?.v2Compatibility === "ALLOWED" ||
+      input.v2Eligibility.flowEvaluation?.v2Compatibility === "ALLOWED_WITH_FLOW_CONTEXT")
   );
 }
 
@@ -125,6 +126,12 @@ export class ResponseGenerationRouter {
       approval.allowedCategory !== "businessHours" ||
       approval.allowedAuthority !== "OFFICIAL_CONTEXT" ||
       approval.flowConfigurationFingerprint !== currentFlow.flowConfigurationFingerprint ||
+      approval.expectedFlowFingerprint !== currentFlow.selectedFlowFingerprint ||
+      approval.expectedFlowVersionFingerprint !== currentFlow.selectedFlowVersionFingerprint ||
+      approval.expectedFlowMatchType !== currentFlow.flowMatchType ||
+      approval.declarativeContextFingerprint !== currentFlow.declarativeContextFingerprint ||
+      (approval.flowCompatibility === "STANDARD_COMPATIBLE") !==
+        (currentFlow.v2Compatibility === "ALLOWED_WITH_FLOW_CONTEXT") ||
       Date.parse(approval.expiresAt) <= Date.now()
     ) {
       return this.executeV1Normal(input);
@@ -167,6 +174,14 @@ export class ResponseGenerationRouter {
         !generated.outboundAllowed
       ) {
         throw new Error("V2_CANDIDATE_BLOCKED");
+      }
+      const flowBeforeTail = await this.currentFlowEvaluation(input);
+      if (!this.isCurrentFlowEligible(input, flowBeforeTail)) {
+        return this.executeV1Fallback(
+          input,
+          claimed.generationId,
+          "FLOW_CONFIGURATION_CHANGED_BEFORE_TAIL",
+        );
       }
       if (
         !(await this.dependencies.coordinator.approveV2Candidate({
@@ -219,9 +234,16 @@ export class ResponseGenerationRouter {
     evaluation: FlowApplicabilityEvaluation | null,
   ): evaluation is FlowApplicabilityEvaluation {
     return (
-      evaluation?.v2Compatibility === "ALLOWED" &&
+      (evaluation?.v2Compatibility === "ALLOWED" ||
+        evaluation?.v2Compatibility === "ALLOWED_WITH_FLOW_CONTEXT") &&
       evaluation.flowConfigurationFingerprint ===
-        input.v2Eligibility?.flowEvaluation?.flowConfigurationFingerprint
+        input.v2Eligibility?.flowEvaluation?.flowConfigurationFingerprint &&
+      evaluation.selectedFlowFingerprint ===
+        input.v2Eligibility?.flowEvaluation?.selectedFlowFingerprint &&
+      evaluation.selectedFlowVersionFingerprint ===
+        input.v2Eligibility?.flowEvaluation?.selectedFlowVersionFingerprint &&
+      evaluation.declarativeContextFingerprint ===
+        input.v2Eligibility?.flowEvaluation?.declarativeContextFingerprint
     );
   }
 

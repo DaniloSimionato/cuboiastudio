@@ -23,6 +23,8 @@ function flow(overrides = {}) {
     triggerKeywords: "[]",
     triggerDescription: null,
     triggerExamples: null,
+    flowInstructions: null,
+    knowledgeScope: null,
     finalAction: "respond",
     fixedMessage: null,
     requiresHuman: false,
@@ -203,7 +205,14 @@ test("preflight bloqueia escopo operacional, contexto e regras incompatíveis", 
     [{ conversation: { aiActive: false } }, "AI_INACTIVE"],
     [{ conversation: { pausedByHuman: true } }, "HUMAN_ACTIVE"],
     [{ conversation: { status: "INACTIVE" } }, "CONVERSATION_NOT_ACTIVE"],
-    [{ flows: [flow({ triggerKeywords: '["horário"]' })] }, "FLOW_APPLICABLE_STANDARD_COMPATIBLE"],
+    [
+      {
+        flows: [
+          flow({ triggerKeywords: '["horário"]', flowInstructions: "Informe que abre às 08:30." }),
+        ],
+      },
+      "FLOW_DECLARATIVE_CONTEXT_UNSUPPORTED",
+    ],
     [{ enabledToolCount: 1 }, "TOOL_CONFIGURATION_PRESENT"],
     [{ assistant: { weeklySchedule: {} } }, "OFFICIAL_BUSINESS_HOURS_UNAVAILABLE"],
     [{}, "TURN_NOT_STRICT_BUSINESS_HOURS", { message: "Qual é o preço?" }],
@@ -218,6 +227,47 @@ test("preflight bloqueia escopo operacional, contexto e regras incompatíveis", 
     assert.equal(result.preflightStatus, "BLOCKED");
     assert.ok(result.blockers.includes(blocker));
   }
+});
+
+test("preflight permits a matched STANDARD-compatible flow without persisting its instructions", async () => {
+  const { administration } = createAdministration({
+    flows: [
+      flow({
+        triggerKeywords: '["horário"]',
+        flowInstructions: "Responda de forma objetiva e cordial.",
+      }),
+    ],
+  });
+  const result = await administration.preflight(preflightInput());
+  assert.equal(result.preflightStatus, "APPROVED");
+  assert.equal(result.flowEvaluationStatus, "MATCHED_STANDARD_COMPATIBLE");
+  assert.equal(result.v2FlowCompatibility, "ALLOWED_WITH_FLOW_CONTEXT");
+  assert.ok(result.selectedFlowFingerprint);
+  assert.ok(result.selectedFlowVersionFingerprint);
+  assert.ok(result.declarativeContextFingerprint);
+  assert.equal(JSON.stringify(result).includes("Responda de forma objetiva"), false);
+});
+
+test("arm binds only compatible-flow fingerprints to the single-use approval", async () => {
+  const { administration, responseExecutionStore } = createAdministration({
+    flows: [
+      flow({
+        triggerKeywords: '["horário"]',
+        flowInstructions: "Responda de forma objetiva e cordial.",
+      }),
+    ],
+  });
+  await administration.arm({
+    ...preflightInput(),
+    durationMinutes: 5,
+    operatorPurpose: "armamento local com flow compatível",
+  });
+  const record = await responseExecutionStore.load({ ...scope, contextVersion: 1 });
+  assert.equal(record?.approval.flowCompatibility, "STANDARD_COMPATIBLE");
+  assert.ok(record?.approval.expectedFlowFingerprint);
+  assert.ok(record?.approval.expectedFlowVersionFingerprint);
+  assert.ok(record?.approval.declarativeContextFingerprint);
+  assert.equal(JSON.stringify(record?.approval).includes("Responda de forma objetiva"), false);
 });
 
 test("preflight permite flows configurados sem match e bloqueia avaliação semântica inconclusiva", async () => {

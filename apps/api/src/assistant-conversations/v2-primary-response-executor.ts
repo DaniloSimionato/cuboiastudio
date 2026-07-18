@@ -21,6 +21,10 @@ import type {
 import type { RuntimeV2ResponseExecutionApproval } from "../runtime-v2/response-execution-approval";
 import type { ResponseExecutionTurn } from "./response-execution-envelope";
 import {
+  isCompatibleFlowExecutionContext,
+  type CompatibleFlowExecutionContext,
+} from "./flow-applicability-evaluator";
+import {
   evaluateV2PrimarySecurityRules,
   responseCompliesWithV2PrimarySecurityRules,
   type V2PrimarySecurityRule,
@@ -47,6 +51,7 @@ export type V2PrimaryResponseExecutionContext = {
   recentHistory: UsefulHistoryMessage[];
   model: string | null;
   temperature: number | undefined;
+  compatibleFlowContext?: CompatibleFlowExecutionContext | null;
   operational: {
     source: "chatwoot" | "manual" | "tests";
     aiActive: boolean;
@@ -89,6 +94,7 @@ export type V2PrimaryResponseExecutorResult = {
     officialDataFingerprint: string;
     securityRulesFingerprint: string | null;
     primaryExecutionNoShadowComparison: true;
+    compatibleFlowContextFingerprint?: string;
   };
 };
 
@@ -205,6 +211,35 @@ function assertOperationalPreconditions(context: V2PrimaryResponseExecutionConte
   }
 }
 
+function assertCompatibleFlowContext(context: V2PrimaryResponseExecutionContext): void {
+  if (
+    context.compatibleFlowContext &&
+    !isCompatibleFlowExecutionContext(context.compatibleFlowContext)
+  ) {
+    throw primaryFailure("FLOW_CONTEXT_INVALID");
+  }
+}
+
+function assertApprovedFlowContext(input: V2PrimaryResponseExecutorInput): void {
+  const context = input.context;
+  if (!context?.compatibleFlowContext) {
+    if (input.approval.flowCompatibility === "STANDARD_COMPATIBLE") {
+      throw primaryFailure("FLOW_CONTEXT_REQUIRED");
+    }
+    return;
+  }
+  const flow = context.compatibleFlowContext;
+  if (
+    input.approval.expectedFlowFingerprint !== flow.flowFingerprint ||
+    input.approval.expectedFlowVersionFingerprint !== flow.flowVersionFingerprint ||
+    input.approval.expectedFlowMatchType !== flow.matchType ||
+    input.approval.flowCompatibility !== flow.compatibilityStatus ||
+    input.approval.declarativeContextFingerprint !== flow.declarativeInstructionFingerprint
+  ) {
+    throw primaryFailure("FLOW_CONTEXT_APPROVAL_MISMATCH");
+  }
+}
+
 function createPrimaryPromptInstruction(): string {
   return [
     "EXECUÇÃO PRIMÁRIA CONTROLADA — ESCOPO ÚNICO:",
@@ -242,6 +277,8 @@ export class RuntimeV2PrimaryResponseExecutor implements V2PrimaryResponseExecut
     if (!context) throw primaryFailure("CONTEXT_REQUIRED");
     assertApprovalAndOwnership(input);
     assertOperationalPreconditions(context);
+    assertCompatibleFlowContext(context);
+    assertApprovedFlowContext(input);
     const securityRules = evaluateV2PrimarySecurityRules(context.securityRules, {
       companyId: input.turn.companyId,
       assistantId: input.turn.assistantId,
@@ -336,6 +373,7 @@ export class RuntimeV2PrimaryResponseExecutor implements V2PrimaryResponseExecut
           calendarContext: null,
           memoryContextBlock: null,
           currentTurnPriorityInstruction: createPrimaryPromptInstruction(),
+          controlledFlowInstruction: context.compatibleFlowContext?.declarativeInstructions ?? null,
         },
         model: context.model,
         temperature: context.temperature,
@@ -384,6 +422,9 @@ export class RuntimeV2PrimaryResponseExecutor implements V2PrimaryResponseExecut
         officialDataFingerprint: officialDataFingerprint.slice(0, 16),
         securityRulesFingerprint: securityRules.rulesFingerprint,
         primaryExecutionNoShadowComparison: true,
+        ...(context.compatibleFlowContext
+          ? { compatibleFlowContextFingerprint: context.compatibleFlowContext.flowFingerprint }
+          : {}),
       },
     };
   }

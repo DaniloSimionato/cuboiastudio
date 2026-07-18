@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { buildOfficialBusinessContext } from "../dist/assistants/official-business-context.js";
 import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
@@ -150,6 +151,99 @@ test("executor primário gera apenas businessHours estruturado com provider fake
     calls[0].messages.some((message) => /EXECUÇÃO PRIMÁRIA CONTROLADA/i.test(message.content)),
     true,
   );
+});
+
+test("executor usa somente o contexto declarativo de flow vinculado à approval", async () => {
+  const declarativeInstructions = "Responda de forma objetiva e cordial.";
+  const compatibleFlowContext = {
+    flowFingerprint: "flow-compatible",
+    flowVersionFingerprint: "flow-version-compatible",
+    matchType: "KEYWORD_SCORED",
+    category: "businessHours",
+    declarativeInstructionFingerprint: createHash("sha256")
+      .update(JSON.stringify(declarativeInstructions))
+      .digest("hex")
+      .slice(0, 16),
+    declarativeInstructions,
+    factualAuthorityType: "OFFICIAL_CONTEXT",
+    hasFixedMessage: false,
+    requiresHuman: false,
+    handoffRequired: false,
+    toolRequired: false,
+    actionRequired: false,
+    autoRespondAllowed: true,
+    compatibilityStatus: "STANDARD_COMPATIBLE",
+    redactionApplied: true,
+  };
+  const calls = [];
+  const result = await executor({
+    async generate(value) {
+      calls.push(value);
+      return {
+        provider: "fake-v2-provider",
+        model: "fake-v2-model",
+        answer: "Atendemos de segunda a sexta, das 09:00 às 18:00.",
+        durationMs: 1,
+      };
+    },
+  }).execute(
+    input({
+      approval: claimedApproval({
+        expectedFlowFingerprint: compatibleFlowContext.flowFingerprint,
+        expectedFlowVersionFingerprint: compatibleFlowContext.flowVersionFingerprint,
+        expectedFlowMatchType: compatibleFlowContext.matchType,
+        flowCompatibility: compatibleFlowContext.compatibilityStatus,
+        declarativeContextFingerprint: compatibleFlowContext.declarativeInstructionFingerprint,
+      }),
+      context: context({ compatibleFlowContext }),
+    }),
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(result.sanitizedTelemetry.compatibleFlowContextFingerprint, "flow-compatible");
+  assert.equal(
+    calls[0].messages.some((message) =>
+      /INSTRUÇÕES DECLARATIVAS DO FLUXO VALIDADO/.test(message.content),
+    ),
+    true,
+  );
+});
+
+test("executor blocks a flow context that differs from the claimed approval before the provider", async () => {
+  let calls = 0;
+  await assert.rejects(
+    () =>
+      executor({
+        async generate() {
+          calls += 1;
+          throw new Error("provider não deveria ser chamado");
+        },
+      }).execute(
+        input({
+          approval: claimedApproval({ flowCompatibility: "STANDARD_COMPATIBLE" }),
+          context: context({
+            compatibleFlowContext: {
+              flowFingerprint: "flow-compatible",
+              flowVersionFingerprint: "flow-version-compatible",
+              matchType: "KEYWORD_SCORED",
+              category: "businessHours",
+              declarativeInstructionFingerprint: null,
+              declarativeInstructions: null,
+              factualAuthorityType: "OFFICIAL_CONTEXT",
+              hasFixedMessage: false,
+              requiresHuman: false,
+              handoffRequired: false,
+              toolRequired: false,
+              actionRequired: false,
+              autoRespondAllowed: true,
+              compatibilityStatus: "STANDARD_COMPATIBLE",
+              redactionApplied: true,
+            },
+          }),
+        }),
+      ),
+    /V2_PRIMARY_FLOW_CONTEXT_APPROVAL_MISMATCH/,
+  );
+  assert.equal(calls, 0);
 });
 
 test("executor bloqueia preconditions, categoria e autoridade antes do provider", async () => {

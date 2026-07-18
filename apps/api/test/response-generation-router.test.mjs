@@ -85,6 +85,17 @@ function approval() {
   });
 }
 
+function compatibleFlowEvaluation() {
+  return {
+    v2Compatibility: "ALLOWED_WITH_FLOW_CONTEXT",
+    flowConfigurationFingerprint: "flow-config-compatible",
+    selectedFlowFingerprint: "flow-compatible",
+    selectedFlowVersionFingerprint: "flow-version-compatible",
+    flowMatchType: "KEYWORD_SCORED",
+    declarativeContextFingerprint: "flow-instructions-compatible",
+  };
+}
+
 function fakeCoordinator(input = {}) {
   const armed = input.approval ?? approval();
   return {
@@ -229,7 +240,7 @@ test("eligible single-use approval claims before V2 fake and suppresses V1", asy
       v1 += 1;
       return v1Response();
     },
-    coordinator: fakeCoordinator({ approval: armed, onClaim: () => claims += 1 }),
+    coordinator: fakeCoordinator({ approval: armed, onClaim: () => (claims += 1) }),
     v2Executor: {
       execute: async () => {
         v2 += 1;
@@ -289,8 +300,12 @@ test("triage and other operationally ineligible turns stay V1 without an approva
   let lookups = 0;
   const router = new ResponseGenerationRouter({
     executeV1: async () => v1Response({ strategy: "TRIAGE" }),
-    coordinator: fakeCoordinator({ onLoad: () => lookups += 1 }),
-    v2Executor: { execute: async () => { throw new Error("must not execute"); } },
+    coordinator: fakeCoordinator({ onLoad: () => (lookups += 1) }),
+    v2Executor: {
+      execute: async () => {
+        throw new Error("must not execute");
+      },
+    },
   });
   const result = await router.route(
     controlledInput({
@@ -346,4 +361,119 @@ test("router rejects a changed flow configuration before claim and falls back sa
   assert.equal(changedAfterClaim.executionOwner, "V1_FALLBACK");
   assert.equal(v1Calls, 2);
   assert.equal(v2Calls, 0);
+});
+
+test("router permits only the approval-bound compatible flow context", async () => {
+  const flow = compatibleFlowEvaluation();
+  const flowApproval = createRuntimeV2ResponseExecutionApproval({
+    companyId: "company-1",
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    expectedCanonicalComparisonHash: "hash-1",
+    canonicalVersion: "canonical-inbound-message-v1",
+    expiresAt: new Date(Date.now() + 60_000),
+    operatorPurpose: "compatible flow test",
+    flowConfigurationFingerprint: flow.flowConfigurationFingerprint,
+    expectedFlowFingerprint: flow.selectedFlowFingerprint,
+    expectedFlowVersionFingerprint: flow.selectedFlowVersionFingerprint,
+    expectedFlowMatchType: flow.flowMatchType,
+    flowCompatibility: "STANDARD_COMPATIBLE",
+    declarativeContextFingerprint: flow.declarativeContextFingerprint,
+  });
+  let v1 = 0;
+  let v2 = 0;
+  const router = new ResponseGenerationRouter({
+    coordinator: fakeCoordinator({ approval: flowApproval }),
+    executeV1: async () => {
+      v1 += 1;
+      return v1Response();
+    },
+    v2Executor: {
+      async execute() {
+        v2 += 1;
+        return {
+          responseText: "Atendemos de segunda a sexta, das 09:00 às 18:00.",
+          category: "businessHours",
+          authority: "OFFICIAL_CONTEXT",
+          candidateStatus: "CANDIDATE_APPROVED",
+          qualityGateResult: "APPROVED",
+          outboundAllowed: true,
+        };
+      },
+    },
+  });
+  const result = await router.route(
+    controlledInput({
+      v2Eligibility: {
+        standardEligible: true,
+        category: "businessHours",
+        authority: "OFFICIAL_CONTEXT",
+        flowEvaluation: flow,
+      },
+    }),
+  );
+  assert.equal(result.executionOwner, "V2_PRIMARY");
+  assert.equal(v2, 1);
+  assert.equal(v1, 0);
+});
+
+test("a compatible flow changed after generation falls back before the tail", async () => {
+  const flow = compatibleFlowEvaluation();
+  const flowApproval = createRuntimeV2ResponseExecutionApproval({
+    companyId: "company-1",
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    expectedCanonicalComparisonHash: "hash-1",
+    canonicalVersion: "canonical-inbound-message-v1",
+    expiresAt: new Date(Date.now() + 60_000),
+    operatorPurpose: "compatible flow tail revalidation",
+    flowConfigurationFingerprint: flow.flowConfigurationFingerprint,
+    expectedFlowFingerprint: flow.selectedFlowFingerprint,
+    expectedFlowVersionFingerprint: flow.selectedFlowVersionFingerprint,
+    expectedFlowMatchType: flow.flowMatchType,
+    flowCompatibility: "STANDARD_COMPATIBLE",
+    declarativeContextFingerprint: flow.declarativeContextFingerprint,
+  });
+  let checks = 0;
+  let v1 = 0;
+  let v2 = 0;
+  const router = new ResponseGenerationRouter({
+    coordinator: fakeCoordinator({ approval: flowApproval }),
+    executeV1: async () => {
+      v1 += 1;
+      return v1Response();
+    },
+    v2Executor: {
+      async execute() {
+        v2 += 1;
+        return {
+          responseText: "Atendemos de segunda a sexta, das 09:00 às 18:00.",
+          category: "businessHours",
+          authority: "OFFICIAL_CONTEXT",
+          candidateStatus: "CANDIDATE_APPROVED",
+          qualityGateResult: "APPROVED",
+          outboundAllowed: true,
+        };
+      },
+    },
+  });
+  const result = await router.route(
+    controlledInput({
+      v2Eligibility: {
+        standardEligible: true,
+        category: "businessHours",
+        authority: "OFFICIAL_CONTEXT",
+        flowEvaluation: flow,
+      },
+      revalidateV2Flow: async () => {
+        checks += 1;
+        return checks < 3
+          ? flow
+          : { ...flow, selectedFlowVersionFingerprint: "changed-after-generation" };
+      },
+    }),
+  );
+  assert.equal(result.executionOwner, "V1_FALLBACK");
+  assert.equal(v2, 1);
+  assert.equal(v1, 1);
 });

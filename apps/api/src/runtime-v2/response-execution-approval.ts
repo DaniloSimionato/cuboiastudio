@@ -38,6 +38,11 @@ export type RuntimeV2ResponseExecutionApproval = {
   officialContextFingerprint?: string | null;
   officialContextStatus?: "AVAILABLE";
   flowConfigurationFingerprint?: string | null;
+  expectedFlowFingerprint?: string | null;
+  expectedFlowVersionFingerprint?: string | null;
+  expectedFlowMatchType?: "KEYWORD_SCORED" | null;
+  flowCompatibility?: "STANDARD_COMPATIBLE" | null;
+  declarativeContextFingerprint?: string | null;
   redactionApplied: true;
 };
 
@@ -62,6 +67,11 @@ export function createRuntimeV2ResponseExecutionApproval(input: {
   officialContextFingerprint?: string | null;
   officialContextStatus?: "AVAILABLE";
   flowConfigurationFingerprint?: string | null;
+  expectedFlowFingerprint?: string | null;
+  expectedFlowVersionFingerprint?: string | null;
+  expectedFlowMatchType?: "KEYWORD_SCORED" | null;
+  flowCompatibility?: "STANDARD_COMPATIBLE" | null;
+  declarativeContextFingerprint?: string | null;
   now?: Date;
 }): RuntimeV2ResponseExecutionApproval {
   const now = input.now ?? new Date();
@@ -107,6 +117,21 @@ export function createRuntimeV2ResponseExecutionApproval(input: {
       : {}),
     ...(input.flowConfigurationFingerprint !== undefined
       ? { flowConfigurationFingerprint: input.flowConfigurationFingerprint }
+      : {}),
+    ...(input.expectedFlowFingerprint !== undefined
+      ? { expectedFlowFingerprint: input.expectedFlowFingerprint }
+      : {}),
+    ...(input.expectedFlowVersionFingerprint !== undefined
+      ? { expectedFlowVersionFingerprint: input.expectedFlowVersionFingerprint }
+      : {}),
+    ...(input.expectedFlowMatchType !== undefined
+      ? { expectedFlowMatchType: input.expectedFlowMatchType }
+      : {}),
+    ...(input.flowCompatibility !== undefined
+      ? { flowCompatibility: input.flowCompatibility }
+      : {}),
+    ...(input.declarativeContextFingerprint !== undefined
+      ? { declarativeContextFingerprint: input.declarativeContextFingerprint }
       : {}),
     redactionApplied: true,
   };

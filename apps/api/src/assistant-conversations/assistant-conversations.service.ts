@@ -4090,6 +4090,7 @@ export class AssistantConversationsService {
             })),
             model: resolvedModel.model,
             temperature,
+            compatibleFlowContext: flowEvaluation.compatibleFlowContext,
             operational: {
               source: source === "chatwoot" ? "chatwoot" : source === "manual" ? "manual" : "tests",
               aiActive: conversation.aiActive,
@@ -4115,8 +4116,9 @@ export class AssistantConversationsService {
               !conversation.pausedByHuman &&
               conversation.status === "ACTIVE" &&
               !humanHandoffSignal.requested &&
-              !selectedFlow &&
-              flowEvaluation.v2Compatibility === "ALLOWED" &&
+              (!selectedFlow || flowEvaluation.v2Compatibility === "ALLOWED_WITH_FLOW_CONTEXT") &&
+              (flowEvaluation.v2Compatibility === "ALLOWED" ||
+                flowEvaluation.v2Compatibility === "ALLOWED_WITH_FLOW_CONTEXT") &&
               (tools?.length ?? 0) === 0 &&
               businessHoursTurn &&
               Boolean(officialBusinessContext?.businessHours),
