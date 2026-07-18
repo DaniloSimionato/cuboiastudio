@@ -115,6 +115,7 @@ import {
   flowObjectiveForFlow,
 } from "../intent-router/intent-routing";
 import { generateTriageResponse } from "./triage-response-generation-strategy";
+import { generateFlowBypassResponse } from "./flow-bypass-response-generation-strategy";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -3505,52 +3506,28 @@ export class AssistantConversationsService {
 
           let toolCallsResolved = false;
 
-          // Short-circuit logic (Phase 1.5)
-          if (selectedFlow) {
-            const finalAction = selectedFlow.finalAction || "respond";
-            const autoRespond = selectedFlow.autoRespond !== false; // true unless explicitly false
-
-            if (finalAction === "fixed_message") {
-              Object.assign(contextMetadata, { finalAction, llmSkipped: true, autoRespond });
-              answer = selectedFlow.fixedMessage || "Agradecemos o contato.";
-              runtime = {
-                ...runtime,
-                mode: "flow-bypass",
-                fallback: false,
-                outcome: "success",
-                reason: undefined,
-              };
-              // Skip LLM
-              toolCallsResolved = true;
-            } else if (finalAction === "handoff" || selectedFlow.requiresHuman || !autoRespond) {
-              if (this.cacheService) {
-                const triageCacheKey = `triage:${input.tenant.companyId}:${conversation.id}`;
-                try {
-                  await this.cacheService.set(triageCacheKey, null, 1);
-                } catch (err: any) {
-                  this.logger.warn(`Failed to clear triage cache on handoff: ${err.message}`);
-                }
-              }
-              Object.assign(contextMetadata, {
-                finalAction,
-                llmSkipped: true,
-                handoffPending: true,
-                autoRespond,
-              });
-              // We don't implement real chatwoot handoff yet, but we skip LLM.
-              // If we shouldn't respond at all, we could throw or return early, but sendMessage expects an answer.
-              // So we provide an internal fallback answer.
-              answer = "Transferindo para um atendente...";
-              runtime = {
-                ...runtime,
-                mode: "flow-bypass",
-                fallback: false,
-                outcome: "handoff",
-                reason: undefined,
-              };
-              // Skip LLM
-              toolCallsResolved = true;
-            }
+          const flowBypass = await generateFlowBypassResponse({
+            flow: selectedFlow,
+            triageCacheKey,
+            cache: this.cacheService,
+            logger: this.logger,
+          });
+          if (flowBypass.kind !== "NONE") {
+            Object.assign(contextMetadata, {
+              finalAction: flowBypass.finalAction,
+              llmSkipped: true,
+              autoRespond: flowBypass.autoRespond,
+              ...(flowBypass.handoffPending ? { handoffPending: true } : {}),
+            });
+            answer = flowBypass.answer;
+            runtime = {
+              ...runtime,
+              mode: "flow-bypass",
+              fallback: false,
+              outcome: flowBypass.outcome,
+              reason: undefined,
+            };
+            toolCallsResolved = true;
           }
 
           let promptMessages: any[] = [];

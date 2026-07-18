@@ -235,8 +235,11 @@ processa mensagens antigas nem habilita outbound.
 
 A estratégia de geração V1 de triagem foi extraída para um contrato interno
 testável, sem mover o tail de persistência, sender, `externalMessageId` ou
-Shadow. O ramo especial e o fluxo normal do V1 continuam inline; esta extração
-não conecta nenhuma parte do Runtime V2 ao `sendMessage`.
+Shadow. O bypass de fluxo V1 (`fixed_message` e handoff sem provider) também foi
+extraído para um contrato interno testável. O fluxo normal do V1 continua inline;
+as duas extrações não conectam nenhuma parte do Runtime V2 ao `sendMessage`. O
+próximo passo de refatoração é isolar a geração do fluxo normal antes de qualquer
+integração produtiva do coordenador.
 
 ## Matriz final: gaps corrigidos antes de outbound
 

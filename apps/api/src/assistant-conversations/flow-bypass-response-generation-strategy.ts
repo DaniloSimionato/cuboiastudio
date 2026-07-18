@@ -1,0 +1,80 @@
+import type { AssistantFlow } from "@prisma/client";
+
+type FlowBypassCache = {
+  set(key: string, value: null, ttlSeconds: number): Promise<unknown>;
+};
+
+type FlowBypassLogger = {
+  warn(message: string): unknown;
+};
+
+export type FlowBypassResponseGenerationInput = {
+  flow: AssistantFlow | null | undefined;
+  triageCacheKey: string;
+  cache?: FlowBypassCache;
+  logger: FlowBypassLogger;
+};
+
+export type FlowBypassResponseGenerationResult =
+  | { kind: "NONE" }
+  | {
+      kind: "FIXED_MESSAGE";
+      answer: string;
+      finalAction: string;
+      autoRespond: boolean;
+      providerCallCount: 0;
+      handoffPending: false;
+      outcome: "success";
+    }
+  | {
+      kind: "HANDOFF";
+      answer: string;
+      finalAction: string;
+      autoRespond: boolean;
+      providerCallCount: 0;
+      handoffPending: true;
+      outcome: "handoff";
+    };
+
+export async function generateFlowBypassResponse(
+  input: FlowBypassResponseGenerationInput,
+): Promise<FlowBypassResponseGenerationResult> {
+  if (!input.flow) return { kind: "NONE" };
+
+  const finalAction = input.flow.finalAction || "respond";
+  const autoRespond = input.flow.autoRespond !== false;
+  if (finalAction === "fixed_message") {
+    return {
+      kind: "FIXED_MESSAGE",
+      answer: input.flow.fixedMessage || "Agradecemos o contato.",
+      finalAction,
+      autoRespond,
+      providerCallCount: 0,
+      handoffPending: false,
+      outcome: "success",
+    };
+  }
+
+  if (finalAction !== "handoff" && !input.flow.requiresHuman && autoRespond) {
+    return { kind: "NONE" };
+  }
+
+  if (input.cache) {
+    try {
+      await input.cache.set(input.triageCacheKey, null, 1);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      input.logger.warn(`Failed to clear triage cache on handoff: ${message}`);
+    }
+  }
+
+  return {
+    kind: "HANDOFF",
+    answer: "Transferindo para um atendente...",
+    finalAction,
+    autoRespond,
+    providerCallCount: 0,
+    handoffPending: true,
+    outcome: "handoff",
+  };
+}
