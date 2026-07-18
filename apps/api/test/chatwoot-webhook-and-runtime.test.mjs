@@ -1427,7 +1427,9 @@ test("webhook Chatwoot incoming com sender.id externo cria conversa sem usar use
     assert.equal(assistantDeps.calls.conversationCreates[0].externalConversationId, "1");
     assert.equal(assistantDeps.calls.conversationCreates[0].externalContactId, "contact-1");
 
-    const payload = assistantDeps.calls.messageUpdates.at(-1).externalPayload;
+    const payload = assistantDeps.calls.messageUpdates.findLast(
+      (update) => update.externalPayload,
+    ).externalPayload;
     assert.equal(payload.externalMessageId, "9961329");
     assert.equal(payload.externalAccountId, "106");
     assert.equal(payload.externalInboxId, "524");

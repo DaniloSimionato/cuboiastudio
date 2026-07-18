@@ -194,7 +194,7 @@ test("resumeConversation envia fala humana delimitada no payload e persiste mani
     ];
     service.sendChatwootOutboundText = async () => {
       outboundCalls.push(true);
-      return "sent";
+      return { status: "sent", performed: true, externalMessageId: "outbound-resume" };
     };
 
     await service.resumeConversation({

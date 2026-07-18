@@ -145,6 +145,11 @@ function createConversationsService(prisma, input) {
 
   service.sendChatwootOutboundText = async (payload) => {
     outboundCalls.push(payload);
+    return {
+      status: "sent",
+      performed: true,
+      externalMessageId: `outbound-${payload.assistantMessageId}`,
+    };
   };
 
   return { service, outboundCalls, aiCalls };
@@ -342,12 +347,79 @@ test("Runtime SINGLE envia um único outbound com o conteúdo integral", async (
     });
 
     const { service, outboundCalls } = createConversationsService(prisma, { answer });
+    const input = {
+      assistantId,
+      conversationId,
+      dto: {
+        message: "Preciso de ajuda",
+        source: "chatwoot",
+        externalMessageId: `incoming-${companyId}`,
+        externalAccountId: `account-${companyId}`,
+        externalConversationId: `ext-${conversationId}`,
+        externalContactId: `contact-${companyId}`,
+        externalInboxId: `inbox-${companyId}`,
+      },
+      ...auth,
+    };
+
+    await service.sendMessage(input);
+    await service.sendMessage(input);
+
+    assert.equal(outboundCalls.length, 1);
+    assert.equal(outboundCalls[0].content, answer);
+    const assistantMessage = await prisma.assistantConversationMessage.findFirst({
+      where: { conversationId, role: "assistant" },
+      select: { id: true, externalMessageId: true },
+    });
+    assert.equal(assistantMessage?.externalMessageId, `outbound-${assistantMessage?.id}`);
+    const runtimeLog = await prisma.assistantRuntimeLog.findFirst({
+      where: { conversationId },
+      select: { metadata: true },
+    });
+    assert.equal(runtimeLog?.metadata?.outboundStatus, "sent");
+    assert.equal(runtimeLog?.metadata?.externalReferenceStatus, "PERSISTED");
+    assert.equal(typeof runtimeLog?.metadata?.externalMessageReferenceFingerprint, "string");
+  } finally {
+    await cleanupAssistantTestData(prisma, companyId);
+    await prisma.$disconnect();
+  }
+});
+
+test("Runtime não reenvia quando a persistência da referência externa falha", async () => {
+  const prisma = new PrismaClient();
+  const companyId = `company_runtime_reference_persistence_failure_${randomUUID()}`;
+  const assistantId = `assistant_runtime_reference_persistence_failure_${randomUUID()}`;
+  const conversationId = `conversation_runtime_reference_persistence_failure_${randomUUID()}`;
+  const auth = createAuth(companyId);
+
+  try {
+    await createRuntimeConversation(prisma, {
+      companyId,
+      assistantId,
+      conversationId,
+      splitResponseStyle: "SINGLE",
+    });
+
+    const { service, outboundCalls } = createConversationsService(prisma, {
+      answer: "Resposta com referência externa.",
+    });
+    const updateAssistantMessage = prisma.assistantConversationMessage.update.bind(
+      prisma.assistantConversationMessage,
+    );
+    prisma.assistantConversationMessage.update = async (args) => {
+      if (args.data?.externalMessageId) {
+        throw new Error("external reference persistence failed");
+      }
+      return updateAssistantMessage(args);
+    };
+
     await service.sendMessage({
       assistantId,
       conversationId,
       dto: {
         message: "Preciso de ajuda",
         source: "chatwoot",
+        externalMessageId: `incoming-${companyId}`,
         externalAccountId: `account-${companyId}`,
         externalConversationId: `ext-${conversationId}`,
         externalContactId: `contact-${companyId}`,
@@ -357,7 +429,78 @@ test("Runtime SINGLE envia um único outbound com o conteúdo integral", async (
     });
 
     assert.equal(outboundCalls.length, 1);
-    assert.equal(outboundCalls[0].content, answer);
+    const assistantMessage = await prisma.assistantConversationMessage.findFirst({
+      where: { conversationId, role: "assistant" },
+      select: { externalMessageId: true },
+    });
+    assert.equal(assistantMessage?.externalMessageId, null);
+    const runtimeLog = await prisma.assistantRuntimeLog.findFirst({
+      where: { conversationId },
+      select: { metadata: true },
+    });
+    assert.equal(runtimeLog?.metadata?.outboundStatus, "sent");
+    assert.equal(runtimeLog?.metadata?.externalReferenceStatus, "PERSISTENCE_FAILED");
+  } finally {
+    await cleanupAssistantTestData(prisma, companyId);
+    await prisma.$disconnect();
+  }
+});
+
+test("Runtime confirmado sem referência externa não duplica outbound", async () => {
+  const prisma = new PrismaClient();
+  const companyId = `company_runtime_missing_ref_${randomUUID()}`;
+  const assistantId = `assistant_runtime_missing_ref_${randomUUID()}`;
+  const conversationId = `conversation_runtime_missing_ref_${randomUUID()}`;
+  const auth = createAuth(companyId);
+
+  try {
+    await createRuntimeConversation(prisma, {
+      companyId,
+      assistantId,
+      conversationId,
+      splitResponseStyle: "SINGLE",
+    });
+
+    const { service, outboundCalls } = createConversationsService(prisma, {
+      answer: "Resposta confirmada sem referência externa.",
+    });
+    service.sendChatwootOutboundText = async (payload) => {
+      outboundCalls.push(payload);
+      return { status: "sent", performed: true, externalMessageId: null };
+    };
+
+    await service.sendMessage({
+      assistantId,
+      conversationId,
+      dto: {
+        message: "Preciso de ajuda",
+        source: "chatwoot",
+        externalMessageId: `incoming-${companyId}`,
+        externalAccountId: `account-${companyId}`,
+        externalConversationId: `ext-${conversationId}`,
+        externalContactId: `contact-${companyId}`,
+        externalInboxId: `inbox-${companyId}`,
+      },
+      ...auth,
+    });
+
+    assert.equal(outboundCalls.length, 1);
+    const messages = await prisma.assistantConversationMessage.findMany({
+      where: { conversationId },
+      select: { role: true, externalMessageId: true },
+    });
+    assert.equal(messages.filter((message) => message.role === "assistant").length, 1);
+    assert.equal(messages.find((message) => message.role === "assistant")?.externalMessageId, null);
+    assert.equal(
+      messages.find((message) => message.role === "user")?.externalMessageId,
+      `incoming-${companyId}`,
+    );
+    const runtimeLog = await prisma.assistantRuntimeLog.findFirst({
+      where: { conversationId },
+      select: { metadata: true },
+    });
+    assert.equal(runtimeLog?.metadata?.outboundStatus, "sent");
+    assert.equal(runtimeLog?.metadata?.externalReferenceStatus, "MISSING");
   } finally {
     await cleanupAssistantTestData(prisma, companyId);
     await prisma.$disconnect();

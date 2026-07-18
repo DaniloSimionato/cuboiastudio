@@ -165,6 +165,51 @@ export type AssistantConversationMessageItem = {
   createdAt: Date;
 };
 
+type ChatwootOutboundStatus = "sent" | "skipped" | "failed";
+type ChatwootExternalReferenceStatus =
+  "NOT_ATTEMPTED" | "PERSISTED" | "MISSING" | "PERSISTENCE_FAILED" | "NOT_CONFIRMED";
+
+type ChatwootOutboundResult = {
+  status: ChatwootOutboundStatus;
+  performed: boolean;
+  externalMessageId: string | null;
+};
+
+export function normalizeChatwootExternalMessageId(responseBody: string): string | null {
+  const trimmed = responseBody.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+
+    const record = parsed as Record<string, unknown>;
+    const nestedData =
+      record.data && typeof record.data === "object" && !Array.isArray(record.data)
+        ? (record.data as Record<string, unknown>)
+        : null;
+    const candidates = [
+      record.externalMessageId,
+      record.messageId,
+      record.chatwootMessageId,
+      record.id,
+      nestedData?.externalMessageId,
+      nestedData?.messageId,
+      nestedData?.chatwootMessageId,
+      nestedData?.id,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+      if (typeof candidate === "number" && Number.isFinite(candidate)) return String(candidate);
+    }
+  } catch {
+    // A successful Chatwoot response without JSON remains a confirmed send with no reference.
+  }
+
+  return null;
+}
+
 export type AssistantConversationRuntime = {
   mode: "ai-runtime" | "deterministic-runtime" | "ai-runtime-rag" | "flow-bypass";
   assistant: {
@@ -377,6 +422,10 @@ export function splitNaturalResponseBlocks(content: string): string[] {
 
 function hashPromptMessages(messages: unknown[]): string {
   return createHash("sha256").update(JSON.stringify(messages)).digest("hex");
+}
+
+function fingerprintExternalMessageReference(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
 }
 
 function getPromptSectionLabels(messages: Array<{ role: string; content?: unknown }>): string[] {
@@ -1440,13 +1489,13 @@ export class AssistantConversationsService {
     assistantId: string;
     content: string;
     handoff?: boolean;
-  }): Promise<"sent" | "skipped" | "failed"> {
+  }): Promise<ChatwootOutboundResult> {
     const accountIdentifier = (input.conversation.externalAccountId ?? "").trim();
     const inboxIdentifier = (input.conversation.externalInboxId ?? "").trim();
     const conversationIdentifier = (input.conversation.externalConversationId ?? "").trim();
 
     if (!accountIdentifier || !conversationIdentifier) {
-      return "skipped";
+      return { status: "skipped", performed: false, externalMessageId: null };
     }
 
     const resolvedConfig = await this.chatwootInboxConfigService.resolveActiveForConversation({
@@ -1457,7 +1506,7 @@ export class AssistantConversationsService {
 
     const baseUrl = resolvedConfig?.baseUrl?.trim() || "";
     if (!baseUrl) {
-      return "skipped";
+      return { status: "skipped", performed: false, externalMessageId: null };
     }
 
     const outboundUrl = `${baseUrl.replace(/\/$/, "")}/api/v1/accounts/${encodeURIComponent(
@@ -1505,20 +1554,26 @@ export class AssistantConversationsService {
         this.logger.warn(
           `Chatwoot outbound failed: company=${input.conversation.companyId} outboundUrl=${outboundUrl} account=${accountIdentifier} externalConversation=${conversationIdentifier} inbox=${inboxIdentifier || "unknown"} assistantMessageId=${input.assistantMessageId} status=${response.status} responseBody=${safeResponseBody}`,
         );
-        return "failed";
+        return { status: "failed", performed: false, externalMessageId: null };
       }
+
+      const externalMessageId = this.extractChatwootExternalMessageId(responseBody);
 
       this.logger.log(
         `Chatwoot outbound completed: company=${input.conversation.companyId} outboundUrl=${outboundUrl} account=${accountIdentifier} externalConversation=${conversationIdentifier} inbox=${inboxIdentifier || "unknown"} assistantMessageId=${input.assistantMessageId} status=${response.status} responseBody=${safeResponseBody}`,
       );
-      return "sent";
+      return { status: "sent", performed: true, externalMessageId };
     } catch (error) {
       this.logger.warn(
         `Chatwoot outbound failed: company=${input.conversation.companyId} outboundUrl=${outboundUrl} account=${accountIdentifier} externalConversation=${conversationIdentifier} inbox=${inboxIdentifier || "unknown"} assistantMessageId=${input.assistantMessageId} error=${this.summarizeOutboundError(error)}`,
       );
       // Non-blocking by design. The conversation turn still succeeds locally.
-      return "failed";
+      return { status: "failed", performed: false, externalMessageId: null };
     }
+  }
+
+  private extractChatwootExternalMessageId(responseBody: string): string | null {
+    return normalizeChatwootExternalMessageId(responseBody);
   }
 
   public async setExternalConversationAiActive(input: {
@@ -4474,6 +4529,9 @@ export class AssistantConversationsService {
 
     let tailOutboundAttempted = false;
     let tailOutboundPerformed: ResponseTailOutboundState = "NOT_ATTEMPTED";
+    let externalReferenceStatus: ChatwootExternalReferenceStatus = "NOT_ATTEMPTED";
+    let externalMessageReferenceFingerprint: string | null = null;
+    let externalReferencePersistenceAttempted = false;
     if (source === "chatwoot") {
       if (process.env.AI_RUNTIME_TRACE === "true") {
         this.logger.log(
@@ -4511,31 +4569,61 @@ export class AssistantConversationsService {
             assistantId: input.assistantId,
             content: block,
           });
-          if (outboundResult === "sent") {
+          if (outboundResult.status === "sent") {
             blocksSent++;
             tailOutboundPerformed = "CONFIRMED";
+
+            if (outboundResult.externalMessageId && !externalReferencePersistenceAttempted) {
+              externalReferencePersistenceAttempted = true;
+              externalMessageReferenceFingerprint = fingerprintExternalMessageReference(
+                outboundResult.externalMessageId,
+              );
+              try {
+                await this.prisma.assistantConversationMessage.update({
+                  where: { id: assistantMessage.id },
+                  data: { externalMessageId: outboundResult.externalMessageId },
+                });
+                externalReferenceStatus = "PERSISTED";
+              } catch (error) {
+                externalReferenceStatus = "PERSISTENCE_FAILED";
+                this.logger.warn(
+                  `Chatwoot outbound reference persistence failed: assistantMessageId=${assistantMessage.id} referenceFingerprint=${externalMessageReferenceFingerprint} error=${this.summarizeOutboundError(error)}`,
+                );
+              }
+            } else if (
+              !outboundResult.externalMessageId &&
+              !externalReferencePersistenceAttempted
+            ) {
+              externalReferenceStatus = "MISSING";
+              this.logger.warn(
+                `Chatwoot outbound confirmed without external message reference: assistantMessageId=${assistantMessage.id}`,
+              );
+            }
+
             responseTailLifecycleHooks.afterOutboundConfirmed(
               createResponseTailLifecycleMetadata(assistantMessage.id, true, "CONFIRMED"),
             );
-          } else if (outboundResult === "skipped") {
+          } else if (outboundResult.status === "skipped") {
             tailOutboundPerformed = "SKIPPED";
           }
-          if (outboundResult === "failed") {
+          if (outboundResult.status === "failed") {
             tailOutboundPerformed = "FAILED";
+            externalReferenceStatus = "NOT_CONFIRMED";
             responseTailLifecycleHooks.afterOutboundFailure(
               createResponseTailLifecycleMetadata(assistantMessage.id, true, "FAILED"),
             );
           }
           contextMetadata.outboundStatus =
-            outboundResult === "sent"
+            outboundResult.status === "sent"
               ? "sent"
-              : outboundResult === "skipped"
+              : outboundResult.status === "skipped"
                 ? "skipped"
                 : "failed";
         } catch (err: any) {
           this.logger.error(`Error sending Chatwoot block ${i}: ${err.message}`, err.stack);
           contextMetadata.outboundStatus = "failed";
           tailOutboundPerformed = "FAILED";
+          externalReferenceStatus = "NOT_CONFIRMED";
           responseTailLifecycleHooks.afterOutboundFailure(
             createResponseTailLifecycleMetadata(assistantMessage.id, true, "FAILED"),
           );
@@ -4581,9 +4669,13 @@ export class AssistantConversationsService {
               outboundBlockCountSent: blocksSent,
               outboundBlockCount: blocksSent,
               outboundStatus: contextMetadata.outboundStatus,
+              externalReferenceStatus,
+              externalMessageReferenceFingerprint,
               contextManifest: {
                 ...(currentMeta.contextManifest ?? {}),
                 outboundStatus: contextMetadata.outboundStatus,
+                externalReferenceStatus,
+                externalMessageReferenceFingerprint,
               },
             };
             await this.prisma.assistantRuntimeLog.update({

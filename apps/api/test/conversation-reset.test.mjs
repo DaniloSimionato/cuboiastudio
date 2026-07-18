@@ -92,6 +92,7 @@ function createResetService(prisma, input) {
 
   service.sendChatwootOutboundText = async (payload) => {
     outboundCalls.push(payload);
+    return { status: "sent", performed: true, externalMessageId: null };
   };
 
   return { service, outboundCalls, aiCalls, extractionCalls };
