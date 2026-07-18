@@ -11,8 +11,9 @@ const coordinatorPath = new URL(
   import.meta.url,
 );
 
-test("single-use execution infrastructure is not connected to the productive V1 path", async () => {
+test("single-use execution infrastructure remains disconnected from the productive V1 path", async () => {
   const source = await readFile(servicePath, "utf8");
+  assert.match(source, /ResponseGenerationRouter/);
   assert.doesNotMatch(source, /ResponseExecutionRouter|RuntimeV2ResponseExecutionCoordinator/);
   assert.doesNotMatch(source, /RUNTIME_V2_RESPONSE_EXECUTION_MODE/);
   assert.match(source, /scheduleRuntimeV2Shadow\(/);

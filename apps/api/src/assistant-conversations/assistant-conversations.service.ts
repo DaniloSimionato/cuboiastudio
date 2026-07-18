@@ -114,10 +114,8 @@ import {
   flowIntentKeyForFlow,
   flowObjectiveForFlow,
 } from "../intent-router/intent-routing";
-import {
-  selectV1ResponseGenerationStrategy,
-  V1ResponseGenerationExecutor,
-} from "./v1-response-generation-executor";
+import { selectV1ResponseGenerationStrategy } from "./v1-response-generation-executor";
+import { ResponseGenerationRouter } from "./response-generation-router";
 import type { StandardResponseGenerationInput } from "./standard-response-generation-strategy";
 import type { TriageResponseGenerationInput } from "./triage-response-generation-strategy";
 
@@ -3946,18 +3944,29 @@ export class AssistantConversationsService {
             };
           };
 
-          const generatedResponse = await new V1ResponseGenerationExecutor().execute({
-            flow: selectedFlow,
-            triageMode,
-            createFlowBypassInput: async () => ({
+          const routedGeneration = await new ResponseGenerationRouter().route({
+            turn: {
+              companyId: input.tenant.companyId,
+              assistantId: input.assistantId,
+              conversationId: conversation.id,
+              internalMessageId: userMessage.id,
+              canonicalComparisonHash: canonicalInboundMessage.canonicalComparisonHash,
+              canonicalVersion: canonicalInboundMessage.schemaVersion,
+            },
+            v1Input: {
               flow: selectedFlow,
-              triageCacheKey,
-              cache: this.cacheService,
-              logger: this.logger,
-            }),
-            createTriageInput,
-            createStandardInput,
+              triageMode,
+              createFlowBypassInput: async () => ({
+                flow: selectedFlow,
+                triageCacheKey,
+                cache: this.cacheService,
+                logger: this.logger,
+              }),
+              createTriageInput,
+              createStandardInput,
+            },
           });
+          const generatedResponse = routedGeneration.response;
 
           if (generatedResponse.strategy === "FLOW_BYPASS") {
             Object.assign(contextMetadata, {
@@ -3977,8 +3986,7 @@ export class AssistantConversationsService {
           } else if (generatedResponse.strategy === "TRIAGE") {
             const triageValidationPassed =
               generatedResponse.generationMetadata.triageValidationPassed ?? false;
-            const triageAttemptCount =
-              generatedResponse.generationMetadata.triageAttemptCount ?? 0;
+            const triageAttemptCount = generatedResponse.generationMetadata.triageAttemptCount ?? 0;
             const triageResolved = generatedResponse.generationMetadata.triageResolved ?? false;
             const triageContinuationLogged = triageContinuation;
             const schedulingExplicitlyRequested = false;
@@ -3991,7 +3999,8 @@ export class AssistantConversationsService {
                 mode: "ai-runtime",
                 fallback: false,
                 outcome: "success",
-                provider: generatedResponse.providerMetadata.provider ?? runtimeConfig.provider ?? null,
+                provider:
+                  generatedResponse.providerMetadata.provider ?? runtimeConfig.provider ?? null,
                 model: generatedResponse.providerMetadata.model ?? resolvedModel.model ?? null,
                 reason: undefined,
                 ragData: ragLogData,
@@ -4012,7 +4021,8 @@ export class AssistantConversationsService {
                 mode: "ai-runtime",
                 fallback: !triageValidationPassed,
                 outcome: "success",
-                provider: generatedResponse.providerMetadata.provider ?? runtimeConfig.provider ?? null,
+                provider:
+                  generatedResponse.providerMetadata.provider ?? runtimeConfig.provider ?? null,
                 model: generatedResponse.providerMetadata.model ?? resolvedModel.model ?? null,
                 reason: undefined,
                 ragData: ragLogData,

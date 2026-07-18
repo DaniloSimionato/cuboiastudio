@@ -240,11 +240,15 @@ extraído para um contrato interno testável. O núcleo iterativo do fluxo norma
 (`provider → tool → provider`, com limite de cinco iterações) foi isolado em uma
 estratégia testável. Um executor V1 único seleciona, com precedência preservada,
 `FLOW_BYPASS`, `TRIAGE` ou `STANDARD` e retorna um envelope redigido comum ao
-tail central. A composição compartilhada de prompt/contexto e a execução detalhada
-de cada ferramenta permanecem no `sendMessage` como dependências lazy do executor,
-preservando a ordem e o custo existentes. O tail central permanece intacto. Essas
-extrações não conectam nenhuma parte do Runtime V2 ao `sendMessage`; o próximo
-passo arquitetural é posicionar o roteamento default-deny antes desse executor.
+tail central. O `ResponseGenerationRouter` agora ocupa o seam antes desse executor,
+mas é estritamente V1-only/default-deny: não consulta approval, não importa o
+coordenador, não persiste ownership e não possui provider, sender ou outbound V2.
+O `sendMessage` não fornece configuração de execution mode ou allowlists a esse
+router nesta fase, portanto toda rota produtiva permanece `V1_DEFAULT`.
+A composição compartilhada de prompt/contexto e a execução detalhada de cada
+ferramenta permanecem no `sendMessage` como dependências lazy do executor,
+preservando a ordem e o custo existentes. O tail central permanece intacto. A
+próxima etapa poderá conectar o coordenador ao router de forma controlada.
 
 ## Matriz final: gaps corrigidos antes de outbound
 
