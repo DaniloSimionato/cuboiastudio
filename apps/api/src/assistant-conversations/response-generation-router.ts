@@ -15,7 +15,10 @@ import {
   RuntimeV2ResponseExecutionCoordinator,
   type ResponseExecutionClaimResult,
 } from "../runtime-v2/response-execution-coordinator";
-import type { V2PrimaryResponseExecutor } from "./v2-primary-response-executor";
+import type {
+  V2PrimaryResponseExecutionContext,
+  V2PrimaryResponseExecutor,
+} from "./v2-primary-response-executor";
 
 export type ResponseGenerationRoute = ResponseExecutionEnvelope["route"];
 export type ResponseGenerationRouterTurn = ResponseExecutionTurn;
@@ -31,6 +34,8 @@ export type ResponseGenerationRouterInput = {
     category: "businessHours" | null;
     authority: "OFFICIAL_CONTEXT" | null;
   };
+  /** Runtime-primary context is constructed only after V1's basic gates. */
+  v2PrimaryContext?: V2PrimaryResponseExecutionContext;
 };
 
 export type ResponseGenerationDeferredResult = {
@@ -134,6 +139,8 @@ export class ResponseGenerationRouter {
         turn: input.turn,
         generationId: claimed.generationId,
         approval: claimed.approval,
+        context: input.v2PrimaryContext,
+        ownership: "V2_GENERATION_PENDING",
       });
       if (
         generated.category !== "businessHours" ||

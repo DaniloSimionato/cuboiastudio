@@ -131,6 +131,7 @@ import {
 } from "./response-tail-lifecycle-hooks";
 import type { StandardResponseGenerationInput } from "./standard-response-generation-strategy";
 import type { TriageResponseGenerationInput } from "./triage-response-generation-strategy";
+import type { V2PrimaryResponseExecutionContext } from "./v2-primary-response-executor";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -4033,6 +4034,59 @@ export class AssistantConversationsService {
             triageMode,
           });
           const businessHoursTurn = /\b(hor[aá]rio|atendimento)\b/i.test(customerIntentText);
+          const v2PrimaryContext: V2PrimaryResponseExecutionContext = {
+            canonicalInbound: {
+              displayContent: canonicalInboundMessage.displayContent,
+              canonicalComparisonHash: canonicalInboundMessage.canonicalComparisonHash,
+              schemaVersion: canonicalInboundMessage.schemaVersion,
+              redactionApplied: true,
+            },
+            assistant: {
+              name: assistant.name,
+              splitResponseStyle: assistant.splitResponseStyle,
+              safetyInstruction: assistant.safetyInstruction,
+              avoidPhrases: assistant.avoidPhrases,
+            },
+            behavior: assistant.behavior,
+            securityRules: activeSecurityRules.map((rule) => ({
+              name: rule.name,
+              ruleType: rule.ruleType,
+              instruction: rule.instruction,
+            })),
+            officialBusinessContext,
+            recentHistory: priorHistory.slice(-6).map((message) => ({
+              id: message.id,
+              role:
+                message.role === "tool"
+                  ? "tool"
+                  : message.role === "assistant"
+                    ? "assistant"
+                    : "user",
+              content: message.content,
+              relevance:
+                message.role === "assistant" && message.content.includes("?")
+                  ? "question-reference"
+                  : "objective",
+            })),
+            model: resolvedModel.model,
+            temperature,
+            operational: {
+              source: source === "chatwoot" ? "chatwoot" : source === "manual" ? "manual" : "tests",
+              aiActive: conversation.aiActive,
+              humanActive: conversation.pausedByHuman,
+              conversationActive: conversation.status === "ACTIVE",
+              activeHandoff: humanHandoffSignal.requested || Boolean(selectedFlow?.requiresHuman),
+              fixedMessage: Boolean(selectedFlow?.fixedMessage?.trim()),
+              autoRespondBlocked: selectedFlow?.autoRespond === false,
+              triage: triageMode,
+              toolRequired: (tools?.length ?? 0) > 0,
+              customerRequestedHuman: humanHandoffSignal.requested,
+              ragRequested: Boolean(ragObservation?.retrievalExecuted),
+              memoryRequested:
+                selectedMemoryManifest.length > 0 || Boolean(memoryObservation.retrievalExecuted),
+              officialDataConflict: false,
+            },
+          };
           const v2Eligibility = {
             standardEligible:
               v1SelectedStrategy === "STANDARD" &&
@@ -4041,8 +4095,7 @@ export class AssistantConversationsService {
               !conversation.pausedByHuman &&
               conversation.status === "ACTIVE" &&
               !humanHandoffSignal.requested &&
-              !selectedFlow?.requiresHuman &&
-              selectedFlow?.autoRespond !== false &&
+              !selectedFlow &&
               (tools?.length ?? 0) === 0 &&
               businessHoursTurn &&
               Boolean(officialBusinessContext?.businessHours),
@@ -4060,6 +4113,7 @@ export class AssistantConversationsService {
             executionAssistantIds: resolveRuntimeV2ResponseExecutionAssistantIds(),
             executionConversationIds: resolveRuntimeV2ResponseExecutionConversationIds(),
             v2Eligibility,
+            v2PrimaryContext,
             v1Input: {
               flow: selectedFlow,
               triageMode,

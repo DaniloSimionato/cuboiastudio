@@ -51,6 +51,11 @@ export type CandidateResponseGenerationResult = {
   candidate: RuntimeV2CandidateResponse;
   comparison: RuntimeResponseComparison;
   messages: AiChatCompletionMessage[];
+  /**
+   * Ephemeral provider output for a caller that owns a live response turn.
+   * Shadow persists only `candidate.responseTextRedacted`, never this value.
+   */
+  responseText: string | null;
 };
 
 class CandidateGenerationTimeoutError extends Error {
@@ -202,6 +207,8 @@ export class RuntimeV2CandidateResponseGenerator {
     responsePlan: ResponsePlan;
     context: RuntimeV2CandidateContext;
     generationTimeoutMs?: number;
+    generationId?: string;
+    signal?: AbortSignal;
   }): Promise<CandidateResponseGenerationResult> {
     const { state, responsePlan, context } = input;
     const responsePlanId = createResponsePlanId({
@@ -212,10 +219,12 @@ export class RuntimeV2CandidateResponseGenerator {
       internalMessageId: state.lastProcessedMessageId ?? "",
       responsePlan,
     });
-    const generationId = createCandidateGenerationId({
-      responsePlanId,
-      internalMessageId: state.lastProcessedMessageId ?? "",
-    });
+    const generationId =
+      input.generationId ??
+      createCandidateGenerationId({
+        responsePlanId,
+        internalMessageId: state.lastProcessedMessageId ?? "",
+      });
     const generatedAt = this.now().toISOString();
     const base = {
       schemaVersion: CANDIDATE_RESPONSE_SCHEMA_VERSION,
@@ -277,6 +286,7 @@ export class RuntimeV2CandidateResponseGenerator {
           reasons: precondition.reasons,
         }),
         messages: [],
+        responseText: null,
       };
     }
 
@@ -286,6 +296,12 @@ export class RuntimeV2CandidateResponseGenerator {
     });
     const generationStartedAt = this.now();
     const controller = new AbortController();
+    const abortFromCaller = () => controller.abort();
+    if (input.signal?.aborted) {
+      controller.abort();
+    } else {
+      input.signal?.addEventListener("abort", abortFromCaller, { once: true });
+    }
     const generationTimeoutMs = boundedGenerationTimeout(input.generationTimeoutMs);
     let providerCalled = false;
     let providerCancellationRequested = false;
@@ -344,6 +360,7 @@ export class RuntimeV2CandidateResponseGenerator {
         candidate,
         comparison: buildComparison({ candidate, context, responsePlan, reasons }),
         messages,
+        responseText: completion.answer,
       };
     } catch (error) {
       const timedOut = error instanceof CandidateGenerationTimeoutError;
@@ -378,9 +395,11 @@ export class RuntimeV2CandidateResponseGenerator {
         candidate,
         comparison: buildComparison({ candidate, context, responsePlan, reasons }),
         messages,
+        responseText: null,
       };
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle);
+      input.signal?.removeEventListener("abort", abortFromCaller);
     }
   }
 }

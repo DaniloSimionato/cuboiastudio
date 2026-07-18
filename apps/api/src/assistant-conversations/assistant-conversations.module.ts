@@ -25,6 +25,14 @@ import { MemoryEvidenceAdapter } from "../runtime-v2/memory-evidence.adapter";
 import { RuntimeV2CandidateResponseProvider } from "../runtime-v2/runtime-v2-candidate-response-provider";
 import { RuntimeV2CandidateResponseGenerator } from "../runtime-v2/candidate-response";
 import { PromptCompilerService } from "../prompt-compiler/prompt-compiler.service";
+import { ConversationStateResponseExecutionStore } from "../runtime-v2/conversation-state-response-execution-store";
+import { RuntimeV2ResponseExecutionCoordinator } from "../runtime-v2/response-execution-coordinator";
+import { ResponseGenerationRouter } from "./response-generation-router";
+import { V1ResponseGenerationExecutor } from "./v1-response-generation-executor";
+import {
+  RuntimeV2PrimaryResponseExecutor,
+  V2_PRIMARY_RESPONSE_EXECUTOR,
+} from "./v2-primary-response-executor";
 
 @Module({
   imports: [
@@ -46,6 +54,43 @@ import { PromptCompilerService } from "../prompt-compiler/prompt-compiler.servic
     RagEvidenceAdapter,
     MemoryEvidenceAdapter,
     RuntimeV2CandidateResponseProvider,
+    {
+      provide: ConversationStateResponseExecutionStore,
+      useFactory: (stateStore: PrismaConversationStateStore) =>
+        new ConversationStateResponseExecutionStore(stateStore),
+      inject: [PrismaConversationStateStore],
+    },
+    {
+      provide: RuntimeV2ResponseExecutionCoordinator,
+      useFactory: (store: ConversationStateResponseExecutionStore) =>
+        new RuntimeV2ResponseExecutionCoordinator({ store }),
+      inject: [ConversationStateResponseExecutionStore],
+    },
+    {
+      provide: V2_PRIMARY_RESPONSE_EXECUTOR,
+      useFactory: (
+        candidateProvider: RuntimeV2CandidateResponseProvider,
+        promptCompiler: PromptCompilerService,
+      ) =>
+        new RuntimeV2PrimaryResponseExecutor({
+          candidateProvider,
+          promptCompiler,
+        }),
+      inject: [RuntimeV2CandidateResponseProvider, PromptCompilerService],
+    },
+    {
+      provide: ResponseGenerationRouter,
+      useFactory: (
+        coordinator: RuntimeV2ResponseExecutionCoordinator,
+        v2Executor: RuntimeV2PrimaryResponseExecutor,
+      ) =>
+        new ResponseGenerationRouter({
+          executeV1: async (input) => new V1ResponseGenerationExecutor().execute(input),
+          coordinator,
+          v2Executor,
+        }),
+      inject: [RuntimeV2ResponseExecutionCoordinator, V2_PRIMARY_RESPONSE_EXECUTOR],
+    },
     {
       provide: RUNTIME_V2_STATE_STORE,
       useFactory: (

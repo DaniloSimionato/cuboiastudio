@@ -218,23 +218,50 @@ V1 como único outbound. Desligar os dois modos e limpar as allowlists interromp
 novas gerações sem alterar candidatos já persistidos. Uma fase posterior deve
 validar comparações reais antes de qualquer decisão sobre resposta V2 ao cliente.
 
-## Execução single-use controlada (executor V2 somente de teste)
+## Execução single-use controlada (executor primário restrito)
 
 O repositório contém contratos preparatórios para uma futura execução single-use
 de resposta Runtime V2: modo `RUNTIME_V2_RESPONSE_EXECUTION_MODE` default-deny,
 allowlists específicas, aprovação vinculada ao hash canônico com validade máxima
 de dez minutos e um coordenador de ownership/fallback/reconciliação persistido
-por CAS no `stateJson`. Esses contratos são testados somente com executor e
-sender fake.
+por CAS no `stateJson`. Os testes usam somente provider e sender fake; não há
+outbound real nesta fase.
 
 **COORDINATOR_CONNECTED_TO_ROUTER=true.** O router recebe modo e allowlists, mas
 continua default-deny: ausência/configuração inválida/OFF, escopo ausente,
 turno não STANDARD, triagem, handoff, ferramenta, categoria ou autoridade não
 permitida retornam `V1_DEFAULT` antes de consultar ou reclamar uma approval. A
-rota V2 só existe quando um coordenador e um executor explicitamente injetados
-estão presentes; a composição produtiva não registra executor V2 real.
-**REAL_V2_PRIMARY_EXECUTOR_CONNECTED=false.** Logo, uma approval ARMED isolada
-nunca processa mensagens antigas nem habilita outbound na produção.
+rota V2 só existe quando coordinator, executor registrado, modo `CONTROLLED`,
+duas allowlists e approval single-use exata estão presentes. O executor não tem
+efeito no boot e não é chamado com os defaults OFF/vazios.
+**REAL_V2_PRIMARY_EXECUTOR_CONNECTED=true.** O executor primário é limitado a
+`businessHours` com autoridade `OFFICIAL_CONTEXT`: revalida o turno, a approval,
+o ownership, o schedule estruturado, timezone e ausência de conflito antes de
+chamar o provider oficial via DI. Ele usa o mesmo `RuntimeV2CandidateResponseGenerator`,
+`ResponsePlan`, política de autoridade, timeout, `AbortSignal` e redaction do
+Shadow, mas fornece somente contexto oficial de horário. Não fornece RAG,
+memória factual, ferramentas, handoff, flow ou calendário.
+
+O prompt primário aceita somente a mensagem canônica, até seis referências da
+mesma conversa, comportamento permitido e o contexto estruturado oficial. O
+quality gate bloqueia resposta vazia, estrutura interna, idioma/escopo impróprio,
+categorias comerciais não autorizadas e horários que não correspondam ao schedule
+oficial. Falha, timeout, abort, autoridade ausente/conflitante ou candidata
+bloqueada ainda ocorrem antes do sender e levam exclusivamente ao fallback V1.
+O executor retorna apenas o `ResponseExecutionEnvelope` V2; ele não persiste a
+mensagem assistant, não chama o sender, não atualiza `externalMessageId` e não
+consome a approval.
+
+Não há uma segunda geração Shadow nem comparação adicional para o mesmo turno
+primário: `PRIMARY_EXECUTION_NO_SHADOW_COMPARISON=true`. A candidata primária é
+efêmera até o tail; só seus fingerprints e metadados redigidos atravessam a
+telemetria. Uma approval ARMED isolada continua incapaz de reprocessar mensagens
+ou disparar execução sem todos os gates.
+
+**COORDINATOR_CONNECTED_TO_ROUTER=true.**
+**REAL_V2_PRIMARY_EXECUTOR_CONNECTED=true.**
+**PRODUCTION_EXECUTION_DEFAULT_OFF=true.**
+**FIRST_REAL_V2_OUTBOUND_COMPLETED=false.**
 
 A estratégia de geração V1 de triagem foi extraída para um contrato interno
 testável, sem mover o tail de persistência, sender, `externalMessageId` ou
@@ -248,8 +275,9 @@ e transporta `V1_NORMAL`, `V1_FALLBACK` ou `V2_PRIMARY` até o mesmo tail. Na
 integração test-only, uma approval elegível é reclamada atomicamente antes da
 geração; falha pré-sender faz fallback no mesmo turno e resultado incerto do
 sender V2 termina em `RECONCILIATION_REQUIRED`, sem resposta V1 adicional.
-A composição produtiva permanece sem executor V2 injetado, portanto sua rota
-efetiva continua `V1_DEFAULT`.
+A composição produtiva registra o executor inerte por DI, mas sua rota efetiva
+continua `V1_DEFAULT` enquanto o modo estiver OFF, o escopo estiver vazio ou não
+existir uma approval elegível. Nenhuma approval é criada automaticamente.
 A composição compartilhada de prompt/contexto e a execução detalhada de cada
 ferramenta permanecem no `sendMessage` como dependências lazy do executor,
 preservando a ordem e o custo existentes. O resultado atravessa o tail central

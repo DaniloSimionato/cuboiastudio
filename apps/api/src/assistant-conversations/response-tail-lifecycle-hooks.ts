@@ -1,10 +1,10 @@
 import type { RuntimeV2ResponseExecutionCoordinator } from "../runtime-v2/response-execution-coordinator";
 import type {
+  ResponseExecutionEnvelope,
   ResponseExecutionOwner,
   ResponseExecutionRoute,
   ResponseExecutionTurn,
 } from "./response-execution-envelope";
-import type { V1ResponseGenerationStrategy } from "./v1-response-generation-executor";
 
 export type ResponseTailOutboundState =
   "NOT_ATTEMPTED" | "SKIPPED" | "CONFIRMED" | "FAILED" | "UNKNOWN";
@@ -12,7 +12,7 @@ export type ResponseTailOutboundState =
 export type ResponseTailLifecycleMetadata = {
   executionOwner: ResponseExecutionOwner;
   route: ResponseExecutionRoute;
-  strategy: V1ResponseGenerationStrategy | null;
+  strategy: ResponseExecutionEnvelope["strategy"];
   internalMessageId: string;
   generationId: string | null;
   persistedResponseId: string | null;

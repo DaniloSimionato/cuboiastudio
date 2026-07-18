@@ -5,12 +5,14 @@ import type {
 
 export type ResponseExecutionOwner = "V1_NORMAL" | "V1_FALLBACK" | "V2_PRIMARY";
 export type ResponseExecutionRoute = "V1_DEFAULT" | "V2_SINGLE_USE";
+export type ResponseExecutionStrategy = V1ResponseGenerationStrategy | "V2_BUSINESS_HOURS" | null;
 
 export type ResponseExecutionTurn = {
   companyId: string;
   assistantId: string;
   conversationId: string;
   internalMessageId: string;
+  contextVersion?: number;
   canonicalComparisonHash: string | null;
   canonicalVersion: string;
 };
@@ -19,7 +21,7 @@ export type ResponseExecutionEnvelope = {
   executionOwner: ResponseExecutionOwner;
   route: ResponseExecutionRoute;
   turn: ResponseExecutionTurn;
-  strategy: V1ResponseGenerationStrategy | null;
+  strategy: ResponseExecutionStrategy;
   responseText: string;
   providerCallCount: number;
   toolCallCount: number;
@@ -36,7 +38,7 @@ export type ResponseExecutionEnvelope = {
   sanitizedTelemetry: {
     executionOwner: ResponseExecutionOwner;
     route: ResponseExecutionRoute;
-    strategy: V1ResponseGenerationStrategy | null;
+    strategy: ResponseExecutionStrategy;
     providerCallCount: number;
     toolCallCount: number;
     decision: "DEFAULT_DENY" | "SINGLE_USE_V2" | "V1_FALLBACK";
@@ -97,7 +99,7 @@ export function createV2PrimaryResponseExecutionEnvelope(input: {
     executionOwner: "V2_PRIMARY",
     route: "V2_SINGLE_USE",
     turn: input.turn,
-    strategy: "STANDARD",
+    strategy: "V2_BUSINESS_HOURS",
     responseText: input.responseText,
     providerCallCount: 1,
     toolCallCount: 0,
@@ -114,7 +116,7 @@ export function createV2PrimaryResponseExecutionEnvelope(input: {
     sanitizedTelemetry: {
       executionOwner: "V2_PRIMARY",
       route: "V2_SINGLE_USE",
-      strategy: "STANDARD",
+      strategy: "V2_BUSINESS_HOURS",
       providerCallCount: 1,
       toolCallCount: 0,
       decision: "SINGLE_USE_V2",
@@ -170,6 +172,7 @@ export function validateV1NormalResponseExecutionEnvelope(input: {
     envelope.turn.assistantId !== turn.assistantId ||
     envelope.turn.conversationId !== turn.conversationId ||
     envelope.turn.internalMessageId !== turn.internalMessageId ||
+    envelope.turn.contextVersion !== turn.contextVersion ||
     envelope.turn.canonicalComparisonHash !== turn.canonicalComparisonHash ||
     envelope.turn.canonicalVersion !== turn.canonicalVersion
   ) {
@@ -190,6 +193,7 @@ export function validateResponseExecutionEnvelope(input: {
     envelope.turn.assistantId !== turn.assistantId ||
     envelope.turn.conversationId !== turn.conversationId ||
     envelope.turn.internalMessageId !== turn.internalMessageId ||
+    envelope.turn.contextVersion !== turn.contextVersion ||
     envelope.turn.canonicalComparisonHash !== turn.canonicalComparisonHash ||
     envelope.turn.canonicalVersion !== turn.canonicalVersion
   ) {
