@@ -238,12 +238,13 @@ testável, sem mover o tail de persistência, sender, `externalMessageId` ou
 Shadow. O bypass de fluxo V1 (`fixed_message` e handoff sem provider) também foi
 extraído para um contrato interno testável. O núcleo iterativo do fluxo normal
 (`provider → tool → provider`, com limite de cinco iterações) foi isolado em uma
-estratégia testável; a composição compartilhada de prompt/contexto e a execução
-detalhada de cada ferramenta permanecem no `sendMessage` como dependências do
-núcleo para preservar a prioridade e o custo atuais de triagem e bypass. O tail
-central permanece intacto. Essas extrações não conectam nenhuma parte do Runtime
-V2 ao `sendMessage`; o próximo passo arquitetural é separar essas dependências
-normais antes de qualquer integração produtiva do coordenador.
+estratégia testável. Um executor V1 único seleciona, com precedência preservada,
+`FLOW_BYPASS`, `TRIAGE` ou `STANDARD` e retorna um envelope redigido comum ao
+tail central. A composição compartilhada de prompt/contexto e a execução detalhada
+de cada ferramenta permanecem no `sendMessage` como dependências lazy do executor,
+preservando a ordem e o custo existentes. O tail central permanece intacto. Essas
+extrações não conectam nenhuma parte do Runtime V2 ao `sendMessage`; o próximo
+passo arquitetural é posicionar o roteamento default-deny antes desse executor.
 
 ## Matriz final: gaps corrigidos antes de outbound
 

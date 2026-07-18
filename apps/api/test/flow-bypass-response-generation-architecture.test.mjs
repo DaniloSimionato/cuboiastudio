@@ -10,16 +10,22 @@ const strategyUrl = new URL(
   "../src/assistant-conversations/flow-bypass-response-generation-strategy.ts",
   import.meta.url,
 );
+const executorUrl = new URL(
+  "../src/assistant-conversations/v1-response-generation-executor.ts",
+  import.meta.url,
+);
 
 test("flow bypass stays isolated before the unchanged productive tail", async () => {
-  const [serviceSource, strategySource] = await Promise.all([
+  const [serviceSource, strategySource, executorSource] = await Promise.all([
     readFile(serviceUrl, "utf8"),
     readFile(strategyUrl, "utf8"),
+    readFile(executorUrl, "utf8"),
   ]);
 
-  assert.match(serviceSource, /generateFlowBypassResponse\(\{/);
+  assert.doesNotMatch(serviceSource, /generateFlowBypassResponse\(/);
+  assert.match(executorSource, /generateFlowBypassResponse/);
   assert.match(strategySource, /finalAction === "fixed_message"/);
-  assert.match(strategySource, /finalAction !== "handoff"/);
+  assert.match(strategySource, /requiresFlowBypassGeneration/);
   assert.doesNotMatch(
     strategySource,
     /generateChatCompletion|sendChatwootOutboundText|scheduleRuntimeV2Shadow|assistantConversationMessage/,

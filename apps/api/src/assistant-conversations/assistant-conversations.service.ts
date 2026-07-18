@@ -114,9 +114,12 @@ import {
   flowIntentKeyForFlow,
   flowObjectiveForFlow,
 } from "../intent-router/intent-routing";
-import { generateTriageResponse } from "./triage-response-generation-strategy";
-import { generateFlowBypassResponse } from "./flow-bypass-response-generation-strategy";
-import { generateStandardResponse } from "./standard-response-generation-strategy";
+import {
+  selectV1ResponseGenerationStrategy,
+  V1ResponseGenerationExecutor,
+} from "./v1-response-generation-executor";
+import type { StandardResponseGenerationInput } from "./standard-response-generation-strategy";
+import type { TriageResponseGenerationInput } from "./triage-response-generation-strategy";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -3505,34 +3508,13 @@ export class AssistantConversationsService {
             currentIntentOverrodeHistory: contextMetadata.currentIntentOverrodeHistory,
           };
 
-          let toolCallsResolved = false;
-
-          const flowBypass = await generateFlowBypassResponse({
+          const selectedGenerationStrategy = selectV1ResponseGenerationStrategy({
             flow: selectedFlow,
-            triageCacheKey,
-            cache: this.cacheService,
-            logger: this.logger,
+            triageMode,
           });
-          if (flowBypass.kind !== "NONE") {
-            Object.assign(contextMetadata, {
-              finalAction: flowBypass.finalAction,
-              llmSkipped: true,
-              autoRespond: flowBypass.autoRespond,
-              ...(flowBypass.handoffPending ? { handoffPending: true } : {}),
-            });
-            answer = flowBypass.answer;
-            runtime = {
-              ...runtime,
-              mode: "flow-bypass",
-              fallback: false,
-              outcome: flowBypass.outcome,
-              reason: undefined,
-            };
-            toolCallsResolved = true;
-          }
 
           let promptMessages: any[] = [];
-          if (!toolCallsResolved) {
+          if (selectedGenerationStrategy !== "FLOW_BYPASS") {
             // Every Chatwoot path uses the same compiler, even if dependency injection is absent.
             const compiler = this.promptCompilerService ?? new PromptCompilerService();
             promptMessages = compiler.compile({
@@ -3638,7 +3620,7 @@ export class AssistantConversationsService {
             }
           }
 
-          if (isDebugLogsEnabled && !toolCallsResolved) {
+          if (isDebugLogsEnabled && selectedGenerationStrategy !== "FLOW_BYPASS") {
             // TEMPORARY DIAGNOSTIC LOGS
             console.log("\n=== TEMPORARY DIAGNOSTIC LOGS: START ===");
             console.log("Source:", input.dto.source || conversation.source);
@@ -3668,17 +3650,8 @@ export class AssistantConversationsService {
             console.log("=== TEMPORARY DIAGNOSTIC LOGS: END ===\n");
           }
 
-          let completion: any;
-          let triageValidationPassed = false;
-          let triageAttemptCount = 0;
-          let responseMode = "ai-runtime";
-          let triageResolved = false;
-          let triageContinuationLogged = triageContinuation;
-          let schedulingExplicitlyRequested = false;
-
-          if (triageMode) {
-            responseMode = "TRIAGE_ONLY";
-            const triageResult = await generateTriageResponse({
+          const createTriageInput = async (): Promise<TriageResponseGenerationInput> => {
+            return {
               companyId: input.tenant.companyId,
               assistant,
               promptInstructions,
@@ -3723,72 +3696,11 @@ export class AssistantConversationsService {
                   triageFlowIncluded: Boolean(triageFlowContext),
                 };
               },
-            });
-            completion = triageResult.completion;
-            promptMessages = triageResult.promptMessages;
-            answer = triageResult.answer;
-            triageValidationPassed = triageResult.triageValidationPassed;
-            triageAttemptCount = triageResult.triageAttemptCount;
-            triageResolved = triageResult.triageResolved;
+            };
+          };
 
-            // Se a triagem foi resolvida com sucesso
-            if (triageResolved) {
-              triageMode = false;
-
-              runtime = {
-                ...runtime,
-                mode: "ai-runtime",
-                fallback: false,
-                outcome: "success",
-                provider: completion?.provider ?? runtimeConfig.provider ?? null,
-                model: completion?.model ?? resolvedModel.model ?? null,
-                reason: undefined,
-                ragData: ragLogData,
-              };
-
-              Object.assign(contextMetadata, {
-                responseMode: "TRIAGE_ONLY",
-                triageMode: true,
-                triageStateActive: false,
-                triageResolved: true,
-                triageContinuation: triageContinuationLogged,
-                triageAttemptCount,
-                schedulingExplicitlyRequested,
-                triageValidationPassed: true,
-              });
-
-              toolCallsResolved = true; // Bypasses normal loop
-            } else {
-              // Mapeamento normal para triage persistente
-              runtime = {
-                ...runtime,
-                mode: "ai-runtime",
-                fallback: !triageValidationPassed,
-                outcome: "success",
-                provider: completion?.provider ?? runtimeConfig.provider ?? null,
-                model: completion?.model ?? resolvedModel.model ?? null,
-                reason: undefined,
-                ragData: ragLogData,
-              };
-
-              Object.assign(contextMetadata, {
-                responseMode,
-                triageMode: true,
-                triageStateActive: true,
-                triageRequestedDetail: loadedTriageState?.requestedDetail ?? "",
-                triageResolved: false,
-                triageContinuation: triageContinuationLogged,
-                triageAttemptCount,
-                schedulingExplicitlyRequested,
-                triageValidationPassed,
-              });
-
-              toolCallsResolved = true; // Bypasses normal loop
-            }
-          }
-
-          if (!toolCallsResolved) {
-            const standardResult = await generateStandardResponse({
+          const createStandardInput = async (): Promise<StandardResponseGenerationInput> => {
+            return {
               companyId: input.tenant.companyId,
               promptMessages,
               model: resolvedModel.model,
@@ -4031,19 +3943,101 @@ export class AssistantConversationsService {
                   });
                 }
               },
-            });
-            completion = standardResult.completion;
-          }
+            };
+          };
 
-          if (!runtime || (runtime.mode !== "flow-bypass" && responseMode !== "TRIAGE_ONLY")) {
-            answer = completion.answer;
+          const generatedResponse = await new V1ResponseGenerationExecutor().execute({
+            flow: selectedFlow,
+            triageMode,
+            createFlowBypassInput: async () => ({
+              flow: selectedFlow,
+              triageCacheKey,
+              cache: this.cacheService,
+              logger: this.logger,
+            }),
+            createTriageInput,
+            createStandardInput,
+          });
+
+          if (generatedResponse.strategy === "FLOW_BYPASS") {
+            Object.assign(contextMetadata, {
+              finalAction: generatedResponse.generationMetadata.finalAction ?? "respond",
+              llmSkipped: true,
+              autoRespond: generatedResponse.autoRespond,
+              ...(generatedResponse.handoffRequired ? { handoffPending: true } : {}),
+            });
+            answer = generatedResponse.responseText;
+            runtime = {
+              ...runtime,
+              mode: "flow-bypass",
+              fallback: false,
+              outcome: generatedResponse.handoffRequired ? "handoff" : "success",
+              reason: undefined,
+            };
+          } else if (generatedResponse.strategy === "TRIAGE") {
+            const triageValidationPassed =
+              generatedResponse.generationMetadata.triageValidationPassed ?? false;
+            const triageAttemptCount =
+              generatedResponse.generationMetadata.triageAttemptCount ?? 0;
+            const triageResolved = generatedResponse.generationMetadata.triageResolved ?? false;
+            const triageContinuationLogged = triageContinuation;
+            const schedulingExplicitlyRequested = false;
+            answer = generatedResponse.responseText;
+
+            if (triageResolved) {
+              triageMode = false;
+              runtime = {
+                ...runtime,
+                mode: "ai-runtime",
+                fallback: false,
+                outcome: "success",
+                provider: generatedResponse.providerMetadata.provider ?? runtimeConfig.provider ?? null,
+                model: generatedResponse.providerMetadata.model ?? resolvedModel.model ?? null,
+                reason: undefined,
+                ragData: ragLogData,
+              };
+              Object.assign(contextMetadata, {
+                responseMode: "TRIAGE_ONLY",
+                triageMode: true,
+                triageStateActive: false,
+                triageResolved: true,
+                triageContinuation: triageContinuationLogged,
+                triageAttemptCount,
+                schedulingExplicitlyRequested,
+                triageValidationPassed: true,
+              });
+            } else {
+              runtime = {
+                ...runtime,
+                mode: "ai-runtime",
+                fallback: !triageValidationPassed,
+                outcome: "success",
+                provider: generatedResponse.providerMetadata.provider ?? runtimeConfig.provider ?? null,
+                model: generatedResponse.providerMetadata.model ?? resolvedModel.model ?? null,
+                reason: undefined,
+                ragData: ragLogData,
+              };
+              Object.assign(contextMetadata, {
+                responseMode: "TRIAGE_ONLY",
+                triageMode: true,
+                triageStateActive: true,
+                triageRequestedDetail: loadedTriageState?.requestedDetail ?? "",
+                triageResolved: false,
+                triageContinuation: triageContinuationLogged,
+                triageAttemptCount,
+                schedulingExplicitlyRequested,
+                triageValidationPassed,
+              });
+            }
+          } else {
+            answer = generatedResponse.responseText;
             runtime = {
               ...runtime,
               mode: assistant.ragEnabled ? "ai-runtime-rag" : "ai-runtime",
               fallback: false,
               outcome: "success",
-              provider: completion.provider,
-              model: completion.model,
+              provider: generatedResponse.providerMetadata.provider ?? undefined,
+              model: generatedResponse.providerMetadata.model ?? undefined,
               reason: undefined,
               ragData: ragLogData,
             };

@@ -10,14 +10,20 @@ const strategyUrl = new URL(
   "../src/assistant-conversations/standard-response-generation-strategy.ts",
   import.meta.url,
 );
+const executorUrl = new URL(
+  "../src/assistant-conversations/v1-response-generation-executor.ts",
+  import.meta.url,
+);
 
 test("standard provider iteration is isolated before the unchanged productive tail", async () => {
-  const [serviceSource, strategySource] = await Promise.all([
+  const [serviceSource, strategySource, executorSource] = await Promise.all([
     readFile(serviceUrl, "utf8"),
     readFile(strategyUrl, "utf8"),
+    readFile(executorUrl, "utf8"),
   ]);
 
-  assert.match(serviceSource, /generateStandardResponse\(\{/);
+  assert.doesNotMatch(serviceSource, /generateStandardResponse\(/);
+  assert.match(executorSource, /generateStandardResponse/);
   assert.equal([...serviceSource.matchAll(/this\.aiService\.generateChatCompletion\(/g)].length, 0);
   assert.match(strategySource, /input\.provider\.generateChatCompletion\(/);
   assert.match(strategySource, /while \(loopCount < maxIterations/);

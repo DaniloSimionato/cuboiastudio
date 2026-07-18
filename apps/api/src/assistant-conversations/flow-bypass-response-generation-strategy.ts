@@ -36,27 +36,35 @@ export type FlowBypassResponseGenerationResult =
       outcome: "handoff";
     };
 
+export function requiresFlowBypassGeneration(flow: AssistantFlow | null | undefined): boolean {
+  if (!flow) return false;
+
+  const finalAction = flow.finalAction || "respond";
+  return (
+    finalAction === "fixed_message" ||
+    finalAction === "handoff" ||
+    flow.requiresHuman ||
+    flow.autoRespond === false
+  );
+}
+
 export async function generateFlowBypassResponse(
   input: FlowBypassResponseGenerationInput,
 ): Promise<FlowBypassResponseGenerationResult> {
-  if (!input.flow) return { kind: "NONE" };
+  if (!requiresFlowBypassGeneration(input.flow)) return { kind: "NONE" };
 
-  const finalAction = input.flow.finalAction || "respond";
-  const autoRespond = input.flow.autoRespond !== false;
+  const finalAction = input.flow!.finalAction || "respond";
+  const autoRespond = input.flow!.autoRespond !== false;
   if (finalAction === "fixed_message") {
     return {
       kind: "FIXED_MESSAGE",
-      answer: input.flow.fixedMessage || "Agradecemos o contato.",
+      answer: input.flow!.fixedMessage || "Agradecemos o contato.",
       finalAction,
       autoRespond,
       providerCallCount: 0,
       handoffPending: false,
       outcome: "success",
     };
-  }
-
-  if (finalAction !== "handoff" && !input.flow.requiresHuman && autoRespond) {
-    return { kind: "NONE" };
   }
 
   if (input.cache) {
