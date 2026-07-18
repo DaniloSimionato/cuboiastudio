@@ -11,6 +11,7 @@ import {
 } from "../inbound/canonical-inbound-message";
 import { understandTurn } from "./turn-understanding";
 import { evaluateV2PrimarySecurityRules } from "../assistant-conversations/v2-primary-security-gate";
+import { evaluateFlowApplicability } from "../assistant-conversations/flow-applicability-evaluator";
 import type { PrismaService } from "../database/prisma.service";
 import {
   resolveRuntimeV2ResponseExecutionAssistantIds,
@@ -55,6 +56,19 @@ export type RuntimeV2ResponseExecutionPreflightResult = {
   securityRulesFingerprint: string | null;
   officialContextStatus: "AVAILABLE" | "BLOCKED";
   officialContextFingerprint: string | null;
+  flowConfigurationStatus: "FLOW_NOT_CONFIGURED" | "ACTIVE_FLOWS_PRESENT";
+  activeFlowCount: number;
+  flowEvaluationStatus:
+    "NO_MATCH" | "MATCHED_STANDARD_COMPATIBLE" | "MATCHED_BLOCKS_V2" | "INDETERMINATE";
+  matchedFlowCount: number;
+  selectedFlowFingerprint: string | null;
+  v2FlowCompatibility: "ALLOWED" | "BLOCKED";
+  flowConfigurationFingerprint: string;
+  flowBlockerCode:
+    | "FLOW_APPLICABLE_BLOCKS_V2"
+    | "FLOW_APPLICABLE_STANDARD_COMPATIBLE"
+    | "FLOW_EVALUATION_INDETERMINATE"
+    | null;
   executionConfiguration: {
     mode: "OFF" | "CONTROLLED";
     assistantAllowlisted: boolean;
@@ -308,17 +322,21 @@ export class RuntimeV2ResponseExecutionAdministrationService {
       if (activeHandoff) blockers.push("HANDOFF_ACTIVE");
     }
 
-    const [activeFlowCount, enabledToolCount] = assistant
+    const [activeFlows, enabledToolCount] = assistant
       ? await Promise.all([
-          this.dependencies.prisma.assistantFlow.count({
+          this.dependencies.prisma.assistantFlow.findMany({
             where: { assistantId: assistant.id, active: true },
           }),
           this.dependencies.prisma.assistantToolConfig.count({
             where: { assistantId: assistant.id, enabled: true },
           }),
         ])
-      : [0, 0];
-    if (activeFlowCount > 0) blockers.push("FLOW_CONFIGURATION_PRESENT");
+      : [[], 0];
+    const flowEvaluation = evaluateFlowApplicability({
+      message: input.message,
+      flows: activeFlows,
+    });
+    if (flowEvaluation.blockerCode) blockers.push(flowEvaluation.blockerCode);
     if (enabledToolCount > 0) blockers.push("TOOL_CONFIGURATION_PRESENT");
 
     const securityRules = assistant
@@ -412,6 +430,14 @@ export class RuntimeV2ResponseExecutionAdministrationService {
       securityRulesFingerprint: security.rulesFingerprint,
       officialContextStatus,
       officialContextFingerprint,
+      flowConfigurationStatus: flowEvaluation.flowConfigurationStatus,
+      activeFlowCount: flowEvaluation.activeFlowCount,
+      flowEvaluationStatus: flowEvaluation.flowEvaluationStatus,
+      matchedFlowCount: flowEvaluation.matchedFlowCount,
+      selectedFlowFingerprint: flowEvaluation.selectedFlowFingerprint,
+      v2FlowCompatibility: flowEvaluation.v2Compatibility,
+      flowConfigurationFingerprint: flowEvaluation.flowConfigurationFingerprint,
+      flowBlockerCode: flowEvaluation.blockerCode,
       executionConfiguration: {
         mode: executionMode,
         assistantAllowlisted,
@@ -451,6 +477,7 @@ export class RuntimeV2ResponseExecutionAdministrationService {
         preflight.securityRulesStatus === "NO_ACTIVE_RULES" ? "NO_ACTIVE_RULES" : "ALLOWED",
       officialContextFingerprint: preflight.officialContextFingerprint,
       officialContextStatus: "AVAILABLE",
+      flowConfigurationFingerprint: preflight.flowConfigurationFingerprint,
       now: this.now(),
     });
     await this.dependencies.responseExecutionStore.arm({

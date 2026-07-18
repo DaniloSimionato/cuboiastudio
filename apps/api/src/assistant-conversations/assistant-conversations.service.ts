@@ -114,6 +114,7 @@ import {
   flowIntentKeyForFlow,
   flowObjectiveForFlow,
 } from "../intent-router/intent-routing";
+import { evaluateFlowApplicability } from "./flow-applicability-evaluator";
 import { selectV1ResponseGenerationStrategy } from "./v1-response-generation-executor";
 import { ResponseGenerationRouter } from "./response-generation-router";
 import {
@@ -4033,6 +4034,22 @@ export class AssistantConversationsService {
             flow: selectedFlow,
             triageMode,
           });
+          const flowEvaluation = evaluateFlowApplicability({
+            message: customerIntentText,
+            flows: assistant.flows ?? [],
+          });
+          const revalidateV2Flow = async () => {
+            const currentAssistant = await this.prisma.assistant.findFirst({
+              where: { id: assistant.id, companyId: input.tenant.companyId },
+              select: { flows: true },
+            });
+            return currentAssistant
+              ? evaluateFlowApplicability({
+                  message: customerIntentText,
+                  flows: currentAssistant.flows,
+                })
+              : null;
+          };
           const businessHoursTurn = /\b(hor[aá]rio|atendimento)\b/i.test(customerIntentText);
           const v2PrimaryContext: V2PrimaryResponseExecutionContext = {
             canonicalInbound: {
@@ -4099,6 +4116,7 @@ export class AssistantConversationsService {
               conversation.status === "ACTIVE" &&
               !humanHandoffSignal.requested &&
               !selectedFlow &&
+              flowEvaluation.v2Compatibility === "ALLOWED" &&
               (tools?.length ?? 0) === 0 &&
               businessHoursTurn &&
               Boolean(officialBusinessContext?.businessHours),
@@ -4107,6 +4125,7 @@ export class AssistantConversationsService {
               businessHoursTurn && officialBusinessContext?.businessHours
                 ? ("OFFICIAL_CONTEXT" as const)
                 : null,
+            flowEvaluation,
           };
           responseGenerationRouterInstance =
             this.responseGenerationRouter ?? new ResponseGenerationRouter();
@@ -4116,6 +4135,7 @@ export class AssistantConversationsService {
             executionAssistantIds: resolveRuntimeV2ResponseExecutionAssistantIds(),
             executionConversationIds: resolveRuntimeV2ResponseExecutionConversationIds(),
             v2Eligibility,
+            revalidateV2Flow,
             v2PrimaryContext,
             v1Input: {
               flow: selectedFlow,

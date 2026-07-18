@@ -111,6 +111,7 @@ test("PostgreSQL stateJson grants one atomic single-use claim across two coordin
     canonicalVersion: "canonical-inbound-message-v1",
     expiresAt: new Date(Date.now() + 60_000),
     operatorPurpose: "PostgreSQL CAS test",
+    flowConfigurationFingerprint: "flow-config-persistence",
   });
   const seedStore = new ConversationStateResponseExecutionStore(
     new PrismaConversationStateStore(prisma),
@@ -189,6 +190,7 @@ test("PostgreSQL allows one real V2 primary executor and one shared tail complet
     canonicalVersion: "canonical-inbound-message-v1",
     expiresAt: new Date(Date.now() + 60_000),
     operatorPurpose: "PostgreSQL real primary executor test",
+    flowConfigurationFingerprint: "flow-config-persistence",
   });
   const seedStore = new ConversationStateResponseExecutionStore(
     new PrismaConversationStateStore(prisma),
@@ -261,6 +263,10 @@ test("PostgreSQL allows one real V2 primary executor and one shared tail complet
       standardEligible: true,
       category: "businessHours",
       authority: "OFFICIAL_CONTEXT",
+      flowEvaluation: {
+        v2Compatibility: "ALLOWED",
+        flowConfigurationFingerprint: "flow-config-persistence",
+      },
     },
     v2PrimaryContext: {
       canonicalInbound: {

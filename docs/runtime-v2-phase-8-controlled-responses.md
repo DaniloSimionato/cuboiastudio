@@ -240,7 +240,15 @@ o ownership, o schedule estruturado, timezone e ausência de conflito antes de
 chamar o provider oficial via DI. Ele usa o mesmo `RuntimeV2CandidateResponseGenerator`,
 `ResponsePlan`, política de autoridade, timeout, `AbortSignal` e redaction do
 Shadow, mas fornece somente contexto oficial de horário. Não fornece RAG,
-memória factual, ferramentas, handoff, flow ou calendário.
+memória factual, ferramentas, handoff, flow ou calendário. Antes de uma approval
+ser reclamada, o `FlowApplicabilityEvaluator` reutiliza a etapa determinística de
+seleção V1 sem provider nem side effect. Flows inexistentes ou ativos sem match
+determinístico e sem fallback semântico podem prosseguir; um match aplicável continua bloqueando o primeiro
+outbound V2, mesmo quando seria compatível com `STANDARD`. Quando o V1 precisaria
+do fallback semântico por IA, a avaliação é `INDETERMINATE` e bloqueia em
+fail-closed. O fingerprint redigido do conjunto de flows é registrado na approval,
+revalidado antes do claim e novamente após o claim; uma mudança nesse intervalo
+segue para fallback V1 antes de qualquer provider V2.
 
 O prompt primário aceita somente a mensagem canônica, até seis referências da
 mesma conversa, comportamento permitido e o contexto estruturado oficial. O
@@ -264,7 +272,8 @@ somente o fallback V1 já coordenado.
 O mecanismo administrativo interno `runtime-v2-response-execution` tem quatro
 comandos: `preflight`, `arm`, `status` e `cancel`. `preflight` calcula apenas o
 hash canônico em memória, valida escopo, estado operacional, contexto oficial,
-regras de segurança e ausência de execução pendente; ele não persiste nada nem
+regras de segurança, aplicabilidade de flow e ausência de execução pendente; ele
+não persiste nada nem
 altera flags/allowlists. `arm` executa o mesmo preflight, aceita exclusivamente
 `businessHours`/`OFFICIAL_CONTEXT`, dura de um a dez minutos e cria uma única
 approval `ARMED` por conversa. Só fingerprints, status e propósito sanitizado

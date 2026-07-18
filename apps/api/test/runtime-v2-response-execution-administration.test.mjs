@@ -14,6 +14,28 @@ const scope = {
 };
 const canonicalVersion = "canonical-inbound-message-v1";
 
+function flow(overrides = {}) {
+  return {
+    id: "flow-admin",
+    name: "Informações gerais",
+    active: true,
+    priority: 10,
+    triggerKeywords: "[]",
+    triggerDescription: null,
+    triggerExamples: null,
+    finalAction: "respond",
+    fixedMessage: null,
+    requiresHuman: false,
+    autoRespond: true,
+    allowedToolSlugs: null,
+    handoffTeamId: null,
+    handoffTeamName: null,
+    toolContext: null,
+    updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+    ...overrides,
+  };
+}
+
 function securityRule(overrides = {}) {
   return {
     id: "rule-admin",
@@ -93,7 +115,7 @@ function createAdministration(overrides = {}) {
         return null;
       },
     },
-    assistantFlow: { count: async () => overrides.activeFlowCount ?? 0 },
+    assistantFlow: { findMany: async () => overrides.flows ?? [] },
     assistantToolConfig: { count: async () => overrides.enabledToolCount ?? 0 },
     assistantConversationStateV2: {
       findMany: async () => {
@@ -181,7 +203,7 @@ test("preflight bloqueia escopo operacional, contexto e regras incompatíveis", 
     [{ conversation: { aiActive: false } }, "AI_INACTIVE"],
     [{ conversation: { pausedByHuman: true } }, "HUMAN_ACTIVE"],
     [{ conversation: { status: "INACTIVE" } }, "CONVERSATION_NOT_ACTIVE"],
-    [{ activeFlowCount: 1 }, "FLOW_CONFIGURATION_PRESENT"],
+    [{ flows: [flow({ triggerKeywords: '["horário"]' })] }, "FLOW_APPLICABLE_STANDARD_COMPATIBLE"],
     [{ enabledToolCount: 1 }, "TOOL_CONFIGURATION_PRESENT"],
     [{ assistant: { weeklySchedule: {} } }, "OFFICIAL_BUSINESS_HOURS_UNAVAILABLE"],
     [{}, "TURN_NOT_STRICT_BUSINESS_HOURS", { message: "Qual é o preço?" }],
@@ -196,6 +218,25 @@ test("preflight bloqueia escopo operacional, contexto e regras incompatíveis", 
     assert.equal(result.preflightStatus, "BLOCKED");
     assert.ok(result.blockers.includes(blocker));
   }
+});
+
+test("preflight permite flows configurados sem match e bloqueia avaliação semântica inconclusiva", async () => {
+  const noMatch = createAdministration({
+    flows: [flow({ triggerKeywords: '["preço"]' })],
+  });
+  const approved = await noMatch.administration.preflight(preflightInput());
+  assert.equal(approved.preflightStatus, "APPROVED");
+  assert.equal(approved.flowConfigurationStatus, "ACTIVE_FLOWS_PRESENT");
+  assert.equal(approved.flowEvaluationStatus, "NO_MATCH");
+  assert.equal(approved.v2FlowCompatibility, "ALLOWED");
+
+  const semantic = createAdministration({
+    flows: [flow({ triggerDescription: "classificação semântica" })],
+  });
+  const blocked = await semantic.administration.preflight(preflightInput());
+  assert.equal(blocked.preflightStatus, "BLOCKED");
+  assert.equal(blocked.flowEvaluationStatus, "INDETERMINATE");
+  assert.ok(blocked.blockers.includes("FLOW_EVALUATION_INDETERMINATE"));
 });
 
 test("arm cria approval única por hash, status é redigido e cancel somente ARMED", async () => {

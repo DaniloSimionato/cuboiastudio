@@ -37,6 +37,7 @@ export type RuntimeV2ResponseExecutionApproval = {
   securityRulesStatus?: "ALLOWED" | "NO_ACTIVE_RULES";
   officialContextFingerprint?: string | null;
   officialContextStatus?: "AVAILABLE";
+  flowConfigurationFingerprint?: string | null;
   redactionApplied: true;
 };
 
@@ -60,6 +61,7 @@ export function createRuntimeV2ResponseExecutionApproval(input: {
   securityRulesStatus?: "ALLOWED" | "NO_ACTIVE_RULES";
   officialContextFingerprint?: string | null;
   officialContextStatus?: "AVAILABLE";
+  flowConfigurationFingerprint?: string | null;
   now?: Date;
 }): RuntimeV2ResponseExecutionApproval {
   const now = input.now ?? new Date();
@@ -102,6 +104,9 @@ export function createRuntimeV2ResponseExecutionApproval(input: {
       : {}),
     ...(input.officialContextStatus !== undefined
       ? { officialContextStatus: input.officialContextStatus }
+      : {}),
+    ...(input.flowConfigurationFingerprint !== undefined
+      ? { flowConfigurationFingerprint: input.flowConfigurationFingerprint }
       : {}),
     redactionApplied: true,
   };

@@ -19,6 +19,7 @@ import type {
   V2PrimaryResponseExecutionContext,
   V2PrimaryResponseExecutor,
 } from "./v2-primary-response-executor";
+import type { FlowApplicabilityEvaluation } from "./flow-applicability-evaluator";
 
 export type ResponseGenerationRoute = ResponseExecutionEnvelope["route"];
 export type ResponseGenerationRouterTurn = ResponseExecutionTurn;
@@ -33,7 +34,10 @@ export type ResponseGenerationRouterInput = {
     standardEligible: boolean;
     category: "businessHours" | null;
     authority: "OFFICIAL_CONTEXT" | null;
+    flowEvaluation?: FlowApplicabilityEvaluation;
   };
+  /** Re-checks current flow configuration at the only point V2 could claim a turn. */
+  revalidateV2Flow?: () => Promise<FlowApplicabilityEvaluation | null>;
   /** Runtime-primary context is constructed only after V1's basic gates. */
   v2PrimaryContext?: V2PrimaryResponseExecutionContext;
 };
@@ -81,7 +85,8 @@ function isEligibleForV2(input: ResponseGenerationRouterInput): boolean {
   return (
     input.v2Eligibility?.standardEligible === true &&
     input.v2Eligibility.category === "businessHours" &&
-    input.v2Eligibility.authority === "OFFICIAL_CONTEXT"
+    input.v2Eligibility.authority === "OFFICIAL_CONTEXT" &&
+    input.v2Eligibility.flowEvaluation?.v2Compatibility === "ALLOWED"
   );
 }
 
@@ -105,6 +110,9 @@ export class ResponseGenerationRouter {
       return this.executeV1Normal(input);
     }
 
+    const currentFlow = await this.currentFlowEvaluation(input);
+    if (!this.isCurrentFlowEligible(input, currentFlow)) return this.executeV1Normal(input);
+
     const approval = await this.dependencies.coordinator.loadApproval(input.turn);
     if (!approval) return this.executeV1Normal(input);
     if (
@@ -116,6 +124,7 @@ export class ResponseGenerationRouter {
       approval.expectedCanonicalComparisonHash !== input.turn.canonicalComparisonHash ||
       approval.allowedCategory !== "businessHours" ||
       approval.allowedAuthority !== "OFFICIAL_CONTEXT" ||
+      approval.flowConfigurationFingerprint !== currentFlow.flowConfigurationFingerprint ||
       Date.parse(approval.expiresAt) <= Date.now()
     ) {
       return this.executeV1Normal(input);
@@ -126,6 +135,14 @@ export class ResponseGenerationRouter {
       approval,
     });
     if (claimed.status !== "CLAIMED") return this.deferred(claimed);
+    const flowAfterClaim = await this.currentFlowEvaluation(input);
+    if (!this.isCurrentFlowEligible(input, flowAfterClaim)) {
+      return this.executeV1Fallback(
+        input,
+        claimed.generationId,
+        "FLOW_CONFIGURATION_CHANGED_AFTER_CLAIM",
+      );
+    }
     if (
       !(await this.dependencies.coordinator.beginV2Generation({
         ...input.turn,
@@ -168,18 +185,7 @@ export class ResponseGenerationRouter {
       });
     } catch (error) {
       const reason = error instanceof Error ? error.message.slice(0, 80) : "V2_GENERATION_FAILED";
-      const fallbackClaimed = await this.dependencies.coordinator.beginV1Fallback({
-        ...input.turn,
-        generationId: claimed.generationId,
-        reason,
-      });
-      if (!fallbackClaimed) return this.deferred({ status: "PENDING_OR_TERMINAL" });
-      const response = await this.dependencies.executeV1(input.v1Input);
-      return createV1FallbackResponseExecutionEnvelope({
-        turn: input.turn,
-        response,
-        reason,
-      });
+      return this.executeV1Fallback(input, claimed.generationId, reason);
     }
   }
 
@@ -196,6 +202,46 @@ export class ResponseGenerationRouter {
 
   getCoordinator(): RuntimeV2ResponseExecutionCoordinator | null {
     return this.dependencies.coordinator ?? null;
+  }
+
+  private async currentFlowEvaluation(
+    input: ResponseGenerationRouterInput,
+  ): Promise<FlowApplicabilityEvaluation | null> {
+    try {
+      return (await input.revalidateV2Flow?.()) ?? input.v2Eligibility?.flowEvaluation ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private isCurrentFlowEligible(
+    input: ResponseGenerationRouterInput,
+    evaluation: FlowApplicabilityEvaluation | null,
+  ): evaluation is FlowApplicabilityEvaluation {
+    return (
+      evaluation?.v2Compatibility === "ALLOWED" &&
+      evaluation.flowConfigurationFingerprint ===
+        input.v2Eligibility?.flowEvaluation?.flowConfigurationFingerprint
+    );
+  }
+
+  private async executeV1Fallback(
+    input: ResponseGenerationRouterInput,
+    generationId: string,
+    reason: string,
+  ): Promise<ResponseGenerationRouterResult> {
+    const fallbackClaimed = await this.dependencies.coordinator!.beginV1Fallback({
+      ...input.turn,
+      generationId,
+      reason,
+    });
+    if (!fallbackClaimed) return this.deferred({ status: "PENDING_OR_TERMINAL" });
+    const response = await this.dependencies.executeV1(input.v1Input);
+    return createV1FallbackResponseExecutionEnvelope({
+      turn: input.turn,
+      response,
+      reason,
+    });
   }
 
   private deferred(

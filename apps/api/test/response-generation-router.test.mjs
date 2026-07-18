@@ -63,6 +63,10 @@ function controlledInput(overrides = {}) {
       standardEligible: true,
       category: "businessHours",
       authority: "OFFICIAL_CONTEXT",
+      flowEvaluation: {
+        v2Compatibility: "ALLOWED",
+        flowConfigurationFingerprint: "flow-config-1",
+      },
     },
     ...overrides,
   });
@@ -77,6 +81,7 @@ function approval() {
     canonicalVersion: "canonical-inbound-message-v1",
     expiresAt: new Date(Date.now() + 60_000),
     operatorPurpose: "isolated router test",
+    flowConfigurationFingerprint: "flow-config-1",
   });
 }
 
@@ -295,4 +300,50 @@ test("triage and other operationally ineligible turns stay V1 without an approva
   );
   assert.equal(result.executionOwner, "V1_NORMAL");
   assert.equal(lookups, 0);
+});
+
+test("router rejects a changed flow configuration before claim and falls back safely after claim", async () => {
+  let approvalLookups = 0;
+  let v1Calls = 0;
+  let v2Calls = 0;
+  const coordinator = fakeCoordinator({ onLoad: () => (approvalLookups += 1) });
+  const router = new ResponseGenerationRouter({
+    coordinator,
+    executeV1: async () => {
+      v1Calls += 1;
+      return v1Response();
+    },
+    v2Executor: {
+      async execute() {
+        v2Calls += 1;
+        throw new Error("must not execute");
+      },
+    },
+  });
+  const changedBeforeClaim = await router.route(
+    controlledInput({
+      revalidateV2Flow: async () => ({
+        v2Compatibility: "ALLOWED",
+        flowConfigurationFingerprint: "changed-flow-config",
+      }),
+    }),
+  );
+  assert.equal(changedBeforeClaim.executionOwner, "V1_NORMAL");
+  assert.equal(approvalLookups, 0);
+  assert.equal(v1Calls, 1);
+
+  let checks = 0;
+  const changedAfterClaim = await router.route(
+    controlledInput({
+      revalidateV2Flow: async () => {
+        checks += 1;
+        return checks === 1
+          ? { v2Compatibility: "ALLOWED", flowConfigurationFingerprint: "flow-config-1" }
+          : { v2Compatibility: "BLOCKED", flowConfigurationFingerprint: "changed-flow-config" };
+      },
+    }),
+  );
+  assert.equal(changedAfterClaim.executionOwner, "V1_FALLBACK");
+  assert.equal(v1Calls, 2);
+  assert.equal(v2Calls, 0);
 });

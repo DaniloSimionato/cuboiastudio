@@ -26,6 +26,7 @@ function createApproval() {
     canonicalVersion: turn.canonicalVersion,
     expiresAt: new Date(Date.now() + 60_000),
     operatorPurpose: "test-only single-use coordinator integration",
+    flowConfigurationFingerprint: "flow-config-c1",
   });
 }
 
@@ -94,6 +95,10 @@ function routerInput() {
       standardEligible: true,
       category: "businessHours",
       authority: "OFFICIAL_CONTEXT",
+      flowEvaluation: {
+        v2Compatibility: "ALLOWED",
+        flowConfigurationFingerprint: "flow-config-c1",
+      },
     },
   };
 }

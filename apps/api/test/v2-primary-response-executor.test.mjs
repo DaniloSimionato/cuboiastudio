@@ -46,6 +46,7 @@ function claimedApproval(overrides = {}) {
     canonicalVersion: turn.canonicalVersion,
     expiresAt: new Date(Date.now() + 60_000),
     operatorPurpose: "teste local do executor primário",
+    flowConfigurationFingerprint: "flow-config-primary",
   });
   return {
     ...armed,
@@ -325,6 +326,10 @@ test("router, executor real e tail fake produzem um único V2_PRIMARY sem V1 par
       standardEligible: true,
       category: "businessHours",
       authority: "OFFICIAL_CONTEXT",
+      flowEvaluation: {
+        v2Compatibility: "ALLOWED",
+        flowConfigurationFingerprint: "flow-config-primary",
+      },
     },
     v2PrimaryContext: context(),
   });
@@ -431,6 +436,10 @@ test("falha pré-sender do executor real faz um único fallback V1", async () =>
       standardEligible: true,
       category: "businessHours",
       authority: "OFFICIAL_CONTEXT",
+      flowEvaluation: {
+        v2Compatibility: "ALLOWED",
+        flowConfigurationFingerprint: "flow-config-primary",
+      },
     },
     v2PrimaryContext: context(),
   });
