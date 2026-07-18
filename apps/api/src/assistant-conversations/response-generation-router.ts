@@ -3,17 +3,14 @@ import {
   type V1GeneratedResponse,
   type V1ResponseGenerationExecutorInput,
 } from "./v1-response-generation-executor";
+import {
+  createV1NormalResponseExecutionEnvelope,
+  type ResponseExecutionEnvelope,
+  type ResponseExecutionTurn,
+} from "./response-execution-envelope";
 
-export type ResponseGenerationRoute = "V1_DEFAULT";
-
-export type ResponseGenerationRouterTurn = {
-  companyId: string;
-  assistantId: string;
-  conversationId: string;
-  internalMessageId: string;
-  canonicalComparisonHash: string | null;
-  canonicalVersion: string;
-};
+export type ResponseGenerationRoute = ResponseExecutionEnvelope["route"];
+export type ResponseGenerationRouterTurn = ResponseExecutionTurn;
 
 export type ResponseGenerationRouterInput = {
   turn: ResponseGenerationRouterTurn;
@@ -23,15 +20,7 @@ export type ResponseGenerationRouterInput = {
   executionConversationIds?: readonly string[] | null;
 };
 
-export type ResponseGenerationRouterResult = {
-  route: ResponseGenerationRoute;
-  response: V1GeneratedResponse;
-  sanitizedTelemetry: {
-    route: ResponseGenerationRoute;
-    decision: "DEFAULT_DENY";
-    reason: "EXECUTION_MODE_OFF" | "EXECUTION_SCOPE_EMPTY" | "V2_EXECUTION_NOT_CONNECTED";
-  };
-};
+export type ResponseGenerationRouterResult = ResponseExecutionEnvelope;
 
 export type ResponseGenerationRouterDependencies = {
   executeV1(input: V1ResponseGenerationExecutorInput): Promise<V1GeneratedResponse>;
@@ -63,14 +52,10 @@ export class ResponseGenerationRouter {
 
   async route(input: ResponseGenerationRouterInput): Promise<ResponseGenerationRouterResult> {
     const response = await this.dependencies.executeV1(input.v1Input);
-    return {
-      route: "V1_DEFAULT",
+    return createV1NormalResponseExecutionEnvelope({
+      turn: input.turn,
       response,
-      sanitizedTelemetry: {
-        route: "V1_DEFAULT",
-        decision: "DEFAULT_DENY",
-        reason: resolveDefaultDenyReason(input),
-      },
-    };
+      reason: resolveDefaultDenyReason(input),
+    });
   }
 }

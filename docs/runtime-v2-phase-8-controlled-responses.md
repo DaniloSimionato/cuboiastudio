@@ -247,8 +247,13 @@ O `sendMessage` não fornece configuração de execution mode ou allowlists a es
 router nesta fase, portanto toda rota produtiva permanece `V1_DEFAULT`.
 A composição compartilhada de prompt/contexto e a execução detalhada de cada
 ferramenta permanecem no `sendMessage` como dependências lazy do executor,
-preservando a ordem e o custo existentes. O tail central permanece intacto. A
-próxima etapa poderá conectar o coordenador ao router de forma controlada.
+preservando a ordem e o custo existentes. O resultado atravessa o tail central
+como `ResponseExecutionEnvelope` com `executionOwner=V1_NORMAL`; hooks de
+lifecycle apenas observam persistência e outbound, sem alterar sender, retries ou
+estado. Em V1, falhas/resultado incerto do sender continuam normalizados pelo
+comportamento histórico e não geram reconciliação ou fallback. O tail central
+permanece intacto. A próxima etapa poderá conectar o coordenador ao router de
+forma controlada.
 
 ## Matriz final: gaps corrigidos antes de outbound
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ResponseGenerationRouter } from "../dist/assistant-conversations/response-generation-router.js";
 
-function v1Response() {
+function v1Response(overrides = {}) {
   return {
     owner: "V1",
     strategy: "STANDARD",
@@ -23,15 +23,16 @@ function v1Response() {
     },
     sanitizedTelemetry: { strategy: "STANDARD", providerCallCount: 1, toolCallCount: 0 },
     errorStage: null,
+    ...overrides,
   };
 }
 
-function createHarness() {
+function createHarness(response = v1Response()) {
   const calls = [];
   const router = new ResponseGenerationRouter({
     executeV1: async (input) => {
       calls.push(input);
-      return v1Response();
+      return response;
     },
   });
   return { calls, router };
@@ -52,17 +53,40 @@ function input(overrides = {}) {
   };
 }
 
-test("router executes V1 once and returns its envelope unchanged", async () => {
+test("router executes V1 once and returns a V1_NORMAL execution envelope", async () => {
   const { calls, router } = createHarness();
   const result = await router.route(input());
 
   assert.equal(calls.length, 1);
-  assert.deepEqual(result.response, v1Response());
-  assert.deepEqual(result.sanitizedTelemetry, {
-    route: "V1_DEFAULT",
-    decision: "DEFAULT_DENY",
-    reason: "EXECUTION_MODE_OFF",
-  });
+  assert.equal(result.executionOwner, "V1_NORMAL");
+  assert.equal(result.route, "V1_DEFAULT");
+  assert.equal(result.strategy, "STANDARD");
+  assert.equal(result.responseText, v1Response().responseText);
+  assert.deepEqual(result.generatedResponse, v1Response());
+  assert.equal(result.outboundAllowed, true);
+  assert.deepEqual(Object.keys(result.sanitizedTelemetry).sort(), [
+    "decision",
+    "executionOwner",
+    "providerCallCount",
+    "reason",
+    "route",
+    "strategy",
+    "toolCallCount",
+  ]);
+});
+
+test("router preserves FLOW_BYPASS, TRIAGE, and STANDARD strategies in the envelope", async () => {
+  for (const strategy of ["FLOW_BYPASS", "TRIAGE", "STANDARD"]) {
+    const response = v1Response({
+      strategy,
+      sanitizedTelemetry: { strategy, providerCallCount: 1, toolCallCount: 0 },
+    });
+    const { router } = createHarness(response);
+    const result = await router.route(input());
+
+    assert.equal(result.strategy, strategy);
+    assert.equal(result.generatedResponse.strategy, strategy);
+  }
 });
 
 test("router propagates V1 errors without fallback or a second execution", async () => {
@@ -113,6 +137,14 @@ test("even a populated future execution scope remains disconnected and redacted"
 
   assert.equal(result.route, "V1_DEFAULT");
   assert.equal(result.sanitizedTelemetry.reason, "V2_EXECUTION_NOT_CONNECTED");
-  assert.deepEqual(Object.keys(result.sanitizedTelemetry).sort(), ["decision", "reason", "route"]);
+  assert.deepEqual(Object.keys(result.sanitizedTelemetry).sort(), [
+    "decision",
+    "executionOwner",
+    "providerCallCount",
+    "reason",
+    "route",
+    "strategy",
+    "toolCallCount",
+  ]);
   assert.equal(calls.length, 1);
 });

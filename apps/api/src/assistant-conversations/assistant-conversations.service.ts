@@ -116,6 +116,14 @@ import {
 } from "../intent-router/intent-routing";
 import { selectV1ResponseGenerationStrategy } from "./v1-response-generation-executor";
 import { ResponseGenerationRouter } from "./response-generation-router";
+import {
+  createV1NormalResponseExecutionEnvelope,
+  validateV1NormalResponseExecutionEnvelope,
+} from "./response-execution-envelope";
+import {
+  ResponseTailLifecycleHooks,
+  type ResponseTailOutboundState,
+} from "./response-tail-lifecycle-hooks";
 import type { StandardResponseGenerationInput } from "./standard-response-generation-strategy";
 import type { TriageResponseGenerationInput } from "./triage-response-generation-strategy";
 
@@ -3199,6 +3207,19 @@ export class AssistantConversationsService {
       },
     };
     let answer = deterministicRuntime.answer;
+    const responseExecutionTurn = {
+      companyId: input.tenant.companyId,
+      assistantId: input.assistantId,
+      conversationId: conversation.id,
+      internalMessageId: userMessage.id,
+      canonicalComparisonHash: canonicalInboundMessage.canonicalComparisonHash,
+      canonicalVersion: canonicalInboundMessage.schemaVersion,
+    };
+    let responseExecutionEnvelope = createV1NormalResponseExecutionEnvelope({
+      turn: responseExecutionTurn,
+      responseText: answer,
+      reason: "EXECUTION_MODE_OFF",
+    });
     let selectedFlowForAuthority: AssistantFlow | null = null;
     const configuredFallbackMessage = assistant.fallbackMessage?.trim() || null;
     const resolveFallbackAnswer = (deterministicAnswer: string) =>
@@ -3945,14 +3966,7 @@ export class AssistantConversationsService {
           };
 
           const routedGeneration = await new ResponseGenerationRouter().route({
-            turn: {
-              companyId: input.tenant.companyId,
-              assistantId: input.assistantId,
-              conversationId: conversation.id,
-              internalMessageId: userMessage.id,
-              canonicalComparisonHash: canonicalInboundMessage.canonicalComparisonHash,
-              canonicalVersion: canonicalInboundMessage.schemaVersion,
-            },
+            turn: responseExecutionTurn,
             v1Input: {
               flow: selectedFlow,
               triageMode,
@@ -3966,7 +3980,11 @@ export class AssistantConversationsService {
               createStandardInput,
             },
           });
-          const generatedResponse = routedGeneration.response;
+          responseExecutionEnvelope = routedGeneration;
+          const generatedResponse = routedGeneration.generatedResponse;
+          if (!generatedResponse) {
+            throw new Error("V1 router completed without a generated response.");
+          }
 
           if (generatedResponse.strategy === "FLOW_BYPASS") {
             Object.assign(contextMetadata, {
@@ -4157,7 +4175,39 @@ export class AssistantConversationsService {
         },
       ];
     }
+    responseExecutionEnvelope = {
+      ...responseExecutionEnvelope,
+      responseText: answer,
+    };
+    try {
+      validateV1NormalResponseExecutionEnvelope({
+        envelope: responseExecutionEnvelope,
+        turn: responseExecutionTurn,
+      });
+    } catch (error) {
+      this.logger.error(
+        "Response tail rejected the V1 response execution envelope before persistence.",
+      );
+      throw error;
+    }
+    const responseTailLifecycleHooks = new ResponseTailLifecycleHooks();
+    const createResponseTailLifecycleMetadata = (
+      persistedResponseId: string | null,
+      outboundAttempted: boolean,
+      outboundPerformed: ResponseTailOutboundState,
+    ) => ({
+      executionOwner: responseExecutionEnvelope.executionOwner,
+      route: responseExecutionEnvelope.route,
+      strategy: responseExecutionEnvelope.strategy,
+      internalMessageId: responseExecutionEnvelope.turn.internalMessageId,
+      persistedResponseId,
+      outboundAttempted,
+      outboundPerformed,
+      externalMessageReferenceFingerprint: null,
+    });
     Object.assign(contextMetadata, {
+      responseExecutionOwner: responseExecutionEnvelope.executionOwner,
+      responseGenerationRoute: responseExecutionEnvelope.route,
       v1UnsupportedClaimDetected: authorityGuard.unsupportedClaimDetected,
       v1UnsupportedClaimCategories: authorityGuard.blockedCategories,
       expectedAuthorityCategory: expectedAuthority.category,
@@ -4179,6 +4229,8 @@ export class AssistantConversationsService {
     });
     contextMetadata.contextManifest = {
       ...contextMetadata.contextManifest,
+      responseExecutionOwner: responseExecutionEnvelope.executionOwner,
+      responseGenerationRoute: responseExecutionEnvelope.route,
       authorityConflictDetected: authorityGuard.authorityConflictDetected,
       authorityConflictCategories: authorityGuard.authorityConflictCategories,
       winningSourceTypes: authorityGuard.winningSourceTypes,
@@ -4228,6 +4280,9 @@ export class AssistantConversationsService {
       ...contextMetadata.contextManifest,
       persistenceStatus: "persisted",
     };
+    responseTailLifecycleHooks.beforeResponsePersist(
+      createResponseTailLifecycleMetadata(null, false, "NOT_ATTEMPTED"),
+    );
 
     const { assistantMessage, runtimeLogId } = await this.prisma.$transaction(async (tx) => {
       const createdAssistantMessage = await tx.assistantConversationMessage.create({
@@ -4275,6 +4330,8 @@ export class AssistantConversationsService {
           intentConfidence: runtime.context.intentConfidence,
           metadata: this.toSerializableJsonValue({
             finalAction: runtime.context.finalAction,
+            responseExecutionOwner: responseExecutionEnvelope.executionOwner,
+            responseGenerationRoute: responseExecutionEnvelope.route,
             llmSkipped: runtime.context.llmSkipped,
             handoffPending: runtime.context.handoffPending,
             autoRespond: runtime.context.autoRespond,
@@ -4411,7 +4468,12 @@ export class AssistantConversationsService {
       ...runtime,
       logId: runtimeLogId,
     };
+    responseTailLifecycleHooks.afterResponsePersist(
+      createResponseTailLifecycleMetadata(assistantMessage.id, false, "NOT_ATTEMPTED"),
+    );
 
+    let tailOutboundAttempted = false;
+    let tailOutboundPerformed: ResponseTailOutboundState = "NOT_ATTEMPTED";
     if (source === "chatwoot") {
       if (process.env.AI_RUNTIME_TRACE === "true") {
         this.logger.log(
@@ -4431,6 +4493,10 @@ export class AssistantConversationsService {
       for (let i = 0; i < blocks.length; i++) {
         const block = blocks[i];
         try {
+          tailOutboundAttempted = true;
+          responseTailLifecycleHooks.beforeOutbound(
+            createResponseTailLifecycleMetadata(assistantMessage.id, true, "NOT_ATTEMPTED"),
+          );
           const outboundResult = await this.sendChatwootOutboundText({
             conversation: {
               ...conversation,
@@ -4447,6 +4513,18 @@ export class AssistantConversationsService {
           });
           if (outboundResult === "sent") {
             blocksSent++;
+            tailOutboundPerformed = "CONFIRMED";
+            responseTailLifecycleHooks.afterOutboundConfirmed(
+              createResponseTailLifecycleMetadata(assistantMessage.id, true, "CONFIRMED"),
+            );
+          } else if (outboundResult === "skipped") {
+            tailOutboundPerformed = "SKIPPED";
+          }
+          if (outboundResult === "failed") {
+            tailOutboundPerformed = "FAILED";
+            responseTailLifecycleHooks.afterOutboundFailure(
+              createResponseTailLifecycleMetadata(assistantMessage.id, true, "FAILED"),
+            );
           }
           contextMetadata.outboundStatus =
             outboundResult === "sent"
@@ -4457,6 +4535,10 @@ export class AssistantConversationsService {
         } catch (err: any) {
           this.logger.error(`Error sending Chatwoot block ${i}: ${err.message}`, err.stack);
           contextMetadata.outboundStatus = "failed";
+          tailOutboundPerformed = "FAILED";
+          responseTailLifecycleHooks.afterOutboundFailure(
+            createResponseTailLifecycleMetadata(assistantMessage.id, true, "FAILED"),
+          );
           break;
         }
 
@@ -4592,6 +4674,13 @@ export class AssistantConversationsService {
       officialDataKeys: ["business_hours", "address", "official_contact", "company_identity"],
     };
 
+    responseTailLifecycleHooks.afterTailCompleted(
+      createResponseTailLifecycleMetadata(
+        assistantMessage.id,
+        tailOutboundAttempted,
+        tailOutboundPerformed,
+      ),
+    );
     this.scheduleRuntimeV2Shadow({
       ...shadowSnapshot,
       candidateContext,
