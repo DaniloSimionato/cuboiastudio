@@ -233,6 +233,11 @@ próprio. A conexão futura exige uma refatoração explícita das estratégias 
 antes de qualquer armamento operacional; uma aprovação ARMED isolada nunca
 processa mensagens antigas nem habilita outbound.
 
+A estratégia de geração V1 de triagem foi extraída para um contrato interno
+testável, sem mover o tail de persistência, sender, `externalMessageId` ou
+Shadow. O ramo especial e o fluxo normal do V1 continuam inline; esta extração
+não conecta nenhuma parte do Runtime V2 ao `sendMessage`.
+
 ## Matriz final: gaps corrigidos antes de outbound
 
 A matriz Shadow encontrou três lacunas sem efeito externo: uma pergunta de

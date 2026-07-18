@@ -49,7 +49,6 @@ import { ContactMemoriesExtractionService } from "../contact-memories/contact-me
 import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
 import {
   isMultiNeedTriageMessage,
-  isTriageResponseValid,
   PROMPT_COMPILER_VERSION,
   PromptCompilerService,
   summarizeTriageHistory,
@@ -115,6 +114,7 @@ import {
   flowIntentKeyForFlow,
   flowObjectiveForFlow,
 } from "../intent-router/intent-routing";
+import { generateTriageResponse } from "./triage-response-generation-strategy";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -3700,225 +3700,61 @@ export class AssistantConversationsService {
 
           if (triageMode) {
             responseMode = "TRIAGE_ONLY";
-            triageAttemptCount = 1;
-
-            const compiler = this.promptCompilerService ?? new PromptCompilerService();
-            promptMessages = compiler.compile({
-              assistant: {
-                ...assistant,
-                instructions: promptInstructions,
-              },
+            const triageResult = await generateTriageResponse({
+              companyId: input.tenant.companyId,
+              assistant,
+              promptInstructions,
               behavior: assistant.behavior,
               flow: selectedFlow,
               securityRules: activeSecurityRules,
-              knowledgeItems: [], // zero chunks in triage
-              // Triage receives only delimited prior client messages. It still
-              // excludes normal history roles, RAG, flow instructions and tools.
-              historyMessages: priorHistory,
-              currentMessage: customerIntentText,
+              priorHistory,
+              customerIntentText,
               officialBusinessContext,
-              calendarContext: null,
               memoryContextBlock,
-              triageMode: true,
-              isSecondAttempt: false,
-              triageState: loadedTriageState,
+              loadedTriageState,
               triageFlowContext,
-            });
-
-            // Update prompt metadata
-            const triagePromptSectionManifest = buildPromptSectionManifest(promptMessages);
-            Object.assign(contextMetadata, {
-              promptVersion: PROMPT_COMPILER_VERSION,
-              promptHash: hashPromptMessages(promptMessages),
-              promptSections: getPromptSectionLabels(promptMessages),
-              promptSectionManifest: triagePromptSectionManifest,
-              promptCharCount: triagePromptSectionManifest.reduce(
-                (total, section) => total + section.charCount,
-                0,
-              ),
-              triageFlowIncluded: Boolean(triageFlowContext),
-            });
-            contextMetadata.contextManifest = {
-              ...contextMetadata.contextManifest,
-              promptSections: triagePromptSectionManifest,
-              promptCharCount: contextMetadata.promptCharCount,
-              mode: "triage",
-              triageFlowIncluded: Boolean(triageFlowContext),
-            };
-
-            try {
-              completion = await this.aiService.generateChatCompletion({
-                companyId: input.tenant.companyId,
-                messages: promptMessages,
-                model: resolvedModel.model,
-                temperature,
-                tools: [], // zero tools in triage
-                response_format: { type: "json_object" },
-              });
-
-              if (completion && completion.answer && isTriageResponseValid(completion.answer)) {
-                const parsed = JSON.parse(
-                  completion.answer.replace(/^```json\s*/i, "").replace(/\s*```$/, ""),
-                );
-                if (parsed.triageResolved) {
-                  triageResolved = true;
-                  triageValidationPassed = true;
-                  answer = parsed.message;
-                } else {
-                  triageValidationPassed = true;
-                  answer = parsed.message;
-                  // Persist triage state
-                  if (this.cacheService) {
-                    const triageState: TriageState = {
-                      active: true,
-                      startedAt: loadedTriageState?.startedAt ?? new Date().toISOString(),
-                      sourceMessageId: userMessage.id,
-                      requestedDetail:
-                        extractedCustomerFields.requestedDetailKey ?? parsed.requestedDetail ?? "",
-                      requestedDetailKey: extractedCustomerFields.requestedDetailKey,
-                      lastQuestion: parsed.message ?? "",
-                      attemptCount: triageAttemptCount,
-                      resolved: false,
-                      expiresAt: loadedTriageState?.expiresAt ?? Date.now() + 3600000,
-                      knownFieldKeys: mergedKnownFieldKeys,
-                      pendingFieldKeys: mergedPendingFieldKeys,
-                    };
-                    await this.cacheService.set(triageCacheKey, triageState, 3600);
-                  }
-                }
-              }
-            } catch (err: any) {
-              this.logger.error(`Error in triage mode attempt 1: ${err.message}`, err.stack);
-            }
-
-            // Attempt 2
-            if (!triageValidationPassed) {
-              triageAttemptCount = 2;
-
-              promptMessages = compiler.compile({
-                assistant: {
-                  ...assistant,
-                  instructions: promptInstructions,
-                },
-                behavior: assistant.behavior,
-                flow: selectedFlow,
-                securityRules: activeSecurityRules,
-                knowledgeItems: [],
-                historyMessages: priorHistory,
-                currentMessage: customerIntentText,
-                officialBusinessContext,
-                calendarContext: null,
-                memoryContextBlock,
-                triageMode: true,
-                isSecondAttempt: true,
-                triageState: loadedTriageState,
-                triageFlowContext,
-              });
-
-              // Update prompt metadata for second attempt
-              const secondTriagePromptSectionManifest = buildPromptSectionManifest(promptMessages);
-              Object.assign(contextMetadata, {
-                promptVersion: PROMPT_COMPILER_VERSION,
-                promptHash: hashPromptMessages(promptMessages),
-                promptSections: getPromptSectionLabels(promptMessages),
-                promptSectionManifest: secondTriagePromptSectionManifest,
-                promptCharCount: secondTriagePromptSectionManifest.reduce(
-                  (total, section) => total + section.charCount,
-                  0,
-                ),
-                triageFlowIncluded: Boolean(triageFlowContext),
-              });
-              contextMetadata.contextManifest = {
-                ...contextMetadata.contextManifest,
-                promptSections: secondTriagePromptSectionManifest,
-                promptCharCount: contextMetadata.promptCharCount,
-                mode: "triage-second-attempt",
-                triageFlowIncluded: Boolean(triageFlowContext),
-              };
-
-              try {
-                completion = await this.aiService.generateChatCompletion({
-                  companyId: input.tenant.companyId,
-                  messages: promptMessages,
-                  model: resolvedModel.model,
-                  temperature,
-                  tools: [], // zero tools in triage
-                  response_format: { type: "json_object" },
+              triageCacheKey,
+              userMessageId: userMessage.id,
+              requestedDetailKey: extractedCustomerFields.requestedDetailKey,
+              knownFieldKeys: mergedKnownFieldKeys,
+              pendingFieldKeys: mergedPendingFieldKeys,
+              model: resolvedModel.model,
+              temperature,
+              provider: this.aiService,
+              compiler: this.promptCompilerService,
+              cache: this.cacheService,
+              logger: this.logger,
+              onPromptCompiled: ({ messages, isSecondAttempt }) => {
+                const triagePromptSectionManifest = buildPromptSectionManifest(messages);
+                Object.assign(contextMetadata, {
+                  promptVersion: PROMPT_COMPILER_VERSION,
+                  promptHash: hashPromptMessages(messages),
+                  promptSections: getPromptSectionLabels(messages),
+                  promptSectionManifest: triagePromptSectionManifest,
+                  promptCharCount: triagePromptSectionManifest.reduce(
+                    (total, section) => total + section.charCount,
+                    0,
+                  ),
+                  triageFlowIncluded: Boolean(triageFlowContext),
                 });
-
-                if (completion && completion.answer && isTriageResponseValid(completion.answer)) {
-                  const parsed = JSON.parse(
-                    completion.answer.replace(/^```json\s*/i, "").replace(/\s*```$/, ""),
-                  );
-                  if (parsed.triageResolved) {
-                    triageResolved = true;
-                    triageValidationPassed = true;
-                    answer = parsed.message;
-                  } else {
-                    triageValidationPassed = true;
-                    answer = parsed.message;
-                    // Persist triage state
-                    if (this.cacheService) {
-                      const triageState: TriageState = {
-                        active: true,
-                        startedAt: loadedTriageState?.startedAt ?? new Date().toISOString(),
-                        sourceMessageId: userMessage.id,
-                        requestedDetail:
-                          extractedCustomerFields.requestedDetailKey ??
-                          parsed.requestedDetail ??
-                          "",
-                        requestedDetailKey: extractedCustomerFields.requestedDetailKey,
-                        lastQuestion: parsed.message ?? "",
-                        attemptCount: triageAttemptCount,
-                        resolved: false,
-                        expiresAt: loadedTriageState?.expiresAt ?? Date.now() + 3600000,
-                        knownFieldKeys: mergedKnownFieldKeys,
-                        pendingFieldKeys: mergedPendingFieldKeys,
-                      };
-                      await this.cacheService.set(triageCacheKey, triageState, 3600);
-                    }
-                  }
-                }
-              } catch (err: any) {
-                this.logger.error(`Error in triage mode attempt 2: ${err.message}`, err.stack);
-              }
-            }
-
-            // Fallback genérico se falhar
-            if (!triageValidationPassed) {
-              answer =
-                "Consigo te ajudar com isso! Qual é o principal detalhe ou informação que você já consegue me passar?";
-              if (this.cacheService) {
-                const triageState: TriageState = {
-                  active: true,
-                  startedAt: loadedTriageState?.startedAt ?? new Date().toISOString(),
-                  sourceMessageId: userMessage.id,
-                  requestedDetail: loadedTriageState?.requestedDetail ?? "informações básicas",
-                  requestedDetailKey:
-                    loadedTriageState?.requestedDetailKey ??
-                    extractedCustomerFields.requestedDetailKey,
-                  lastQuestion: answer,
-                  attemptCount: triageAttemptCount,
-                  resolved: false,
-                  expiresAt: loadedTriageState?.expiresAt ?? Date.now() + 3600000,
-                  knownFieldKeys: mergedKnownFieldKeys,
-                  pendingFieldKeys: mergedPendingFieldKeys,
+                contextMetadata.contextManifest = {
+                  ...contextMetadata.contextManifest,
+                  promptSections: triagePromptSectionManifest,
+                  promptCharCount: contextMetadata.promptCharCount,
+                  mode: isSecondAttempt ? "triage-second-attempt" : "triage",
+                  triageFlowIncluded: Boolean(triageFlowContext),
                 };
-                await this.cacheService.set(triageCacheKey, triageState, 3600);
-              }
-            }
+              },
+            });
+            completion = triageResult.completion;
+            promptMessages = triageResult.promptMessages;
+            answer = triageResult.answer;
+            triageValidationPassed = triageResult.triageValidationPassed;
+            triageAttemptCount = triageResult.triageAttemptCount;
+            triageResolved = triageResult.triageResolved;
 
             // Se a triagem foi resolvida com sucesso
             if (triageResolved) {
-              // Limpa o cache
-              if (this.cacheService) {
-                try {
-                  await this.cacheService.set(triageCacheKey, null, 1);
-                } catch (err: any) {
-                  this.logger.warn(`Failed to clear triage cache: ${err.message}`);
-                }
-              }
-
               triageMode = false;
 
               runtime = {
