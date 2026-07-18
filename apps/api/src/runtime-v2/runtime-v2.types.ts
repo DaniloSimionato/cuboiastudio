@@ -87,6 +87,8 @@ export type ConversationState = {
   handoffState?: RuntimeHandoffState | null;
   controlledExecutionApproval?: ControlledExecutionApprovalState | null;
   controlledExecution?: ControlledExecutionRecord | null;
+  /** Dormant single-use response execution metadata; no prompt or payload is stored. */
+  responseExecution?: JsonValue;
   candidateResponses?: RuntimeV2CandidateResponse[];
   responseComparisons?: RuntimeResponseComparison[];
   updatedAt: Date;
@@ -129,6 +131,7 @@ export type SerializedConversationState = {
   handoffState?: JsonValue;
   controlledExecutionApproval?: JsonValue;
   controlledExecution?: JsonValue;
+  responseExecution?: JsonValue;
   candidateResponses?: JsonValue;
   responseComparisons?: JsonValue;
 };

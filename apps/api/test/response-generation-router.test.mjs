@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ResponseGenerationRouter } from "../dist/assistant-conversations/response-generation-router.js";
+import { createRuntimeV2ResponseExecutionApproval } from "../dist/runtime-v2/index.js";
 
 function v1Response(overrides = {}) {
   return {
@@ -50,6 +51,70 @@ function input(overrides = {}) {
     },
     v1Input: { triageMode: false },
     ...overrides,
+  };
+}
+
+function controlledInput(overrides = {}) {
+  return input({
+    executionMode: "CONTROLLED",
+    executionAssistantIds: ["assistant-1"],
+    executionConversationIds: ["conversation-1"],
+    v2Eligibility: {
+      standardEligible: true,
+      category: "businessHours",
+      authority: "OFFICIAL_CONTEXT",
+    },
+    ...overrides,
+  });
+}
+
+function approval() {
+  return createRuntimeV2ResponseExecutionApproval({
+    companyId: "company-1",
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    expectedCanonicalComparisonHash: "hash-1",
+    canonicalVersion: "canonical-inbound-message-v1",
+    expiresAt: new Date(Date.now() + 60_000),
+    operatorPurpose: "isolated router test",
+  });
+}
+
+function fakeCoordinator(input = {}) {
+  const armed = input.approval ?? approval();
+  return {
+    async loadApproval() {
+      input.onLoad?.();
+      return armed;
+    },
+    async claim({ approval: claimedApproval }) {
+      input.onClaim?.();
+      return (
+        input.claimResult ?? {
+          status: "CLAIMED",
+          approval: {
+            ...claimedApproval,
+            status: "CLAIMED",
+            internalMessageId: "message-1",
+            claimedAt: new Date().toISOString(),
+            generationId: "generation-1",
+          },
+          generationId: "generation-1",
+        }
+      );
+    },
+    async beginV2Generation() {
+      input.onBeginGeneration?.();
+      return true;
+    },
+    async approveV2Candidate() {
+      input.onApproveCandidate?.();
+      return true;
+    },
+    async beginV1Fallback() {
+      input.onFallback?.();
+      return true;
+    },
   };
 }
 
@@ -125,7 +190,7 @@ test("missing, OFF, invalid, and empty execution scope remain V1_DEFAULT", async
   }
 });
 
-test("even a populated future execution scope remains disconnected and redacted", async () => {
+test("populated scope without a coordinator remains default-deny", async () => {
   const { calls, router } = createHarness();
   const result = await router.route(
     input({
@@ -147,4 +212,87 @@ test("even a populated future execution scope remains disconnected and redacted"
     "toolCallCount",
   ]);
   assert.equal(calls.length, 1);
+});
+
+test("eligible single-use approval claims before V2 fake and suppresses V1", async () => {
+  let v1 = 0;
+  let v2 = 0;
+  let claims = 0;
+  const armed = approval();
+  const router = new ResponseGenerationRouter({
+    executeV1: async () => {
+      v1 += 1;
+      return v1Response();
+    },
+    coordinator: fakeCoordinator({ approval: armed, onClaim: () => claims += 1 }),
+    v2Executor: {
+      execute: async () => {
+        v2 += 1;
+        return {
+          responseText: "Horário oficial de teste.",
+          category: "businessHours",
+          authority: "OFFICIAL_CONTEXT",
+          candidateStatus: "CANDIDATE_APPROVED",
+          qualityGateResult: "APPROVED",
+          outboundAllowed: true,
+        };
+      },
+    },
+  });
+
+  const result = await router.route(controlledInput());
+  assert.deepEqual([claims, v2, v1], [1, 1, 0]);
+  assert.equal(result.executionOwner, "V2_PRIMARY");
+  assert.equal(result.route, "V2_SINGLE_USE");
+  assert.equal(result.generationId, "generation-1");
+  assert.equal(result.allowedCategory, "businessHours");
+  assert.equal(result.allowedAuthority, "OFFICIAL_CONTEXT");
+  assert.equal(result.candidateStatus, "CANDIDATE_APPROVED");
+});
+
+test("V2 fake failure falls back once to V1 before any sender", async () => {
+  let v1 = 0;
+  let v2 = 0;
+  const router = new ResponseGenerationRouter({
+    executeV1: async () => {
+      v1 += 1;
+      return v1Response();
+    },
+    coordinator: fakeCoordinator({
+      claimResult: {
+        status: "CLAIMED",
+        approval: { ...approval(), status: "CLAIMED", internalMessageId: "message-1" },
+        generationId: "generation-fallback",
+      },
+    }),
+    v2Executor: {
+      execute: async () => {
+        v2 += 1;
+        throw new Error("V2_PROVIDER_FAILED");
+      },
+    },
+  });
+
+  const result = await router.route(controlledInput());
+  assert.deepEqual([v2, v1], [1, 1]);
+  assert.equal(result.executionOwner, "V1_FALLBACK");
+  assert.equal(result.route, "V2_SINGLE_USE");
+  assert.equal(result.sanitizedTelemetry.decision, "V1_FALLBACK");
+});
+
+test("triage and other operationally ineligible turns stay V1 without an approval lookup", async () => {
+  let lookups = 0;
+  const router = new ResponseGenerationRouter({
+    executeV1: async () => v1Response({ strategy: "TRIAGE" }),
+    coordinator: fakeCoordinator({ onLoad: () => lookups += 1 }),
+    v2Executor: { execute: async () => { throw new Error("must not execute"); } },
+  });
+  const result = await router.route(
+    controlledInput({
+      v2Eligibility: { standardEligible: false, category: null, authority: null },
+      v1Input: { triageMode: true },
+    }),
+  );
+  assert.equal(result.executionOwner, "V1_NORMAL");
+  assert.equal(lookups, 0);
 });

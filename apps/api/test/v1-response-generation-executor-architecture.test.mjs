@@ -23,7 +23,7 @@ const lifecycleUrl = new URL(
   import.meta.url,
 );
 
-test("sendMessage uses a V1_NORMAL envelope and ownership-aware tail after the default-deny router", async () => {
+test("sendMessage reaches the ownership-aware tail through the single-use-capable router seam", async () => {
   const [serviceSource, executorSource, routerSource, envelopeSource, lifecycleSource] =
     await Promise.all([
       readFile(serviceUrl, "utf8"),
@@ -33,7 +33,7 @@ test("sendMessage uses a V1_NORMAL envelope and ownership-aware tail after the d
       readFile(lifecycleUrl, "utf8"),
     ]);
 
-  assert.equal([...serviceSource.matchAll(/ResponseGenerationRouter\(\)\.route\(/g)].length, 1);
+  assert.equal([...serviceSource.matchAll(/responseGenerationRouterInstance\.route\(/g)].length, 1);
   assert.doesNotMatch(serviceSource, /V1ResponseGenerationExecutor\(\)\.execute\(/);
   assert.doesNotMatch(
     serviceSource,
@@ -46,21 +46,17 @@ test("sendMessage uses a V1_NORMAL envelope and ownership-aware tail after the d
   assert.match(routerSource, /createV1NormalResponseExecutionEnvelope/);
   assert.match(envelopeSource, /executionOwner: "V1_NORMAL"/);
   assert.match(envelopeSource, /"V1_FALLBACK" \| "V2_PRIMARY"/);
-  assert.match(serviceSource, /validateV1NormalResponseExecutionEnvelope/);
+  assert.match(serviceSource, /validateResponseExecutionEnvelope/);
   assert.match(serviceSource, /ResponseTailLifecycleHooks/);
-  assert.doesNotMatch(
-    routerSource,
-    /ResponseExecutionCoordinator|Approval|claim|generateChatCompletion|sendChatwootOutboundText|scheduleRuntimeV2Shadow/,
-  );
-  assert.doesNotMatch(
-    routerSource,
-    /response-execution-approval|response-execution-coordinator|candidate-response-generator/,
-  );
+  assert.match(routerSource, /RuntimeV2ResponseExecutionCoordinator/);
+  assert.match(routerSource, /loadApproval/);
+  assert.match(routerSource, /claim/);
+  assert.doesNotMatch(routerSource, /generateChatCompletion|sendChatwootOutboundText|scheduleRuntimeV2Shadow/);
   assert.match(serviceSource, /sendChatwootOutboundText\(/);
   assert.match(serviceSource, /scheduleRuntimeV2Shadow\(/);
   assert.doesNotMatch(
     lifecycleSource,
-    /ResponseExecutionCoordinator|response-execution-approval|response-execution-coordinator|prisma\.|fetch\(/,
+    /prisma\.|fetch\(/,
   );
   const beforePersist = serviceSource.indexOf("responseTailLifecycleHooks.beforeResponsePersist");
   const persisted = serviceSource.indexOf("const { assistantMessage, runtimeLogId }");
@@ -72,8 +68,6 @@ test("sendMessage uses a V1_NORMAL envelope and ownership-aware tail after the d
   assert.ok(beforePersist < persisted && persisted < afterPersist);
   assert.ok(afterPersist < beforeOutbound && beforeOutbound < sender);
   assert.ok(sender < afterTail && afterTail < shadow);
-  assert.doesNotMatch(
-    serviceSource,
-    /ResponseExecutionRouter|RuntimeV2ResponseExecutionCoordinator|RUNTIME_V2_RESPONSE_EXECUTION_MODE/,
-  );
+  assert.doesNotMatch(serviceSource, /RuntimeV2ResponseExecutionCoordinator/);
+  assert.match(serviceSource, /resolveRuntimeV2ResponseExecutionMode/);
 });

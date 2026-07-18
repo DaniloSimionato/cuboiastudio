@@ -218,20 +218,23 @@ V1 como único outbound. Desligar os dois modos e limpar as allowlists interromp
 novas gerações sem alterar candidatos já persistidos. Uma fase posterior deve
 validar comparações reais antes de qualquer decisão sobre resposta V2 ao cliente.
 
-## Infraestrutura single-use de execução (inativa)
+## Execução single-use controlada (executor V2 somente de teste)
 
 O repositório contém contratos preparatórios para uma futura execução single-use
 de resposta Runtime V2: modo `RUNTIME_V2_RESPONSE_EXECUTION_MODE` default-deny,
 allowlists específicas, aprovação vinculada ao hash canônico com validade máxima
-de dez minutos e um coordenador isolado de ownership/fallback/reconciliação.
-Esses contratos são testados somente com provider e sender fake.
+de dez minutos e um coordenador de ownership/fallback/reconciliação persistido
+por CAS no `stateJson`. Esses contratos são testados somente com executor e
+sender fake.
 
-**COORDINATOR_NOT_CONNECTED_TO_PRODUCTION=true.** O `sendMessage` produtivo não
-consulta aprovação, não faz claim, não suprime V1 e não alcança provider ou
-sender V2. Shadow continua posterior ao outbound V1 e não possui outbound
-próprio. A conexão futura exige uma refatoração explícita das estratégias V1
-antes de qualquer armamento operacional; uma aprovação ARMED isolada nunca
-processa mensagens antigas nem habilita outbound.
+**COORDINATOR_CONNECTED_TO_ROUTER=true.** O router recebe modo e allowlists, mas
+continua default-deny: ausência/configuração inválida/OFF, escopo ausente,
+turno não STANDARD, triagem, handoff, ferramenta, categoria ou autoridade não
+permitida retornam `V1_DEFAULT` antes de consultar ou reclamar uma approval. A
+rota V2 só existe quando um coordenador e um executor explicitamente injetados
+estão presentes; a composição produtiva não registra executor V2 real.
+**REAL_V2_PRIMARY_EXECUTOR_CONNECTED=false.** Logo, uma approval ARMED isolada
+nunca processa mensagens antigas nem habilita outbound na produção.
 
 A estratégia de geração V1 de triagem foi extraída para um contrato interno
 testável, sem mover o tail de persistência, sender, `externalMessageId` ou
@@ -240,20 +243,22 @@ extraído para um contrato interno testável. O núcleo iterativo do fluxo norma
 (`provider → tool → provider`, com limite de cinco iterações) foi isolado em uma
 estratégia testável. Um executor V1 único seleciona, com precedência preservada,
 `FLOW_BYPASS`, `TRIAGE` ou `STANDARD` e retorna um envelope redigido comum ao
-tail central. O `ResponseGenerationRouter` agora ocupa o seam antes desse executor,
-mas é estritamente V1-only/default-deny: não consulta approval, não importa o
-coordenador, não persiste ownership e não possui provider, sender ou outbound V2.
-O `sendMessage` não fornece configuração de execution mode ou allowlists a esse
-router nesta fase, portanto toda rota produtiva permanece `V1_DEFAULT`.
+tail central. O `ResponseGenerationRouter` agora ocupa o seam antes desse executor
+e transporta `V1_NORMAL`, `V1_FALLBACK` ou `V2_PRIMARY` até o mesmo tail. Na
+integração test-only, uma approval elegível é reclamada atomicamente antes da
+geração; falha pré-sender faz fallback no mesmo turno e resultado incerto do
+sender V2 termina em `RECONCILIATION_REQUIRED`, sem resposta V1 adicional.
+A composição produtiva permanece sem executor V2 injetado, portanto sua rota
+efetiva continua `V1_DEFAULT`.
 A composição compartilhada de prompt/contexto e a execução detalhada de cada
 ferramenta permanecem no `sendMessage` como dependências lazy do executor,
 preservando a ordem e o custo existentes. O resultado atravessa o tail central
-como `ResponseExecutionEnvelope` com `executionOwner=V1_NORMAL`; hooks de
-lifecycle apenas observam persistência e outbound, sem alterar sender, retries ou
-estado. Em V1, falhas/resultado incerto do sender continuam normalizados pelo
-comportamento histórico e não geram reconciliação ou fallback. O tail central
-permanece intacto. A próxima etapa poderá conectar o coordenador ao router de
-forma controlada.
+como `ResponseExecutionEnvelope`. O tail central permanece intacto e é o único
+responsável por persistir a resposta, chamar o sender e atualizar
+`externalMessageId`; os hooks apenas fazem transições de ownership para V2/fallback
+ao redor desse sender. Em V1, falhas/resultado incerto do sender continuam com o
+comportamento histórico. Shadow permanece posterior somente a `V1_NORMAL`; V2,
+fallback e reconciliação não iniciam geração Shadow adicional.
 
 ## Matriz final: gaps corrigidos antes de outbound
 

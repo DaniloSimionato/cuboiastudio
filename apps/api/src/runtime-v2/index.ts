@@ -9,6 +9,7 @@ export * from "./response-validator-v2";
 export * from "./runtime-v2-feature-flag";
 export * from "./response-execution-approval";
 export * from "./response-execution-coordinator";
+export * from "./conversation-state-response-execution-store";
 export * from "./runtime-v2-scope-gate";
 export * from "./runtime-v2-manifest";
 export * from "./runtime-v2-prototype";

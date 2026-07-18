@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createV1NormalResponseExecutionEnvelope,
+  createV2PrimaryResponseExecutionEnvelope,
+  validateResponseExecutionEnvelope,
   validateV1NormalResponseExecutionEnvelope,
 } from "../dist/assistant-conversations/response-execution-envelope.js";
 
@@ -70,5 +72,26 @@ test("outbound-disabled and mismatched envelopes are rejected before the sender"
         turn,
       }),
     /mismatched/,
+  );
+});
+
+test("V2 primary envelope requires the single-use binding before the tail", () => {
+  const result = createV2PrimaryResponseExecutionEnvelope({
+    turn,
+    responseText: "Horário oficial de teste.",
+    generationId: "generation-1",
+    approvalFingerprint: "approval-fingerprint",
+  });
+
+  validateResponseExecutionEnvelope({ envelope: result, turn });
+  assert.equal(result.executionOwner, "V2_PRIMARY");
+  assert.equal(result.route, "V2_SINGLE_USE");
+  assert.throws(
+    () =>
+      validateResponseExecutionEnvelope({
+        envelope: { ...result, allowedAuthority: null },
+        turn,
+      }),
+    /invalid V2 primary envelope/,
   );
 });

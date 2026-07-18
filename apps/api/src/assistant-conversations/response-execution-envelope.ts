@@ -4,7 +4,7 @@ import type {
 } from "./v1-response-generation-executor";
 
 export type ResponseExecutionOwner = "V1_NORMAL" | "V1_FALLBACK" | "V2_PRIMARY";
-export type ResponseExecutionRoute = "V1_DEFAULT";
+export type ResponseExecutionRoute = "V1_DEFAULT" | "V2_SINGLE_USE";
 
 export type ResponseExecutionTurn = {
   companyId: string;
@@ -27,14 +27,20 @@ export type ResponseExecutionEnvelope = {
   generationMetadata: V1GeneratedResponse["generationMetadata"] | null;
   generatedResponse: V1GeneratedResponse | null;
   outboundAllowed: boolean;
+  generationId: string | null;
+  approvalFingerprint: string | null;
+  allowedCategory: "businessHours" | null;
+  allowedAuthority: "OFFICIAL_CONTEXT" | null;
+  candidateStatus: "CANDIDATE_APPROVED" | null;
+  qualityGateResult: "APPROVED" | null;
   sanitizedTelemetry: {
-    executionOwner: "V1_NORMAL";
-    route: "V1_DEFAULT";
+    executionOwner: ResponseExecutionOwner;
+    route: ResponseExecutionRoute;
     strategy: V1ResponseGenerationStrategy | null;
     providerCallCount: number;
     toolCallCount: number;
-    decision: "DEFAULT_DENY";
-    reason: "EXECUTION_MODE_OFF" | "EXECUTION_SCOPE_EMPTY" | "V2_EXECUTION_NOT_CONNECTED";
+    decision: "DEFAULT_DENY" | "SINGLE_USE_V2" | "V1_FALLBACK";
+    reason: string;
   };
 };
 
@@ -62,6 +68,12 @@ export function createV1NormalResponseExecutionEnvelope(input: {
     generationMetadata: response?.generationMetadata ?? null,
     generatedResponse: response,
     outboundAllowed: true,
+    generationId: null,
+    approvalFingerprint: null,
+    allowedCategory: null,
+    allowedAuthority: null,
+    candidateStatus: null,
+    qualityGateResult: null,
     sanitizedTelemetry: {
       executionOwner: "V1_NORMAL",
       route: "V1_DEFAULT",
@@ -69,6 +81,68 @@ export function createV1NormalResponseExecutionEnvelope(input: {
       providerCallCount,
       toolCallCount,
       decision: "DEFAULT_DENY",
+      reason: input.reason,
+    },
+  };
+}
+
+export function createV2PrimaryResponseExecutionEnvelope(input: {
+  turn: ResponseExecutionTurn;
+  responseText: string;
+  generationId: string;
+  approvalFingerprint: string;
+  providerMetadata?: { provider: string | null; model: string | null };
+}): ResponseExecutionEnvelope {
+  return {
+    executionOwner: "V2_PRIMARY",
+    route: "V2_SINGLE_USE",
+    turn: input.turn,
+    strategy: "STANDARD",
+    responseText: input.responseText,
+    providerCallCount: 1,
+    toolCallCount: 0,
+    providerMetadata: input.providerMetadata ?? { provider: "v2-fake", model: "v2-fake" },
+    generationMetadata: null,
+    generatedResponse: null,
+    outboundAllowed: true,
+    generationId: input.generationId,
+    approvalFingerprint: input.approvalFingerprint,
+    allowedCategory: "businessHours",
+    allowedAuthority: "OFFICIAL_CONTEXT",
+    candidateStatus: "CANDIDATE_APPROVED",
+    qualityGateResult: "APPROVED",
+    sanitizedTelemetry: {
+      executionOwner: "V2_PRIMARY",
+      route: "V2_SINGLE_USE",
+      strategy: "STANDARD",
+      providerCallCount: 1,
+      toolCallCount: 0,
+      decision: "SINGLE_USE_V2",
+      reason: "APPROVAL_CLAIMED",
+    },
+  };
+}
+
+export function createV1FallbackResponseExecutionEnvelope(input: {
+  turn: ResponseExecutionTurn;
+  response: V1GeneratedResponse;
+  reason: string;
+}): ResponseExecutionEnvelope {
+  return {
+    ...createV1NormalResponseExecutionEnvelope({
+      turn: input.turn,
+      response: input.response,
+      reason: "V2_EXECUTION_NOT_CONNECTED",
+    }),
+    executionOwner: "V1_FALLBACK",
+    route: "V2_SINGLE_USE",
+    sanitizedTelemetry: {
+      executionOwner: "V1_FALLBACK",
+      route: "V2_SINGLE_USE",
+      strategy: input.response.strategy,
+      providerCallCount: input.response.providerCallCount,
+      toolCallCount: input.response.toolCallCount,
+      decision: "V1_FALLBACK",
       reason: input.reason,
     },
   };
@@ -100,5 +174,47 @@ export function validateV1NormalResponseExecutionEnvelope(input: {
     envelope.turn.canonicalVersion !== turn.canonicalVersion
   ) {
     throw new Error("Response tail rejected a mismatched response execution envelope.");
+  }
+}
+
+export function validateResponseExecutionEnvelope(input: {
+  envelope: ResponseExecutionEnvelope;
+  turn: ResponseExecutionTurn;
+}): void {
+  const { envelope, turn } = input;
+  if (!envelope.outboundAllowed || typeof envelope.responseText !== "string") {
+    throw new Error("Response tail rejected an invalid response envelope.");
+  }
+  if (
+    envelope.turn.companyId !== turn.companyId ||
+    envelope.turn.assistantId !== turn.assistantId ||
+    envelope.turn.conversationId !== turn.conversationId ||
+    envelope.turn.internalMessageId !== turn.internalMessageId ||
+    envelope.turn.canonicalComparisonHash !== turn.canonicalComparisonHash ||
+    envelope.turn.canonicalVersion !== turn.canonicalVersion
+  ) {
+    throw new Error("Response tail rejected a mismatched response execution envelope.");
+  }
+  if (envelope.executionOwner === "V1_NORMAL") {
+    validateV1NormalResponseExecutionEnvelope(input);
+    return;
+  }
+  if (envelope.executionOwner === "V1_FALLBACK") {
+    if (envelope.route !== "V2_SINGLE_USE" || !envelope.generatedResponse) {
+      throw new Error("Response tail rejected an invalid V1 fallback envelope.");
+    }
+    return;
+  }
+  if (
+    envelope.route !== "V2_SINGLE_USE" ||
+    !envelope.generationId ||
+    !envelope.approvalFingerprint ||
+    envelope.allowedCategory !== "businessHours" ||
+    envelope.allowedAuthority !== "OFFICIAL_CONTEXT" ||
+    envelope.candidateStatus !== "CANDIDATE_APPROVED" ||
+    envelope.qualityGateResult !== "APPROVED" ||
+    envelope.toolCallCount !== 0
+  ) {
+    throw new Error("Response tail rejected an invalid V2 primary envelope.");
   }
 }

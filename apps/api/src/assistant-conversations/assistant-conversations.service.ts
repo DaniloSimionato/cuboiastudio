@@ -118,8 +118,13 @@ import { selectV1ResponseGenerationStrategy } from "./v1-response-generation-exe
 import { ResponseGenerationRouter } from "./response-generation-router";
 import {
   createV1NormalResponseExecutionEnvelope,
-  validateV1NormalResponseExecutionEnvelope,
+  validateResponseExecutionEnvelope,
 } from "./response-execution-envelope";
+import {
+  resolveRuntimeV2ResponseExecutionAssistantIds,
+  resolveRuntimeV2ResponseExecutionConversationIds,
+  resolveRuntimeV2ResponseExecutionMode,
+} from "../runtime-v2/runtime-v2-feature-flag";
 import {
   ResponseTailLifecycleHooks,
   type ResponseTailOutboundState,
@@ -731,6 +736,7 @@ export class AssistantConversationsService {
     private readonly contactMemoriesExtractionService?: ContactMemoriesExtractionService,
     private readonly cacheService?: CacheService,
     @Optional() private readonly runtimeV2ShadowIntegration?: RuntimeV2ShadowIntegrationService,
+    @Optional() private readonly responseGenerationRouter?: ResponseGenerationRouter,
   ) {}
 
   private scheduleRuntimeV2Shadow(input: RuntimeV2ShadowSnapshot): void {
@@ -3267,6 +3273,7 @@ export class AssistantConversationsService {
       assistantId: input.assistantId,
       conversationId: conversation.id,
       internalMessageId: userMessage.id,
+      contextVersion: conversation.currentContextVersion ?? 1,
       canonicalComparisonHash: canonicalInboundMessage.canonicalComparisonHash,
       canonicalVersion: canonicalInboundMessage.schemaVersion,
     };
@@ -3275,6 +3282,7 @@ export class AssistantConversationsService {
       responseText: answer,
       reason: "EXECUTION_MODE_OFF",
     });
+    let responseGenerationRouterInstance: ResponseGenerationRouter | null = null;
     let selectedFlowForAuthority: AssistantFlow | null = null;
     const configuredFallbackMessage = assistant.fallbackMessage?.trim() || null;
     const resolveFallbackAnswer = (deterministicAnswer: string) =>
@@ -4020,8 +4028,38 @@ export class AssistantConversationsService {
             };
           };
 
-          const routedGeneration = await new ResponseGenerationRouter().route({
+          const v1SelectedStrategy = selectV1ResponseGenerationStrategy({
+            flow: selectedFlow,
+            triageMode,
+          });
+          const businessHoursTurn = /\b(hor[aá]rio|atendimento)\b/i.test(customerIntentText);
+          const v2Eligibility = {
+            standardEligible:
+              v1SelectedStrategy === "STANDARD" &&
+              source === "chatwoot" &&
+              conversation.aiActive &&
+              !conversation.pausedByHuman &&
+              conversation.status === "ACTIVE" &&
+              !humanHandoffSignal.requested &&
+              !selectedFlow?.requiresHuman &&
+              selectedFlow?.autoRespond !== false &&
+              (tools?.length ?? 0) === 0 &&
+              businessHoursTurn &&
+              Boolean(officialBusinessContext?.businessHours),
+            category: businessHoursTurn ? ("businessHours" as const) : null,
+            authority:
+              businessHoursTurn && officialBusinessContext?.businessHours
+                ? ("OFFICIAL_CONTEXT" as const)
+                : null,
+          };
+          responseGenerationRouterInstance =
+            this.responseGenerationRouter ?? new ResponseGenerationRouter();
+          const routedGeneration = await responseGenerationRouterInstance.route({
             turn: responseExecutionTurn,
+            executionMode: resolveRuntimeV2ResponseExecutionMode(),
+            executionAssistantIds: resolveRuntimeV2ResponseExecutionAssistantIds(),
+            executionConversationIds: resolveRuntimeV2ResponseExecutionConversationIds(),
+            v2Eligibility,
             v1Input: {
               flow: selectedFlow,
               triageMode,
@@ -4035,13 +4073,35 @@ export class AssistantConversationsService {
               createStandardInput,
             },
           });
+          if ("state" in routedGeneration) {
+            throw new ConflictException("Single-use response execution is already pending.");
+          }
           responseExecutionEnvelope = routedGeneration;
           const generatedResponse = routedGeneration.generatedResponse;
-          if (!generatedResponse) {
-            throw new Error("V1 router completed without a generated response.");
+
+          if (routedGeneration.executionOwner === "V2_PRIMARY") {
+            answer = routedGeneration.responseText;
+            runtime = {
+              ...runtime,
+              mode: "ai-runtime",
+              fallback: false,
+              outcome: "success",
+              provider: routedGeneration.providerMetadata.provider ?? "v2-fake",
+              model: routedGeneration.providerMetadata.model ?? "v2-fake",
+              reason: undefined,
+            };
+            Object.assign(contextMetadata, {
+              responseMode: "V2_SINGLE_USE",
+              triageMode: false,
+              toolCallCount: 0,
+            });
           }
 
-          if (generatedResponse.strategy === "FLOW_BYPASS") {
+          if (!generatedResponse && routedGeneration.executionOwner !== "V2_PRIMARY") {
+            throw new Error("Response router completed without a generated response.");
+          }
+
+          if (generatedResponse?.strategy === "FLOW_BYPASS") {
             Object.assign(contextMetadata, {
               finalAction: generatedResponse.generationMetadata.finalAction ?? "respond",
               llmSkipped: true,
@@ -4056,7 +4116,7 @@ export class AssistantConversationsService {
               outcome: generatedResponse.handoffRequired ? "handoff" : "success",
               reason: undefined,
             };
-          } else if (generatedResponse.strategy === "TRIAGE") {
+          } else if (generatedResponse?.strategy === "TRIAGE") {
             const triageValidationPassed =
               generatedResponse.generationMetadata.triageValidationPassed ?? false;
             const triageAttemptCount = generatedResponse.generationMetadata.triageAttemptCount ?? 0;
@@ -4112,7 +4172,7 @@ export class AssistantConversationsService {
                 triageValidationPassed,
               });
             }
-          } else {
+          } else if (generatedResponse) {
             answer = generatedResponse.responseText;
             runtime = {
               ...runtime,
@@ -4235,17 +4295,21 @@ export class AssistantConversationsService {
       responseText: answer,
     };
     try {
-      validateV1NormalResponseExecutionEnvelope({
+      validateResponseExecutionEnvelope({
         envelope: responseExecutionEnvelope,
         turn: responseExecutionTurn,
       });
     } catch (error) {
       this.logger.error(
-        "Response tail rejected the V1 response execution envelope before persistence.",
+        "Response tail rejected the response execution envelope before persistence.",
       );
       throw error;
     }
-    const responseTailLifecycleHooks = new ResponseTailLifecycleHooks();
+    const responseTailLifecycleHooks = new ResponseTailLifecycleHooks(
+      undefined,
+      responseGenerationRouterInstance?.getCoordinator(),
+      responseExecutionTurn,
+    );
     const createResponseTailLifecycleMetadata = (
       persistedResponseId: string | null,
       outboundAttempted: boolean,
@@ -4255,6 +4319,7 @@ export class AssistantConversationsService {
       route: responseExecutionEnvelope.route,
       strategy: responseExecutionEnvelope.strategy,
       internalMessageId: responseExecutionEnvelope.turn.internalMessageId,
+      generationId: responseExecutionEnvelope.generationId,
       persistedResponseId,
       outboundAttempted,
       outboundPerformed,
@@ -4324,6 +4389,10 @@ export class AssistantConversationsService {
         if (blocks.length === 0) blocks = [answer];
       }
     }
+    if (responseExecutionEnvelope.executionOwner === "V2_PRIMARY") {
+      // The single-use V2 contract permits exactly one shared-sender attempt.
+      blocks = [answer];
+    }
     const outboundBlockCountPlanned = blocks.length;
     Object.assign(contextMetadata, {
       outboundBlockCountPlanned,
@@ -4335,7 +4404,7 @@ export class AssistantConversationsService {
       ...contextMetadata.contextManifest,
       persistenceStatus: "persisted",
     };
-    responseTailLifecycleHooks.beforeResponsePersist(
+    await responseTailLifecycleHooks.beforeResponsePersist(
       createResponseTailLifecycleMetadata(null, false, "NOT_ATTEMPTED"),
     );
 
@@ -4523,7 +4592,7 @@ export class AssistantConversationsService {
       ...runtime,
       logId: runtimeLogId,
     };
-    responseTailLifecycleHooks.afterResponsePersist(
+    await responseTailLifecycleHooks.afterResponsePersist(
       createResponseTailLifecycleMetadata(assistantMessage.id, false, "NOT_ATTEMPTED"),
     );
 
@@ -4552,7 +4621,7 @@ export class AssistantConversationsService {
         const block = blocks[i];
         try {
           tailOutboundAttempted = true;
-          responseTailLifecycleHooks.beforeOutbound(
+          await responseTailLifecycleHooks.beforeOutbound(
             createResponseTailLifecycleMetadata(assistantMessage.id, true, "NOT_ATTEMPTED"),
           );
           const outboundResult = await this.sendChatwootOutboundText({
@@ -4600,16 +4669,22 @@ export class AssistantConversationsService {
               );
             }
 
-            responseTailLifecycleHooks.afterOutboundConfirmed(
+            await responseTailLifecycleHooks.afterOutboundConfirmed(
               createResponseTailLifecycleMetadata(assistantMessage.id, true, "CONFIRMED"),
+              outboundResult.externalMessageId,
             );
           } else if (outboundResult.status === "skipped") {
             tailOutboundPerformed = "SKIPPED";
+            if (responseExecutionEnvelope.executionOwner === "V2_PRIMARY") {
+              await responseTailLifecycleHooks.afterOutboundUncertain(
+                createResponseTailLifecycleMetadata(assistantMessage.id, true, "UNKNOWN"),
+              );
+            }
           }
           if (outboundResult.status === "failed") {
             tailOutboundPerformed = "FAILED";
             externalReferenceStatus = "NOT_CONFIRMED";
-            responseTailLifecycleHooks.afterOutboundFailure(
+            await responseTailLifecycleHooks.afterOutboundFailure(
               createResponseTailLifecycleMetadata(assistantMessage.id, true, "FAILED"),
             );
           }
@@ -4624,7 +4699,7 @@ export class AssistantConversationsService {
           contextMetadata.outboundStatus = "failed";
           tailOutboundPerformed = "FAILED";
           externalReferenceStatus = "NOT_CONFIRMED";
-          responseTailLifecycleHooks.afterOutboundFailure(
+          await responseTailLifecycleHooks.afterOutboundFailure(
             createResponseTailLifecycleMetadata(assistantMessage.id, true, "FAILED"),
           );
           break;
@@ -4691,6 +4766,7 @@ export class AssistantConversationsService {
 
     // Async memory extraction
     if (
+      responseExecutionEnvelope.executionOwner === "V1_NORMAL" &&
       assistant.memoryEnabled &&
       assistant.memoryExtractionEnabled &&
       this.contactMemoriesExtractionService &&
@@ -4766,75 +4842,77 @@ export class AssistantConversationsService {
       officialDataKeys: ["business_hours", "address", "official_contact", "company_identity"],
     };
 
-    responseTailLifecycleHooks.afterTailCompleted(
+    await responseTailLifecycleHooks.afterTailCompleted(
       createResponseTailLifecycleMetadata(
         assistantMessage.id,
         tailOutboundAttempted,
         tailOutboundPerformed,
       ),
     );
-    this.scheduleRuntimeV2Shadow({
-      ...shadowSnapshot,
-      candidateContext,
-      v1HandoffObservation:
-        contextMetadata.handoffPending ||
-        humanHandoffSignal.requested ||
-        Boolean(conversation.pausedByHuman)
-          ? createV1HandoffObservation({
-              companyId: input.tenant.companyId,
-              assistantId: assistant.id,
-              conversationId: conversation.id,
-              contactId:
-                memoryObservation.contactId === "unresolved" ? null : memoryObservation.contactId,
-              contextVersion: conversation.currentContextVersion ?? 1,
-              internalMessageId: userMessage.id,
-              flowId: contextMetadata.selectedFlowId ?? null,
-              handoffPendingObserved: Boolean(contextMetadata.handoffPending),
-              reasonCode: contextMetadata.handoffPending
-                ? contextMetadata.finalAction === "handoff" ||
-                  selectedFlowForAuthority?.requiresHuman
-                  ? "FLOW_REQUIRED_HANDOFF"
+    if (responseExecutionEnvelope.executionOwner === "V1_NORMAL") {
+      this.scheduleRuntimeV2Shadow({
+        ...shadowSnapshot,
+        candidateContext,
+        v1HandoffObservation:
+          contextMetadata.handoffPending ||
+          humanHandoffSignal.requested ||
+          Boolean(conversation.pausedByHuman)
+            ? createV1HandoffObservation({
+                companyId: input.tenant.companyId,
+                assistantId: assistant.id,
+                conversationId: conversation.id,
+                contactId:
+                  memoryObservation.contactId === "unresolved" ? null : memoryObservation.contactId,
+                contextVersion: conversation.currentContextVersion ?? 1,
+                internalMessageId: userMessage.id,
+                flowId: contextMetadata.selectedFlowId ?? null,
+                handoffPendingObserved: Boolean(contextMetadata.handoffPending),
+                reasonCode: contextMetadata.handoffPending
+                  ? contextMetadata.finalAction === "handoff" ||
+                    selectedFlowForAuthority?.requiresHuman
+                    ? "FLOW_REQUIRED_HANDOFF"
+                    : humanHandoffSignal.requested
+                      ? (humanHandoffSignal.reasonCode ?? "CUSTOMER_REQUESTED_HUMAN")
+                      : "OTHER_STRUCTURED_REASON"
                   : humanHandoffSignal.requested
                     ? (humanHandoffSignal.reasonCode ?? "CUSTOMER_REQUESTED_HUMAN")
-                    : "OTHER_STRUCTURED_REASON"
-                : humanHandoffSignal.requested
-                  ? (humanHandoffSignal.reasonCode ?? "CUSTOMER_REQUESTED_HUMAN")
-                  : "HUMAN_ALREADY_ACTIVE",
-              customerRequested: humanHandoffSignal.customerRequested,
-              humanActiveObserved: Boolean(conversation.pausedByHuman),
-              aiActiveObserved: Boolean(conversation.aiActive),
-              pausedByHumanObserved: Boolean(conversation.pausedByHuman),
-              requestedTargetType: humanHandoffSignal.requestedTargetType ?? "ANY_HUMAN",
-              requestedTargetIdHash: null,
-              collectedContextKeys: [
-                ...(contextMetadata.handoffPending ? ["handoff_pending"] : []),
-                ...(humanHandoffSignal.requested ? ["customer_requested_human"] : []),
-                ...(contextMetadata.selectedFlowId ? ["selected_flow"] : []),
-                ...(conversation.pausedByHuman ? ["paused_by_human"] : []),
-              ],
-              contextHash: "",
-              provenance: {
-                source: "V1_PIPELINE",
-                sourceMessageId: userMessage.id,
-                sourceFlowId: contextMetadata.selectedFlowId ?? null,
-                sourceVersion: "handoff-v1-observation",
-                reasonCode: null,
-              },
-            })
-          : null,
-      v1Comparison: {
-        selectedFlowId: contextMetadata.selectedFlowId ?? null,
-        selectedIntent: contextMetadata.detectedIntent ?? null,
-        triageMode: contextMetadata.triageMode ? "TRIAGE" : null,
-        toolsExposed: contextMetadata.toolsExposed ?? [],
-        customerUnableToAnswer,
-        triageExitReason,
-        conversationalOutcome,
-        flowSelectionReason: contextMetadata.detectedIntent ?? null,
-        flowCandidateCount: (contextMetadata.candidateFlowIds ?? []).length,
-        intentChangedFromPreviousTurn: Boolean(contextMetadata.currentIntentOverrodeHistory),
-      },
-    });
+                    : "HUMAN_ALREADY_ACTIVE",
+                customerRequested: humanHandoffSignal.customerRequested,
+                humanActiveObserved: Boolean(conversation.pausedByHuman),
+                aiActiveObserved: Boolean(conversation.aiActive),
+                pausedByHumanObserved: Boolean(conversation.pausedByHuman),
+                requestedTargetType: humanHandoffSignal.requestedTargetType ?? "ANY_HUMAN",
+                requestedTargetIdHash: null,
+                collectedContextKeys: [
+                  ...(contextMetadata.handoffPending ? ["handoff_pending"] : []),
+                  ...(humanHandoffSignal.requested ? ["customer_requested_human"] : []),
+                  ...(contextMetadata.selectedFlowId ? ["selected_flow"] : []),
+                  ...(conversation.pausedByHuman ? ["paused_by_human"] : []),
+                ],
+                contextHash: "",
+                provenance: {
+                  source: "V1_PIPELINE",
+                  sourceMessageId: userMessage.id,
+                  sourceFlowId: contextMetadata.selectedFlowId ?? null,
+                  sourceVersion: "handoff-v1-observation",
+                  reasonCode: null,
+                },
+              })
+            : null,
+        v1Comparison: {
+          selectedFlowId: contextMetadata.selectedFlowId ?? null,
+          selectedIntent: contextMetadata.detectedIntent ?? null,
+          triageMode: contextMetadata.triageMode ? "TRIAGE" : null,
+          toolsExposed: contextMetadata.toolsExposed ?? [],
+          customerUnableToAnswer,
+          triageExitReason,
+          conversationalOutcome,
+          flowSelectionReason: contextMetadata.detectedIntent ?? null,
+          flowCandidateCount: (contextMetadata.candidateFlowIds ?? []).length,
+          intentChangedFromPreviousTurn: Boolean(contextMetadata.currentIntentOverrodeHistory),
+        },
+      });
+    }
 
     return {
       conversationId: conversation.id,
