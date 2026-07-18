@@ -16,6 +16,7 @@ export type RuntimeV2HandoffExecutionMode = "OFF" | "CONTROLLED";
 export type RuntimeV2HandoffAdapterMode = "OFF" | "CHATWOOT_CONTROLLED";
 export type RuntimeV2ResponseGenerationMode = "OFF" | "SHADOW";
 export type RuntimeV2ResponseComparisonMode = "OFF" | "SHADOW";
+export type RuntimeV2ResponseExecutionMode = "OFF" | "CONTROLLED";
 
 export const DEFAULT_RUNTIME_V2_SHADOW_DISPATCH_BUDGET_MS = 250;
 export const DEFAULT_RUNTIME_V2_CANDIDATE_GENERATION_TIMEOUT_MS = 10_000;
@@ -232,6 +233,40 @@ export function resolveRuntimeV2ResponseConversationIds(
   environment: NodeJS.ProcessEnv = process.env,
 ): string[] {
   return parseAllowlist(environment.RUNTIME_V2_RESPONSE_CONVERSATION_IDS);
+}
+
+/**
+ * Execution is deliberately independent from Shadow generation/comparison.
+ * It is default-deny and must be combined with the single-use approval gate.
+ */
+export function resolveRuntimeV2ResponseExecutionMode(
+  environment: NodeJS.ProcessEnv = process.env,
+): RuntimeV2ResponseExecutionMode {
+  return environment.RUNTIME_V2_RESPONSE_EXECUTION_MODE === "CONTROLLED" ? "CONTROLLED" : "OFF";
+}
+
+export function resolveRuntimeV2ResponseExecutionAssistantIds(
+  environment: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return parseAllowlist(environment.RUNTIME_V2_RESPONSE_EXECUTION_ASSISTANT_IDS);
+}
+
+export function resolveRuntimeV2ResponseExecutionConversationIds(
+  environment: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return parseAllowlist(environment.RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS);
+}
+
+export function isRuntimeV2ResponseExecutionScopeEnabled(
+  input: { companyId?: string; assistantId: string; conversationId: string },
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return (
+    resolveRuntimeV2ResponseExecutionMode(environment) === "CONTROLLED" &&
+    evaluateRuntimeV2BaseScopeGate(input, environment, "RESPONSE_GENERATION").allowed &&
+    resolveRuntimeV2ResponseExecutionAssistantIds(environment).includes(input.assistantId) &&
+    resolveRuntimeV2ResponseExecutionConversationIds(environment).includes(input.conversationId)
+  );
 }
 
 export function isRuntimeV2ResponseGenerationEnabled(

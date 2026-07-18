@@ -218,6 +218,21 @@ V1 como único outbound. Desligar os dois modos e limpar as allowlists interromp
 novas gerações sem alterar candidatos já persistidos. Uma fase posterior deve
 validar comparações reais antes de qualquer decisão sobre resposta V2 ao cliente.
 
+## Infraestrutura single-use de execução (inativa)
+
+O repositório contém contratos preparatórios para uma futura execução single-use
+de resposta Runtime V2: modo `RUNTIME_V2_RESPONSE_EXECUTION_MODE` default-deny,
+allowlists específicas, aprovação vinculada ao hash canônico com validade máxima
+de dez minutos e um coordenador isolado de ownership/fallback/reconciliação.
+Esses contratos são testados somente com provider e sender fake.
+
+**COORDINATOR_NOT_CONNECTED_TO_PRODUCTION=true.** O `sendMessage` produtivo não
+consulta aprovação, não faz claim, não suprime V1 e não alcança provider ou
+sender V2. Shadow continua posterior ao outbound V1 e não possui outbound
+próprio. A conexão futura exige uma refatoração explícita das estratégias V1
+antes de qualquer armamento operacional; uma aprovação ARMED isolada nunca
+processa mensagens antigas nem habilita outbound.
+
 ## Matriz final: gaps corrigidos antes de outbound
 
 A matriz Shadow encontrou três lacunas sem efeito externo: uma pergunta de
