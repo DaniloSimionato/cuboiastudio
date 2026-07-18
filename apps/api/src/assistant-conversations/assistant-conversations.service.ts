@@ -116,6 +116,7 @@ import {
 } from "../intent-router/intent-routing";
 import { generateTriageResponse } from "./triage-response-generation-strategy";
 import { generateFlowBypassResponse } from "./flow-bypass-response-generation-strategy";
+import { generateStandardResponse } from "./standard-response-generation-strategy";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -3786,82 +3787,108 @@ export class AssistantConversationsService {
             }
           }
 
-          let loopCount = 0;
-          let toolCallCount = 0;
-
-          while (loopCount < 5 && !toolCallsResolved) {
-            completion = await this.aiService.generateChatCompletion({
+          if (!toolCallsResolved) {
+            const standardResult = await generateStandardResponse({
               companyId: input.tenant.companyId,
-              messages: promptMessages,
+              promptMessages,
               model: resolvedModel.model,
               temperature,
               tools,
-            });
-
-            if (completion.toolCalls && completion.toolCalls.length > 0) {
-              toolCallCount += completion.toolCalls.length;
-              contextMetadata.toolCallCount = toolCallCount;
-              if (contextMetadata.contextManifest) {
-                contextMetadata.contextManifest.toolCallCount = toolCallCount;
-              }
-              promptMessages.push({
-                role: "assistant",
-                content: completion.answer || "",
-                tool_calls: completion.toolCalls,
-              } as any);
-
-              await this.prisma.assistantConversationMessage.create({
-                data: {
-                  companyId: input.tenant.companyId,
-                  assistantId: input.assistantId,
-                  conversationId: conversation.id,
+              provider: this.aiService,
+              onToolCallCount: (toolCallCount) => {
+                contextMetadata.toolCallCount = toolCallCount;
+                if (contextMetadata.contextManifest) {
+                  contextMetadata.contextManifest.toolCallCount = toolCallCount;
+                }
+              },
+              onToolCalls: async ({ completion, promptMessages, toolCalls }) => {
+                promptMessages.push({
                   role: "assistant",
                   content: completion.answer || "",
-                  externalPayload: this.toSerializableJsonValue({
-                    tool_calls: completion.toolCalls,
-                  }),
-                  mode: "ai-runtime",
-                  contextVersion: conversation.currentContextVersion ?? 1,
-                },
-              });
+                  tool_calls: toolCalls,
+                } as any);
 
-              for (const toolCall of completion.toolCalls) {
-                const toolName = this.normalizeCalendarToolName(toolCall.function.name);
-                const toolArgs = JSON.parse(toolCall.function.arguments);
-                let resultString = "";
-                const observationStartedAt = new Date();
-                let observationExecutionStarted = false;
-                let observationErrorCode: string | null = null;
-                let observationMetadata: Record<string, unknown> = {};
-
-                try {
-                  const preparedTool = await this.prepareToolExecution({
+                await this.prisma.assistantConversationMessage.create({
+                  data: {
                     companyId: input.tenant.companyId,
                     assistantId: input.assistantId,
-                    selectedFlow: selectedFlow ?? null,
-                    toolName,
-                    args: toolArgs,
-                  });
-                  const effectiveToolArgs = preparedTool.args;
-                  Object.assign(contextMetadata, preparedTool.metadata);
-                  observationMetadata = { ...preparedTool.metadata };
+                    conversationId: conversation.id,
+                    role: "assistant",
+                    content: completion.answer || "",
+                    externalPayload: this.toSerializableJsonValue({
+                      tool_calls: toolCalls,
+                    }),
+                    mode: "ai-runtime",
+                    contextVersion: conversation.currentContextVersion ?? 1,
+                  },
+                });
 
-                  let requiresConfirmation = false;
-                  if (toolName.startsWith("webhook_")) {
-                    const actionName = toolName.replace("webhook_", "");
-                    const action = await this.prisma.customWebhookAction.findFirst({
-                      where: { companyId: input.tenant.companyId, name: actionName, active: true },
+                for (const toolCall of toolCalls) {
+                  const toolName = this.normalizeCalendarToolName(toolCall.function.name);
+                  const toolArgs = JSON.parse(toolCall.function.arguments);
+                  let resultString = "";
+                  const observationStartedAt = new Date();
+                  let observationExecutionStarted = false;
+                  let observationErrorCode: string | null = null;
+                  let observationMetadata: Record<string, unknown> = {};
+
+                  try {
+                    const preparedTool = await this.prepareToolExecution({
+                      companyId: input.tenant.companyId,
+                      assistantId: input.assistantId,
+                      selectedFlow: selectedFlow ?? null,
+                      toolName,
+                      args: toolArgs,
                     });
-                    if (action) {
-                      observationMetadata = {
-                        ...observationMetadata,
-                        webhookMethod: action.method,
-                        webhookOperationName: actionName,
-                      };
+                    const effectiveToolArgs = preparedTool.args;
+                    Object.assign(contextMetadata, preparedTool.metadata);
+                    observationMetadata = { ...preparedTool.metadata };
+
+                    let requiresConfirmation = false;
+                    if (toolName.startsWith("webhook_")) {
+                      const actionName = toolName.replace("webhook_", "");
+                      const action = await this.prisma.customWebhookAction.findFirst({
+                        where: {
+                          companyId: input.tenant.companyId,
+                          name: actionName,
+                          active: true,
+                        },
+                      });
+                      if (action) {
+                        observationMetadata = {
+                          ...observationMetadata,
+                          webhookMethod: action.method,
+                          webhookOperationName: actionName,
+                        };
+                        const appInst = await this.prisma.appInstallation.findFirst({
+                          where: {
+                            companyId: input.tenant.companyId,
+                            app: { slug: "custom_webhook" },
+                          },
+                        });
+                        const override = appInst
+                          ? await this.prisma.assistantToolConfig.findFirst({
+                              where: {
+                                assistantId: input.assistantId,
+                                appId: appInst.appId,
+                                toolName,
+                              },
+                            })
+                          : null;
+                        requiresConfirmation = override
+                          ? override.requiresConfirmation
+                          : action.requiresConfirmation;
+                      }
+                    } else {
+                      const isMutating = [
+                        "calendar_createBooking",
+                        "calendar_rescheduleBooking",
+                        "calendar_cancelBooking",
+                      ].includes(toolName);
                       const appInst = await this.prisma.appInstallation.findFirst({
                         where: {
                           companyId: input.tenant.companyId,
-                          app: { slug: "custom_webhook" },
+                          app: { slug: "google_calendar" },
                         },
                       });
                       const override = appInst
@@ -3873,61 +3900,51 @@ export class AssistantConversationsService {
                             },
                           })
                         : null;
-                      requiresConfirmation = override
-                        ? override.requiresConfirmation
-                        : action.requiresConfirmation;
+                      requiresConfirmation = override ? override.requiresConfirmation : isMutating;
+                      observationMetadata = {
+                        ...observationMetadata,
+                        inputSchemaVersion: "calendar-v1",
+                      };
                     }
-                  } else {
-                    const isMutating = [
-                      "calendar_createBooking",
-                      "calendar_rescheduleBooking",
-                      "calendar_cancelBooking",
-                    ].includes(toolName);
-                    const appInst = await this.prisma.appInstallation.findFirst({
-                      where: {
-                        companyId: input.tenant.companyId,
-                        app: { slug: "google_calendar" },
-                      },
-                    });
-                    const override = appInst
-                      ? await this.prisma.assistantToolConfig.findFirst({
-                          where: { assistantId: input.assistantId, appId: appInst.appId, toolName },
-                        })
-                      : null;
-                    requiresConfirmation = override ? override.requiresConfirmation : isMutating;
-                    observationMetadata = {
-                      ...observationMetadata,
-                      inputSchemaVersion: "calendar-v1",
-                    };
-                  }
 
-                  if (requiresConfirmation) {
-                    await this.logToolAction(input.tenant.companyId, "confirmation_required", {
-                      toolName,
-                      args: effectiveToolArgs,
-                      ...preparedTool.metadata,
-                    });
-
-                    const isConfirmed =
-                      /(sim|pode|confirmo|confirmar|isso\s+mesmo|ok|fechado|perfeito|pode\s+reservar|pode\s+cancelar|pode\s+remarcar)/i.test(
-                        interpretedMessage,
-                      );
-                    if (!isConfirmed) {
-                      await this.logToolAction(input.tenant.companyId, "confirmation_missing", {
+                    if (requiresConfirmation) {
+                      await this.logToolAction(input.tenant.companyId, "confirmation_required", {
                         toolName,
                         args: effectiveToolArgs,
                         ...preparedTool.metadata,
                       });
-                      resultString = JSON.stringify({
-                        error:
-                          "Confirmação pendente. Você deve apresentar os detalhes da ação (resumo claro) e pedir confirmação explícita ao usuário (ex: 'Confirmando: ..., posso confirmar?') antes de prosseguir.",
-                      });
+
+                      const isConfirmed =
+                        /(sim|pode|confirmo|confirmar|isso\s+mesmo|ok|fechado|perfeito|pode\s+reservar|pode\s+cancelar|pode\s+remarcar)/i.test(
+                          interpretedMessage,
+                        );
+                      if (!isConfirmed) {
+                        await this.logToolAction(input.tenant.companyId, "confirmation_missing", {
+                          toolName,
+                          args: effectiveToolArgs,
+                          ...preparedTool.metadata,
+                        });
+                        resultString = JSON.stringify({
+                          error:
+                            "Confirmação pendente. Você deve apresentar os detalhes da ação (resumo claro) e pedir confirmação explícita ao usuário (ex: 'Confirmando: ..., posso confirmar?') antes de prosseguir.",
+                        });
+                      } else {
+                        await this.logToolAction(input.tenant.companyId, "confirmation_received", {
+                          toolName,
+                          args: effectiveToolArgs,
+                          ...preparedTool.metadata,
+                        });
+                        observationExecutionStarted = true;
+                        resultString = await this.executeTool(
+                          input.tenant.companyId,
+                          toolName,
+                          effectiveToolArgs,
+                          preparedTool.metadata,
+                          input.assistantId,
+                          selectedFlow,
+                        );
+                      }
                     } else {
-                      await this.logToolAction(input.tenant.companyId, "confirmation_received", {
-                        toolName,
-                        args: effectiveToolArgs,
-                        ...preparedTool.metadata,
-                      });
                       observationExecutionStarted = true;
                       resultString = await this.executeTool(
                         input.tenant.companyId,
@@ -3938,97 +3955,84 @@ export class AssistantConversationsService {
                         selectedFlow,
                       );
                     }
-                  } else {
-                    observationExecutionStarted = true;
-                    resultString = await this.executeTool(
-                      input.tenant.companyId,
-                      toolName,
-                      effectiveToolArgs,
-                      preparedTool.metadata,
-                      input.assistantId,
-                      selectedFlow,
+                  } catch (err) {
+                    const errMsg =
+                      err instanceof Error
+                        ? err.message
+                        : "Erro desconhecido na chamada da ferramenta.";
+                    observationErrorCode = errMsg;
+                    if (errMsg.includes("outside selected flow calendar scope")) {
+                      Object.assign(contextMetadata, {
+                        blockedByToolScope: true,
+                        blockReason: errMsg,
+                        resourceScopeApplied: true,
+                      });
+                    }
+                    resultString = JSON.stringify({ error: errMsg });
+                  }
+
+                  if (observeV1Tools) {
+                    toolObservations.push(
+                      createV1ToolExecutionObservation({
+                        scope: {
+                          companyId: input.tenant.companyId,
+                          assistantId: input.assistantId,
+                          conversationId: conversation.id,
+                          contactId: conversation.externalContactId ?? null,
+                          contextVersion: conversation.currentContextVersion ?? 1,
+                        },
+                        internalMessageId: userMessage.id,
+                        executionAttemptId: toolCall.id,
+                        toolName,
+                        arguments: toolArgs,
+                        startedAt: observationStartedAt,
+                        completedAt: new Date(),
+                        timeoutMs: Number(observationMetadata.timeoutMs ?? 5000),
+                        result: resultString,
+                        errorCode: observationErrorCode,
+                        executionStarted: observationExecutionStarted,
+                        flowId: selectedFlow?.id ?? null,
+                        metadata: observationMetadata,
+                      }),
                     );
                   }
-                } catch (err) {
-                  const errMsg =
-                    err instanceof Error
-                      ? err.message
-                      : "Erro desconhecido na chamada da ferramenta.";
-                  observationErrorCode = errMsg;
-                  if (errMsg.includes("outside selected flow calendar scope")) {
-                    Object.assign(contextMetadata, {
-                      blockedByToolScope: true,
-                      blockReason: errMsg,
-                      resourceScopeApplied: true,
-                    });
+
+                  if (isDebugLogsEnabled) {
+                    console.log(`\n=== DIAGNOSTIC: TOOL EXECUTION: ${toolName} ===`);
+                    const isError = resultString.includes('"error"');
+                    console.log("Status:", isError ? "ERROR" : "SUCCESS");
+                    if (isError) {
+                      console.log("Result (sanitized):", resultString);
+                    }
+                    console.log("=== END TOOL ===\n");
                   }
-                  resultString = JSON.stringify({ error: errMsg });
-                }
 
-                if (observeV1Tools) {
-                  toolObservations.push(
-                    createV1ToolExecutionObservation({
-                      scope: {
-                        companyId: input.tenant.companyId,
-                        assistantId: input.assistantId,
-                        conversationId: conversation.id,
-                        contactId: conversation.externalContactId ?? null,
-                        contextVersion: conversation.currentContextVersion ?? 1,
-                      },
-                      internalMessageId: userMessage.id,
-                      executionAttemptId: toolCall.id,
-                      toolName,
-                      arguments: toolArgs,
-                      startedAt: observationStartedAt,
-                      completedAt: new Date(),
-                      timeoutMs: Number(observationMetadata.timeoutMs ?? 5000),
-                      result: resultString,
-                      errorCode: observationErrorCode,
-                      executionStarted: observationExecutionStarted,
-                      flowId: selectedFlow?.id ?? null,
-                      metadata: observationMetadata,
-                    }),
-                  );
-                }
-
-                if (isDebugLogsEnabled) {
-                  console.log(`\n=== DIAGNOSTIC: TOOL EXECUTION: ${toolName} ===`);
-                  const isError = resultString.includes('"error"');
-                  console.log("Status:", isError ? "ERROR" : "SUCCESS");
-                  if (isError) {
-                    console.log("Result (sanitized):", resultString);
-                  }
-                  console.log("=== END TOOL ===\n");
-                }
-
-                promptMessages.push({
-                  role: "tool",
-                  tool_call_id: toolCall.id,
-                  name: toolName,
-                  content: resultString,
-                } as any);
-
-                await this.prisma.assistantConversationMessage.create({
-                  data: {
-                    companyId: input.tenant.companyId,
-                    assistantId: input.assistantId,
-                    conversationId: conversation.id,
+                  promptMessages.push({
                     role: "tool",
+                    tool_call_id: toolCall.id,
+                    name: toolName,
                     content: resultString,
-                    externalPayload: this.toSerializableJsonValue({
-                      tool_call_id: toolCall.id,
-                      name: toolName,
-                    }),
-                    mode: "ai-runtime",
-                    contextVersion: conversation.currentContextVersion ?? 1,
-                  },
-                });
-              }
+                  } as any);
 
-              loopCount++;
-            } else {
-              toolCallsResolved = true;
-            }
+                  await this.prisma.assistantConversationMessage.create({
+                    data: {
+                      companyId: input.tenant.companyId,
+                      assistantId: input.assistantId,
+                      conversationId: conversation.id,
+                      role: "tool",
+                      content: resultString,
+                      externalPayload: this.toSerializableJsonValue({
+                        tool_call_id: toolCall.id,
+                        name: toolName,
+                      }),
+                      mode: "ai-runtime",
+                      contextVersion: conversation.currentContextVersion ?? 1,
+                    },
+                  });
+                }
+              },
+            });
+            completion = standardResult.completion;
           }
 
           if (!runtime || (runtime.mode !== "flow-bypass" && responseMode !== "TRIAGE_ONLY")) {
