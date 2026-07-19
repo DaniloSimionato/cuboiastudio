@@ -64,12 +64,22 @@ function runProcess(command, args, options = {}) {
     let stdout = "";
     let stderr = "";
     if (options.capture) {
-      child.stdout.on("data", (chunk) => { stdout += chunk; });
-      child.stderr.on("data", (chunk) => { stderr += chunk; });
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
     }
     child.once("error", reject);
-    child.once("exit", (code, signal) => resolve({ code, signal, stdout, stderr }));
+    // `close` guarantees captured streams are drained before a database clone
+    // is dropped and before TAP summaries are parsed.
+    child.once("close", (code, signal) => resolve({ code, signal, stdout, stderr }));
   });
+}
+
+function marker(name, details = "") {
+  console.log(`isolated-suite marker=${name}${details ? ` ${details}` : ""}`);
 }
 
 function readSummary(output, key) {
@@ -83,13 +93,17 @@ const admin = new PrismaClient({ datasources: { db: { url: adminUrl.toString() }
 const createdDatabases = new Set();
 
 async function dropDatabase(databaseName) {
-  await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)} WITH (FORCE)`);
+  await admin.$executeRawUnsafe(
+    `DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)} WITH (FORCE)`,
+  );
   createdDatabases.delete(databaseName);
 }
 
 async function createDatabase(databaseName, template = null) {
   const templateClause = template ? ` TEMPLATE ${quoteIdentifier(template)}` : "";
-  await admin.$executeRawUnsafe(`CREATE DATABASE ${quoteIdentifier(databaseName)}${templateClause}`);
+  await admin.$executeRawUnsafe(
+    `CREATE DATABASE ${quoteIdentifier(databaseName)}${templateClause}`,
+  );
   createdDatabases.add(databaseName);
 }
 
@@ -97,12 +111,14 @@ const files = (await readdir(testDir))
   .filter((name) => name.endsWith(".mjs"))
   .sort()
   .map((name) => path.join("test", name));
+if (files.length === 0) throw new Error("isolated test suite discovered no test files");
 
 const totals = { tests: 0, pass: 0, fail: 0, skipped: 0, todo: 0 };
 let failures = 0;
 
 try {
   await createDatabase(templateDatabaseName);
+  marker("DATABASE_READY");
   const migrateCommand = process.platform === "win32" ? "npx.cmd" : "npx";
   const migration = await runProcess(
     migrateCommand,
@@ -113,6 +129,9 @@ try {
     },
   );
   if (migration.code !== 0) throw new Error("existing migrations failed for the test template");
+  marker("MIGRATIONS_APPLIED");
+  marker("TEST_DISCOVERY_COMPLETED", `files=${files.length}`);
+  marker("TEST_RUN_STARTED");
 
   for (let index = 0; index < files.length; index += 1) {
     const databaseName = `cubo_ai_studio_test_suite_${runId}_${String(index).padStart(2, "0")}`;
@@ -140,18 +159,23 @@ try {
       const failureSummary = output
         .split("\n")
         .filter((line) =>
-          /AssertionError|Expected values|actual|expected|operator|diff|at TestContext|Error:/i.test(line),
+          /AssertionError|Expected values|actual|expected|operator|diff|at TestContext|Error:/i.test(
+            line,
+          ),
         )
         .slice(-16);
       if (failureSummary.length > 0) console.error(failureSummary.join("\n"));
     }
     await dropDatabase(databaseName);
   }
+  marker("TEST_RUN_COMPLETED", `files=${files.length}`);
 } finally {
+  marker("CLEANUP_STARTED");
   for (const databaseName of createdDatabases) {
     await dropDatabase(databaseName);
   }
   await admin.$disconnect();
+  marker("CLEANUP_COMPLETED");
 }
 
 console.log(
@@ -159,5 +183,7 @@ console.log(
     `fail=${totals.fail} skipped=${totals.skipped} todo=${totals.todo} ` +
     `fileFailures=${failures}`,
 );
+marker("FINAL_SUMMARY");
 
-if (failures !== 0 || totals.fail !== 0 || totals.skipped !== 0 || totals.todo !== 0) process.exitCode = 1;
+if (failures !== 0 || totals.fail !== 0 || totals.skipped !== 0 || totals.todo !== 0)
+  process.exitCode = 1;
