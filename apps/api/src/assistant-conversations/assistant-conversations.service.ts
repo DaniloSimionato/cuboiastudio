@@ -363,6 +363,7 @@ export type AssistantConversationRuntime = {
     triageValidationPassed?: boolean;
     triageAttemptCount?: number;
     responseMode?: string;
+    responseExecutionReason?: string;
     outboundBlockCountPlanned?: number;
     outboundBlockCountSent?: number;
     outboundBlockCount?: number;
@@ -4408,6 +4409,7 @@ export class AssistantConversationsService {
     Object.assign(contextMetadata, {
       responseExecutionOwner: responseExecutionEnvelope.executionOwner,
       responseGenerationRoute: responseExecutionEnvelope.route,
+      responseExecutionReason: responseExecutionEnvelope.sanitizedTelemetry.reason,
       v1UnsupportedClaimDetected: authorityGuard.unsupportedClaimDetected,
       v1UnsupportedClaimCategories: authorityGuard.blockedCategories,
       expectedAuthorityCategory: expectedAuthority.category,
@@ -4536,6 +4538,7 @@ export class AssistantConversationsService {
             finalAction: runtime.context.finalAction,
             responseExecutionOwner: responseExecutionEnvelope.executionOwner,
             responseGenerationRoute: responseExecutionEnvelope.route,
+            responseExecutionReason: runtime.context.responseExecutionReason,
             llmSkipped: runtime.context.llmSkipped,
             handoffPending: runtime.context.handoffPending,
             autoRespond: runtime.context.autoRespond,

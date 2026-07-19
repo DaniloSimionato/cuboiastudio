@@ -308,16 +308,33 @@ test("redaction preserva IDs estruturais e sanitiza texto livre aninhado", () =>
   assert.equal(nestedJson.includes("+55 11 99999-9999"), false);
 
   const comparisonHash = "12345678901234567890abcdef12345678901234567890abcdef1234567890abcd";
+  const semanticDecisionFingerprint =
+    "abcdef12345678901234567890abcdef12345678901234567890abcdef1234";
+  const contextFingerprint = "01234567890123456789abcdef01234567890123456789abcdef0123456789";
+  const antecedentFingerprint = "fedcba98765432109876543210fedcba98765432109876543210fedcba9876";
   const approvalState = {
     ...state,
-    metadata: {
-      expectedCanonicalComparisonHash: comparisonHash,
-      creationFingerprint: "1234567890123456",
-      payload: { phone: "+55 11 99999-9999" },
+    responseExecution: {
+      current: {
+        approval: {
+          expectedCanonicalComparisonHash: comparisonHash,
+          expectedSemanticDecisionFingerprint: semanticDecisionFingerprint,
+          expectedContextFingerprint: contextFingerprint,
+          expectedAntecedentFingerprint: antecedentFingerprint,
+          creationFingerprint: "1234567890123456",
+        },
+        owner: "V1_OWNED",
+        redactionApplied: true,
+      },
+      history: [],
     },
+    metadata: { payload: { phone: "+55 11 99999-9999" } },
   };
   const approvalJson = JSON.stringify(sanitizeConversationStateForPersistence(approvalState).json);
   assert.equal(approvalJson.includes(comparisonHash), true);
+  assert.equal(approvalJson.includes(semanticDecisionFingerprint), true);
+  assert.equal(approvalJson.includes(contextFingerprint), true);
+  assert.equal(approvalJson.includes(antecedentFingerprint), true);
   assert.equal(approvalJson.includes("+55 11 99999-9999"), false);
 });
 

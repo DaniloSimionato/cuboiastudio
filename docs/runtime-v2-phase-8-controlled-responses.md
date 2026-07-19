@@ -461,6 +461,16 @@ confirmados com uma única execução V2, sem V1 paralelo e com restauração in
 O follow-up de horário teve preflight aprovado, mas permaneceu em V1 no inbound
 antes do claim; o default-deny e a ausência de duplicação foram preservados.
 
+Na segunda tentativa real de follow-up, a auditoria forense confirmou que preflight
+e router reconstruíam o mesmo contexto e antecedente, mas o fingerprint de contexto
+persistido na approval havia sido alterado pelo sanitizador genérico de stateJson:
+uma sequência numérica dentro do identificador opaco foi interpretada como telefone.
+O router carregou a approval e aplicou corretamente
+`RESPONSE_EXECUTION_CONTEXT_MISMATCH` antes do claim; o motivo não chegava ao
+runtime log. Fingerprints explícitos da approval agora são preservados byte a byte e
+o motivo sanitizado da decisão do router é persistido para auditoria. O reteste real
+do follow-up continua pendente.
+
 A correção subsequente elimina os builders paralelos de histórico. Preflight e
 router usam o mesmo contrato versionado de contexto conversacional: mensagens
 conversacionais da mesma conversa e `contextVersion`, janela limitada e ordenada

@@ -94,6 +94,9 @@ const STRUCTURAL_STATE_KEYS = new Set([
   // Hashes and fingerprints are opaque comparison identities, not free text.
   // They must remain byte-for-byte stable for single-use approval matching.
   "expectedCanonicalComparisonHash",
+  "expectedSemanticDecisionFingerprint",
+  "expectedContextFingerprint",
+  "expectedAntecedentFingerprint",
   "creationFingerprint",
   "securityRulesFingerprint",
   "officialContextFingerprint",

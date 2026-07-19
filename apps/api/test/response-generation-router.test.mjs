@@ -398,6 +398,104 @@ test("router emits a contextual mismatch and does not claim a versioned follow-u
   assert.equal(claims, 0);
 });
 
+test("router claims a follow-up approval after an earlier V1 follow-up when the persisted context fingerprint is intact", async () => {
+  const context = buildResponseExecutionConversationContext({
+    contextVersion: 1,
+    messages: [
+      {
+        id: "direct",
+        role: "user",
+        content: "Que horas vocês atendem de segunda a sexta?",
+        contextVersion: 1,
+      },
+      {
+        id: "direct-answer",
+        role: "assistant",
+        content: "Resposta de horário.",
+        contextVersion: 1,
+      },
+      {
+        id: "previous-follow-up",
+        role: "user",
+        content: "E até que horas vocês atendem?",
+        contextVersion: 1,
+      },
+      {
+        id: "previous-v1-answer",
+        role: "assistant",
+        content: "Resposta V1 de horário.",
+        contextVersion: 1,
+      },
+    ],
+  });
+  const decision = resolveResponseExecutionIntent({
+    canonicalMessage: "E até que horas vocês atendem?",
+    messageId: "message-1",
+    contextVersion: 1,
+    conversationContext: context,
+  });
+  const armed = createRuntimeV2ResponseExecutionApproval({
+    companyId: "company-1",
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    expectedCanonicalComparisonHash: "hash-1",
+    canonicalVersion: "canonical-inbound-message-v1",
+    expiresAt: new Date(Date.now() + 60_000),
+    operatorPurpose: "follow-up after V1",
+    semanticDecisionVersion: decision.version,
+    expectedSemanticDecisionFingerprint: decision.fingerprint,
+    expectedIntent: decision.intent,
+    contextResolutionVersion: decision.contextResolutionVersion,
+    expectedContextFingerprint: decision.contextFingerprint,
+    expectedAntecedentFingerprint: decision.antecedentFingerprint,
+    expectedAntecedentCategory: decision.antecedentCategory,
+    expectedAntecedentIntent: decision.antecedentIntent,
+    contextualResolution: decision.contextualResolution,
+    flowConfigurationFingerprint: "flow-config-1",
+  });
+  let claims = 0;
+  let v1 = 0;
+  let v2 = 0;
+  const router = new ResponseGenerationRouter({
+    coordinator: fakeCoordinator({ approval: armed, onClaim: () => (claims += 1) }),
+    executeV1: async () => {
+      v1 += 1;
+      return v1Response();
+    },
+    v2Executor: {
+      async execute() {
+        v2 += 1;
+        return {
+          responseText: "Até o horário oficial de encerramento.",
+          category: "businessHours",
+          authority: "OFFICIAL_CONTEXT",
+          candidateStatus: "CANDIDATE_APPROVED",
+          qualityGateResult: "APPROVED",
+          outboundAllowed: true,
+        };
+      },
+    },
+  });
+  const result = await router.route(
+    controlledInput({
+      v2Eligibility: {
+        standardEligible: true,
+        category: "businessHours",
+        authority: "OFFICIAL_CONTEXT",
+        semanticDecision: decision,
+        flowEvaluation: {
+          v2Compatibility: "ALLOWED",
+          flowConfigurationFingerprint: "flow-config-1",
+        },
+      },
+    }),
+  );
+
+  assert.deepEqual([claims, v2, v1], [1, 1, 0]);
+  assert.equal(result.route, "V2_SINGLE_USE");
+  assert.equal(result.executionOwner, "V2_PRIMARY");
+});
+
 test("V2 fake failure falls back once to V1 before any sender", async () => {
   let v1 = 0;
   let v2 = 0;
