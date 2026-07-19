@@ -9,7 +9,10 @@ import {
   CANONICAL_INBOUND_MESSAGE_SCHEMA_VERSION,
   canonicalizeInboundMessageForComparison,
 } from "../inbound/canonical-inbound-message";
-import { understandTurn } from "./turn-understanding";
+import {
+  resolveResponseExecutionIntent,
+  type ResponseExecutionSemanticDecision,
+} from "./response-execution-intent";
 import { evaluateV2PrimarySecurityRules } from "../assistant-conversations/v2-primary-security-gate";
 import { evaluateFlowApplicability } from "../assistant-conversations/flow-applicability-evaluator";
 import type { PrismaService } from "../database/prisma.service";
@@ -57,6 +60,11 @@ export type RuntimeV2ResponseExecutionPreflightResult = {
   canonicalVersion: string;
   allowedCategory: "businessHours";
   allowedAuthority: "OFFICIAL_CONTEXT";
+  resolvedCategory: "businessHours" | null;
+  resolvedIntent: "ask_business_hours" | null;
+  semanticDecisionVersion: string;
+  semanticDecisionFingerprint: string;
+  semanticApplicable: boolean;
   contextVersion: number | null;
   securityRulesStatus: "ALLOWED" | "NO_ACTIVE_RULES" | "BLOCKED";
   securityRulesFingerprint: string | null;
@@ -104,6 +112,9 @@ export type RuntimeV2ResponseExecutionStatusResult = {
   status: RuntimeV2ResponseExecutionApproval["status"] | null;
   canonicalVersion: string | null;
   canonicalHashFingerprint: string | null;
+  semanticDecisionVersion: string | null;
+  semanticDecisionFingerprint: string | null;
+  expectedIntent: "ask_business_hours" | null;
   allowedCategory: "businessHours" | null;
   allowedAuthority: "OFFICIAL_CONTEXT" | null;
   createdAt: string | null;
@@ -141,7 +152,8 @@ export type RuntimeV2ResponseExecutionAdministrationDependencies = {
     | "assistantFlow"
     | "assistantToolConfig"
     | "assistantConversationStateV2"
-  >;
+  > &
+    Partial<Pick<PrismaService, "assistantConversationMessage">>;
   securityRules: Pick<AssistantSecurityRulesService, "findActiveForRuntime">;
   stateStore: ConversationStateStore;
   responseExecutionStore: ConversationStateResponseExecutionStore;
@@ -154,6 +166,7 @@ type RuntimeV2ResponseExecutionPreflightEvaluation = {
   result: RuntimeV2ResponseExecutionPreflightResult;
   canonicalComparisonHash: string | null;
   canonicalMessage: string;
+  semanticDecision: ResponseExecutionSemanticDecision;
 };
 
 function fingerprint(value: string | null | undefined): string | null {
@@ -207,6 +220,9 @@ function statusFromRecord(
       status: null,
       canonicalVersion: null,
       canonicalHashFingerprint: null,
+      semanticDecisionVersion: null,
+      semanticDecisionFingerprint: null,
+      expectedIntent: null,
       allowedCategory: null,
       allowedAuthority: null,
       createdAt: null,
@@ -250,6 +266,9 @@ function statusFromRecord(
     status,
     canonicalVersion: approval.canonicalVersion,
     canonicalHashFingerprint: fingerprint(approval.expectedCanonicalComparisonHash),
+    semanticDecisionVersion: approval.semanticDecisionVersion ?? null,
+    semanticDecisionFingerprint: fingerprint(approval.expectedSemanticDecisionFingerprint),
+    expectedIntent: approval.expectedIntent ?? null,
     allowedCategory: approval.allowedCategory,
     allowedAuthority: approval.allowedAuthority,
     createdAt: approval.createdAt ?? null,
@@ -314,24 +333,6 @@ export class RuntimeV2ResponseExecutionAdministrationService {
     }
     if (input.allowedCategory !== "businessHours") blockers.push("CATEGORY_NOT_ALLOWED");
     if (input.allowedAuthority !== "OFFICIAL_CONTEXT") blockers.push("AUTHORITY_NOT_ALLOWED");
-    const understanding = understandTurn({
-      message: canonicalMessage,
-      messageId: "preflight",
-      contextVersion: 1,
-      now: this.now(),
-      recentHistory: [],
-    });
-    if (understanding.humanHandoffSignal.requested) {
-      blockers.push("CUSTOMER_REQUESTED_HUMAN");
-    }
-    if (
-      understanding.requiresClarification ||
-      understanding.requestedInformationCategories.length !== 1 ||
-      understanding.requestedInformationCategories[0] !== "businessHours"
-    ) {
-      blockers.push("TURN_NOT_STRICT_BUSINESS_HOURS");
-    }
-
     const company = await this.dependencies.prisma.company.findUnique({
       where: { id: input.companyId },
       select: { id: true, name: true, timezone: true },
@@ -382,6 +383,34 @@ export class RuntimeV2ResponseExecutionAdministrationService {
     if (conversation && conversation.status !== "ACTIVE") blockers.push("CONVERSATION_NOT_ACTIVE");
 
     const contextVersion = conversation?.currentContextVersion ?? null;
+    const recentHistoryRepository = this.dependencies.prisma.assistantConversationMessage;
+    const recentHistory =
+      conversation && recentHistoryRepository
+        ? await recentHistoryRepository.findMany({
+            where: {
+              companyId: input.companyId,
+              assistantId: input.assistantId,
+              conversationId: input.conversationId,
+            },
+            orderBy: { createdAt: "desc" },
+            take: 6,
+            select: { id: true, role: true, content: true },
+          })
+        : [];
+    const semanticDecision = resolveResponseExecutionIntent({
+      canonicalMessage,
+      messageId: "preflight",
+      contextVersion: contextVersion ?? 1,
+      now: this.now(),
+      recentHistory: recentHistory.reverse().map((message) => ({
+        id: message.id,
+        role:
+          message.role === "tool" ? "tool" : message.role === "assistant" ? "assistant" : "user",
+        content: message.content,
+        relevance: "objective",
+      })),
+    });
+    if (!semanticDecision.applicable) blockers.push("TURN_NOT_STRICT_BUSINESS_HOURS");
     let activeHandoff = false;
     if (contextVersion !== null) {
       const state = await this.dependencies.stateStore.load({
@@ -489,6 +518,7 @@ export class RuntimeV2ResponseExecutionAdministrationService {
     return {
       canonicalComparisonHash: canonicalHash,
       canonicalMessage,
+      semanticDecision,
       result: {
         preflightStatus: blockers.length === 0 ? "APPROVED" : "BLOCKED",
         scope: {
@@ -500,6 +530,11 @@ export class RuntimeV2ResponseExecutionAdministrationService {
         canonicalVersion: input.canonicalVersion,
         allowedCategory: "businessHours",
         allowedAuthority: "OFFICIAL_CONTEXT",
+        resolvedCategory: semanticDecision.category,
+        resolvedIntent: semanticDecision.intent,
+        semanticDecisionVersion: semanticDecision.version,
+        semanticDecisionFingerprint: fingerprint(semanticDecision.fingerprint)!,
+        semanticApplicable: semanticDecision.applicable,
         contextVersion,
         securityRulesStatus: security.allowed
           ? security.activeRuleCount > 0
@@ -554,6 +589,9 @@ export class RuntimeV2ResponseExecutionAdministrationService {
       conversationId: input.conversationId,
       expectedCanonicalComparisonHash: canonicalHash,
       canonicalVersion: input.canonicalVersion,
+      semanticDecisionVersion: preflightEvaluation.semanticDecision.version,
+      expectedSemanticDecisionFingerprint: preflightEvaluation.semanticDecision.fingerprint,
+      expectedIntent: preflightEvaluation.semanticDecision.intent ?? undefined,
       expiresAt: new Date(this.now().getTime() + input.durationMinutes * 60_000),
       operatorPurpose: sanitizeOperatorPurpose(input.operatorPurpose),
       securityRulesFingerprint: preflight.securityRulesFingerprint,

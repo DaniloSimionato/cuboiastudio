@@ -23,6 +23,9 @@ export type RuntimeV2ResponseExecutionApproval = {
   canonicalVersion: string;
   allowedCategory: "businessHours";
   allowedAuthority: "OFFICIAL_CONTEXT";
+  semanticDecisionVersion?: string;
+  expectedSemanticDecisionFingerprint?: string;
+  expectedIntent?: "ask_business_hours";
   expiresAt: string;
   createdAt?: string;
   maxUses: 1;
@@ -60,6 +63,9 @@ export function createRuntimeV2ResponseExecutionApproval(input: {
   conversationId: string;
   expectedCanonicalComparisonHash: string;
   canonicalVersion: string;
+  semanticDecisionVersion?: string;
+  expectedSemanticDecisionFingerprint?: string;
+  expectedIntent?: "ask_business_hours";
   expiresAt: Date;
   operatorPurpose: string;
   securityRulesFingerprint?: string | null;
@@ -103,6 +109,13 @@ export function createRuntimeV2ResponseExecutionApproval(input: {
       `${approvalId}:${input.companyId}:${input.assistantId}:${input.conversationId}:${input.expectedCanonicalComparisonHash}`,
     ),
     operatorPurpose: input.operatorPurpose.slice(0, 120),
+    ...(input.semanticDecisionVersion !== undefined
+      ? { semanticDecisionVersion: input.semanticDecisionVersion }
+      : {}),
+    ...(input.expectedSemanticDecisionFingerprint !== undefined
+      ? { expectedSemanticDecisionFingerprint: input.expectedSemanticDecisionFingerprint }
+      : {}),
+    ...(input.expectedIntent !== undefined ? { expectedIntent: input.expectedIntent } : {}),
     ...(input.securityRulesFingerprint !== undefined
       ? { securityRulesFingerprint: input.securityRulesFingerprint }
       : {}),

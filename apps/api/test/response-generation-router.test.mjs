@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ResponseGenerationRouter } from "../dist/assistant-conversations/response-generation-router.js";
 import { createRuntimeV2ResponseExecutionApproval } from "../dist/runtime-v2/index.js";
+import { resolveResponseExecutionIntent } from "../dist/runtime-v2/index.js";
 
 function v1Response(overrides = {}) {
   return {
@@ -55,6 +56,10 @@ function input(overrides = {}) {
 }
 
 function controlledInput(overrides = {}) {
+  const semanticDecision = resolveResponseExecutionIntent({
+    canonicalMessage: "Que horas voces atendem de segunda a sexta?",
+    messageId: "message-1",
+  });
   return input({
     executionMode: "CONTROLLED",
     executionAssistantIds: ["assistant-1"],
@@ -63,6 +68,7 @@ function controlledInput(overrides = {}) {
       standardEligible: true,
       category: "businessHours",
       authority: "OFFICIAL_CONTEXT",
+      semanticDecision,
       flowEvaluation: {
         v2Compatibility: "ALLOWED",
         flowConfigurationFingerprint: "flow-config-1",
@@ -73,6 +79,10 @@ function controlledInput(overrides = {}) {
 }
 
 function approval() {
+  const semanticDecision = resolveResponseExecutionIntent({
+    canonicalMessage: "Que horas voces atendem de segunda a sexta?",
+    messageId: "message-1",
+  });
   return createRuntimeV2ResponseExecutionApproval({
     companyId: "company-1",
     assistantId: "assistant-1",
@@ -81,7 +91,17 @@ function approval() {
     canonicalVersion: "canonical-inbound-message-v1",
     expiresAt: new Date(Date.now() + 60_000),
     operatorPurpose: "isolated router test",
+    semanticDecisionVersion: semanticDecision.version,
+    expectedSemanticDecisionFingerprint: semanticDecision.fingerprint,
+    expectedIntent: semanticDecision.intent,
     flowConfigurationFingerprint: "flow-config-1",
+  });
+}
+
+function approvedBusinessHoursDecision() {
+  return resolveResponseExecutionIntent({
+    canonicalMessage: "Que horas voces atendem de segunda a sexta?",
+    messageId: "message-1",
   });
 }
 
@@ -266,6 +286,50 @@ test("eligible single-use approval claims before V2 fake and suppresses V1", asy
   assert.equal(result.candidateStatus, "CANDIDATE_APPROVED");
 });
 
+test("router default-denies a semantic decision that differs from the approval before claim", async () => {
+  let claims = 0;
+  let v2 = 0;
+  const armed = approval();
+  const router = new ResponseGenerationRouter({
+    coordinator: fakeCoordinator({
+      approval: armed,
+      onClaim: () => {
+        claims += 1;
+      },
+    }),
+    executeV1: async () => v1Response(),
+    v2Executor: {
+      async execute() {
+        v2 += 1;
+        throw new Error("must not execute");
+      },
+    },
+  });
+  const mismatchedDecision = resolveResponseExecutionIntent({
+    canonicalMessage: "Qual é o horário de funcionamento?",
+    messageId: "message-1",
+  });
+  const result = await router.route(
+    controlledInput({
+      v2Eligibility: {
+        standardEligible: true,
+        category: "businessHours",
+        authority: "OFFICIAL_CONTEXT",
+        semanticDecision: { ...mismatchedDecision, fingerprint: "semantic-mismatch" },
+        flowEvaluation: {
+          v2Compatibility: "ALLOWED",
+          flowConfigurationFingerprint: "flow-config-1",
+        },
+      },
+    }),
+  );
+  assert.equal(result.route, "V1_DEFAULT");
+  assert.equal(result.executionOwner, "V1_NORMAL");
+  assert.equal(result.sanitizedTelemetry.reason, "RESPONSE_EXECUTION_SEMANTIC_MISMATCH");
+  assert.equal(claims, 0);
+  assert.equal(v2, 0);
+});
+
 test("V2 fake failure falls back once to V1 before any sender", async () => {
   let v1 = 0;
   let v2 = 0;
@@ -365,6 +429,7 @@ test("router rejects a changed flow configuration before claim and falls back sa
 
 test("router permits only the approval-bound compatible flow context", async () => {
   const flow = compatibleFlowEvaluation();
+  const semanticDecision = approvedBusinessHoursDecision();
   const flowApproval = createRuntimeV2ResponseExecutionApproval({
     companyId: "company-1",
     assistantId: "assistant-1",
@@ -373,6 +438,9 @@ test("router permits only the approval-bound compatible flow context", async () 
     canonicalVersion: "canonical-inbound-message-v1",
     expiresAt: new Date(Date.now() + 60_000),
     operatorPurpose: "compatible flow test",
+    semanticDecisionVersion: semanticDecision.version,
+    expectedSemanticDecisionFingerprint: semanticDecision.fingerprint,
+    expectedIntent: semanticDecision.intent,
     flowConfigurationFingerprint: flow.flowConfigurationFingerprint,
     expectedFlowFingerprint: flow.selectedFlowFingerprint,
     expectedFlowVersionFingerprint: flow.selectedFlowVersionFingerprint,
@@ -408,6 +476,7 @@ test("router permits only the approval-bound compatible flow context", async () 
         standardEligible: true,
         category: "businessHours",
         authority: "OFFICIAL_CONTEXT",
+        semanticDecision,
         flowEvaluation: flow,
       },
     }),
@@ -419,6 +488,7 @@ test("router permits only the approval-bound compatible flow context", async () 
 
 test("a compatible flow changed after generation falls back before the tail", async () => {
   const flow = compatibleFlowEvaluation();
+  const semanticDecision = approvedBusinessHoursDecision();
   const flowApproval = createRuntimeV2ResponseExecutionApproval({
     companyId: "company-1",
     assistantId: "assistant-1",
@@ -427,6 +497,9 @@ test("a compatible flow changed after generation falls back before the tail", as
     canonicalVersion: "canonical-inbound-message-v1",
     expiresAt: new Date(Date.now() + 60_000),
     operatorPurpose: "compatible flow tail revalidation",
+    semanticDecisionVersion: semanticDecision.version,
+    expectedSemanticDecisionFingerprint: semanticDecision.fingerprint,
+    expectedIntent: semanticDecision.intent,
     flowConfigurationFingerprint: flow.flowConfigurationFingerprint,
     expectedFlowFingerprint: flow.selectedFlowFingerprint,
     expectedFlowVersionFingerprint: flow.selectedFlowVersionFingerprint,
@@ -463,6 +536,7 @@ test("a compatible flow changed after generation falls back before the tail", as
         standardEligible: true,
         category: "businessHours",
         authority: "OFFICIAL_CONTEXT",
+        semanticDecision,
         flowEvaluation: flow,
       },
       revalidateV2Flow: async () => {

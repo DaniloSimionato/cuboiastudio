@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   RuntimeV2ResponseExecutionCoordinator,
   createRuntimeV2ResponseExecutionApproval,
+  resolveResponseExecutionIntent,
 } from "../dist/runtime-v2/index.js";
 import { ResponseGenerationRouter } from "../dist/assistant-conversations/response-generation-router.js";
 import { ResponseTailLifecycleHooks } from "../dist/assistant-conversations/response-tail-lifecycle-hooks.js";
@@ -17,6 +18,11 @@ const turn = {
   canonicalVersion: "canonical-inbound-message-v1",
 };
 
+const semanticDecision = resolveResponseExecutionIntent({
+  canonicalMessage: "Que horas vocês atendem de segunda a sexta?",
+  messageId: turn.internalMessageId,
+});
+
 function createApproval() {
   return createRuntimeV2ResponseExecutionApproval({
     companyId: turn.companyId,
@@ -26,6 +32,9 @@ function createApproval() {
     canonicalVersion: turn.canonicalVersion,
     expiresAt: new Date(Date.now() + 60_000),
     operatorPurpose: "test-only single-use coordinator integration",
+    semanticDecisionVersion: semanticDecision.version,
+    expectedSemanticDecisionFingerprint: semanticDecision.fingerprint,
+    expectedIntent: semanticDecision.intent,
     flowConfigurationFingerprint: "flow-config-c1",
   });
 }
@@ -95,6 +104,7 @@ function routerInput() {
       standardEligible: true,
       category: "businessHours",
       authority: "OFFICIAL_CONTEXT",
+      semanticDecision,
       flowEvaluation: {
         v2Compatibility: "ALLOWED",
         flowConfigurationFingerprint: "flow-config-c1",
@@ -171,7 +181,11 @@ test("V2 fake failure claims one V1 fallback before the shared sender", async ()
       v1 += 1;
       return v1Response();
     },
-    v2Executor: { execute: async () => { throw new Error("V2_PROVIDER_FAILED"); } },
+    v2Executor: {
+      execute: async () => {
+        throw new Error("V2_PROVIDER_FAILED");
+      },
+    },
   });
 
   const envelope = await router.route(routerInput());
@@ -215,7 +229,11 @@ test("uncertain V2 sender enters reconciliation and never permits V1 fallback", 
   assert.equal(persisted.outboundV2Performed, null);
   assert.equal(persisted.terminalStatus, "RECONCILIATION_REQUIRED");
   assert.equal(
-    await coordinator.beginV1Fallback({ ...turn, generationId: envelope.generationId, reason: "must-not-run" }),
+    await coordinator.beginV1Fallback({
+      ...turn,
+      generationId: envelope.generationId,
+      reason: "must-not-run",
+    }),
     false,
   );
 });
@@ -246,7 +264,10 @@ test("two concurrent routers produce one claim and the loser never falls through
     },
   });
 
-  const [first, second] = await Promise.all([router.route(routerInput()), router.route(routerInput())]);
+  const [first, second] = await Promise.all([
+    router.route(routerInput()),
+    router.route(routerInput()),
+  ]);
   const results = [first, second];
   assert.equal(results.filter((result) => result.executionOwner === "V2_PRIMARY").length, 1);
   assert.equal(results.filter((result) => result.state === "PENDING_OR_TERMINAL").length, 1);

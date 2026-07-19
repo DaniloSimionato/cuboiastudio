@@ -132,6 +132,9 @@ function createAdministration(overrides = {}) {
         return null;
       },
     },
+    assistantConversationMessage: {
+      findMany: async () => overrides.recentHistory ?? [],
+    },
     assistantFlow: { findMany: async () => overrides.flows ?? [] },
     assistantToolConfig: { count: async () => overrides.enabledToolCount ?? 0 },
     assistantConversationStateV2: {
@@ -228,9 +231,37 @@ test("preflight é dry-run redigido e não persiste approval", async () => {
   assert.equal(result.executionConfiguration.mode, "OFF");
   assert.equal(result.securityRulesStatus, "ALLOWED");
   assert.equal(result.officialContextStatus, "AVAILABLE");
+  assert.equal(result.resolvedCategory, "businessHours");
+  assert.equal(result.resolvedIntent, "ask_business_hours");
+  assert.equal(result.semanticApplicable, true);
+  assert.equal(result.semanticDecisionFingerprint.length, 16);
   assert.deepEqual(result.blockers, []);
   assert.equal(await responseExecutionStore.load({ ...scope, contextVersion: 1 }), null);
   assert.equal(JSON.stringify(result).includes(preflightInput().message), false);
+});
+
+test("preflight requires an authorized antecedent for an elliptical business-hours follow-up", async () => {
+  const withoutHistory = createAdministration();
+  const blocked = await withoutHistory.administration.preflight(
+    preflightInput({ message: "E até que horas?" }),
+  );
+  assert.equal(blocked.preflightStatus, "BLOCKED");
+  assert.equal(blocked.semanticApplicable, false);
+
+  const withHistory = createAdministration({
+    recentHistory: [
+      {
+        id: "history-business-hours",
+        role: "user",
+        content: "Que horas vocês atendem de segunda a sexta?",
+      },
+    ],
+  });
+  const approved = await withHistory.administration.preflight(
+    preflightInput({ message: "E até que horas?" }),
+  );
+  assert.equal(approved.preflightStatus, "APPROVED");
+  assert.equal(approved.resolvedIntent, "ask_business_hours");
 });
 
 test("preflight bloqueia escopo operacional, contexto e regras incompatíveis", async () => {

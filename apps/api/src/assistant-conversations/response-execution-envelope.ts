@@ -50,7 +50,11 @@ export function createV1NormalResponseExecutionEnvelope(input: {
   turn: ResponseExecutionTurn;
   response?: V1GeneratedResponse | null;
   responseText?: string;
-  reason: "EXECUTION_MODE_OFF" | "EXECUTION_SCOPE_EMPTY" | "V2_EXECUTION_NOT_CONNECTED";
+  reason:
+    | "EXECUTION_MODE_OFF"
+    | "EXECUTION_SCOPE_EMPTY"
+    | "V2_EXECUTION_NOT_CONNECTED"
+    | "RESPONSE_EXECUTION_SEMANTIC_MISMATCH";
 }): ResponseExecutionEnvelope {
   const response = input.response ?? null;
   const responseText = input.responseText ?? response?.responseText ?? "";

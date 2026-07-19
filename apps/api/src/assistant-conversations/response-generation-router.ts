@@ -20,6 +20,7 @@ import type {
   V2PrimaryResponseExecutor,
 } from "./v2-primary-response-executor";
 import type { FlowApplicabilityEvaluation } from "./flow-applicability-evaluator";
+import type { ResponseExecutionSemanticDecision } from "../runtime-v2/response-execution-intent";
 
 export type ResponseGenerationRoute = ResponseExecutionEnvelope["route"];
 export type ResponseGenerationRouterTurn = ResponseExecutionTurn;
@@ -34,6 +35,7 @@ export type ResponseGenerationRouterInput = {
     standardEligible: boolean;
     category: "businessHours" | null;
     authority: "OFFICIAL_CONTEXT" | null;
+    semanticDecision?: ResponseExecutionSemanticDecision;
     flowEvaluation?: FlowApplicabilityEvaluation;
   };
   /** Re-checks current flow configuration at the only point V2 could claim a turn. */
@@ -65,10 +67,17 @@ const defaultDependencies: ResponseGenerationRouterDependencies = {
 
 function resolveDefaultDenyReason(
   input: ResponseGenerationRouterInput,
-): "EXECUTION_MODE_OFF" | "EXECUTION_SCOPE_EMPTY" | "V2_EXECUTION_NOT_CONNECTED" {
+):
+  | "EXECUTION_MODE_OFF"
+  | "EXECUTION_SCOPE_EMPTY"
+  | "V2_EXECUTION_NOT_CONNECTED"
+  | "RESPONSE_EXECUTION_SEMANTIC_MISMATCH" {
   if (input.executionMode !== "CONTROLLED") return "EXECUTION_MODE_OFF";
   if (!input.executionAssistantIds?.length || !input.executionConversationIds?.length) {
     return "EXECUTION_SCOPE_EMPTY";
+  }
+  if (input.v2Eligibility?.semanticDecision && !input.v2Eligibility.semanticDecision.applicable) {
+    return "RESPONSE_EXECUTION_SEMANTIC_MISMATCH";
   }
   return "V2_EXECUTION_NOT_CONNECTED";
 }
@@ -86,6 +95,7 @@ function isEligibleForV2(input: ResponseGenerationRouterInput): boolean {
     input.v2Eligibility?.standardEligible === true &&
     input.v2Eligibility.category === "businessHours" &&
     input.v2Eligibility.authority === "OFFICIAL_CONTEXT" &&
+    input.v2Eligibility.semanticDecision?.applicable === true &&
     (input.v2Eligibility.flowEvaluation?.v2Compatibility === "ALLOWED" ||
       input.v2Eligibility.flowEvaluation?.v2Compatibility === "ALLOWED_WITH_FLOW_CONTEXT")
   );
@@ -116,6 +126,14 @@ export class ResponseGenerationRouter {
 
     const approval = await this.dependencies.coordinator.loadApproval(input.turn);
     if (!approval) return this.executeV1Normal(input);
+    const semanticDecision = input.v2Eligibility?.semanticDecision;
+    if (
+      approval.semanticDecisionVersion !== semanticDecision?.version ||
+      approval.expectedSemanticDecisionFingerprint !== semanticDecision?.fingerprint ||
+      approval.expectedIntent !== semanticDecision?.intent
+    ) {
+      return this.executeV1Normal(input, "RESPONSE_EXECUTION_SEMANTIC_MISMATCH");
+    }
     if (
       approval.status !== "ARMED" ||
       approval.companyId !== input.turn.companyId ||
@@ -206,12 +224,13 @@ export class ResponseGenerationRouter {
 
   private async executeV1Normal(
     input: ResponseGenerationRouterInput,
+    reason = resolveDefaultDenyReason(input),
   ): Promise<ResponseGenerationRouterResult> {
     const response = await this.dependencies.executeV1(input.v1Input);
     return createV1NormalResponseExecutionEnvelope({
       turn: input.turn,
       response,
-      reason: resolveDefaultDenyReason(input),
+      reason,
     });
   }
 

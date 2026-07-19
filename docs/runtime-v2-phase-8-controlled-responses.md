@@ -358,6 +358,23 @@ prompt, flow ou referência externa bruta.
 **ISOLATED_CANARY_COMPLETED=false.**
 **HELOISA_V2_ENABLEMENT_BLOCKED_BY_FACTUAL_FLOW=true.**
 
+### Alinhamento semântico do canário multi-turn
+
+No primeiro turno do canário multi-turn isolado, o preflight reconheceu uma
+pergunta determinística de horário de atendimento, mas o router caiu em V1 por
+uma expressão local mais estreita. O default-deny funcionou: não houve claim V2,
+provider V2, duplicação ou segundo outbound; a approval foi terminada e toda a
+configuração operacional foi restaurada.
+
+Preflight, arm e router agora usam `resolveResponseExecutionIntent`, uma decisão
+versionada e redigida construída a partir do conteúdo canônico e, quando
+necessário, de no máximo seis mensagens da mesma conversa. A approval guarda
+somente versão, intent e fingerprint dessa decisão; no inbound, o router a
+reconstrói antes do claim e mantém V1 quando qualquer dimensão divergir. A
+categoria permitida continua restrita a `businessHours` com
+`OFFICIAL_CONTEXT`; entrega, pedido, agendamento, humano e perguntas ambíguas
+continuam no default-deny. O canário multi-turn permanece pendente.
+
 A estratégia de geração V1 de triagem foi extraída para um contrato interno
 testável, sem mover o tail de persistência, sender, `externalMessageId` ou
 Shadow. O bypass de fluxo V1 (`fixed_message` e handoff sem provider) também foi

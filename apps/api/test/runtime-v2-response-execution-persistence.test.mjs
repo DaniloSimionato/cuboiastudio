@@ -14,6 +14,7 @@ import {
   PrismaConversationStateStore,
   RuntimeV2ResponseExecutionCoordinator,
   createRuntimeV2ResponseExecutionApproval,
+  resolveResponseExecutionIntent,
 } from "../dist/runtime-v2/index.js";
 
 if (!process.env.DATABASE_URL) {
@@ -262,6 +263,10 @@ test("PostgreSQL permits exactly one rearm after a terminal cancellation and pre
 
 test("PostgreSQL allows one real V2 primary executor and one shared tail completion", async () => {
   const { scope, message } = await fixture();
+  const semanticDecision = resolveResponseExecutionIntent({
+    canonicalMessage: "Qual é o horário de atendimento?",
+    messageId: message.id,
+  });
   const approval = createRuntimeV2ResponseExecutionApproval({
     companyId: scope.companyId,
     assistantId: scope.assistantId,
@@ -270,6 +275,9 @@ test("PostgreSQL allows one real V2 primary executor and one shared tail complet
     canonicalVersion: "canonical-inbound-message-v1",
     expiresAt: new Date(Date.now() + 60_000),
     operatorPurpose: "PostgreSQL real primary executor test",
+    semanticDecisionVersion: semanticDecision.version,
+    expectedSemanticDecisionFingerprint: semanticDecision.fingerprint,
+    expectedIntent: semanticDecision.intent,
     flowConfigurationFingerprint: "flow-config-persistence",
   });
   const seedStore = new ConversationStateResponseExecutionStore(
@@ -343,6 +351,7 @@ test("PostgreSQL allows one real V2 primary executor and one shared tail complet
       standardEligible: true,
       category: "businessHours",
       authority: "OFFICIAL_CONTEXT",
+      semanticDecision,
       flowEvaluation: {
         v2Compatibility: "ALLOWED",
         flowConfigurationFingerprint: "flow-config-persistence",

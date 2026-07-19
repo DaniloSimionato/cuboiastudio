@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { buildOfficialBusinessContext } from "../dist/assistants/official-business-context.js";
 import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
-import { createRuntimeV2ResponseExecutionApproval } from "../dist/runtime-v2/index.js";
+import {
+  createRuntimeV2ResponseExecutionApproval,
+  resolveResponseExecutionIntent,
+} from "../dist/runtime-v2/index.js";
 import { RuntimeV2ResponseExecutionCoordinator } from "../dist/runtime-v2/response-execution-coordinator.js";
 import { ResponseGenerationRouter } from "../dist/assistant-conversations/response-generation-router.js";
 import { ResponseTailLifecycleHooks } from "../dist/assistant-conversations/response-tail-lifecycle-hooks.js";
@@ -18,6 +21,11 @@ const turn = {
   canonicalComparisonHash: "canonical-hash-v2-primary",
   canonicalVersion: "canonical-inbound-message-v1",
 };
+
+const semanticDecision = resolveResponseExecutionIntent({
+  canonicalMessage: "Qual é o horário de atendimento?",
+  messageId: turn.internalMessageId,
+});
 
 function officialContext(overrides = {}) {
   return buildOfficialBusinessContext({
@@ -47,6 +55,9 @@ function claimedApproval(overrides = {}) {
     canonicalVersion: turn.canonicalVersion,
     expiresAt: new Date(Date.now() + 60_000),
     operatorPurpose: "teste local do executor primário",
+    semanticDecisionVersion: semanticDecision.version,
+    expectedSemanticDecisionFingerprint: semanticDecision.fingerprint,
+    expectedIntent: semanticDecision.intent,
     flowConfigurationFingerprint: "flow-config-primary",
   });
   return {
@@ -420,6 +431,7 @@ test("router, executor real e tail fake produzem um único V2_PRIMARY sem V1 par
       standardEligible: true,
       category: "businessHours",
       authority: "OFFICIAL_CONTEXT",
+      semanticDecision,
       flowEvaluation: {
         v2Compatibility: "ALLOWED",
         flowConfigurationFingerprint: "flow-config-primary",
@@ -530,6 +542,7 @@ test("falha pré-sender do executor real faz um único fallback V1", async () =>
       standardEligible: true,
       category: "businessHours",
       authority: "OFFICIAL_CONTEXT",
+      semanticDecision,
       flowEvaluation: {
         v2Compatibility: "ALLOWED",
         flowConfigurationFingerprint: "flow-config-primary",

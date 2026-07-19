@@ -102,6 +102,7 @@ import {
 } from "../runtime-v2/tool-observation";
 import { createV1HandoffObservation } from "../runtime-v2/handoff-state";
 import { deriveHumanHandoffSignal } from "../runtime-v2/turn-understanding";
+import { resolveResponseExecutionIntent } from "../runtime-v2/response-execution-intent";
 import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
 import type { RuntimeV2CandidateContext } from "../runtime-v2/candidate-response";
 import {
@@ -4050,7 +4051,26 @@ export class AssistantConversationsService {
                 })
               : null;
           };
-          const businessHoursTurn = /\b(hor[aá]rio|atendimento)\b/i.test(customerIntentText);
+          const v2RecentHistory = priorHistory.slice(-6).map((message) => ({
+            id: message.id,
+            role:
+              message.role === "tool"
+                ? ("tool" as const)
+                : message.role === "assistant"
+                  ? ("assistant" as const)
+                  : ("user" as const),
+            content: message.content,
+            relevance:
+              message.role === "assistant" && message.content.includes("?")
+                ? ("question-reference" as const)
+                : ("objective" as const),
+          }));
+          const responseExecutionSemanticDecision = resolveResponseExecutionIntent({
+            canonicalMessage: canonicalInboundMessage.canonicalComparisonContent,
+            messageId: responseExecutionTurn.internalMessageId,
+            contextVersion: responseExecutionTurn.contextVersion,
+            recentHistory: v2RecentHistory,
+          });
           const v2PrimaryContext: V2PrimaryResponseExecutionContext = {
             canonicalInbound: {
               displayContent: canonicalInboundMessage.displayContent,
@@ -4074,20 +4094,7 @@ export class AssistantConversationsService {
               instruction: rule.instruction,
             })),
             officialBusinessContext,
-            recentHistory: priorHistory.slice(-6).map((message) => ({
-              id: message.id,
-              role:
-                message.role === "tool"
-                  ? "tool"
-                  : message.role === "assistant"
-                    ? "assistant"
-                    : "user",
-              content: message.content,
-              relevance:
-                message.role === "assistant" && message.content.includes("?")
-                  ? "question-reference"
-                  : "objective",
-            })),
+            recentHistory: v2RecentHistory,
             model: resolvedModel.model,
             temperature,
             compatibleFlowContext: flowEvaluation.compatibleFlowContext,
@@ -4120,13 +4127,14 @@ export class AssistantConversationsService {
               (flowEvaluation.v2Compatibility === "ALLOWED" ||
                 flowEvaluation.v2Compatibility === "ALLOWED_WITH_FLOW_CONTEXT") &&
               (tools?.length ?? 0) === 0 &&
-              businessHoursTurn &&
+              responseExecutionSemanticDecision.applicable &&
               Boolean(officialBusinessContext?.businessHours),
-            category: businessHoursTurn ? ("businessHours" as const) : null,
+            category: responseExecutionSemanticDecision.category,
             authority:
-              businessHoursTurn && officialBusinessContext?.businessHours
+              responseExecutionSemanticDecision.authority && officialBusinessContext?.businessHours
                 ? ("OFFICIAL_CONTEXT" as const)
                 : null,
+            semanticDecision: responseExecutionSemanticDecision,
             flowEvaluation,
           };
           responseGenerationRouterInstance =
