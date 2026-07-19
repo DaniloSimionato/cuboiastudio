@@ -103,6 +103,7 @@ import {
 import { createV1HandoffObservation } from "../runtime-v2/handoff-state";
 import { deriveHumanHandoffSignal } from "../runtime-v2/turn-understanding";
 import { resolveResponseExecutionIntent } from "../runtime-v2/response-execution-intent";
+import { buildResponseExecutionConversationContext } from "../runtime-v2/response-execution-conversation-context";
 import { RuntimeV2ShadowIntegrationService } from "../runtime-v2/runtime-v2-shadow-integration.service";
 import type { RuntimeV2CandidateContext } from "../runtime-v2/candidate-response";
 import {
@@ -4051,25 +4052,17 @@ export class AssistantConversationsService {
                 })
               : null;
           };
-          const v2RecentHistory = priorHistory.slice(-6).map((message) => ({
-            id: message.id,
-            role:
-              message.role === "tool"
-                ? ("tool" as const)
-                : message.role === "assistant"
-                  ? ("assistant" as const)
-                  : ("user" as const),
-            content: message.content,
-            relevance:
-              message.role === "assistant" && message.content.includes("?")
-                ? ("question-reference" as const)
-                : ("objective" as const),
-          }));
+          const responseExecutionConversationContext = buildResponseExecutionConversationContext({
+            contextVersion: responseExecutionTurn.contextVersion ?? 1,
+            currentInboundMessageId: responseExecutionTurn.internalMessageId,
+            messages: conversationHistory,
+          });
+          const v2RecentHistory = responseExecutionConversationContext.messages;
           const responseExecutionSemanticDecision = resolveResponseExecutionIntent({
             canonicalMessage: canonicalInboundMessage.canonicalComparisonContent,
             messageId: responseExecutionTurn.internalMessageId,
             contextVersion: responseExecutionTurn.contextVersion,
-            recentHistory: v2RecentHistory,
+            conversationContext: responseExecutionConversationContext,
           });
           const v2PrimaryContext: V2PrimaryResponseExecutionContext = {
             canonicalInbound: {

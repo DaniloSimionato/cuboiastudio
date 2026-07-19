@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { understandTurn } from "./turn-understanding";
 import type { UsefulHistoryMessage } from "./runtime-v2.types";
+import type { ResponseExecutionConversationContext } from "./response-execution-conversation-context";
 
 /**
  * The sole semantic contract used to admit a controlled V2 response.  It is
@@ -20,6 +21,12 @@ export type ResponseExecutionSemanticDecision = {
   applicable: boolean;
   deterministicReason: string;
   fingerprint: string;
+  contextResolutionVersion: string;
+  contextFingerprint: string;
+  antecedentFingerprint: string | null;
+  antecedentCategory: "businessHours" | null;
+  antecedentIntent: ResponseExecutionIntent | null;
+  contextualResolution: boolean;
   redactionApplied: true;
 };
 
@@ -29,6 +36,7 @@ export type ResolveResponseExecutionIntentInput = {
   contextVersion?: number;
   recentHistory?: UsefulHistoryMessage[];
   recentBusinessHoursTopic?: boolean;
+  conversationContext?: ResponseExecutionConversationContext;
   now?: Date;
 };
 
@@ -37,6 +45,9 @@ function decisionFingerprint(input: {
   intent: ResponseExecutionIntent | null;
   applicable: boolean;
   deterministicReason: string;
+  contextResolutionVersion?: string;
+  contextFingerprint?: string;
+  antecedentFingerprint?: string | null;
 }): string {
   // Never fingerprint message text or history contents here. The canonical
   // inbound hash separately binds the approval to the exact inbound content.
@@ -67,24 +78,28 @@ export function resolveResponseExecutionIntent(
   const contextDependentFollowUp = /^e ate que horas(?: voces atendem)?[?!.\s]*$/.test(
     normalizedMessage,
   );
-  const hasRecentBusinessHoursTopic = (input.recentHistory ?? []).slice(-6).some((message) => {
-    const historicalUnderstanding = understandTurn({
-      message: message.content,
-      messageId: message.id ?? "history",
-      contextVersion: input.contextVersion,
-      recentHistory: [],
-    });
-    return (
-      historicalUnderstanding.turnIntent === "ask_business_hours" &&
-      historicalUnderstanding.requestedInformationCategories.length === 1 &&
-      historicalUnderstanding.requestedInformationCategories[0] === "businessHours"
-    );
-  });
+  const hasRecentBusinessHoursTopic = input.conversationContext
+    ? input.conversationContext.antecedentCategory === "businessHours" &&
+      input.conversationContext.antecedentIntent === "ask_business_hours"
+    : (input.recentHistory ?? []).slice(-6).some((message) => {
+        const historicalUnderstanding = understandTurn({
+          message: message.content,
+          messageId: message.id ?? "history",
+          contextVersion: input.contextVersion,
+          recentHistory: [],
+        });
+        return (
+          historicalUnderstanding.turnIntent === "ask_business_hours" &&
+          historicalUnderstanding.requestedInformationCategories.length === 1 &&
+          historicalUnderstanding.requestedInformationCategories[0] === "businessHours"
+        );
+      });
+  const recentHistory = input.conversationContext?.messages ?? input.recentHistory?.slice(-6);
   const understanding = understandTurn({
     message: input.canonicalMessage,
     messageId: input.messageId,
     contextVersion: input.contextVersion,
-    recentHistory: input.recentHistory?.slice(-6),
+    recentHistory,
     recentBusinessHoursTopic: input.recentBusinessHoursTopic,
     now: input.now,
   });
@@ -126,7 +141,35 @@ export function resolveResponseExecutionIntent(
     authority: applicable ? "OFFICIAL_CONTEXT" : null,
     applicable,
     deterministicReason,
-    fingerprint: decisionFingerprint({ category, intent, applicable, deterministicReason }),
+    fingerprint: decisionFingerprint({
+      category,
+      intent,
+      applicable,
+      deterministicReason,
+      ...(input.conversationContext
+        ? {
+            contextResolutionVersion: input.conversationContext.contextResolutionVersion,
+            contextFingerprint: input.conversationContext.contextFingerprint,
+            antecedentFingerprint: input.conversationContext.antecedentFingerprint,
+          }
+        : {}),
+    }),
+    contextResolutionVersion:
+      input.conversationContext?.contextResolutionVersion ?? "legacy-history-v1",
+    contextFingerprint:
+      input.conversationContext?.contextFingerprint ??
+      decisionFingerprint({
+        category: null,
+        intent: null,
+        applicable: false,
+        deterministicReason: "LEGACY_CONTEXT_UNVERSIONED",
+      }),
+    antecedentFingerprint: input.conversationContext?.antecedentFingerprint ?? null,
+    antecedentCategory: input.conversationContext?.antecedentCategory ?? null,
+    antecedentIntent: input.conversationContext?.antecedentIntent ?? null,
+    contextualResolution:
+      contextDependentFollowUp &&
+      (input.conversationContext?.contextualResolution ?? hasRecentBusinessHoursTopic),
     redactionApplied: true,
   };
 }

@@ -13,6 +13,7 @@ import {
   resolveResponseExecutionIntent,
   type ResponseExecutionSemanticDecision,
 } from "./response-execution-intent";
+import { buildResponseExecutionConversationContext } from "./response-execution-conversation-context";
 import { evaluateV2PrimarySecurityRules } from "../assistant-conversations/v2-primary-security-gate";
 import { evaluateFlowApplicability } from "../assistant-conversations/flow-applicability-evaluator";
 import type { PrismaService } from "../database/prisma.service";
@@ -65,6 +66,12 @@ export type RuntimeV2ResponseExecutionPreflightResult = {
   semanticDecisionVersion: string;
   semanticDecisionFingerprint: string;
   semanticApplicable: boolean;
+  contextResolutionVersion: string;
+  contextFingerprint: string;
+  antecedentFingerprint: string | null;
+  antecedentCategory: "businessHours" | null;
+  antecedentIntent: "ask_business_hours" | null;
+  contextualResolution: boolean;
   contextVersion: number | null;
   securityRulesStatus: "ALLOWED" | "NO_ACTIVE_RULES" | "BLOCKED";
   securityRulesFingerprint: string | null;
@@ -115,6 +122,12 @@ export type RuntimeV2ResponseExecutionStatusResult = {
   semanticDecisionVersion: string | null;
   semanticDecisionFingerprint: string | null;
   expectedIntent: "ask_business_hours" | null;
+  contextResolutionVersion: string | null;
+  contextFingerprint: string | null;
+  antecedentFingerprint: string | null;
+  antecedentCategory: "businessHours" | null;
+  antecedentIntent: "ask_business_hours" | null;
+  contextualResolution: boolean | null;
   allowedCategory: "businessHours" | null;
   allowedAuthority: "OFFICIAL_CONTEXT" | null;
   createdAt: string | null;
@@ -223,6 +236,12 @@ function statusFromRecord(
       semanticDecisionVersion: null,
       semanticDecisionFingerprint: null,
       expectedIntent: null,
+      contextResolutionVersion: null,
+      contextFingerprint: null,
+      antecedentFingerprint: null,
+      antecedentCategory: null,
+      antecedentIntent: null,
+      contextualResolution: null,
       allowedCategory: null,
       allowedAuthority: null,
       createdAt: null,
@@ -269,6 +288,12 @@ function statusFromRecord(
     semanticDecisionVersion: approval.semanticDecisionVersion ?? null,
     semanticDecisionFingerprint: fingerprint(approval.expectedSemanticDecisionFingerprint),
     expectedIntent: approval.expectedIntent ?? null,
+    contextResolutionVersion: approval.contextResolutionVersion ?? null,
+    contextFingerprint: fingerprint(approval.expectedContextFingerprint),
+    antecedentFingerprint: fingerprint(approval.expectedAntecedentFingerprint),
+    antecedentCategory: approval.expectedAntecedentCategory ?? null,
+    antecedentIntent: approval.expectedAntecedentIntent ?? null,
+    contextualResolution: approval.contextualResolution ?? null,
     allowedCategory: approval.allowedCategory,
     allowedAuthority: approval.allowedAuthority,
     createdAt: approval.createdAt ?? null,
@@ -391,24 +416,23 @@ export class RuntimeV2ResponseExecutionAdministrationService {
               companyId: input.companyId,
               assistantId: input.assistantId,
               conversationId: input.conversationId,
+              contextVersion: contextVersion ?? 1,
             },
-            orderBy: { createdAt: "desc" },
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
             take: 6,
-            select: { id: true, role: true, content: true },
+            select: { id: true, role: true, content: true, createdAt: true, contextVersion: true },
           })
         : [];
+    const conversationContext = buildResponseExecutionConversationContext({
+      contextVersion: contextVersion ?? 1,
+      messages: recentHistory,
+    });
     const semanticDecision = resolveResponseExecutionIntent({
       canonicalMessage,
       messageId: "preflight",
       contextVersion: contextVersion ?? 1,
       now: this.now(),
-      recentHistory: recentHistory.reverse().map((message) => ({
-        id: message.id,
-        role:
-          message.role === "tool" ? "tool" : message.role === "assistant" ? "assistant" : "user",
-        content: message.content,
-        relevance: "objective",
-      })),
+      conversationContext,
     });
     if (!semanticDecision.applicable) blockers.push("TURN_NOT_STRICT_BUSINESS_HOURS");
     let activeHandoff = false;
@@ -535,6 +559,12 @@ export class RuntimeV2ResponseExecutionAdministrationService {
         semanticDecisionVersion: semanticDecision.version,
         semanticDecisionFingerprint: fingerprint(semanticDecision.fingerprint)!,
         semanticApplicable: semanticDecision.applicable,
+        contextResolutionVersion: semanticDecision.contextResolutionVersion,
+        contextFingerprint: fingerprint(semanticDecision.contextFingerprint)!,
+        antecedentFingerprint: fingerprint(semanticDecision.antecedentFingerprint),
+        antecedentCategory: semanticDecision.antecedentCategory,
+        antecedentIntent: semanticDecision.antecedentIntent,
+        contextualResolution: semanticDecision.contextualResolution,
         contextVersion,
         securityRulesStatus: security.allowed
           ? security.activeRuleCount > 0
@@ -592,6 +622,12 @@ export class RuntimeV2ResponseExecutionAdministrationService {
       semanticDecisionVersion: preflightEvaluation.semanticDecision.version,
       expectedSemanticDecisionFingerprint: preflightEvaluation.semanticDecision.fingerprint,
       expectedIntent: preflightEvaluation.semanticDecision.intent ?? undefined,
+      contextResolutionVersion: preflightEvaluation.semanticDecision.contextResolutionVersion,
+      expectedContextFingerprint: preflightEvaluation.semanticDecision.contextFingerprint,
+      expectedAntecedentFingerprint: preflightEvaluation.semanticDecision.antecedentFingerprint,
+      expectedAntecedentCategory: preflightEvaluation.semanticDecision.antecedentCategory,
+      expectedAntecedentIntent: preflightEvaluation.semanticDecision.antecedentIntent,
+      contextualResolution: preflightEvaluation.semanticDecision.contextualResolution,
       expiresAt: new Date(this.now().getTime() + input.durationMinutes * 60_000),
       operatorPurpose: sanitizeOperatorPurpose(input.operatorPurpose),
       securityRulesFingerprint: preflight.securityRulesFingerprint,

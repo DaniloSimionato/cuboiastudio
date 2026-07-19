@@ -134,6 +134,18 @@ export class ResponseGenerationRouter {
     ) {
       return this.executeV1Normal(input, "RESPONSE_EXECUTION_SEMANTIC_MISMATCH");
     }
+    const approvalHasVersionedContext = approval.contextResolutionVersion !== undefined;
+    if (
+      approvalHasVersionedContext &&
+      (approval.contextResolutionVersion !== semanticDecision?.contextResolutionVersion ||
+        approval.expectedContextFingerprint !== semanticDecision?.contextFingerprint ||
+        approval.expectedAntecedentFingerprint !== semanticDecision?.antecedentFingerprint ||
+        approval.expectedAntecedentCategory !== semanticDecision?.antecedentCategory ||
+        approval.expectedAntecedentIntent !== semanticDecision?.antecedentIntent ||
+        approval.contextualResolution !== semanticDecision?.contextualResolution)
+    ) {
+      return this.executeV1Normal(input, "RESPONSE_EXECUTION_CONTEXT_MISMATCH");
+    }
     if (
       approval.status !== "ARMED" ||
       approval.companyId !== input.turn.companyId ||
@@ -224,7 +236,12 @@ export class ResponseGenerationRouter {
 
   private async executeV1Normal(
     input: ResponseGenerationRouterInput,
-    reason = resolveDefaultDenyReason(input),
+    reason:
+      | "EXECUTION_MODE_OFF"
+      | "EXECUTION_SCOPE_EMPTY"
+      | "V2_EXECUTION_NOT_CONNECTED"
+      | "RESPONSE_EXECUTION_SEMANTIC_MISMATCH"
+      | "RESPONSE_EXECUTION_CONTEXT_MISMATCH" = resolveDefaultDenyReason(input),
   ): Promise<ResponseGenerationRouterResult> {
     const response = await this.dependencies.executeV1(input.v1Input);
     return createV1NormalResponseExecutionEnvelope({

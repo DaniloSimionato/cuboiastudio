@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ResponseGenerationRouter } from "../dist/assistant-conversations/response-generation-router.js";
 import { createRuntimeV2ResponseExecutionApproval } from "../dist/runtime-v2/index.js";
-import { resolveResponseExecutionIntent } from "../dist/runtime-v2/index.js";
+import {
+  buildResponseExecutionConversationContext,
+  resolveResponseExecutionIntent,
+} from "../dist/runtime-v2/index.js";
 
 function v1Response(overrides = {}) {
   return {
@@ -328,6 +331,71 @@ test("router default-denies a semantic decision that differs from the approval b
   assert.equal(result.sanitizedTelemetry.reason, "RESPONSE_EXECUTION_SEMANTIC_MISMATCH");
   assert.equal(claims, 0);
   assert.equal(v2, 0);
+});
+
+test("router emits a contextual mismatch and does not claim a versioned follow-up approval", async () => {
+  const context = buildResponseExecutionConversationContext({
+    contextVersion: 1,
+    messages: [
+      { id: "direct", role: "user", content: "Que horas vocês atendem?", contextVersion: 1 },
+    ],
+  });
+  const decision = resolveResponseExecutionIntent({
+    canonicalMessage: "E até que horas?",
+    messageId: "message-1",
+    contextVersion: 1,
+    conversationContext: context,
+  });
+  const armed = createRuntimeV2ResponseExecutionApproval({
+    companyId: "company-1",
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    expectedCanonicalComparisonHash: "hash-1",
+    canonicalVersion: "canonical-inbound-message-v1",
+    expiresAt: new Date(Date.now() + 60_000),
+    operatorPurpose: "context mismatch",
+    semanticDecisionVersion: decision.version,
+    expectedSemanticDecisionFingerprint: decision.fingerprint,
+    expectedIntent: decision.intent,
+    contextResolutionVersion: decision.contextResolutionVersion,
+    expectedContextFingerprint: "different-context",
+    expectedAntecedentFingerprint: decision.antecedentFingerprint,
+    expectedAntecedentCategory: decision.antecedentCategory,
+    expectedAntecedentIntent: decision.antecedentIntent,
+    contextualResolution: decision.contextualResolution,
+    flowConfigurationFingerprint: "flow-config-1",
+  });
+  let claims = 0;
+  const router = new ResponseGenerationRouter({
+    coordinator: fakeCoordinator({
+      approval: armed,
+      onClaim: () => {
+        claims += 1;
+      },
+    }),
+    executeV1: async () => v1Response(),
+    v2Executor: {
+      async execute() {
+        throw new Error("must not execute");
+      },
+    },
+  });
+  const result = await router.route(
+    controlledInput({
+      v2Eligibility: {
+        standardEligible: true,
+        category: "businessHours",
+        authority: "OFFICIAL_CONTEXT",
+        semanticDecision: decision,
+        flowEvaluation: {
+          v2Compatibility: "ALLOWED",
+          flowConfigurationFingerprint: "flow-config-1",
+        },
+      },
+    }),
+  );
+  assert.equal(result.sanitizedTelemetry.reason, "RESPONSE_EXECUTION_CONTEXT_MISMATCH");
+  assert.equal(claims, 0);
 });
 
 test("V2 fake failure falls back once to V1 before any sender", async () => {

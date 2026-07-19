@@ -26,6 +26,12 @@ export type RuntimeV2ResponseExecutionApproval = {
   semanticDecisionVersion?: string;
   expectedSemanticDecisionFingerprint?: string;
   expectedIntent?: "ask_business_hours";
+  contextResolutionVersion?: string;
+  expectedContextFingerprint?: string;
+  expectedAntecedentFingerprint?: string | null;
+  expectedAntecedentCategory?: "businessHours" | null;
+  expectedAntecedentIntent?: "ask_business_hours" | null;
+  contextualResolution?: boolean;
   expiresAt: string;
   createdAt?: string;
   maxUses: 1;
@@ -66,6 +72,12 @@ export function createRuntimeV2ResponseExecutionApproval(input: {
   semanticDecisionVersion?: string;
   expectedSemanticDecisionFingerprint?: string;
   expectedIntent?: "ask_business_hours";
+  contextResolutionVersion?: string;
+  expectedContextFingerprint?: string;
+  expectedAntecedentFingerprint?: string | null;
+  expectedAntecedentCategory?: "businessHours" | null;
+  expectedAntecedentIntent?: "ask_business_hours" | null;
+  contextualResolution?: boolean;
   expiresAt: Date;
   operatorPurpose: string;
   securityRulesFingerprint?: string | null;
@@ -116,6 +128,24 @@ export function createRuntimeV2ResponseExecutionApproval(input: {
       ? { expectedSemanticDecisionFingerprint: input.expectedSemanticDecisionFingerprint }
       : {}),
     ...(input.expectedIntent !== undefined ? { expectedIntent: input.expectedIntent } : {}),
+    ...(input.contextResolutionVersion !== undefined
+      ? { contextResolutionVersion: input.contextResolutionVersion }
+      : {}),
+    ...(input.expectedContextFingerprint !== undefined
+      ? { expectedContextFingerprint: input.expectedContextFingerprint }
+      : {}),
+    ...(input.expectedAntecedentFingerprint !== undefined
+      ? { expectedAntecedentFingerprint: input.expectedAntecedentFingerprint }
+      : {}),
+    ...(input.expectedAntecedentCategory !== undefined
+      ? { expectedAntecedentCategory: input.expectedAntecedentCategory }
+      : {}),
+    ...(input.expectedAntecedentIntent !== undefined
+      ? { expectedAntecedentIntent: input.expectedAntecedentIntent }
+      : {}),
+    ...(input.contextualResolution !== undefined
+      ? { contextualResolution: input.contextualResolution }
+      : {}),
     ...(input.securityRulesFingerprint !== undefined
       ? { securityRulesFingerprint: input.securityRulesFingerprint }
       : {}),

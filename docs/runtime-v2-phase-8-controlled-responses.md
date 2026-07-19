@@ -453,3 +453,24 @@ Os critérios para repetir os cenários A, C e D são: RAG vencedor e suportado 
 chunk autorizado; mudança explícita com herança factual suprimida; e pedido humano
 reconhecido sem execução. Preço sem diagnóstico e agendamento sem ferramenta
 continuam bloqueados ou limitados a esclarecimento seguro.
+
+## Canário isolado: contexto de follow-up versionado
+
+`FIRST_REAL_V2_OUTBOUND_COMPLETED=true` e o turno direto do canário isolado foram
+confirmados com uma única execução V2, sem V1 paralelo e com restauração integral.
+O follow-up de horário teve preflight aprovado, mas permaneceu em V1 no inbound
+antes do claim; o default-deny e a ausência de duplicação foram preservados.
+
+A correção subsequente elimina os builders paralelos de histórico. Preflight e
+router usam o mesmo contrato versionado de contexto conversacional: mensagens
+conversacionais da mesma conversa e `contextVersion`, janela limitada e ordenada
+por data/identidade, exclusão do inbound atual por ID e antecedente opaco de
+`businessHours`. Approval persiste apenas versão e fingerprints opacos do contexto
+e antecedente. Divergência contextual bloqueia o claim com diagnóstico sanitizado;
+follow-up sem antecedente suficiente, após mudança de assunto ou fora da janela
+continua no default-deny. O reteste do follow-up e o Turno 3 permanecem pendentes.
+
+`ISOLATED_CANARY_DIRECT_TURN_COMPLETED=true`
+`ISOLATED_CANARY_FOLLOW_UP_COMPLETED=false`
+`ISOLATED_CANARY_COMPLETED=false`
+`HELOISA_V2_ENABLEMENT_BLOCKED_BY_FACTUAL_FLOW=true`

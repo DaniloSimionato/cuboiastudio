@@ -54,7 +54,8 @@ export function createV1NormalResponseExecutionEnvelope(input: {
     | "EXECUTION_MODE_OFF"
     | "EXECUTION_SCOPE_EMPTY"
     | "V2_EXECUTION_NOT_CONNECTED"
-    | "RESPONSE_EXECUTION_SEMANTIC_MISMATCH";
+    | "RESPONSE_EXECUTION_SEMANTIC_MISMATCH"
+    | "RESPONSE_EXECUTION_CONTEXT_MISMATCH";
 }): ResponseExecutionEnvelope {
   const response = input.response ?? null;
   const responseText = input.responseText ?? response?.responseText ?? "";
