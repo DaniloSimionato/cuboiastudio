@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import test from "node:test";
 import { InMemoryConversationStateStore } from "../dist/runtime-v2/conversation-state-store.js";
-import { ConversationStateResponseExecutionStore } from "../dist/runtime-v2/conversation-state-response-execution-store.js";
+import {
+  ConversationStateResponseExecutionStore,
+  responseExecutionSnapshotFromState,
+} from "../dist/runtime-v2/conversation-state-response-execution-store.js";
 import { RuntimeV2ResponseExecutionCoordinator } from "../dist/runtime-v2/response-execution-coordinator.js";
 import { RuntimeV2ResponseExecutionAdministrationService } from "../dist/runtime-v2/response-execution-administration.js";
 import { evaluateV2PrimarySecurityRules } from "../dist/assistant-conversations/v2-primary-security-gate.js";
@@ -301,7 +304,7 @@ test("preflight permite flows configurados sem match e bloqueia avaliação sem�
   assert.ok(blocked.blockers.includes("FLOW_EVALUATION_INDETERMINATE"));
 });
 
-test("arm cria approval única por hash, status é redigido e cancel somente ARMED", async () => {
+test("arm blocks an active attempt, archives a terminal one, and preserves its identity", async () => {
   const { administration, responseExecutionStore, coordinator } = createAdministration();
   const armed = await administration.arm({
     ...preflightInput(),
@@ -337,14 +340,100 @@ test("arm cria approval única por hash, status é redigido e cancel somente ARM
   assert.equal(cancelledAgain.status, "CANCELLED");
   const record = await responseExecutionStore.load({ ...scope, contextVersion: 1 });
   assert.equal(record?.approval.status, "CANCELLED");
+  const rearmed = await administration.arm({
+    ...preflightInput(),
+    durationMinutes: 5,
+    operatorPurpose: "tentativa terminal nova",
+  });
+  assert.equal(rearmed.status, "ARMED");
+  assert.equal(rearmed.attemptNumber, 2);
+  const snapshot = await responseExecutionStore.loadSnapshot({ ...scope, contextVersion: 1 });
+  assert.equal(snapshot?.history.length, 1);
+  assert.equal(snapshot?.history[0].approval.approvalId, record?.approval.approvalId);
+  assert.equal(snapshot?.history[0].approval.status, "CANCELLED");
+  assert.notEqual(snapshot?.current.executionId, snapshot?.history[0].executionId);
+  const historical = await administration.status({
+    ...scope,
+    approvalFingerprint: armed.approvalFingerprint,
+  });
+  assert.equal(historical.status, "CANCELLED");
+  assert.equal(historical.attemptNumber, 1);
+  assert.equal(historical.historyCount, 1);
+  assert.equal(historical.isCurrentAttempt, false);
+  assert.equal(historical.currentAttemptNumber, 2);
+  assert.equal(historical.hasActiveExecution, true);
+  assert.equal(historical.canArmNew, false);
+  const cancelledRearm = await administration.cancel({
+    ...scope,
+    approvalFingerprint: rearmed.approvalFingerprint,
+  });
+  assert.equal(cancelledRearm.status, "CANCELLED");
+  const third = await administration.arm({
+    ...preflightInput(),
+    durationMinutes: 5,
+    operatorPurpose: "terceira tentativa terminal",
+  });
+  assert.equal(third.attemptNumber, 3);
+  const current = await responseExecutionStore.load({ ...scope, contextVersion: 1 });
   const claim = await coordinator.claim({
     ...scope,
     contextVersion: 1,
     canonicalComparisonHash: "hash",
     internalMessageId: "message-1",
-    approval: record.approval,
+    approval: current.approval,
   });
   assert.notEqual(claim.status, "CLAIMED");
+});
+
+test("legacy terminal record migrates atomically and malformed state fails closed", async () => {
+  const stateStore = new InMemoryConversationStateStore();
+  const store = new ConversationStateResponseExecutionStore(stateStore);
+  const { administration } = createAdministration({ stateStore, responseExecutionStore: store });
+  const first = await administration.arm({
+    ...preflightInput(),
+    durationMinutes: 5,
+    operatorPurpose: "legacy seed",
+  });
+  await administration.cancel({ ...scope, approvalFingerprint: first.approvalFingerprint });
+  const legacy = await stateStore.load({
+    ...scope,
+    contextVersion: 1,
+    runtimeVersion: "V2",
+    mode: "SHADOW",
+  });
+  legacy.responseExecution = legacy.responseExecution.current;
+  await stateStore.save({ ...legacy, revision: legacy.revision + 1 }, legacy.revision);
+  const rearmed = await administration.arm({
+    ...preflightInput(),
+    durationMinutes: 5,
+    operatorPurpose: "legacy rearm",
+  });
+  assert.equal(rearmed.attemptNumber, 2);
+  const migrated = await stateStore.load({
+    ...scope,
+    contextVersion: 1,
+    runtimeVersion: "V2",
+    mode: "SHADOW",
+  });
+  const snapshot = responseExecutionSnapshotFromState(migrated);
+  assert.equal(snapshot.invalid, false);
+  assert.equal(snapshot.history.length, 1);
+  assert.equal(snapshot.history[0].approval.status, "CANCELLED");
+  const malformed = {
+    ...migrated,
+    revision: migrated.revision + 1,
+    responseExecution: { current: migrated.responseExecution.current, history: [{}] },
+  };
+  await stateStore.save(malformed, migrated.revision);
+  await assert.rejects(
+    () =>
+      administration.arm({
+        ...preflightInput(),
+        durationMinutes: 5,
+        operatorPurpose: "estado inválido",
+      }),
+    /RESPONSE_EXECUTION_STATE_INCONSISTENT/,
+  );
 });
 
 test("canonicalização de transporte mantém LF, CRLF e ausência de newline no mesmo hash", () => {

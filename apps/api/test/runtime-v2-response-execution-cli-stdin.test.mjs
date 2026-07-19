@@ -95,6 +95,19 @@ function command(command, additional = []) {
   ];
 }
 
+function scopedCommand(command, additional = []) {
+  return [
+    command,
+    "--company-id",
+    scope.companyId,
+    "--assistant-id",
+    scope.assistantId,
+    "--conversation-id",
+    scope.conversationId,
+    ...additional,
+  ];
+}
+
 function parseCliResult(output, requiredKey) {
   const result = output
     .trim()
@@ -154,10 +167,41 @@ test("CLI real via stdin mantém o hash do preflight no arm e não persiste a me
     },
     select: { stateJson: true },
   });
-  const execution = state?.stateJson?.responseExecution;
+  const execution = state?.stateJson?.responseExecution?.current;
   assert.equal(
     execution?.approval?.expectedCanonicalComparisonHash,
     hashCanonicalInboundMessageContent(fixtureMessage),
   );
   assert.equal(JSON.stringify(execution).includes(fixtureMessage), false);
+
+  const cancel = await runCli(
+    scopedCommand("cancel", ["--approval-fingerprint", armResult.approvalFingerprint]),
+    "",
+  );
+  assert.equal(cancel.code, 0, cancel.stderr);
+  assert.equal(parseCliResult(cancel.stdout, "status").status, "CANCELLED");
+
+  const rearm = await runCli(
+    command("arm", ["--duration-minutes", "2", "--operator-purpose", "CLI terminal rearm"]),
+    fixtureMessage,
+  );
+  assert.equal(rearm.code, 0, rearm.stderr);
+  const rearmResult = parseCliResult(rearm.stdout, "status");
+  assert.equal(rearmResult.status, "ARMED");
+  assert.equal(rearmResult.attemptNumber, 2);
+  const rearmedState = await prisma.assistantConversationStateV2.findFirst({
+    where: {
+      companyId: scope.companyId,
+      assistantId: scope.assistantId,
+      conversationId: scope.conversationId,
+    },
+    select: { stateJson: true },
+  });
+  const attempts = rearmedState?.stateJson?.responseExecution;
+  assert.equal(attempts?.history?.length, 1);
+  assert.equal(attempts?.history?.[0]?.approval?.status, "CANCELLED");
+  assert.equal(
+    attempts?.current?.approval?.expectedCanonicalComparisonHash,
+    execution.approval.expectedCanonicalComparisonHash,
+  );
 });

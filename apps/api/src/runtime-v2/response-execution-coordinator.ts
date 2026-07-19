@@ -9,6 +9,10 @@ export type ResponseExecutionTerminal =
   "V2_OUTBOUND_SENT" | "V1_FALLBACK_SENT" | "RECONCILIATION_REQUIRED" | "TERMINAL_BLOCKED";
 
 export type ResponseExecutionRecord = {
+  /** Immutable identity for a single arm attempt. */
+  executionId: string;
+  /** Monotonic within a conversation state; a terminal attempt is never reused. */
+  attemptNumber: number;
   approval: RuntimeV2ResponseExecutionApproval;
   owner: RuntimeV2TurnOwner;
   /** Mirrors the persisted stateJson row revision and is used by CAS. */
@@ -25,6 +29,111 @@ export type ResponseExecutionRecord = {
   terminalStatus: ResponseExecutionTerminal | null;
   redactionApplied: true;
 };
+
+export type ResponseExecutionRearmBlocker =
+  | "RESPONSE_EXECUTION_ACTIVE"
+  | "RESPONSE_EXECUTION_RECONCILIATION_REQUIRED"
+  | "RESPONSE_EXECUTION_STATE_INCONSISTENT";
+
+function approvalIsExpired(record: ResponseExecutionRecord, now = new Date()): boolean {
+  return (
+    record.approval.status === "EXPIRED" ||
+    (record.approval.status === "ARMED" && Date.parse(record.approval.expiresAt) <= now.getTime())
+  );
+}
+
+/** A prior outbound may have happened even if the sender could not confirm it. */
+export function isResponseExecutionUncertain(record: ResponseExecutionRecord): boolean {
+  return (
+    record.owner === "RECONCILIATION_REQUIRED" ||
+    record.terminalStatus === "RECONCILIATION_REQUIRED" ||
+    (record.outboundV2Attempted && record.outboundV2Performed !== true)
+  );
+}
+
+export function isResponseExecutionTerminal(
+  record: ResponseExecutionRecord,
+  now = new Date(),
+): boolean {
+  if (isResponseExecutionUncertain(record)) return false;
+  if (approvalIsExpired(record, now)) {
+    return (
+      record.owner === "V1_OWNED" &&
+      record.approval.internalMessageId === null &&
+      record.approval.generationId === null &&
+      !record.outboundV2Attempted &&
+      !record.outboundV1Performed
+    );
+  }
+  if (record.approval.status === "CANCELLED") {
+    return (
+      record.owner === "TERMINAL_BLOCKED" &&
+      record.terminalStatus === "TERMINAL_BLOCKED" &&
+      record.approval.internalMessageId === null &&
+      record.approval.generationId === null &&
+      !record.outboundV2Attempted &&
+      !record.outboundV1Performed
+    );
+  }
+  if (record.approval.status !== "CONSUMED") return false;
+  return (
+    (record.owner === "V2_OUTBOUND_SENT" &&
+      record.terminalStatus === "V2_OUTBOUND_SENT" &&
+      record.outboundV2Attempted &&
+      record.outboundV2Performed === true) ||
+    (record.owner === "V1_FALLBACK_SENT" &&
+      record.terminalStatus === "V1_FALLBACK_SENT" &&
+      record.outboundV1Performed)
+  );
+}
+
+export function isResponseExecutionActive(
+  record: ResponseExecutionRecord,
+  now = new Date(),
+): boolean {
+  if (isResponseExecutionTerminal(record, now) || isResponseExecutionUncertain(record)) {
+    return false;
+  }
+  if (record.approval.status === "ARMED") {
+    return (
+      record.owner === "V1_OWNED" &&
+      record.terminalStatus === null &&
+      record.approval.internalMessageId === null &&
+      record.approval.generationId === null &&
+      !record.outboundV2Attempted &&
+      !record.outboundV1Performed
+    );
+  }
+  if (record.approval.status !== "CLAIMED" || !record.approval.internalMessageId) return false;
+  return (
+    record.terminalStatus === null &&
+    [
+      "V2_OWNED",
+      "V2_GENERATION_PENDING",
+      "V2_CANDIDATE_APPROVED",
+      "V2_OUTBOUND_PENDING",
+      "V1_FALLBACK_REQUIRED",
+      "V1_FALLBACK_PENDING",
+    ].includes(record.owner)
+  );
+}
+
+export function responseExecutionRearmBlocker(
+  record: ResponseExecutionRecord,
+  now = new Date(),
+): ResponseExecutionRearmBlocker | null {
+  if (isResponseExecutionUncertain(record)) return "RESPONSE_EXECUTION_RECONCILIATION_REQUIRED";
+  if (isResponseExecutionTerminal(record, now)) return null;
+  if (isResponseExecutionActive(record, now)) return "RESPONSE_EXECUTION_ACTIVE";
+  return "RESPONSE_EXECUTION_STATE_INCONSISTENT";
+}
+
+export function canArmNewResponseExecution(
+  record: ResponseExecutionRecord | null | undefined,
+  now = new Date(),
+): boolean {
+  return !record || responseExecutionRearmBlocker(record, now) === null;
+}
 
 export type ResponseExecutionScope = {
   companyId: string;

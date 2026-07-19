@@ -22,6 +22,12 @@ import type { ConversationStateStore } from "./conversation-state-store";
 import { ConversationStateResponseExecutionStore } from "./conversation-state-response-execution-store";
 import { RuntimeV2ResponseExecutionCoordinator } from "./response-execution-coordinator";
 import {
+  canArmNewResponseExecution,
+  isResponseExecutionActive,
+  type ResponseExecutionRecord,
+} from "./response-execution-coordinator";
+import { responseExecutionSnapshotFromState } from "./conversation-state-response-execution-store";
+import {
   createRuntimeV2ResponseExecutionApproval,
   type RuntimeV2ResponseExecutionApproval,
 } from "./response-execution-approval";
@@ -109,6 +115,13 @@ export type RuntimeV2ResponseExecutionStatusResult = {
   externalMessageReferenceFingerprint: string | null;
   fallbackReason: string | null;
   reconciliationReason: string | null;
+  executionIdFingerprint: string | null;
+  attemptNumber: number | null;
+  historyCount: number;
+  isCurrentAttempt: boolean | null;
+  currentAttemptNumber: number | null;
+  hasActiveExecution: boolean;
+  canArmNew: boolean;
   redactionApplied: true;
 };
 
@@ -176,6 +189,8 @@ function statusFromRecord(
     reconciliationReason: string | null;
   } | null,
   now = new Date(),
+  historyCount = 0,
+  currentRecord: ResponseExecutionRecord | null = record as ResponseExecutionRecord | null,
 ): RuntimeV2ResponseExecutionStatusResult {
   if (!record) {
     return {
@@ -196,6 +211,13 @@ function statusFromRecord(
       externalMessageReferenceFingerprint: null,
       fallbackReason: null,
       reconciliationReason: null,
+      executionIdFingerprint: null,
+      attemptNumber: null,
+      historyCount,
+      isCurrentAttempt: null,
+      currentAttemptNumber: null,
+      hasActiveExecution: false,
+      canArmNew: true,
       redactionApplied: true,
     };
   }
@@ -222,6 +244,16 @@ function statusFromRecord(
     externalMessageReferenceFingerprint: fingerprint(record.externalMessageId),
     fallbackReason: record.fallbackReason,
     reconciliationReason: record.reconciliationReason,
+    executionIdFingerprint: fingerprint((record as ResponseExecutionRecord).executionId),
+    attemptNumber: (record as ResponseExecutionRecord).attemptNumber ?? null,
+    historyCount,
+    isCurrentAttempt:
+      currentRecord === null
+        ? null
+        : currentRecord.executionId === (record as ResponseExecutionRecord).executionId,
+    currentAttemptNumber: currentRecord?.attemptNumber ?? null,
+    hasActiveExecution: currentRecord ? isResponseExecutionActive(currentRecord, now) : false,
+    canArmNew: canArmNewResponseExecution(currentRecord, now),
     redactionApplied: true,
   };
 }
@@ -418,7 +450,9 @@ export class RuntimeV2ResponseExecutionAdministrationService {
         conversationId: input.conversationId,
         contextVersion,
       });
-      if (record && !record.terminalStatus) blockers.push("RESPONSE_EXECUTION_PENDING");
+      if (record && !canArmNewResponseExecution(record, this.now())) {
+        blockers.push("RESPONSE_EXECUTION_PENDING");
+      }
     }
 
     const executionMode = resolveRuntimeV2ResponseExecutionMode(this.environment);
@@ -562,24 +596,17 @@ export class RuntimeV2ResponseExecutionAdministrationService {
         select: { stateJson: true },
       });
       for (const row of rows) {
-        const candidate =
-          row.stateJson && typeof row.stateJson === "object" && !Array.isArray(row.stateJson)
-            ? (row.stateJson as { responseExecution?: unknown }).responseExecution
-            : null;
-        if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
-          const record = candidate as {
-            approval?: { creationFingerprint?: unknown };
-          };
-          const candidateFingerprint =
-            typeof record.approval?.creationFingerprint === "string"
-              ? record.approval.creationFingerprint.slice(0, 16)
-              : null;
-          if (candidateFingerprint === input.approvalFingerprint) {
-            return statusFromRecord(
-              candidate as Parameters<typeof statusFromRecord>[0],
-              this.now(),
-            );
-          }
+        const snapshot = responseExecutionSnapshotFromState(row.stateJson as never);
+        if (snapshot.invalid) continue;
+        const records = [snapshot.current, ...snapshot.history].filter(
+          (record): record is ResponseExecutionRecord => record !== null,
+        );
+        const record = records.find(
+          (candidate) =>
+            candidate.approval.creationFingerprint.slice(0, 16) === input.approvalFingerprint,
+        );
+        if (record) {
+          return statusFromRecord(record, this.now(), snapshot.history.length, snapshot.current);
         }
       }
       return statusFromRecord(null, this.now());
@@ -593,18 +620,24 @@ export class RuntimeV2ResponseExecutionAdministrationService {
       select: { currentContextVersion: true },
     });
     if (!conversation) return statusFromRecord(null, this.now());
-    const record = await this.dependencies.responseExecutionStore.load({
+    const snapshot = await this.dependencies.responseExecutionStore.loadSnapshot({
       ...input,
       contextVersion: conversation.currentContextVersion,
     });
-    if (
-      record &&
-      input.approvalFingerprint &&
-      record.approval.creationFingerprint.slice(0, 16) !== input.approvalFingerprint
-    ) {
-      return statusFromRecord(null, this.now());
+    if (!snapshot || snapshot.invalid) return statusFromRecord(null, this.now());
+    const records = [snapshot.current, ...snapshot.history].filter(
+      (record): record is ResponseExecutionRecord => record !== null,
+    );
+    const record = input.approvalFingerprint
+      ? (records.find(
+          (candidate) =>
+            candidate.approval.creationFingerprint.slice(0, 16) === input.approvalFingerprint,
+        ) ?? null)
+      : snapshot.current;
+    if (!record) {
+      return statusFromRecord(null, this.now(), snapshot.history.length);
     }
-    return statusFromRecord(record, this.now());
+    return statusFromRecord(record, this.now(), snapshot.history.length, snapshot.current);
   }
 
   async cancel(

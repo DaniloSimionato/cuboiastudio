@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   RuntimeV2ResponseExecutionCoordinator,
+  canArmNewResponseExecution,
   createRuntimeV2ResponseExecutionApproval,
+  responseExecutionRearmBlocker,
 } from "../dist/runtime-v2/index.js";
 
 const scope = { companyId: "company", assistantId: "assistant", conversationId: "conversation" };
@@ -115,4 +117,38 @@ test("uncertain V2 sender never activates V1 fallback", async () => {
   assert.equal(result.outboundV2Attempted, true);
   assert.equal(result.outboundV2Performed, null);
   assert.equal(fallback, 0);
+});
+
+test("rearm classification accepts only consistent terminal records", () => {
+  const terminal = {
+    ...record(),
+    owner: "TERMINAL_BLOCKED",
+    terminalStatus: "TERMINAL_BLOCKED",
+    approval: {
+      ...record().approval,
+      status: "CANCELLED",
+      internalMessageId: null,
+      generationId: null,
+    },
+  };
+  assert.equal(canArmNewResponseExecution(terminal), true);
+  assert.equal(responseExecutionRearmBlocker(terminal), null);
+  assert.equal(
+    responseExecutionRearmBlocker({
+      ...terminal,
+      owner: "V1_OWNED",
+      terminalStatus: null,
+    }),
+    "RESPONSE_EXECUTION_STATE_INCONSISTENT",
+  );
+  assert.equal(
+    responseExecutionRearmBlocker({
+      ...terminal,
+      owner: "RECONCILIATION_REQUIRED",
+      terminalStatus: "RECONCILIATION_REQUIRED",
+      outboundV2Attempted: true,
+      outboundV2Performed: null,
+    }),
+    "RESPONSE_EXECUTION_RECONCILIATION_REQUIRED",
+  );
 });

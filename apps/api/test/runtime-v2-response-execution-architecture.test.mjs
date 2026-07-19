@@ -22,6 +22,10 @@ const administrationPath = new URL(
   "../src/runtime-v2/response-execution-administration.ts",
   import.meta.url,
 );
+const responseExecutionStorePath = new URL(
+  "../src/runtime-v2/conversation-state-response-execution-store.ts",
+  import.meta.url,
+);
 const cliPath = new URL("../src/runtime-v2-response-execution-cli.ts", import.meta.url);
 
 test("single-use execution remains default-deny until the router gates every V2 dependency", async () => {
@@ -57,9 +61,11 @@ test("isolated coordinator owns no production provider or Chatwoot transport", a
 });
 
 test("single-use administrative CLI is local-only, redacted, and cannot activate execution", async () => {
-  const [administrationSource, cliSource] = await Promise.all([
+  const [administrationSource, cliSource, storeSource, coordinatorSource] = await Promise.all([
     readFile(administrationPath, "utf8"),
     readFile(cliPath, "utf8"),
+    readFile(responseExecutionStorePath, "utf8"),
+    readFile(coordinatorPath, "utf8"),
   ]);
   assert.match(cliSource, /preflight|arm|status|cancel/);
   assert.match(administrationSource, /evaluateV2PrimarySecurityRules/);
@@ -67,6 +73,11 @@ test("single-use administrative CLI is local-only, redacted, and cannot activate
   assert.match(administrationSource, /ARM_CANONICAL_HASH_MISMATCH/);
   assert.match(cliSource, /message-stdin/);
   assert.match(administrationSource, /durationMinutes > 10/);
+  assert.match(storeSource, /responseExecutionSnapshotFromState/);
+  assert.match(storeSource, /history/);
+  assert.match(storeSource, /responseExecutionRearmBlocker/);
+  assert.match(coordinatorSource, /isResponseExecutionUncertain/);
+  assert.match(coordinatorSource, /canArmNewResponseExecution/);
   assert.doesNotMatch(administrationSource, /Chatwoot|sendChatwootOutboundText|fetch\(/);
   assert.doesNotMatch(cliSource, /Chatwoot|sendChatwootOutboundText|fetch\(/);
   assert.doesNotMatch(administrationSource, /process\.env\.[A-Z_]+\s*=/);

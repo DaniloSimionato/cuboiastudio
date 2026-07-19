@@ -10,11 +10,18 @@ import type {
   ResponseExecutionScope,
   ResponseExecutionStore,
 } from "./response-execution-coordinator";
+import { responseExecutionRearmBlocker } from "./response-execution-coordinator";
 import type { RuntimeV2ResponseExecutionApproval } from "./response-execution-approval";
 import type { ConversationState, JsonValue } from "./runtime-v2.types";
 
 type StateWithResponseExecution = ConversationState & {
   responseExecution?: JsonValue;
+};
+
+export type ResponseExecutionSnapshot = {
+  current: ResponseExecutionRecord | null;
+  history: ResponseExecutionRecord[];
+  invalid: boolean;
 };
 
 function scopeFor(input: ResponseExecutionScope): ConversationStateStoreScope {
@@ -28,31 +35,93 @@ function scopeFor(input: ResponseExecutionScope): ConversationStateStoreScope {
   };
 }
 
-function responseExecutionFromState(state: ConversationState): ResponseExecutionRecord | null {
-  const candidate = (state as StateWithResponseExecution).responseExecution;
-  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
-  const record = candidate as unknown as ResponseExecutionRecord;
-  if (
-    !record.approval ||
-    typeof record.approval !== "object" ||
-    typeof record.owner !== "string" ||
-    record.redactionApplied !== true
-  ) {
-    return null;
-  }
-  return { ...record, revision: state.revision, contextVersion: state.contextVersion };
+function isRecord(value: unknown): value is ResponseExecutionRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Partial<ResponseExecutionRecord>;
+  return (
+    Boolean(record.approval && typeof record.approval === "object") &&
+    typeof record.owner === "string" &&
+    record.redactionApplied === true
+  );
 }
 
-function stateWithRecord(
+function normalizeLegacyRecord(record: ResponseExecutionRecord): ResponseExecutionRecord {
+  return {
+    ...record,
+    executionId: record.executionId || record.approval.approvalId,
+    attemptNumber:
+      Number.isInteger(record.attemptNumber) && record.attemptNumber > 0 ? record.attemptNumber : 1,
+  };
+}
+
+/** Reads both the legacy single-record format and the current/history envelope. */
+export function responseExecutionSnapshotFromState(
   state: ConversationState,
-  record: ResponseExecutionRecord,
+): ResponseExecutionSnapshot {
+  const candidate = (state as StateWithResponseExecution).responseExecution;
+  if (candidate === undefined || candidate === null) {
+    return { current: null, history: [], invalid: false };
+  }
+  if (isRecord(candidate)) {
+    return {
+      current: {
+        ...normalizeLegacyRecord(candidate),
+        revision: state.revision,
+        contextVersion: state.contextVersion,
+      },
+      history: [],
+      invalid: false,
+    };
+  }
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return { current: null, history: [], invalid: true };
+  }
+  const envelope = candidate as { current?: unknown; history?: unknown };
+  if (
+    !isRecord(envelope.current) ||
+    !Array.isArray(envelope.history) ||
+    !envelope.history.every(isRecord)
+  ) {
+    return { current: null, history: [], invalid: true };
+  }
+  const current = normalizeLegacyRecord(envelope.current);
+  const history = envelope.history.map(normalizeLegacyRecord);
+  const identities = new Set(history.map((record) => record.executionId));
+  if (
+    !current.executionId ||
+    identities.has(current.executionId) ||
+    history.some((record, index) => !record.executionId || record.attemptNumber !== index + 1) ||
+    current.attemptNumber !== history.length + 1
+  ) {
+    return { current: null, history: [], invalid: true };
+  }
+  return {
+    current: { ...current, revision: state.revision, contextVersion: state.contextVersion },
+    history,
+    invalid: false,
+  };
+}
+
+function stateWithSnapshot(
+  state: ConversationState,
+  current: ResponseExecutionRecord,
+  history: ResponseExecutionRecord[],
 ): ConversationState {
   return {
     ...state,
-    revision: record.revision,
+    revision: current.revision,
     updatedAt: new Date(),
-    responseExecution: record as unknown as JsonValue,
+    responseExecution: { current, history } as unknown as JsonValue,
   } as ConversationState;
+}
+
+function expireRecord(record: ResponseExecutionRecord): ResponseExecutionRecord {
+  return {
+    ...record,
+    owner: "TERMINAL_BLOCKED",
+    terminalStatus: "TERMINAL_BLOCKED",
+    approval: { ...record.approval, status: "EXPIRED" },
+  };
 }
 
 /**
@@ -66,7 +135,9 @@ export class ConversationStateResponseExecutionStore implements ResponseExecutio
   async load(input: ResponseExecutionScope): Promise<ResponseExecutionRecord | null> {
     const state = await this.stateStore.load(scopeFor(input));
     if (!state) return null;
-    const record = responseExecutionFromState(state);
+    const snapshot = responseExecutionSnapshotFromState(state);
+    if (snapshot.invalid) return null;
+    const record = snapshot.current;
     if (
       !record ||
       record.approval.companyId !== input.companyId ||
@@ -95,7 +166,18 @@ export class ConversationStateResponseExecutionStore implements ResponseExecutio
       return false;
     }
     try {
-      await this.stateStore.save(stateWithRecord(current, input.next), current.revision);
+      const snapshot = responseExecutionSnapshotFromState(current);
+      if (
+        snapshot.invalid ||
+        !snapshot.current ||
+        snapshot.current.executionId !== input.next.executionId
+      ) {
+        return false;
+      }
+      await this.stateStore.save(
+        stateWithSnapshot(current, input.next, snapshot.history),
+        current.revision,
+      );
       return true;
     } catch (error) {
       if (error instanceof StateRevisionConflictError) return false;
@@ -109,11 +191,19 @@ export class ConversationStateResponseExecutionStore implements ResponseExecutio
   }): Promise<ResponseExecutionRecord> {
     const scope = scopeFor({ ...input.approval, contextVersion: input.contextVersion });
     const existing = await this.stateStore.load(scope);
-    if (existing && responseExecutionFromState(existing)) {
-      throw new Error("RESPONSE_EXECUTION_ALREADY_ARMED");
-    }
+    const snapshot = existing ? responseExecutionSnapshotFromState(existing) : null;
+    if (snapshot?.invalid) throw new Error("RESPONSE_EXECUTION_STATE_INCONSISTENT");
+    const previous = snapshot?.current ?? null;
+    const blocker = previous ? responseExecutionRearmBlocker(previous) : null;
+    if (blocker) throw new Error(blocker);
     const revision = existing?.revision ?? 0;
+    const history = snapshot?.history ?? [];
+    const archived = previous
+      ? [...history, previous.approval.status === "ARMED" ? expireRecord(previous) : previous]
+      : history;
     const record: ResponseExecutionRecord = {
+      executionId: input.approval.approvalId,
+      attemptNumber: archived.length + 1,
       approval: input.approval,
       owner: "V1_OWNED",
       revision,
@@ -130,7 +220,7 @@ export class ConversationStateResponseExecutionStore implements ResponseExecutio
       redactionApplied: true,
     };
     if (!existing) {
-      const initial = stateWithRecord(
+      const initial = stateWithSnapshot(
         createEmptyConversationState(
           {
             companyId: input.approval.companyId,
@@ -141,18 +231,31 @@ export class ConversationStateResponseExecutionStore implements ResponseExecutio
           new Date(),
         ),
         record,
+        [],
       );
       try {
         await this.stateStore.create(initial);
       } catch (error) {
-        if (error instanceof StateAlreadyExistsError)
-          throw new Error("RESPONSE_EXECUTION_ALREADY_ARMED");
+        if (error instanceof StateAlreadyExistsError) throw new Error("RESPONSE_EXECUTION_ACTIVE");
         throw error;
       }
       return record;
     }
     const next = { ...record, revision: existing.revision + 1 };
-    await this.stateStore.save(stateWithRecord(existing, next), existing.revision);
+    try {
+      await this.stateStore.save(stateWithSnapshot(existing, next, archived), existing.revision);
+    } catch (error) {
+      if (error instanceof StateRevisionConflictError) {
+        throw new Error("RESPONSE_EXECUTION_ACTIVE");
+      }
+      throw error;
+    }
     return next;
+  }
+
+  async loadSnapshot(input: ResponseExecutionScope): Promise<ResponseExecutionSnapshot | null> {
+    const state = await this.stateStore.load(scopeFor(input));
+    if (!state) return null;
+    return responseExecutionSnapshotFromState(state);
   }
 }

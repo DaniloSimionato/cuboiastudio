@@ -312,6 +312,26 @@ texto livre continua sujeito à redaction. Esta correção elimina a recanonical
 independente do `arm` e a alteração de hash na persistência; uma repetição
 operacional continua pendente de deploy e novo preflight.
 
+Após o deploy dessa correção, um ensaio administrativo localizou um segundo
+bloqueio seguro: a conversa de validação continha uma tentativa anterior
+`CANCELLED`/`TERMINAL_BLOCKED`; o formato inicial mantinha apenas um slot
+`responseExecution` e recusava qualquer novo `arm`, inclusive depois de uma
+conclusão terminal. O contrato agora diferencia execução ativa, incerta e
+terminal. O estado persistido aceita o envelope compatível
+`responseExecution: { current, history }`: a primeira tentativa nova converte
+atomicamente o formato legado, preserva integralmente a tentativa terminal em
+`history` e cria `current` com novo `executionId` e `attemptNumber`.
+
+Somente tentativas terminais consistentes (`CANCELLED`, expirada sem claim,
+`V2_OUTBOUND_SENT` consumida ou `V1_FALLBACK_SENT` consumida) podem ser
+arquivadas para novo arm. `ARMED`, claim/ownership pendente, geração, tail,
+outbound pendente, estado inválido e `RECONCILIATION_REQUIRED` continuam
+fail-closed. Nenhum histórico é apagado automaticamente; a retenção permanece
+protegida pelo limite já existente do `stateJson` até que uma política de
+retenção versionada seja explicitamente aprovada. Coordinator e router operam
+somente sobre `current`; uma tentativa no histórico nunca pode ser reclamada ou
+consumida novamente.
+
 Não há uma segunda geração Shadow nem comparação adicional para o mesmo turno
 primário: `PRIMARY_EXECUTION_NO_SHADOW_COMPARISON=true`. A candidata primária é
 efêmera até o tail; só seus fingerprints e metadados redigidos atravessam a

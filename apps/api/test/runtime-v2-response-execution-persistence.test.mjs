@@ -180,6 +180,68 @@ test("PostgreSQL stateJson grants one atomic single-use claim across two coordin
   );
 });
 
+test("PostgreSQL permits exactly one rearm after a terminal cancellation and preserves history", async () => {
+  const { scope } = await fixture();
+  const seedStore = new ConversationStateResponseExecutionStore(
+    new PrismaConversationStateStore(prisma),
+  );
+  const first = createRuntimeV2ResponseExecutionApproval({
+    companyId: scope.companyId,
+    assistantId: scope.assistantId,
+    conversationId: scope.conversationId,
+    expectedCanonicalComparisonHash: "hash-pg-rearm-first",
+    canonicalVersion: "canonical-inbound-message-v1",
+    expiresAt: new Date(Date.now() + 60_000),
+    operatorPurpose: "PostgreSQL terminal history seed",
+  });
+  await seedStore.arm({ approval: first, contextVersion: scope.contextVersion });
+  assert.equal(
+    await new RuntimeV2ResponseExecutionCoordinator({ store: seedStore }).cancel({
+      ...scope,
+      approvalFingerprint: first.creationFingerprint.slice(0, 16),
+    }),
+    true,
+  );
+  const leftApproval = createRuntimeV2ResponseExecutionApproval({
+    companyId: scope.companyId,
+    assistantId: scope.assistantId,
+    conversationId: scope.conversationId,
+    expectedCanonicalComparisonHash: "hash-pg-rearm-next",
+    canonicalVersion: "canonical-inbound-message-v1",
+    expiresAt: new Date(Date.now() + 60_000),
+    operatorPurpose: "PostgreSQL concurrent rearm left",
+  });
+  const rightApproval = createRuntimeV2ResponseExecutionApproval({
+    companyId: scope.companyId,
+    assistantId: scope.assistantId,
+    conversationId: scope.conversationId,
+    expectedCanonicalComparisonHash: "hash-pg-rearm-next",
+    canonicalVersion: "canonical-inbound-message-v1",
+    expiresAt: new Date(Date.now() + 60_000),
+    operatorPurpose: "PostgreSQL concurrent rearm right",
+  });
+  const arm = (approval) =>
+    new ConversationStateResponseExecutionStore(new PrismaConversationStateStore(prisma)).arm({
+      approval,
+      contextVersion: scope.contextVersion,
+    });
+  const results = await Promise.allSettled([arm(leftApproval), arm(rightApproval)]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(
+    results.filter(
+      (result) => result.status === "rejected" && /RESPONSE_EXECUTION_ACTIVE/.test(result.reason),
+    ).length,
+    1,
+  );
+  const snapshot = await seedStore.loadSnapshot(scope);
+  assert.equal(snapshot.invalid, false);
+  assert.equal(snapshot.history.length, 1);
+  assert.equal(snapshot.history[0].approval.approvalId, first.approvalId);
+  assert.equal(snapshot.history[0].approval.status, "CANCELLED");
+  assert.equal(snapshot.current.attemptNumber, 2);
+  assert.notEqual(snapshot.current.executionId, snapshot.history[0].executionId);
+});
+
 test("PostgreSQL allows one real V2 primary executor and one shared tail completion", async () => {
   const { scope, message } = await fixture();
   const approval = createRuntimeV2ResponseExecutionApproval({
