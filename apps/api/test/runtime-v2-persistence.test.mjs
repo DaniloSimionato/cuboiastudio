@@ -170,7 +170,9 @@ test("stateJson preserva IDs estruturais mesmo quando parecem números de telefo
     contextVersion: 1,
   };
   await prisma.company.create({ data: { id: scope.companyId, name: "Structural IDs" } });
-  await prisma.assistant.create({ data: { id: scope.assistantId, companyId: scope.companyId, name: "Structural Assistant" } });
+  await prisma.assistant.create({
+    data: { id: scope.assistantId, companyId: scope.companyId, name: "Structural Assistant" },
+  });
   await prisma.assistantConversation.create({
     data: {
       id: scope.conversationId,
@@ -203,20 +205,44 @@ test("PostgreSQL mantém candidata V2 limitada e redigida após restart", async 
     state: persistedTurn.state,
     candidate: {
       schemaVersion: "runtime-v2-candidate-response-v1",
-      companyId: scope.companyId, assistantId: scope.assistantId, conversationId: scope.conversationId,
-      contextVersion: scope.contextVersion, originatingInternalMessageId: message.id,
-      responsePlanId: "plan-candidate", generationId: "generation-candidate",
-      status: "CANDIDATE_APPROVED", responseTextRedacted: "Contato [REDACTED]",
-      provider: "fake", model: "fake-model", finishReason: "STOP", latencyMs: 1,
-      promptCompilerVersion: "test", flowIdsUsed: [], candidateFlowIds: [],
-      flowSelectionReason: null, flowSelectionConfidence: null, evidenceIdsUsed: [], memoryIdsUsed: [],
-      officialDataKeysUsed: [], toolPlan: [], handoffDecision: "NONE", safetyDecision: "PASS",
-      qualitySignals: [], generatedAt: "2026-07-20T12:00:00.000Z", idempotencyKey: "candidate-key",
-      redactionApplied: true, outboundAttempted: false, outboundPerformed: false,
+      companyId: scope.companyId,
+      assistantId: scope.assistantId,
+      conversationId: scope.conversationId,
+      contextVersion: scope.contextVersion,
+      originatingInternalMessageId: message.id,
+      responsePlanId: "plan-candidate",
+      generationId: "generation-candidate",
+      status: "CANDIDATE_APPROVED",
+      responseTextRedacted: "Contato [REDACTED]",
+      provider: "fake",
+      model: "fake-model",
+      finishReason: "STOP",
+      latencyMs: 1,
+      promptCompilerVersion: "test",
+      flowIdsUsed: [],
+      candidateFlowIds: [],
+      flowSelectionReason: null,
+      flowSelectionConfidence: null,
+      evidenceIdsUsed: [],
+      memoryIdsUsed: [],
+      officialDataKeysUsed: [],
+      toolPlan: [],
+      handoffDecision: "NONE",
+      safetyDecision: "PASS",
+      qualitySignals: [],
+      generatedAt: "2026-07-20T12:00:00.000Z",
+      idempotencyKey: "candidate-key",
+      redactionApplied: true,
+      outboundAttempted: false,
+      outboundPerformed: false,
       generationLifecycle: {
-        status: "GENERATION_COMPLETED", generationStartedAt: "2026-07-20T12:00:00.000Z",
-        generationCompletedAt: "2026-07-20T12:00:00.001Z", generationLatencyMs: 1,
-        providerCalled: true, providerCallCount: 1, providerCancellationRequested: false,
+        status: "GENERATION_COMPLETED",
+        generationStartedAt: "2026-07-20T12:00:00.000Z",
+        generationCompletedAt: "2026-07-20T12:00:00.001Z",
+        generationLatencyMs: 1,
+        providerCalled: true,
+        providerCallCount: 1,
+        providerCancellationRequested: false,
         lateResultDiscarded: false,
       },
     },
@@ -280,6 +306,19 @@ test("redaction preserva IDs estruturais e sanitiza texto livre aninhado", () =>
   assert.equal(nestedJson.includes(nested.flowId), true);
   assert.equal(nestedJson.includes("nested@example.com"), false);
   assert.equal(nestedJson.includes("+55 11 99999-9999"), false);
+
+  const comparisonHash = "12345678901234567890abcdef12345678901234567890abcdef1234567890abcd";
+  const approvalState = {
+    ...state,
+    metadata: {
+      expectedCanonicalComparisonHash: comparisonHash,
+      creationFingerprint: "1234567890123456",
+      payload: { phone: "+55 11 99999-9999" },
+    },
+  };
+  const approvalJson = JSON.stringify(sanitizeConversationStateForPersistence(approvalState).json);
+  assert.equal(approvalJson.includes(comparisonHash), true);
+  assert.equal(approvalJson.includes("+55 11 99999-9999"), false);
 });
 
 test("stateJson valida schema, redaction e limite de 64 KB sem truncamento", async () => {
@@ -456,8 +495,12 @@ test("PostgreSQL não cria state, evento nem Runtime log para outra conversa do 
   );
 
   const before = await Promise.all([
-    prisma.assistantConversationStateV2.count({ where: { conversationId: blockedScope.conversationId } }),
-    prisma.assistantConversationStateV2Event.count({ where: { conversationId: blockedScope.conversationId } }),
+    prisma.assistantConversationStateV2.count({
+      where: { conversationId: blockedScope.conversationId },
+    }),
+    prisma.assistantConversationStateV2Event.count({
+      where: { conversationId: blockedScope.conversationId },
+    }),
     prisma.assistantRuntimeLog.count({ where: { conversationId: blockedScope.conversationId } }),
   ]);
   const [allowedResult, blockedResult] = await Promise.all([
@@ -466,8 +509,12 @@ test("PostgreSQL não cria state, evento nem Runtime log para outra conversa do 
   ]);
   await integration.drain();
   const after = await Promise.all([
-    prisma.assistantConversationStateV2.count({ where: { conversationId: blockedScope.conversationId } }),
-    prisma.assistantConversationStateV2Event.count({ where: { conversationId: blockedScope.conversationId } }),
+    prisma.assistantConversationStateV2.count({
+      where: { conversationId: blockedScope.conversationId },
+    }),
+    prisma.assistantConversationStateV2Event.count({
+      where: { conversationId: blockedScope.conversationId },
+    }),
     prisma.assistantRuntimeLog.count({ where: { conversationId: blockedScope.conversationId } }),
   ]);
 

@@ -7,7 +7,7 @@ import {
 import type { AssistantSecurityRulesService } from "../assistant-security-rules/assistant-security-rules.service";
 import {
   CANONICAL_INBOUND_MESSAGE_SCHEMA_VERSION,
-  hashCanonicalInboundMessageContent,
+  canonicalizeInboundMessageForComparison,
 } from "../inbound/canonical-inbound-message";
 import { understandTurn } from "./turn-understanding";
 import { evaluateV2PrimarySecurityRules } from "../assistant-conversations/v2-primary-security-gate";
@@ -130,6 +130,12 @@ export type RuntimeV2ResponseExecutionAdministrationDependencies = {
   now?: () => Date;
 };
 
+type RuntimeV2ResponseExecutionPreflightEvaluation = {
+  result: RuntimeV2ResponseExecutionPreflightResult;
+  canonicalComparisonHash: string | null;
+  canonicalMessage: string;
+};
+
 function fingerprint(value: string | null | undefined): string | null {
   if (!value) return null;
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
@@ -236,8 +242,16 @@ export class RuntimeV2ResponseExecutionAdministrationService {
   async preflight(
     input: RuntimeV2ResponseExecutionPreflightInput,
   ): Promise<RuntimeV2ResponseExecutionPreflightResult> {
+    return (await this.evaluatePreflight(input)).result;
+  }
+
+  private async evaluatePreflight(
+    input: RuntimeV2ResponseExecutionPreflightInput,
+  ): Promise<RuntimeV2ResponseExecutionPreflightEvaluation> {
     const blockers: string[] = [];
-    const canonicalHash = hashCanonicalInboundMessageContent(input.message);
+    const canonical = canonicalizeInboundMessageForComparison(input.message);
+    const canonicalHash = canonical.canonicalComparisonHash;
+    const canonicalMessage = canonical.canonicalComparisonContent;
     if (!canonicalHash) blockers.push("CANONICAL_MESSAGE_EMPTY");
     if (input.canonicalVersion !== CANONICAL_INBOUND_MESSAGE_SCHEMA_VERSION) {
       blockers.push("CANONICAL_VERSION_UNSUPPORTED");
@@ -245,7 +259,7 @@ export class RuntimeV2ResponseExecutionAdministrationService {
     if (input.allowedCategory !== "businessHours") blockers.push("CATEGORY_NOT_ALLOWED");
     if (input.allowedAuthority !== "OFFICIAL_CONTEXT") blockers.push("AUTHORITY_NOT_ALLOWED");
     const understanding = understandTurn({
-      message: input.message,
+      message: canonicalMessage,
       messageId: "preflight",
       contextVersion: 1,
       now: this.now(),
@@ -337,7 +351,7 @@ export class RuntimeV2ResponseExecutionAdministrationService {
         ])
       : [[], 0];
     const flowEvaluation = evaluateFlowApplicability({
-      message: input.message,
+      message: canonicalMessage,
       flows: activeFlows,
     });
     if (flowEvaluation.blockerCode) blockers.push(flowEvaluation.blockerCode);
@@ -415,43 +429,47 @@ export class RuntimeV2ResponseExecutionAdministrationService {
       this.environment,
     ).includes(input.conversationId);
     return {
-      preflightStatus: blockers.length === 0 ? "APPROVED" : "BLOCKED",
-      scope: {
-        companyIdFingerprint: fingerprint(input.companyId)!,
-        assistantIdFingerprint: fingerprint(input.assistantId)!,
-        conversationIdFingerprint: fingerprint(input.conversationId)!,
+      canonicalComparisonHash: canonicalHash,
+      canonicalMessage,
+      result: {
+        preflightStatus: blockers.length === 0 ? "APPROVED" : "BLOCKED",
+        scope: {
+          companyIdFingerprint: fingerprint(input.companyId)!,
+          assistantIdFingerprint: fingerprint(input.assistantId)!,
+          conversationIdFingerprint: fingerprint(input.conversationId)!,
+        },
+        canonicalHashFingerprint: fingerprint(canonicalHash),
+        canonicalVersion: input.canonicalVersion,
+        allowedCategory: "businessHours",
+        allowedAuthority: "OFFICIAL_CONTEXT",
+        contextVersion,
+        securityRulesStatus: security.allowed
+          ? security.activeRuleCount > 0
+            ? "ALLOWED"
+            : "NO_ACTIVE_RULES"
+          : "BLOCKED",
+        securityRulesFingerprint: security.rulesFingerprint,
+        officialContextStatus,
+        officialContextFingerprint,
+        flowConfigurationStatus: flowEvaluation.flowConfigurationStatus,
+        activeFlowCount: flowEvaluation.activeFlowCount,
+        flowEvaluationStatus: flowEvaluation.flowEvaluationStatus,
+        matchedFlowCount: flowEvaluation.matchedFlowCount,
+        selectedFlowFingerprint: flowEvaluation.selectedFlowFingerprint,
+        selectedFlowVersionFingerprint: flowEvaluation.selectedFlowVersionFingerprint,
+        flowMatchType: flowEvaluation.flowMatchType,
+        declarativeContextFingerprint: flowEvaluation.declarativeContextFingerprint,
+        v2FlowCompatibility: flowEvaluation.v2Compatibility,
+        flowConfigurationFingerprint: flowEvaluation.flowConfigurationFingerprint,
+        flowBlockerCode: flowEvaluation.blockerCode,
+        executionConfiguration: {
+          mode: executionMode,
+          assistantAllowlisted,
+          conversationAllowlisted,
+        },
+        blockers: sortUnique(blockers),
+        redactionApplied: true,
       },
-      canonicalHashFingerprint: fingerprint(canonicalHash),
-      canonicalVersion: input.canonicalVersion,
-      allowedCategory: "businessHours",
-      allowedAuthority: "OFFICIAL_CONTEXT",
-      contextVersion,
-      securityRulesStatus: security.allowed
-        ? security.activeRuleCount > 0
-          ? "ALLOWED"
-          : "NO_ACTIVE_RULES"
-        : "BLOCKED",
-      securityRulesFingerprint: security.rulesFingerprint,
-      officialContextStatus,
-      officialContextFingerprint,
-      flowConfigurationStatus: flowEvaluation.flowConfigurationStatus,
-      activeFlowCount: flowEvaluation.activeFlowCount,
-      flowEvaluationStatus: flowEvaluation.flowEvaluationStatus,
-      matchedFlowCount: flowEvaluation.matchedFlowCount,
-      selectedFlowFingerprint: flowEvaluation.selectedFlowFingerprint,
-      selectedFlowVersionFingerprint: flowEvaluation.selectedFlowVersionFingerprint,
-      flowMatchType: flowEvaluation.flowMatchType,
-      declarativeContextFingerprint: flowEvaluation.declarativeContextFingerprint,
-      v2FlowCompatibility: flowEvaluation.v2Compatibility,
-      flowConfigurationFingerprint: flowEvaluation.flowConfigurationFingerprint,
-      flowBlockerCode: flowEvaluation.blockerCode,
-      executionConfiguration: {
-        mode: executionMode,
-        assistantAllowlisted,
-        conversationAllowlisted,
-      },
-      blockers: sortUnique(blockers),
-      redactionApplied: true,
     };
   }
 
@@ -465,11 +483,12 @@ export class RuntimeV2ResponseExecutionAdministrationService {
     ) {
       throw new Error("RESPONSE_EXECUTION_DURATION_INVALID");
     }
-    const preflight = await this.preflight(input);
+    const preflightEvaluation = await this.evaluatePreflight(input);
+    const preflight = preflightEvaluation.result;
     if (preflight.preflightStatus !== "APPROVED" || !preflight.contextVersion) {
       throw new Error("RESPONSE_EXECUTION_PREFLIGHT_BLOCKED");
     }
-    const canonicalHash = hashCanonicalInboundMessageContent(input.message);
+    const canonicalHash = preflightEvaluation.canonicalComparisonHash;
     if (!canonicalHash) throw new Error("RESPONSE_EXECUTION_CANONICAL_HASH_REQUIRED");
     const approval = createRuntimeV2ResponseExecutionApproval({
       companyId: input.companyId,
@@ -495,18 +514,43 @@ export class RuntimeV2ResponseExecutionAdministrationService {
       declarativeContextFingerprint: preflight.declarativeContextFingerprint,
       now: this.now(),
     });
-    await this.dependencies.responseExecutionStore.arm({
+    if (approval.expectedCanonicalComparisonHash !== canonicalHash) {
+      throw new Error("ARM_CANONICAL_HASH_MISMATCH");
+    }
+    const armed = await this.dependencies.responseExecutionStore.arm({
       approval,
       contextVersion: preflight.contextVersion,
     });
-    return statusFromRecord(
-      await this.dependencies.responseExecutionStore.load({
+    const persisted = await this.dependencies.responseExecutionStore.load({
+      companyId: input.companyId,
+      assistantId: input.assistantId,
+      conversationId: input.conversationId,
+      contextVersion: preflight.contextVersion,
+    });
+    if (
+      !persisted ||
+      persisted.approval.approvalId !== armed.approval.approvalId ||
+      persisted.approval.expectedCanonicalComparisonHash !== canonicalHash
+    ) {
+      const cancelled = await this.dependencies.coordinator.cancel({
         companyId: input.companyId,
         assistantId: input.assistantId,
         conversationId: input.conversationId,
         contextVersion: preflight.contextVersion,
-      }),
-    );
+        approvalFingerprint: armed.approval.creationFingerprint.slice(0, 16),
+      });
+      const afterCancellation = await this.dependencies.responseExecutionStore.load({
+        companyId: input.companyId,
+        assistantId: input.assistantId,
+        conversationId: input.conversationId,
+        contextVersion: preflight.contextVersion,
+      });
+      if (!cancelled || afterCancellation?.approval.status === "ARMED") {
+        throw new Error("ARM_CANONICAL_HASH_MISMATCH");
+      }
+      throw new Error("ARM_CANONICAL_HASH_MISMATCH");
+    }
+    return statusFromRecord(persisted);
   }
 
   async status(

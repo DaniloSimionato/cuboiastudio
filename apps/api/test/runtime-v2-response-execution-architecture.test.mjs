@@ -63,7 +63,9 @@ test("single-use administrative CLI is local-only, redacted, and cannot activate
   ]);
   assert.match(cliSource, /preflight|arm|status|cancel/);
   assert.match(administrationSource, /evaluateV2PrimarySecurityRules/);
-  assert.match(administrationSource, /hashCanonicalInboundMessageContent/);
+  assert.match(administrationSource, /canonicalizeInboundMessageForComparison/);
+  assert.match(administrationSource, /ARM_CANONICAL_HASH_MISMATCH/);
+  assert.match(cliSource, /message-stdin/);
   assert.match(administrationSource, /durationMinutes > 10/);
   assert.doesNotMatch(administrationSource, /Chatwoot|sendChatwootOutboundText|fetch\(/);
   assert.doesNotMatch(cliSource, /Chatwoot|sendChatwootOutboundText|fetch\(/);

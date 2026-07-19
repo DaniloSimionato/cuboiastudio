@@ -283,14 +283,34 @@ comandos: `preflight`, `arm`, `status` e `cancel`. `preflight` calcula apenas o
 hash canônico em memória, valida escopo, estado operacional, contexto oficial,
 regras de segurança, aplicabilidade de flow e ausência de execução pendente; ele
 não persiste nada nem
-altera flags/allowlists. `arm` executa o mesmo preflight, aceita exclusivamente
-`businessHours`/`OFFICIAL_CONTEXT`, dura de um a dez minutos e cria uma única
-approval `ARMED` por conversa. Só fingerprints, status e propósito sanitizado
-são persistidos — nunca a mensagem futura. `status` retorna apenas estados,
+altera flags/allowlists. `preflight` e `arm` usam o mesmo contrato
+`canonicalizeInboundMessageForComparison()`: normalização de transporte e
+representação canônica acontecem uma única vez antes do hash. O `arm` reutiliza
+diretamente o hash interno aprovado pelo seu preflight; ele não recalcula a partir
+de texto raw, redigido ou serializado. Antes de criar a approval e depois de
+reler a persistência, ele exige igualdade exata entre o hash canônico do
+preflight e o hash persistido. Divergência resulta em
+`ARM_CANONICAL_HASH_MISMATCH`, sem approval utilizável; uma gravação divergente
+é cancelada fail-closed. A CLI aceita `--message` ou `--message-stdin`, nunca as
+duas fontes, e mostra somente fingerprints no output. `arm` aceita
+exclusivamente `businessHours`/`OFFICIAL_CONTEXT`, dura de um a dez minutos e
+cria uma única approval `ARMED` por conversa. Só fingerprints, status e propósito
+sanitizado são persistidos — nunca a mensagem futura. `status` retorna apenas estados,
 datas, fingerprints e referências externas redigidas. `cancel` faz a transição
 somente em `ARMED` e uma repetição retorna o mesmo estado `CANCELLED`; claim,
 consumo, expiração e estados terminais não podem ser cancelados ou reativados. A CLI não habilita `CONTROLLED`, não preenche
 allowlists e não altera Shadow, Evidence, actions, tools ou handoff.
+
+O primeiro teste operacional controlado não foi capturado pelo V2: preflight e
+inbound concordaram, mas a approval gravada por `arm` continha hash incompatível;
+o router recusou o claim e o V1 respondeu uma única vez, sem duplicação. Não houve
+outbound V2 e **FIRST_REAL_V2_OUTBOUND_COMPLETED=false** permanece definido como `false`.
+A causa foi o sanitizador genérico de `stateJson`, que interpretava uma sequência
+numérica dentro de um hash hexadecimal como telefone. Hashes/fingerprints da
+approval agora são chaves estruturais opacas, preservadas byte a byte, enquanto
+texto livre continua sujeito à redaction. Esta correção elimina a recanonicalização
+independente do `arm` e a alteração de hash na persistência; uma repetição
+operacional continua pendente de deploy e novo preflight.
 
 Não há uma segunda geração Shadow nem comparação adicional para o mesmo turno
 primário: `PRIMARY_EXECUTION_NO_SHADOW_COMPARISON=true`. A candidata primária é

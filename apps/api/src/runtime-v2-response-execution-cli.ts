@@ -15,6 +15,7 @@ type ParsedArguments = {
   assistantId?: string;
   conversationId?: string;
   message?: string;
+  messageFromStdin?: boolean;
   canonicalVersion?: string;
   category?: string;
   authority?: string;
@@ -27,7 +28,7 @@ function usage(): string {
   return [
     "runtime-v2-response-execution <preflight|arm|status|cancel>",
     "--company-id <id> --assistant-id <id> --conversation-id <id>",
-    "preflight|arm: --message <future-message> --canonical-version <version>",
+    "preflight|arm: (--message <future-message> | --message-stdin) --canonical-version <version>",
     "--category businessHours --authority OFFICIAL_CONTEXT",
     "arm: --duration-minutes <1-10> --operator-purpose <purpose>",
     "status|cancel: --approval-fingerprint <fingerprint>",
@@ -40,6 +41,26 @@ function requireValue(values: Map<string, string>, key: string): string {
   return value;
 }
 
+function requireMessageValue(values: Map<string, string>): string {
+  const value = values.get("message");
+  if (!value?.trim()) throw new Error("RESPONSE_EXECUTION_CLI_ARGUMENTS_INVALID");
+  return value;
+}
+
+export async function readRuntimeV2ResponseExecutionStdin(
+  stream: AsyncIterable<string | Buffer> = process.stdin,
+): Promise<string> {
+  let value = "";
+  for await (const chunk of stream) {
+    value += chunk.toString();
+    if (Buffer.byteLength(value, "utf8") > 16_384) {
+      throw new Error("RESPONSE_EXECUTION_CLI_MESSAGE_TOO_LARGE");
+    }
+  }
+  if (!value.trim()) throw new Error("RESPONSE_EXECUTION_CLI_ARGUMENTS_INVALID");
+  return value;
+}
+
 export function parseRuntimeV2ResponseExecutionArguments(argv: string[]): ParsedArguments {
   if (argv.length === 0 || argv[0] === "--help") throw new Error("RESPONSE_EXECUTION_CLI_USAGE");
   const command = argv[0];
@@ -47,8 +68,14 @@ export function parseRuntimeV2ResponseExecutionArguments(argv: string[]): Parsed
     throw new Error("RESPONSE_EXECUTION_CLI_COMMAND_INVALID");
   }
   const values = new Map<string, string>();
+  let messageFromStdin = false;
   for (let index = 1; index < argv.length; index += 1) {
     const key = argv[index];
+    if (key === "--message-stdin") {
+      if (messageFromStdin) throw new Error("RESPONSE_EXECUTION_CLI_ARGUMENTS_INVALID");
+      messageFromStdin = true;
+      continue;
+    }
     const value = argv[index + 1];
     if (!key?.startsWith("--") || !value || value.startsWith("--")) {
       throw new Error("RESPONSE_EXECUTION_CLI_ARGUMENTS_INVALID");
@@ -64,13 +91,19 @@ export function parseRuntimeV2ResponseExecutionArguments(argv: string[]): Parsed
     approvalFingerprint: values.get("approval-fingerprint")?.trim(),
   };
   if (result.command === "preflight" || result.command === "arm") {
-    result.message = requireValue(values, "message");
+    if (messageFromStdin && values.has("message")) {
+      throw new Error("RESPONSE_EXECUTION_CLI_ARGUMENTS_INVALID");
+    }
+    result.messageFromStdin = messageFromStdin;
+    result.message = messageFromStdin ? undefined : requireMessageValue(values);
     result.canonicalVersion = requireValue(values, "canonical-version");
     result.category = requireValue(values, "category");
     result.authority = requireValue(values, "authority");
     if (result.category !== "businessHours" || result.authority !== "OFFICIAL_CONTEXT") {
       throw new Error("RESPONSE_EXECUTION_CLI_CATEGORY_OR_AUTHORITY_INVALID");
     }
+  } else if (messageFromStdin) {
+    throw new Error("RESPONSE_EXECUTION_CLI_ARGUMENTS_INVALID");
   }
   if (result.command === "arm") {
     result.operatorPurpose = requireValue(values, "operator-purpose");
@@ -103,6 +136,9 @@ export async function runRuntimeV2ResponseExecutionCli(
   let app: Awaited<ReturnType<typeof NestFactory.createApplicationContext>> | null = null;
   try {
     const input = parseRuntimeV2ResponseExecutionArguments(argv);
+    const message = input.messageFromStdin
+      ? await readRuntimeV2ResponseExecutionStdin()
+      : input.message;
     app = await NestFactory.createApplicationContext(AppModule, { logger: false });
     const administration = new RuntimeV2ResponseExecutionAdministrationService({
       prisma: app.get(PrismaService),
@@ -120,7 +156,7 @@ export async function runRuntimeV2ResponseExecutionCli(
       input.command === "preflight"
         ? await administration.preflight({
             ...scope,
-            message: input.message!,
+            message: message!,
             canonicalVersion: input.canonicalVersion!,
             allowedCategory: "businessHours",
             allowedAuthority: "OFFICIAL_CONTEXT",
@@ -128,7 +164,7 @@ export async function runRuntimeV2ResponseExecutionCli(
         : input.command === "arm"
           ? await administration.arm({
               ...scope,
-              message: input.message!,
+              message: message!,
               canonicalVersion: input.canonicalVersion!,
               allowedCategory: "businessHours",
               allowedAuthority: "OFFICIAL_CONTEXT",

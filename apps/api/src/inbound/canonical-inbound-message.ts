@@ -9,6 +9,18 @@ export type CanonicalInboundAttachmentMetadata = {
   hasQuotedMessage: boolean;
 };
 
+/**
+ * The single comparison contract shared by inbound processing and controlled
+ * response-execution administration. The canonical content is intentionally
+ * ephemeral: callers may retain its hash for matching, but must not emit the
+ * content in telemetry or administrative output.
+ */
+export type CanonicalInboundMessageComparison = {
+  canonicalVersion: typeof CANONICAL_INBOUND_MESSAGE_SCHEMA_VERSION;
+  canonicalComparisonContent: string;
+  canonicalComparisonHash: string | null;
+};
+
 export type CanonicalInboundMessage = {
   schemaVersion: typeof CANONICAL_INBOUND_MESSAGE_SCHEMA_VERSION;
   companyId: string;
@@ -64,11 +76,23 @@ export function normalizeInboundMessageForComparison(value: string | null | unde
   );
 }
 
+export function canonicalizeInboundMessageForComparison(
+  value: string | null | undefined,
+): CanonicalInboundMessageComparison {
+  const canonicalComparisonContent = normalizeInboundMessageForComparison(value);
+  return {
+    canonicalVersion: CANONICAL_INBOUND_MESSAGE_SCHEMA_VERSION,
+    canonicalComparisonContent,
+    canonicalComparisonHash: canonicalComparisonContent
+      ? createHash("sha256").update(canonicalComparisonContent, "utf8").digest("hex")
+      : null,
+  };
+}
+
 export function hashCanonicalInboundMessageContent(
   value: string | null | undefined,
 ): string | null {
-  const normalized = normalizeInboundMessageForComparison(value);
-  return normalized ? createHash("sha256").update(normalized, "utf8").digest("hex") : null;
+  return canonicalizeInboundMessageForComparison(value).canonicalComparisonHash;
 }
 
 function hashSourceSnapshot(value: string | null | undefined): string | null {
@@ -90,7 +114,7 @@ export function createCanonicalInboundMessage(input: {
   attachmentMetadata?: Partial<CanonicalInboundAttachmentMetadata>;
   quotedMessagePresent?: boolean;
 }): CanonicalInboundMessage {
-  const canonicalComparisonContent = normalizeInboundMessageForComparison(input.displayContent);
+  const comparison = canonicalizeInboundMessageForComparison(input.displayContent);
   const sourceSnapshotContent = input.sourceSnapshotContent ?? input.displayContent;
   const externalUpdatedAt = input.externalUpdatedAt ?? null;
   const externalCreatedAt = input.externalCreatedAt ?? null;
@@ -104,8 +128,8 @@ export function createCanonicalInboundMessage(input: {
     externalMessageReference: input.externalMessageReference ?? null,
     contentType: input.contentType,
     displayContent: input.displayContent,
-    canonicalComparisonContent,
-    canonicalComparisonHash: hashCanonicalInboundMessageContent(input.displayContent),
+    canonicalComparisonContent: comparison.canonicalComparisonContent,
+    canonicalComparisonHash: comparison.canonicalComparisonHash,
     sourceSnapshotHash: hashSourceSnapshot(sourceSnapshotContent),
     normalizationVersion: INBOUND_MESSAGE_NORMALIZATION_VERSION,
     receivedAt: input.receivedAt,

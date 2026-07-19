@@ -91,6 +91,16 @@ const STRUCTURAL_STATE_KEYS = new Set([
   "selectedFlowId",
   "responsePlanId",
   "generationId",
+  // Hashes and fingerprints are opaque comparison identities, not free text.
+  // They must remain byte-for-byte stable for single-use approval matching.
+  "expectedCanonicalComparisonHash",
+  "creationFingerprint",
+  "securityRulesFingerprint",
+  "officialContextFingerprint",
+  "flowConfigurationFingerprint",
+  "expectedFlowFingerprint",
+  "expectedFlowVersionFingerprint",
+  "declarativeContextFingerprint",
 ]);
 
 function redactStateValue(value: unknown, key = ""): JsonValue | undefined {

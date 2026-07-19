@@ -1,11 +1,20 @@
 import assert from "node:assert/strict";
+import { Readable } from "node:stream";
 import test from "node:test";
 import { InMemoryConversationStateStore } from "../dist/runtime-v2/conversation-state-store.js";
 import { ConversationStateResponseExecutionStore } from "../dist/runtime-v2/conversation-state-response-execution-store.js";
 import { RuntimeV2ResponseExecutionCoordinator } from "../dist/runtime-v2/response-execution-coordinator.js";
 import { RuntimeV2ResponseExecutionAdministrationService } from "../dist/runtime-v2/response-execution-administration.js";
 import { evaluateV2PrimarySecurityRules } from "../dist/assistant-conversations/v2-primary-security-gate.js";
-import { parseRuntimeV2ResponseExecutionArguments } from "../dist/runtime-v2-response-execution-cli.js";
+import {
+  parseRuntimeV2ResponseExecutionArguments,
+  readRuntimeV2ResponseExecutionStdin,
+} from "../dist/runtime-v2-response-execution-cli.js";
+import {
+  canonicalizeInboundMessageForComparison,
+  createCanonicalInboundMessage,
+  hashCanonicalInboundMessageContent,
+} from "../dist/inbound/canonical-inbound-message.js";
 
 const scope = {
   companyId: "company-admin",
@@ -55,9 +64,12 @@ function securityRule(overrides = {}) {
 }
 
 function createAdministration(overrides = {}) {
-  const stateStore = new InMemoryConversationStateStore();
-  const responseExecutionStore = new ConversationStateResponseExecutionStore(stateStore);
-  const coordinator = new RuntimeV2ResponseExecutionCoordinator({ store: responseExecutionStore });
+  const stateStore = overrides.stateStore ?? new InMemoryConversationStateStore();
+  const responseExecutionStore =
+    overrides.responseExecutionStore ?? new ConversationStateResponseExecutionStore(stateStore);
+  const coordinator =
+    overrides.coordinator ??
+    new RuntimeV2ResponseExecutionCoordinator({ store: responseExecutionStore });
   const company = { id: scope.companyId, name: "Empresa", timezone: "America/Sao_Paulo" };
   const assistant = {
     id: scope.assistantId,
@@ -333,6 +345,183 @@ test("arm cria approval única por hash, status é redigido e cancel somente ARM
     approval: record.approval,
   });
   assert.notEqual(claim.status, "CLAIMED");
+});
+
+test("canonicalização de transporte mantém LF, CRLF e ausência de newline no mesmo hash", () => {
+  const fixture = "Qual é o horário de atendimento de segunda a sexta?";
+  const expected = canonicalizeInboundMessageForComparison(fixture);
+  for (const transported of [
+    `${fixture}\n`,
+    `${fixture}\r\n`,
+    `${fixture}\n\n`,
+    `  ${fixture}  `,
+    fixture,
+  ]) {
+    const result = canonicalizeInboundMessageForComparison(transported);
+    assert.equal(result.canonicalComparisonHash, expected.canonicalComparisonHash);
+    assert.equal(result.canonicalVersion, canonicalVersion);
+  }
+  assert.equal(expected.canonicalComparisonHash, hashCanonicalInboundMessageContent(fixture));
+  assert.notEqual(
+    canonicalizeInboundMessageForComparison(`${fixture}!`).canonicalComparisonHash,
+    expected.canonicalComparisonHash,
+  );
+  assert.notEqual(
+    canonicalizeInboundMessageForComparison(fixture.replace(" de ", "  de "))
+      .canonicalComparisonHash,
+    expected.canonicalComparisonHash,
+  );
+  assert.equal(
+    canonicalizeInboundMessageForComparison("Qual e\u0301 o hora\u0301rio de atendimento?")
+      .canonicalComparisonHash,
+    canonicalizeInboundMessageForComparison("Qual é o horário de atendimento?")
+      .canonicalComparisonHash,
+  );
+});
+
+test("arm persiste exatamente o hash produzido pelo preflight canônico", async () => {
+  const { administration, responseExecutionStore } = createAdministration();
+  const fixture = "Qual é o horário de atendimento de segunda a sexta?\r\n";
+  const preflight = await administration.preflight(preflightInput({ message: fixture }));
+  assert.equal(preflight.preflightStatus, "APPROVED");
+  await administration.arm({
+    ...preflightInput({ message: fixture }),
+    durationMinutes: 5,
+    operatorPurpose: "hash canonical único",
+  });
+  const persisted = await responseExecutionStore.load({ ...scope, contextVersion: 1 });
+  const expectedHash = canonicalizeInboundMessageForComparison(fixture).canonicalComparisonHash;
+  const routerInbound = createCanonicalInboundMessage({
+    ...scope,
+    internalMessageId: "inbound-fake",
+    contentType: "TEXT",
+    displayContent: fixture,
+    receivedAt: new Date(),
+  });
+  assert.equal(persisted?.approval.expectedCanonicalComparisonHash, expectedHash);
+  assert.equal(routerInbound.canonicalComparisonHash, expectedHash);
+  assert.equal(preflight.canonicalHashFingerprint, "f2432202f1b28ebd");
+});
+
+test("arm não recanonicaliza uma entrada depois do preflight interno", async () => {
+  const { administration, responseExecutionStore } = createAdministration();
+  const approvedMessage = "Qual é o horário de atendimento de segunda a sexta?";
+  const differentMessage = "Qual é o horário de atendimento aos sábados?";
+  const input = {
+    ...preflightInput(),
+    durationMinutes: 5,
+    operatorPurpose: "reuso de preflight",
+  };
+  let reads = 0;
+  Object.defineProperty(input, "message", {
+    enumerable: true,
+    get() {
+      reads += 1;
+      return reads === 1 ? approvedMessage : differentMessage;
+    },
+  });
+  await administration.arm(input);
+  const persisted = await responseExecutionStore.load({ ...scope, contextVersion: 1 });
+  assert.equal(reads, 1);
+  assert.equal(
+    persisted?.approval.expectedCanonicalComparisonHash,
+    canonicalizeInboundMessageForComparison(approvedMessage).canonicalComparisonHash,
+  );
+});
+
+test("arm falha fechado e cancela a approval se a releitura divergir do hash canônico", async () => {
+  const stateStore = new InMemoryConversationStateStore();
+  class MismatchingStore extends ConversationStateResponseExecutionStore {
+    corruptReads = false;
+
+    async arm(input) {
+      const result = await super.arm(input);
+      this.corruptReads = true;
+      return result;
+    }
+
+    async load(input) {
+      const result = await super.load(input);
+      if (!this.corruptReads || !result) return result;
+      return {
+        ...result,
+        approval: { ...result.approval, expectedCanonicalComparisonHash: "mismatched-hash" },
+      };
+    }
+
+    async loadPersisted(input) {
+      return super.load(input);
+    }
+  }
+  const responseExecutionStore = new MismatchingStore(stateStore);
+  const { administration } = createAdministration({
+    stateStore,
+    responseExecutionStore,
+    coordinator: new RuntimeV2ResponseExecutionCoordinator({ store: responseExecutionStore }),
+  });
+  await assert.rejects(
+    () =>
+      administration.arm({
+        ...preflightInput(),
+        durationMinutes: 5,
+        operatorPurpose: "detectar corrupção",
+      }),
+    /ARM_CANONICAL_HASH_MISMATCH/,
+  );
+  const persisted = await responseExecutionStore.loadPersisted({ ...scope, contextVersion: 1 });
+  assert.equal(persisted?.approval.status, "CANCELLED");
+  assert.equal(persisted?.terminalStatus, "TERMINAL_BLOCKED");
+});
+
+test("CLI aceita stdin sem expor a mensagem e rejeita fontes duplicadas", async () => {
+  const parsed = parseRuntimeV2ResponseExecutionArguments([
+    "preflight",
+    "--company-id",
+    "c",
+    "--assistant-id",
+    "a",
+    "--conversation-id",
+    "v",
+    "--message-stdin",
+    "--canonical-version",
+    canonicalVersion,
+    "--category",
+    "businessHours",
+    "--authority",
+    "OFFICIAL_CONTEXT",
+  ]);
+  assert.equal(parsed.messageFromStdin, true);
+  assert.equal(parsed.message, undefined);
+  const fromStdin = await readRuntimeV2ResponseExecutionStdin(
+    Readable.from(["Qual é o horário de atendimento?\r\n"]),
+  );
+  assert.equal(
+    canonicalizeInboundMessageForComparison(fromStdin).canonicalComparisonHash,
+    canonicalizeInboundMessageForComparison("Qual é o horário de atendimento?")
+      .canonicalComparisonHash,
+  );
+  assert.throws(
+    () =>
+      parseRuntimeV2ResponseExecutionArguments([
+        "preflight",
+        "--company-id",
+        "c",
+        "--assistant-id",
+        "a",
+        "--conversation-id",
+        "v",
+        "--message",
+        "privada",
+        "--message-stdin",
+        "--canonical-version",
+        canonicalVersion,
+        "--category",
+        "businessHours",
+        "--authority",
+        "OFFICIAL_CONTEXT",
+      ]),
+    /ARGUMENTS_INVALID/,
+  );
 });
 
 test("arm limita duração e CLI não aceita categoria fora do contrato", async () => {

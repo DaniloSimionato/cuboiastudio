@@ -1,0 +1,163 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import test, { after } from "node:test";
+import { PrismaClient } from "@prisma/client";
+import { hashCanonicalInboundMessageContent } from "../dist/inbound/canonical-inbound-message.js";
+
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL must point to a local disposable database");
+}
+
+const prisma = new PrismaClient();
+const prefix = `runtime-v2-cli-stdin-${randomUUID()}`;
+const scope = {
+  companyId: `${prefix}-company`,
+  assistantId: `${prefix}-assistant`,
+  conversationId: `${prefix}-conversation`,
+};
+const canonicalVersion = "canonical-inbound-message-v1";
+const fixtureMessage = "Qual é o horário de atendimento de segunda a sexta?";
+
+function runCli(args, stdin) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["scripts/runtime-v2-response-execution.mjs", ...args], {
+      cwd: new URL("..", import.meta.url),
+      env: {
+        ...process.env,
+        RUNTIME_V2_RESPONSE_EXECUTION_MODE: "OFF",
+        RUNTIME_V2_RESPONSE_EXECUTION_ASSISTANT_IDS: "",
+        RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS: "",
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => resolve({ code, stdout, stderr }));
+    child.stdin.end(stdin);
+  });
+}
+
+async function createFixture() {
+  await prisma.company.create({ data: { id: scope.companyId, name: "CLI stdin company" } });
+  await prisma.assistant.create({
+    data: {
+      id: scope.assistantId,
+      companyId: scope.companyId,
+      name: "CLI stdin assistant",
+      timezone: "America/Sao_Paulo",
+      weeklySchedule: {
+        monday: [{ start: "08:00", end: "18:00" }],
+        tuesday: [{ start: "08:00", end: "18:00" }],
+        wednesday: [{ start: "08:00", end: "18:00" }],
+        thursday: [{ start: "08:00", end: "18:00" }],
+        friday: [{ start: "08:00", end: "18:00" }],
+        saturday: [],
+        sunday: [],
+      },
+    },
+  });
+  await prisma.assistantConversation.create({
+    data: {
+      id: scope.conversationId,
+      companyId: scope.companyId,
+      assistantId: scope.assistantId,
+      source: "SMOKE",
+      currentContextVersion: 1,
+    },
+  });
+}
+
+function command(command, additional = []) {
+  return [
+    command,
+    "--company-id",
+    scope.companyId,
+    "--assistant-id",
+    scope.assistantId,
+    "--conversation-id",
+    scope.conversationId,
+    "--message-stdin",
+    "--canonical-version",
+    canonicalVersion,
+    "--category",
+    "businessHours",
+    "--authority",
+    "OFFICIAL_CONTEXT",
+    ...additional,
+  ];
+}
+
+function parseCliResult(output, requiredKey) {
+  const result = output
+    .trim()
+    .split("\n")
+    .reverse()
+    .flatMap((candidate) => {
+      try {
+        return [JSON.parse(candidate)];
+      } catch {
+        return [];
+      }
+    })
+    .find(
+      (candidate) =>
+        candidate && typeof candidate === "object" && Object.hasOwn(candidate, requiredKey),
+    );
+  assert.ok(result, "CLI did not emit its expected JSON result");
+  return result;
+}
+
+after(async () => {
+  await prisma.assistantConversationStateV2Event.deleteMany({
+    where: { companyId: scope.companyId },
+  });
+  await prisma.assistantConversationStateV2.deleteMany({ where: { companyId: scope.companyId } });
+  await prisma.assistantConversation.deleteMany({ where: { companyId: scope.companyId } });
+  await prisma.assistant.deleteMany({ where: { companyId: scope.companyId } });
+  await prisma.company.deleteMany({ where: { id: scope.companyId } });
+  await prisma.$disconnect();
+});
+
+test("CLI real via stdin mantém o hash do preflight no arm e não persiste a mensagem", async () => {
+  await createFixture();
+  const preflight = await runCli(command("preflight"), `${fixtureMessage}\r\n`);
+  assert.equal(preflight.code, 0);
+  assert.equal(preflight.stderr, "");
+  assert.equal(preflight.stdout.includes(fixtureMessage), false);
+  const preflightResult = parseCliResult(preflight.stdout, "preflightStatus");
+  assert.equal(preflightResult.preflightStatus, "APPROVED");
+  assert.equal(preflightResult.canonicalHashFingerprint, "f2432202f1b28ebd");
+
+  const arm = await runCli(
+    command("arm", ["--duration-minutes", "2", "--operator-purpose", "CLI stdin hash alignment"]),
+    `${fixtureMessage}\n`,
+  );
+  assert.equal(arm.code, 0, arm.stderr);
+  assert.equal(arm.stderr, "");
+  assert.equal(arm.stdout.includes(fixtureMessage), false);
+  const armResult = parseCliResult(arm.stdout, "status");
+  assert.equal(armResult.status, "ARMED");
+
+  const state = await prisma.assistantConversationStateV2.findFirst({
+    where: {
+      companyId: scope.companyId,
+      assistantId: scope.assistantId,
+      conversationId: scope.conversationId,
+    },
+    select: { stateJson: true },
+  });
+  const execution = state?.stateJson?.responseExecution;
+  assert.equal(
+    execution?.approval?.expectedCanonicalComparisonHash,
+    hashCanonicalInboundMessageContent(fixtureMessage),
+  );
+  assert.equal(JSON.stringify(execution).includes(fixtureMessage), false);
+});
