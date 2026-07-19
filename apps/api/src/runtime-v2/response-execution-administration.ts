@@ -100,7 +100,12 @@ export type RuntimeV2ResponseExecutionStatusInput =
 export type RuntimeV2ResponseExecutionStatusResult = {
   found: boolean;
   approvalFingerprint: string | null;
+  executionFingerprint: string | null;
   status: RuntimeV2ResponseExecutionApproval["status"] | null;
+  canonicalVersion: string | null;
+  canonicalHashFingerprint: string | null;
+  allowedCategory: "businessHours" | null;
+  allowedAuthority: "OFFICIAL_CONTEXT" | null;
   createdAt: string | null;
   expiresAt: string | null;
   claimedAt: string | null;
@@ -121,7 +126,9 @@ export type RuntimeV2ResponseExecutionStatusResult = {
   isCurrentAttempt: boolean | null;
   currentAttemptNumber: number | null;
   hasActiveExecution: boolean;
+  activeExecution: boolean;
   canArmNew: boolean;
+  canArmNewResponseExecution: boolean;
   redactionApplied: true;
 };
 
@@ -196,7 +203,12 @@ function statusFromRecord(
     return {
       found: false,
       approvalFingerprint: null,
+      executionFingerprint: null,
       status: null,
+      canonicalVersion: null,
+      canonicalHashFingerprint: null,
+      allowedCategory: null,
+      allowedAuthority: null,
       createdAt: null,
       expiresAt: null,
       claimedAt: null,
@@ -217,7 +229,9 @@ function statusFromRecord(
       isCurrentAttempt: null,
       currentAttemptNumber: null,
       hasActiveExecution: false,
+      activeExecution: false,
       canArmNew: true,
+      canArmNewResponseExecution: true,
       redactionApplied: true,
     };
   }
@@ -226,10 +240,18 @@ function statusFromRecord(
     approval.status === "ARMED" && Date.parse(approval.expiresAt) <= now.getTime()
       ? "EXPIRED"
       : approval.status;
+  const hasActiveExecution = currentRecord ? isResponseExecutionActive(currentRecord, now) : false;
+  const canArmNew = canArmNewResponseExecution(currentRecord, now);
+  const executionFingerprint = fingerprint((record as ResponseExecutionRecord).executionId);
   return {
     found: true,
     approvalFingerprint: approval.creationFingerprint.slice(0, 16),
+    executionFingerprint,
     status,
+    canonicalVersion: approval.canonicalVersion,
+    canonicalHashFingerprint: fingerprint(approval.expectedCanonicalComparisonHash),
+    allowedCategory: approval.allowedCategory,
+    allowedAuthority: approval.allowedAuthority,
     createdAt: approval.createdAt ?? null,
     expiresAt: approval.expiresAt,
     claimedAt: approval.claimedAt,
@@ -244,7 +266,7 @@ function statusFromRecord(
     externalMessageReferenceFingerprint: fingerprint(record.externalMessageId),
     fallbackReason: record.fallbackReason,
     reconciliationReason: record.reconciliationReason,
-    executionIdFingerprint: fingerprint((record as ResponseExecutionRecord).executionId),
+    executionIdFingerprint: executionFingerprint,
     attemptNumber: (record as ResponseExecutionRecord).attemptNumber ?? null,
     historyCount,
     isCurrentAttempt:
@@ -252,8 +274,10 @@ function statusFromRecord(
         ? null
         : currentRecord.executionId === (record as ResponseExecutionRecord).executionId,
     currentAttemptNumber: currentRecord?.attemptNumber ?? null,
-    hasActiveExecution: currentRecord ? isResponseExecutionActive(currentRecord, now) : false,
-    canArmNew: canArmNewResponseExecution(currentRecord, now),
+    hasActiveExecution,
+    activeExecution: hasActiveExecution,
+    canArmNew,
+    canArmNewResponseExecution: canArmNew,
     redactionApplied: true,
   };
 }
@@ -555,13 +579,16 @@ export class RuntimeV2ResponseExecutionAdministrationService {
       approval,
       contextVersion: preflight.contextVersion,
     });
-    const persisted = await this.dependencies.responseExecutionStore.load({
+    const persistedSnapshot = await this.dependencies.responseExecutionStore.loadSnapshot({
       companyId: input.companyId,
       assistantId: input.assistantId,
       conversationId: input.conversationId,
       contextVersion: preflight.contextVersion,
     });
+    const persisted = persistedSnapshot?.current ?? null;
     if (
+      !persistedSnapshot ||
+      persistedSnapshot.invalid ||
       !persisted ||
       persisted.approval.approvalId !== armed.approval.approvalId ||
       persisted.approval.expectedCanonicalComparisonHash !== canonicalHash
@@ -584,7 +611,12 @@ export class RuntimeV2ResponseExecutionAdministrationService {
       }
       throw new Error("ARM_CANONICAL_HASH_MISMATCH");
     }
-    return statusFromRecord(persisted);
+    return statusFromRecord(
+      persisted,
+      this.now(),
+      persistedSnapshot.history.length,
+      persistedSnapshot.current,
+    );
   }
 
   async status(

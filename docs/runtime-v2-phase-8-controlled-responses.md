@@ -303,14 +303,12 @@ allowlists e não altera Shadow, Evidence, actions, tools ou handoff.
 
 O primeiro teste operacional controlado não foi capturado pelo V2: preflight e
 inbound concordaram, mas a approval gravada por `arm` continha hash incompatível;
-o router recusou o claim e o V1 respondeu uma única vez, sem duplicação. Não houve
-outbound V2 e **FIRST_REAL_V2_OUTBOUND_COMPLETED=false** permanece definido como `false`.
-A causa foi o sanitizador genérico de `stateJson`, que interpretava uma sequência
+o router recusou o claim e o V1 respondeu uma única vez, sem duplicação. A causa
+foi o sanitizador genérico de `stateJson`, que interpretava uma sequência
 numérica dentro de um hash hexadecimal como telefone. Hashes/fingerprints da
 approval agora são chaves estruturais opacas, preservadas byte a byte, enquanto
 texto livre continua sujeito à redaction. Esta correção elimina a recanonicalização
-independente do `arm` e a alteração de hash na persistência; uma repetição
-operacional continua pendente de deploy e novo preflight.
+independente do `arm` e a alteração de hash na persistência.
 
 Após o deploy dessa correção, um ensaio administrativo localizou um segundo
 bloqueio seguro: a conversa de validação continha uma tentativa anterior
@@ -338,10 +336,27 @@ efêmera até o tail; só seus fingerprints e metadados redigidos atravessam a
 telemetria. Uma approval ARMED isolada continua incapaz de reprocessar mensagens
 ou disparar execução sem todos os gates.
 
+O primeiro outbound real foi concluído em um canário isolado, com approval
+single-use, `route=V2_SINGLE_USE`, `owner=V2_PRIMARY`, uma chamada de provider
+V2, zero V1/fallback, um único tail/sender e referência externa persistida. A
+approval terminou `CONSUMED` e o ownership terminou `V2_OUTBOUND_SENT`; o modo
+de execução, as allowlists e o vínculo temporário do inbox foram restaurados
+imediatamente. A Heloísa continua bloqueada para V2 enquanto seu flow factual
+permanecer aplicável.
+
+Após um `arm` bem-sucedido, o payload administrativo é montado a partir do
+snapshot `current/history` relido após o CAS — a mesma fonte de `status`. Assim,
+`attemptNumber`, `historyCount`, fingerprints, hash canônico, categoria,
+autoridade e indicadores de atividade/capacidade de rearmamento representam o
+estado efetivamente persistido. O payload não contém mensagem, hash integral,
+prompt, flow ou referência externa bruta.
+
 **COORDINATOR_CONNECTED_TO_ROUTER=true.**
 **REAL_V2_PRIMARY_EXECUTOR_CONNECTED=true.**
 **PRODUCTION_EXECUTION_DEFAULT_OFF=true.**
-**FIRST_REAL_V2_OUTBOUND_COMPLETED=false.**
+**FIRST_REAL_V2_OUTBOUND_COMPLETED=true.**
+**ISOLATED_CANARY_COMPLETED=false.**
+**HELOISA_V2_ENABLEMENT_BLOCKED_BY_FACTUAL_FLOW=true.**
 
 A estratégia de geração V1 de triagem foi extraída para um contrato interno
 testável, sem mover o tail de persistência, sender, `externalMessageId` ou

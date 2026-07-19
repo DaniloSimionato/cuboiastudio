@@ -128,6 +128,24 @@ function parseCliResult(output, requiredKey) {
   return result;
 }
 
+function assertArmMatchesStatus(armed, status) {
+  for (const field of [
+    "approvalFingerprint",
+    "executionFingerprint",
+    "attemptNumber",
+    "historyCount",
+    "canonicalHashFingerprint",
+    "canonicalVersion",
+    "allowedCategory",
+    "allowedAuthority",
+    "status",
+    "activeExecution",
+    "canArmNewResponseExecution",
+  ]) {
+    assert.equal(armed[field], status[field], `CLI arm/status mismatch for ${field}`);
+  }
+}
+
 after(async () => {
   await prisma.assistantConversationStateV2Event.deleteMany({
     where: { companyId: scope.companyId },
@@ -158,6 +176,13 @@ test("CLI real via stdin mantém o hash do preflight no arm e não persiste a me
   assert.equal(arm.stdout.includes(fixtureMessage), false);
   const armResult = parseCliResult(arm.stdout, "status");
   assert.equal(armResult.status, "ARMED");
+  assert.equal(armResult.historyCount, 0);
+  const armedStatus = await runCli(
+    scopedCommand("status", ["--approval-fingerprint", armResult.approvalFingerprint]),
+    "",
+  );
+  assert.equal(armedStatus.code, 0, armedStatus.stderr);
+  assertArmMatchesStatus(armResult, parseCliResult(armedStatus.stdout, "status"));
 
   const state = await prisma.assistantConversationStateV2.findFirst({
     where: {
@@ -189,6 +214,13 @@ test("CLI real via stdin mantém o hash do preflight no arm e não persiste a me
   const rearmResult = parseCliResult(rearm.stdout, "status");
   assert.equal(rearmResult.status, "ARMED");
   assert.equal(rearmResult.attemptNumber, 2);
+  assert.equal(rearmResult.historyCount, 1);
+  const rearmedStatus = await runCli(
+    scopedCommand("status", ["--approval-fingerprint", rearmResult.approvalFingerprint]),
+    "",
+  );
+  assert.equal(rearmedStatus.code, 0, rearmedStatus.stderr);
+  assertArmMatchesStatus(rearmResult, parseCliResult(rearmedStatus.stdout, "status"));
   const rearmedState = await prisma.assistantConversationStateV2.findFirst({
     where: {
       companyId: scope.companyId,

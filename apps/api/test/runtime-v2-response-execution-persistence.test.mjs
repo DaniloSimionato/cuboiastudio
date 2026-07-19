@@ -81,6 +81,24 @@ function coordinator() {
   });
 }
 
+function assertArmMatchesStatus(armed, status) {
+  for (const field of [
+    "approvalFingerprint",
+    "executionFingerprint",
+    "attemptNumber",
+    "historyCount",
+    "canonicalHashFingerprint",
+    "canonicalVersion",
+    "allowedCategory",
+    "allowedAuthority",
+    "status",
+    "activeExecution",
+    "canArmNewResponseExecution",
+  ]) {
+    assert.equal(armed[field], status[field], `PostgreSQL arm/status mismatch for ${field}`);
+  }
+}
+
 before(async () => {
   await prisma.$queryRaw`SELECT 1`;
 });
@@ -458,6 +476,7 @@ test("PostgreSQL preflight and arm produce one claimed V2 turn with no configura
   });
   assert.equal(status.status, "ARMED");
   assert.equal(status.internalMessageIdFingerprint, null);
+  assertArmMatchesStatus(armed, status);
 
   const persistedApproval = await responseExecutionStore.load({
     ...scope,
@@ -497,4 +516,57 @@ test("PostgreSQL preflight and arm produce one claimed V2 turn with no configura
       }),
     /CANCEL_NOT_ARMED/,
   );
+});
+
+test("PostgreSQL concurrent rearm returns the persisted current/history snapshot to the winner", async () => {
+  const { scope } = await fixture();
+  const stateStore = new PrismaConversationStateStore(prisma);
+  const responseExecutionStore = new ConversationStateResponseExecutionStore(stateStore);
+  const executionCoordinator = new RuntimeV2ResponseExecutionCoordinator({
+    store: responseExecutionStore,
+  });
+  const createAdministration = () =>
+    new RuntimeV2ResponseExecutionAdministrationService({
+      prisma,
+      securityRules: { findActiveForRuntime: async () => [] },
+      stateStore,
+      responseExecutionStore,
+      coordinator: executionCoordinator,
+      environment: {},
+    });
+  const input = {
+    companyId: scope.companyId,
+    assistantId: scope.assistantId,
+    conversationId: scope.conversationId,
+    message: "Qual é o horário de atendimento?",
+    canonicalVersion: "canonical-inbound-message-v1",
+    allowedCategory: "businessHours",
+    allowedAuthority: "OFFICIAL_CONTEXT",
+    durationMinutes: 2,
+  };
+  const administration = createAdministration();
+  const first = await administration.arm({ ...input, operatorPurpose: "PostgreSQL terminal seed" });
+  await administration.cancel({ ...scope, approvalFingerprint: first.approvalFingerprint });
+
+  const results = await Promise.allSettled([
+    createAdministration().arm({ ...input, operatorPurpose: "PostgreSQL concurrent left" }),
+    createAdministration().arm({ ...input, operatorPurpose: "PostgreSQL concurrent right" }),
+  ]);
+  const fulfilled = results.filter((result) => result.status === "fulfilled");
+  const rejected = results.filter((result) => result.status === "rejected");
+  assert.equal(fulfilled.length, 1);
+  assert.equal(rejected.length, 1);
+  assert.match(String(rejected[0].reason), /RESPONSE_EXECUTION_(ACTIVE|PREFLIGHT_BLOCKED)/);
+  const armed = fulfilled[0].value;
+  assert.equal(armed.attemptNumber, 2);
+  assert.equal(armed.historyCount, 1);
+  const status = await administration.status({
+    ...scope,
+    approvalFingerprint: armed.approvalFingerprint,
+  });
+  assertArmMatchesStatus(armed, status);
+  const snapshot = await responseExecutionStore.loadSnapshot(scope);
+  assert.equal(snapshot?.invalid, false);
+  assert.equal(snapshot?.history.length, 1);
+  assert.equal(snapshot?.current.attemptNumber, 2);
 });

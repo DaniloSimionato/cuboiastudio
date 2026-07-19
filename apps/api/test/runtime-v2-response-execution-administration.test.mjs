@@ -175,6 +175,24 @@ function preflightInput(overrides = {}) {
   };
 }
 
+function assertArmMatchesCurrentStatus(armed, status) {
+  for (const field of [
+    "approvalFingerprint",
+    "executionFingerprint",
+    "attemptNumber",
+    "historyCount",
+    "canonicalHashFingerprint",
+    "canonicalVersion",
+    "allowedCategory",
+    "allowedAuthority",
+    "status",
+    "activeExecution",
+    "canArmNewResponseExecution",
+  ]) {
+    assert.equal(armed[field], status[field], `arm/status mismatch for ${field}`);
+  }
+}
+
 test("gate de segurança V2 permite regra ativa compatível e bloqueia regras operacionais", () => {
   const allowed = evaluateV2PrimarySecurityRules([securityRule()]);
   assert.equal(allowed.allowed, true);
@@ -319,6 +337,8 @@ test("arm blocks an active attempt, archives a terminal one, and preserves its i
     approvalFingerprint: armed.approvalFingerprint,
   });
   assert.equal(byFingerprint.status, "ARMED");
+  assert.equal(armed.historyCount, 0);
+  assertArmMatchesCurrentStatus(armed, byFingerprint);
   await assert.rejects(
     () =>
       administration.arm({
@@ -347,11 +367,17 @@ test("arm blocks an active attempt, archives a terminal one, and preserves its i
   });
   assert.equal(rearmed.status, "ARMED");
   assert.equal(rearmed.attemptNumber, 2);
+  assert.equal(rearmed.historyCount, 1);
   const snapshot = await responseExecutionStore.loadSnapshot({ ...scope, contextVersion: 1 });
   assert.equal(snapshot?.history.length, 1);
   assert.equal(snapshot?.history[0].approval.approvalId, record?.approval.approvalId);
   assert.equal(snapshot?.history[0].approval.status, "CANCELLED");
   assert.notEqual(snapshot?.current.executionId, snapshot?.history[0].executionId);
+  const rearmedStatus = await administration.status({
+    ...scope,
+    approvalFingerprint: rearmed.approvalFingerprint,
+  });
+  assertArmMatchesCurrentStatus(rearmed, rearmedStatus);
   const historical = await administration.status({
     ...scope,
     approvalFingerprint: armed.approvalFingerprint,
@@ -374,6 +400,12 @@ test("arm blocks an active attempt, archives a terminal one, and preserves its i
     operatorPurpose: "terceira tentativa terminal",
   });
   assert.equal(third.attemptNumber, 3);
+  assert.equal(third.historyCount, 2);
+  const thirdStatus = await administration.status({
+    ...scope,
+    approvalFingerprint: third.approvalFingerprint,
+  });
+  assertArmMatchesCurrentStatus(third, thirdStatus);
   const current = await responseExecutionStore.load({ ...scope, contextVersion: 1 });
   const claim = await coordinator.claim({
     ...scope,
@@ -409,6 +441,7 @@ test("legacy terminal record migrates atomically and malformed state fails close
     operatorPurpose: "legacy rearm",
   });
   assert.equal(rearmed.attemptNumber, 2);
+  assert.equal(rearmed.historyCount, 1);
   const migrated = await stateStore.load({
     ...scope,
     contextVersion: 1,
@@ -419,6 +452,11 @@ test("legacy terminal record migrates atomically and malformed state fails close
   assert.equal(snapshot.invalid, false);
   assert.equal(snapshot.history.length, 1);
   assert.equal(snapshot.history[0].approval.status, "CANCELLED");
+  const rearmedStatus = await administration.status({
+    ...scope,
+    approvalFingerprint: rearmed.approvalFingerprint,
+  });
+  assertArmMatchesCurrentStatus(rearmed, rearmedStatus);
   const malformed = {
     ...migrated,
     revision: migrated.revision + 1,
@@ -529,12 +567,18 @@ test("arm falha fechado e cancela a approval se a releitura divergir do hash can
       return result;
     }
 
-    async load(input) {
-      const result = await super.load(input);
-      if (!this.corruptReads || !result) return result;
+    async loadSnapshot(input) {
+      const result = await super.loadSnapshot(input);
+      if (!this.corruptReads || !result?.current) return result;
       return {
         ...result,
-        approval: { ...result.approval, expectedCanonicalComparisonHash: "mismatched-hash" },
+        current: {
+          ...result.current,
+          approval: {
+            ...result.current.approval,
+            expectedCanonicalComparisonHash: "mismatched-hash",
+          },
+        },
       };
     }
 
