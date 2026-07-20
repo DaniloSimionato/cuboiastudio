@@ -49,6 +49,8 @@ export type RuntimeV2ResponseExecutionPreflightInput =
     canonicalVersion: string;
     allowedCategory: "businessHours";
     allowedAuthority: "OFFICIAL_CONTEXT";
+    /** Excludes an inbound already persisted before its semantic decision is rebuilt. */
+    currentInboundMessageId?: string;
   };
 
 export type RuntimeV2ResponseExecutionPreflightResult = {
@@ -122,6 +124,8 @@ export type RuntimeV2ResponseExecutionPreflightResult = {
 export type RuntimeV2ResponseExecutionArmInput = RuntimeV2ResponseExecutionPreflightInput & {
   durationMinutes: number;
   operatorPurpose: string;
+  approvalSource?: "MANUAL" | "AUTO_SINGLE_USE";
+  expectedCanonicalComparisonHash?: string;
 };
 
 export type RuntimeV2ResponseExecutionStatusInput =
@@ -434,6 +438,9 @@ export class RuntimeV2ResponseExecutionAdministrationService {
               assistantId: input.assistantId,
               conversationId: input.conversationId,
               contextVersion: contextVersion ?? 1,
+              ...(input.currentInboundMessageId
+                ? { id: { not: input.currentInboundMessageId } }
+                : {}),
             },
             orderBy: [{ createdAt: "desc" }, { id: "desc" }],
             take: 6,
@@ -657,6 +664,18 @@ export class RuntimeV2ResponseExecutionAdministrationService {
     }
     const canonicalHash = preflightEvaluation.canonicalComparisonHash;
     if (!canonicalHash) throw new Error("RESPONSE_EXECUTION_CANONICAL_HASH_REQUIRED");
+    if (
+      input.expectedCanonicalComparisonHash !== undefined &&
+      input.expectedCanonicalComparisonHash !== canonicalHash
+    ) {
+      throw new Error("RESPONSE_EXECUTION_CANONICAL_HASH_MISMATCH");
+    }
+    if (
+      input.approvalSource === "AUTO_SINGLE_USE" &&
+      (!input.currentInboundMessageId || !input.expectedCanonicalComparisonHash)
+    ) {
+      throw new Error("RESPONSE_EXECUTION_AUTO_APPROVAL_IDENTITY_REQUIRED");
+    }
     const approval = createRuntimeV2ResponseExecutionApproval({
       companyId: input.companyId,
       assistantId: input.assistantId,
@@ -688,6 +707,9 @@ export class RuntimeV2ResponseExecutionAdministrationService {
           ? "STANDARD_COMPATIBLE"
           : null,
       declarativeContextFingerprint: preflight.declarativeContextFingerprint,
+      internalMessageId:
+        input.approvalSource === "AUTO_SINGLE_USE" ? input.currentInboundMessageId : null,
+      approvalSource: input.approvalSource ?? "MANUAL",
       now: this.now(),
     });
     if (approval.expectedCanonicalComparisonHash !== canonicalHash) {
@@ -709,7 +731,9 @@ export class RuntimeV2ResponseExecutionAdministrationService {
       persistedSnapshot.invalid ||
       !persisted ||
       persisted.approval.approvalId !== armed.approval.approvalId ||
-      persisted.approval.expectedCanonicalComparisonHash !== canonicalHash
+      persisted.approval.expectedCanonicalComparisonHash !== canonicalHash ||
+      persisted.approval.internalMessageId !== armed.approval.internalMessageId ||
+      persisted.approval.approvalSource !== armed.approval.approvalSource
     ) {
       const cancelled = await this.dependencies.coordinator.cancel({
         companyId: input.companyId,

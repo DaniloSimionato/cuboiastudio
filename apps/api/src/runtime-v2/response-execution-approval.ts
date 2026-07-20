@@ -26,8 +26,8 @@ export type RuntimeV2ResponseExecutionApproval = {
   semanticDecisionVersion?: string;
   expectedSemanticDecisionFingerprint?: string;
   expectedIntent?: "ask_business_hours";
-  contextResolutionVersion?: string;
-  expectedContextFingerprint?: string;
+  contextResolutionVersion?: string | null;
+  expectedContextFingerprint?: string | null;
   expectedAntecedentFingerprint?: string | null;
   expectedAntecedentCategory?: "businessHours" | null;
   expectedAntecedentIntent?: "ask_business_hours" | null;
@@ -40,6 +40,7 @@ export type RuntimeV2ResponseExecutionApproval = {
   consumedAt: string | null;
   generationId: string | null;
   internalMessageId: string | null;
+  approvalSource: "MANUAL" | "AUTO_SINGLE_USE";
   creationFingerprint: string;
   operatorPurpose: string;
   securityRulesFingerprint?: string | null;
@@ -72,8 +73,8 @@ export function createRuntimeV2ResponseExecutionApproval(input: {
   semanticDecisionVersion?: string;
   expectedSemanticDecisionFingerprint?: string;
   expectedIntent?: "ask_business_hours";
-  contextResolutionVersion?: string;
-  expectedContextFingerprint?: string;
+  contextResolutionVersion?: string | null;
+  expectedContextFingerprint?: string | null;
   expectedAntecedentFingerprint?: string | null;
   expectedAntecedentCategory?: "businessHours" | null;
   expectedAntecedentIntent?: "ask_business_hours" | null;
@@ -90,6 +91,8 @@ export function createRuntimeV2ResponseExecutionApproval(input: {
   expectedFlowMatchType?: "KEYWORD_SCORED" | "EXPLICIT_RUNTIME_SCOPE" | null;
   flowCompatibility?: "STANDARD_COMPATIBLE" | null;
   declarativeContextFingerprint?: string | null;
+  internalMessageId?: string | null;
+  approvalSource?: "MANUAL" | "AUTO_SINGLE_USE";
   now?: Date;
 }): RuntimeV2ResponseExecutionApproval {
   const now = input.now ?? new Date();
@@ -116,7 +119,8 @@ export function createRuntimeV2ResponseExecutionApproval(input: {
     claimedAt: null,
     consumedAt: null,
     generationId: null,
-    internalMessageId: null,
+    internalMessageId: input.internalMessageId ?? null,
+    approvalSource: input.approvalSource ?? "MANUAL",
     creationFingerprint: fingerprint(
       `${approvalId}:${input.companyId}:${input.assistantId}:${input.conversationId}:${input.expectedCanonicalComparisonHash}`,
     ),
@@ -204,6 +208,8 @@ export function claimRuntimeV2ResponseExecution(input: {
     return { allowed: false, reason: "APPROVAL_SCOPE_MISMATCH", owner: "V1_OWNED" };
   if (approval.expectedCanonicalComparisonHash !== input.canonicalComparisonHash)
     return { allowed: false, reason: "APPROVAL_HASH_MISMATCH", owner: "V1_OWNED" };
+  if (approval.internalMessageId !== null && approval.internalMessageId !== input.internalMessageId)
+    return { allowed: false, reason: "APPROVAL_INBOUND_MISMATCH", owner: "V1_OWNED" };
   return {
     allowed: true,
     owner: "V2_OWNED",

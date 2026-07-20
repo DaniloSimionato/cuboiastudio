@@ -516,3 +516,18 @@ export function assertNoDualOutbound(input: {
     throw new Error("RUNTIME_V2_OUTBOUND_BLOCKED_WHEN_V1_ACTIVE");
   }
 }
+
+export type RuntimeV2ResponseExecutionApprovalMode = "MANUAL" | "AUTO_SINGLE_USE" | "INVALID";
+
+export function resolveRuntimeV2ResponseExecutionApprovalMode(
+  environment: NodeJS.ProcessEnv = process.env,
+): RuntimeV2ResponseExecutionApprovalMode {
+  const value = environment.RUNTIME_V2_RESPONSE_EXECUTION_APPROVAL_MODE;
+  if (!value || value === "MANUAL") {
+    return "MANUAL";
+  }
+  if (value === "AUTO_SINGLE_USE") {
+    return "AUTO_SINGLE_USE";
+  }
+  return "INVALID";
+}

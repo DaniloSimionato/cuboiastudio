@@ -21,6 +21,7 @@ import type {
 } from "./v2-primary-response-executor";
 import type { FlowApplicabilityEvaluation } from "./flow-applicability-evaluator";
 import type { ResponseExecutionSemanticDecision } from "../runtime-v2/response-execution-intent";
+import type { RuntimeV2ResponseExecutionAdministrationService } from "../runtime-v2/response-execution-administration";
 
 export type ResponseGenerationRoute = ResponseExecutionEnvelope["route"];
 export type ResponseGenerationRouterTurn = ResponseExecutionTurn;
@@ -43,6 +44,8 @@ export type ResponseGenerationRouterInput = {
   revalidateV2Flow?: () => Promise<FlowApplicabilityEvaluation | null>;
   /** Runtime-primary context is constructed only after V1's basic gates. */
   v2PrimaryContext?: V2PrimaryResponseExecutionContext;
+  messageText?: string;
+  approvalMode?: unknown;
 };
 
 export type ResponseGenerationDeferredResult = {
@@ -60,11 +63,36 @@ export type ResponseGenerationRouterDependencies = {
   executeV1(input: V1ResponseGenerationExecutorInput): Promise<V1GeneratedResponse>;
   coordinator?: RuntimeV2ResponseExecutionCoordinator;
   v2Executor?: V2PrimaryResponseExecutor;
+  administration?: RuntimeV2ResponseExecutionAdministrationService;
 };
 
 const defaultDependencies: ResponseGenerationRouterDependencies = {
   executeV1: (input) => new V1ResponseGenerationExecutor().execute(input),
 };
+
+function contextApprovalState(
+  approval: RuntimeV2ResponseExecutionApproval,
+): "LEGACY" | "VERSIONED" | "INVALID" {
+  const allFieldsAreNullish =
+    approval.contextResolutionVersion == null &&
+    approval.expectedContextFingerprint == null &&
+    approval.expectedAntecedentFingerprint == null &&
+    approval.expectedAntecedentCategory == null &&
+    approval.expectedAntecedentIntent == null &&
+    approval.contextualResolution == null;
+  if (allFieldsAreNullish) return "LEGACY";
+  if (
+    approval.contextResolutionVersion != null &&
+    approval.expectedContextFingerprint != null &&
+    approval.expectedAntecedentFingerprint !== undefined &&
+    approval.expectedAntecedentCategory !== undefined &&
+    approval.expectedAntecedentIntent !== undefined &&
+    typeof approval.contextualResolution === "boolean"
+  ) {
+    return "VERSIONED";
+  }
+  return "INVALID";
+}
 
 function resolveDefaultDenyReason(
   input: ResponseGenerationRouterInput,
@@ -140,29 +168,157 @@ export class ResponseGenerationRouter {
       return this.executeV1Normal(input);
     }
 
-    const currentFlow = await this.currentFlowEvaluation(input);
+    let currentFlow = await this.currentFlowEvaluation(input);
+    const approvalMode =
+      input.approvalMode === "AUTO_SINGLE_USE"
+        ? "AUTO_SINGLE_USE"
+        : input.approvalMode === "MANUAL" || input.approvalMode == null
+          ? "MANUAL"
+          : "INVALID";
     if (!this.isCurrentFlowEligible(input, currentFlow)) return this.executeV1Normal(input);
 
-    const approval = await this.dependencies.coordinator.loadApproval(input.turn);
-    if (!approval) return this.executeV1Normal(input);
+    if (approvalMode === "INVALID") {
+      return this.executeV1Normal(input, "AUTO_APPROVAL_MODE_INVALID");
+    }
+
+    let approval = await this.dependencies.coordinator.loadApproval(input.turn);
+
+    if (!approval && approvalMode === "AUTO_SINGLE_USE") {
+      // Validar restrições estritas do primeiro escopo suportado
+      const flowEval = input.v2Eligibility?.flowEvaluation;
+      if (
+        !flowEval ||
+        flowEval.flowRuntimeScope !== "V2_CONTROLLED" ||
+        flowEval.explicitRuntimeCategory !== "businessHours" ||
+        flowEval.explicitRuntimeIntent !== "ask_business_hours" ||
+        flowEval.explicitRuntimeAuthority !== "OFFICIAL_CONTEXT" ||
+        flowEval.runtimeDirectOnly !== true ||
+        flowEval.flowScopeCompatibility !== "EXPLICIT_V2_MATCH" ||
+        input.v2Eligibility?.semanticDecision?.contextualResolution !== false ||
+        flowEval.requiresHuman ||
+        flowEval.toolRequired ||
+        flowEval.handoffRequired ||
+        flowEval.fixedMessageApplicable ||
+        flowEval.autoRespond === false
+      ) {
+        return this.executeV1Normal(input, "AUTO_APPROVAL_FLOW_INELIGIBLE");
+      }
+
+      if (!input.turn.canonicalComparisonHash || !input.turn.internalMessageId) {
+        return this.executeV1Normal(input, "AUTO_APPROVAL_IDENTITY_UNAVAILABLE");
+      }
+
+      if (!this.dependencies.administration) {
+        return this.executeV1Normal(input, "AUTO_APPROVAL_PREFLIGHT_BLOCKED");
+      }
+
+      // Reutilizar validações puras de preflight
+      const preflight = await this.dependencies.administration.preflight({
+        companyId: input.turn.companyId,
+        assistantId: input.turn.assistantId,
+        conversationId: input.turn.conversationId,
+        message: input.messageText ?? "",
+        canonicalVersion: input.turn.canonicalVersion,
+        allowedCategory: "businessHours",
+        allowedAuthority: "OFFICIAL_CONTEXT",
+        currentInboundMessageId: input.turn.internalMessageId,
+      });
+
+      if (!preflight.executionConfiguration.scopeEligibility) {
+        return this.executeV1Normal(input, "AUTO_APPROVAL_SCOPE_BLOCKED");
+      }
+
+      if (preflight.preflightStatus !== "APPROVED") {
+        return this.executeV1Normal(input, "AUTO_APPROVAL_PREFLIGHT_BLOCKED");
+      }
+
+      if (preflight.officialContextStatus !== "AVAILABLE") {
+        return this.executeV1Normal(input, "AUTO_APPROVAL_CONTEXT_UNAVAILABLE");
+      }
+      if (
+        preflight.resolvedCategory !== "businessHours" ||
+        preflight.resolvedIntent !== "ask_business_hours" ||
+        preflight.contextualResolution !== false
+      ) {
+        return this.executeV1Normal(input, "AUTO_APPROVAL_PREFLIGHT_BLOCKED");
+      }
+
+      // Armar approval de forma idempotente
+      try {
+        await this.dependencies.administration.arm({
+          companyId: input.turn.companyId,
+          assistantId: input.turn.assistantId,
+          conversationId: input.turn.conversationId,
+          message: input.messageText ?? "",
+          canonicalVersion: input.turn.canonicalVersion,
+          allowedCategory: "businessHours",
+          allowedAuthority: "OFFICIAL_CONTEXT",
+          currentInboundMessageId: input.turn.internalMessageId,
+          expectedCanonicalComparisonHash: input.turn.canonicalComparisonHash,
+          approvalSource: "AUTO_SINGLE_USE",
+          durationMinutes: 5, // Curta validade (ex: 5 minutos)
+          operatorPurpose: "AUTO_SINGLE_USE_EXPLICIT_V2_INBOUND",
+        });
+
+        // Carregar a approval recém-criada
+        approval = await this.dependencies.coordinator.loadApproval(input.turn);
+        if (!approval) {
+          return this.executeV1Normal(input, "AUTO_APPROVAL_CLAIM_FAILED");
+        }
+        currentFlow = await this.currentFlowEvaluation(input);
+        if (!this.isCurrentFlowEligible(input, currentFlow)) {
+          await this.cancelAutomaticApproval(input, approval);
+          return this.executeV1Normal(input, "AUTO_APPROVAL_FLOW_INELIGIBLE");
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "";
+        if (msg.includes("RESPONSE_EXECUTION_ACTIVE")) {
+          // A concurrent worker might have already created it! Try reloading first
+          approval = await this.dependencies.coordinator.loadApproval(input.turn);
+          if (!approval) {
+            return this.executeV1Normal(input, "AUTO_APPROVAL_CREATE_CONFLICT");
+          }
+        } else {
+          return this.executeV1Normal(input, "AUTO_APPROVAL_PREFLIGHT_BLOCKED");
+        }
+      }
+    }
+
+    if (!approval) {
+      return this.executeV1Normal(input);
+    }
+    if (!this.isCurrentFlowEligible(input, currentFlow)) {
+      await this.cancelAutomaticApproval(input, approval);
+      return this.executeV1Normal(input, "AUTO_APPROVAL_FLOW_INELIGIBLE");
+    }
+    if (
+      approval.approvalSource === "AUTO_SINGLE_USE" &&
+      approval.internalMessageId !== input.turn.internalMessageId
+    ) {
+      return this.executeV1Normal(input, "AUTO_APPROVAL_IDENTITY_UNAVAILABLE");
+    }
+
     const semanticDecision = input.v2Eligibility?.semanticDecision;
     if (
       approval.semanticDecisionVersion !== semanticDecision?.version ||
       approval.expectedSemanticDecisionFingerprint !== semanticDecision?.fingerprint ||
       approval.expectedIntent !== semanticDecision?.intent
     ) {
+      await this.cancelAutomaticApproval(input, approval);
       return this.executeV1Normal(input, "RESPONSE_EXECUTION_SEMANTIC_MISMATCH");
     }
-    const approvalHasVersionedContext = approval.contextResolutionVersion !== undefined;
+    const approvalContextState = contextApprovalState(approval);
     if (
-      approvalHasVersionedContext &&
-      (approval.contextResolutionVersion !== semanticDecision?.contextResolutionVersion ||
-        approval.expectedContextFingerprint !== semanticDecision?.contextFingerprint ||
-        approval.expectedAntecedentFingerprint !== semanticDecision?.antecedentFingerprint ||
-        approval.expectedAntecedentCategory !== semanticDecision?.antecedentCategory ||
-        approval.expectedAntecedentIntent !== semanticDecision?.antecedentIntent ||
-        approval.contextualResolution !== semanticDecision?.contextualResolution)
+      approvalContextState === "INVALID" ||
+      (approvalContextState === "VERSIONED" &&
+        (approval.contextResolutionVersion !== semanticDecision?.contextResolutionVersion ||
+          approval.expectedContextFingerprint !== semanticDecision?.contextFingerprint ||
+          approval.expectedAntecedentFingerprint !== semanticDecision?.antecedentFingerprint ||
+          approval.expectedAntecedentCategory !== semanticDecision?.antecedentCategory ||
+          approval.expectedAntecedentIntent !== semanticDecision?.antecedentIntent ||
+          approval.contextualResolution !== semanticDecision?.contextualResolution))
     ) {
+      await this.cancelAutomaticApproval(input, approval);
       return this.executeV1Normal(input, "RESPONSE_EXECUTION_CONTEXT_MISMATCH");
     }
     if (
@@ -183,6 +339,7 @@ export class ResponseGenerationRouter {
         (currentFlow.v2Compatibility === "ALLOWED_WITH_FLOW_CONTEXT") ||
       Date.parse(approval.expiresAt) <= Date.now()
     ) {
+      await this.cancelAutomaticApproval(input, approval);
       return this.executeV1Normal(input);
     }
 
@@ -190,7 +347,16 @@ export class ResponseGenerationRouter {
       ...input.turn,
       approval,
     });
-    if (claimed.status !== "CLAIMED") return this.deferred(claimed);
+    if (claimed.status !== "CLAIMED") {
+      if (claimed.status === "PENDING_OR_TERMINAL") {
+        return this.deferred(claimed);
+      }
+      if (approvalMode === "AUTO_SINGLE_USE") {
+        return this.executeV1Normal(input, "AUTO_APPROVAL_CLAIM_FAILED");
+      }
+      return this.deferred(claimed);
+    }
+
     const flowAfterClaim = await this.currentFlowEvaluation(input);
     if (!this.isCurrentFlowEligible(input, flowAfterClaim)) {
       return this.executeV1Fallback(
@@ -260,13 +426,37 @@ export class ResponseGenerationRouter {
       | "EXECUTION_SCOPE_EMPTY"
       | "V2_EXECUTION_NOT_CONNECTED"
       | "RESPONSE_EXECUTION_SEMANTIC_MISMATCH"
-      | "RESPONSE_EXECUTION_CONTEXT_MISMATCH" = resolveDefaultDenyReason(input),
+      | "RESPONSE_EXECUTION_CONTEXT_MISMATCH"
+      | "AUTO_APPROVAL_MODE_INVALID"
+      | "AUTO_APPROVAL_SCOPE_BLOCKED"
+      | "AUTO_APPROVAL_FLOW_INELIGIBLE"
+      | "AUTO_APPROVAL_PREFLIGHT_BLOCKED"
+      | "AUTO_APPROVAL_CONTEXT_UNAVAILABLE"
+      | "AUTO_APPROVAL_IDENTITY_UNAVAILABLE"
+      | "AUTO_APPROVAL_CREATE_CONFLICT"
+      | "AUTO_APPROVAL_CLAIM_FAILED" = resolveDefaultDenyReason(input),
   ): Promise<ResponseGenerationRouterResult> {
     const response = await this.dependencies.executeV1(input.v1Input);
     return createV1NormalResponseExecutionEnvelope({
       turn: input.turn,
       response,
       reason,
+    });
+  }
+
+  private async cancelAutomaticApproval(
+    input: ResponseGenerationRouterInput,
+    approval: RuntimeV2ResponseExecutionApproval,
+  ): Promise<void> {
+    if (
+      approval.approvalSource !== "AUTO_SINGLE_USE" ||
+      approval.internalMessageId !== input.turn.internalMessageId
+    ) {
+      return;
+    }
+    await this.dependencies.coordinator?.cancel({
+      ...input.turn,
+      approvalFingerprint: approval.creationFingerprint.slice(0, 16),
     });
   }
 

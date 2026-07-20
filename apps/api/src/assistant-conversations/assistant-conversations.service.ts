@@ -128,7 +128,9 @@ import {
   resolveRuntimeV2ResponseExecutionConversationIds,
   resolveRuntimeV2ResponseExecutionMode,
   resolveRuntimeV2ResponseExecutionConversationScope,
+  resolveRuntimeV2ResponseExecutionApprovalMode,
 } from "../runtime-v2/runtime-v2-feature-flag";
+
 import {
   ResponseTailLifecycleHooks,
   type ResponseTailOutboundState,
@@ -4148,6 +4150,8 @@ export class AssistantConversationsService {
             executionAssistantIds: resolveRuntimeV2ResponseExecutionAssistantIds(),
             executionConversationIds: resolveRuntimeV2ResponseExecutionConversationIds(),
             executionConversationScope: resolveRuntimeV2ResponseExecutionConversationScope(),
+            approvalMode: resolveRuntimeV2ResponseExecutionApprovalMode(),
+            messageText: input.dto.message ?? "",
             v2Eligibility,
             revalidateV2Flow,
             v2PrimaryContext,

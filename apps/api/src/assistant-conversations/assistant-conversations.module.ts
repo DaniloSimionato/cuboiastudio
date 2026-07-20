@@ -33,6 +33,9 @@ import {
   RuntimeV2PrimaryResponseExecutor,
   V2_PRIMARY_RESPONSE_EXECUTOR,
 } from "./v2-primary-response-executor";
+import { PrismaService } from "../database/prisma.service";
+import { AssistantSecurityRulesService } from "../assistant-security-rules/assistant-security-rules.service";
+import { RuntimeV2ResponseExecutionAdministrationService } from "../runtime-v2/response-execution-administration";
 
 @Module({
   imports: [
@@ -79,18 +82,49 @@ import {
       inject: [RuntimeV2CandidateResponseProvider, PromptCompilerService],
     },
     {
+      provide: RuntimeV2ResponseExecutionAdministrationService,
+      useFactory: (
+        prisma: PrismaService,
+        stateStore: InMemoryConversationStateStore | PrismaConversationStateStore,
+        responseExecutionStore: ConversationStateResponseExecutionStore,
+        securityRules: AssistantSecurityRulesService,
+        coordinator: RuntimeV2ResponseExecutionCoordinator,
+      ) =>
+        new RuntimeV2ResponseExecutionAdministrationService({
+          prisma,
+          stateStore,
+          responseExecutionStore,
+          securityRules,
+          coordinator,
+        }),
+      inject: [
+        PrismaService,
+        RUNTIME_V2_STATE_STORE,
+        ConversationStateResponseExecutionStore,
+        AssistantSecurityRulesService,
+        RuntimeV2ResponseExecutionCoordinator,
+      ],
+    },
+    {
       provide: ResponseGenerationRouter,
       useFactory: (
         coordinator: RuntimeV2ResponseExecutionCoordinator,
         v2Executor: RuntimeV2PrimaryResponseExecutor,
+        administration: RuntimeV2ResponseExecutionAdministrationService,
       ) =>
         new ResponseGenerationRouter({
           executeV1: async (input) => new V1ResponseGenerationExecutor().execute(input),
           coordinator,
           v2Executor,
+          administration,
         }),
-      inject: [RuntimeV2ResponseExecutionCoordinator, V2_PRIMARY_RESPONSE_EXECUTOR],
+      inject: [
+        RuntimeV2ResponseExecutionCoordinator,
+        V2_PRIMARY_RESPONSE_EXECUTOR,
+        RuntimeV2ResponseExecutionAdministrationService,
+      ],
     },
+
     {
       provide: RUNTIME_V2_STATE_STORE,
       useFactory: (

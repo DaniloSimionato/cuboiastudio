@@ -78,6 +78,7 @@ function createAdministration(overrides = {}) {
   const coordinator =
     overrides.coordinator ??
     new RuntimeV2ResponseExecutionCoordinator({ store: responseExecutionStore });
+  const historyQueries = [];
   const company = { id: scope.companyId, name: "Empresa", timezone: "America/Sao_Paulo" };
   const assistant = {
     id: scope.assistantId,
@@ -138,7 +139,10 @@ function createAdministration(overrides = {}) {
       },
     },
     assistantConversationMessage: {
-      findMany: async () => overrides.recentHistory ?? [],
+      findMany: async (query) => {
+        historyQueries.push(query);
+        return overrides.recentHistory ?? [];
+      },
     },
     assistantFlow: { findMany: async () => overrides.flows ?? [] },
     assistantToolConfig: { count: async () => overrides.enabledToolCount ?? 0 },
@@ -170,7 +174,7 @@ function createAdministration(overrides = {}) {
     coordinator,
     environment: overrides.environment ?? {},
   });
-  return { administration, responseExecutionStore, coordinator };
+  return { administration, responseExecutionStore, coordinator, historyQueries };
 }
 
 function preflightInput(overrides = {}) {
@@ -201,6 +205,48 @@ function assertArmMatchesCurrentStatus(armed, status) {
     assert.equal(armed[field], status[field], `arm/status mismatch for ${field}`);
   }
 }
+
+test("automatic arm binds the exact inbound and excludes it from the rebuilt context", async () => {
+  const message = "Qual é o horário de atendimento?";
+  const currentInboundMessageId = "persisted-inbound-auto";
+  const { administration, responseExecutionStore, historyQueries } = createAdministration({
+    flows: [
+      flow({
+        runtimeScope: "V2_CONTROLLED",
+        runtimeCategory: "businessHours",
+        runtimeIntent: "ask_business_hours",
+        runtimeAuthority: "OFFICIAL_CONTEXT",
+        runtimeDirectOnly: true,
+        triggerKeywords: '["horário"]',
+      }),
+    ],
+    environment: {
+      RUNTIME_V2_RESPONSE_EXECUTION_MODE: "CONTROLLED",
+      RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE: "EXPLICIT_CONVERSATIONS",
+      RUNTIME_V2_RESPONSE_EXECUTION_ASSISTANT_IDS: scope.assistantId,
+      RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS: scope.conversationId,
+    },
+  });
+  const expectedCanonicalComparisonHash =
+    canonicalizeInboundMessageForComparison(message).canonicalComparisonHash;
+
+  await administration.arm({
+    ...preflightInput({ message, currentInboundMessageId }),
+    durationMinutes: 5,
+    operatorPurpose: "automatic inbound test",
+    approvalSource: "AUTO_SINGLE_USE",
+    expectedCanonicalComparisonHash,
+  });
+
+  const record = await responseExecutionStore.load({ ...scope, contextVersion: 1 });
+  assert.equal(record.approval.approvalSource, "AUTO_SINGLE_USE");
+  assert.equal(record.approval.internalMessageId, currentInboundMessageId);
+  assert.equal(record.approval.expectedCanonicalComparisonHash, expectedCanonicalComparisonHash);
+  assert.ok(
+    historyQueries.every((query) => query.where.id?.not === currentInboundMessageId),
+    "preflight and arm must exclude the already-persisted inbound before their history limit",
+  );
+});
 
 test("gate de segurança V2 permite regra ativa compatível e bloqueia regras operacionais", () => {
   const allowed = evaluateV2PrimarySecurityRules([securityRule()]);

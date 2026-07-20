@@ -48,6 +48,10 @@ function isRecord(value: unknown): value is ResponseExecutionRecord {
 function normalizeLegacyRecord(record: ResponseExecutionRecord): ResponseExecutionRecord {
   return {
     ...record,
+    approval: {
+      ...record.approval,
+      approvalSource: record.approval.approvalSource ?? "MANUAL",
+    },
     executionId: record.executionId || record.approval.approvalId,
     attemptNumber:
       Number.isInteger(record.attemptNumber) && record.attemptNumber > 0 ? record.attemptNumber : 1,

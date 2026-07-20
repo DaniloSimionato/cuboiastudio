@@ -59,7 +59,6 @@ export function isResponseExecutionTerminal(
   if (approvalIsExpired(record, now)) {
     return (
       record.owner === "V1_OWNED" &&
-      record.approval.internalMessageId === null &&
       record.approval.generationId === null &&
       !record.outboundV2Attempted &&
       !record.outboundV1Performed
@@ -69,7 +68,6 @@ export function isResponseExecutionTerminal(
     return (
       record.owner === "TERMINAL_BLOCKED" &&
       record.terminalStatus === "TERMINAL_BLOCKED" &&
-      record.approval.internalMessageId === null &&
       record.approval.generationId === null &&
       !record.outboundV2Attempted &&
       !record.outboundV1Performed
@@ -98,7 +96,6 @@ export function isResponseExecutionActive(
     return (
       record.owner === "V1_OWNED" &&
       record.terminalStatus === null &&
-      record.approval.internalMessageId === null &&
       record.approval.generationId === null &&
       !record.outboundV2Attempted &&
       !record.outboundV1Performed

@@ -55,7 +55,15 @@ export function createV1NormalResponseExecutionEnvelope(input: {
     | "EXECUTION_SCOPE_EMPTY"
     | "V2_EXECUTION_NOT_CONNECTED"
     | "RESPONSE_EXECUTION_SEMANTIC_MISMATCH"
-    | "RESPONSE_EXECUTION_CONTEXT_MISMATCH";
+    | "RESPONSE_EXECUTION_CONTEXT_MISMATCH"
+    | "AUTO_APPROVAL_MODE_INVALID"
+    | "AUTO_APPROVAL_SCOPE_BLOCKED"
+    | "AUTO_APPROVAL_FLOW_INELIGIBLE"
+    | "AUTO_APPROVAL_PREFLIGHT_BLOCKED"
+    | "AUTO_APPROVAL_CONTEXT_UNAVAILABLE"
+    | "AUTO_APPROVAL_IDENTITY_UNAVAILABLE"
+    | "AUTO_APPROVAL_CREATE_CONFLICT"
+    | "AUTO_APPROVAL_CLAIM_FAILED";
 }): ResponseExecutionEnvelope {
   const response = input.response ?? null;
   const responseText = input.responseText ?? response?.responseText ?? "";

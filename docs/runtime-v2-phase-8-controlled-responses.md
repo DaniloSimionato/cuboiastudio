@@ -520,3 +520,32 @@ O escopo de rollout de respostas controladas é governado pela variável de ambi
     4. Qualquer violação dessas regras falha fechada (fail-closed) com códigos de rejeição específicos (ex: `CONVERSATION_ALLOWLIST_NOT_EMPTY`, `ASSISTANT_NOT_ALLOWLISTED`, `INBOX_NOT_CONNECTED`).
 
 Esta mudança permite habilitar a V2 para todo o assistente da Heloísa de forma limpa, mantendo o controle centralizado de escopo e isolamento multi-tenant.
+
+## Approval automática single-use controlada
+
+`RUNTIME_V2_RESPONSE_EXECUTION_APPROVAL_MODE` permanece `MANUAL` por padrão:
+sem uma approval administrativa armada, o turno continua na V1. O modo opcional
+`AUTO_SINGLE_USE` só é avaliado durante a chegada de um novo inbound em escopo
+`CONTROLLED`; ele não consulta histórico no boot e não cria approval, provider ou
+sender retroativamente.
+
+Antes de criar a approval automática, o router revalida o flow e executa o mesmo
+preflight interno. A única combinação suportada é um flow declarativo explícito
+`V2_CONTROLLED` de `businessHours` / `ask_business_hours` /
+`OFFICIAL_CONTEXT`, com atendimento direto, sem knowledge, ferramentas, ações,
+handoff, mensagem fixa ou exigência humana. Follow-ups contextuais e qualquer
+combinação fora desse contrato continuam na V1.
+
+A approval automática tem `maxUses=1`, expira em cinco minutos e recebe o propósito
+sanitizado `AUTO_SINGLE_USE_EXPLICIT_V2_INBOUND`. Ela é vinculada ao hash canônico
+e ao `internalMessageId` do inbound que a criou; o preflight exclui esse inbound do
+histórico antes de aplicar a janela conversacional. A criação concorrente reutiliza
+somente a approval compatível já armada e o claim continua protegido por CAS.
+
+Contexto legado é aceito apenas quando todos os campos contextuais são nulos ou
+ausentes. Um contexto parcialmente persistido, ou qualquer diferença de versão,
+fingerprint ou antecedente, bloqueia antes do claim. Fingerprints opacos permanecem
+íntegros no `stateJson`; redaction ocorre apenas nas superfícies de observabilidade.
+
+Esta alteração é somente de código e testes locais: staging e a configuração real
+da Heloísa permanecem inalterados até um canário controlado posterior.
