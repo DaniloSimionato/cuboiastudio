@@ -7,6 +7,8 @@ import {
 } from "../dist/runtime-v2/index.js";
 import { buildOfficialBusinessContext } from "../dist/assistants/official-business-context.js";
 import { validateV1AnswerAuthority } from "../dist/assistant-conversations/runtime-authority-guard.js";
+import { ensureMultiIntentResponseCoverage } from "../dist/assistant-conversations/multi-intent-response-coverage.js";
+import { buildMultiIntentTurn } from "../dist/intent-router/intent-routing.js";
 
 const scope = {
   companyId: "authority-company",
@@ -311,6 +313,29 @@ test("guardião preserva reconhecimento secundário quando coleta ainda exige co
   assert.equal(result.replacementReason, null);
   assert.match(result.answer, /notebook não está ligando/i);
   assert.match(result.answer, /retirada/i);
+});
+
+test("composição final restaura cobertura determinística depois de substituição segura do guardião", () => {
+  const message = "Meu notebook não está ligando\nVocês fazem coleta?";
+  const guarded = validateV1AnswerAuthority({
+    answer: "A coleta está disponível para esse atendimento.",
+    currentMessage: message,
+    selectedFlowKey: "pickup_delivery",
+    sources: [],
+    officialBusinessContext: officialContext(),
+  });
+  const coverage = ensureMultiIntentResponseCoverage({
+    answer: guarded.answer,
+    turn: buildMultiIntentTurn({ message, selectedIntentKey: "pickup_delivery" }),
+    currentMessage: message,
+    officialBusinessContext: officialContext(),
+  });
+
+  assert.match(guarded.answer, /confirmar/i);
+  assert.match(coverage.answer, /notebook não está ligando/i);
+  assert.match(coverage.answer, /retirada|coleta/i);
+  assert.equal(coverage.coverage.deterministicAcknowledgementApplied, true);
+  assert.deepEqual(coverage.coverage.unresolvedRequests, ["technical_support"]);
 });
 
 test("proteção factual diferencia especificações do cliente de afirmações comerciais", () => {

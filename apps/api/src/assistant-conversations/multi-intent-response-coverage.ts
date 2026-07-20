@@ -12,6 +12,7 @@ export type MultiIntentResponseCoverage = {
   coveredRequests: ExplicitCustomerRequestKey[];
   unresolvedRequests: ExplicitCustomerRequestKey[];
   addedAcknowledgements: ExplicitCustomerRequestKey[];
+  deterministicAcknowledgementApplied: boolean;
 };
 
 function coversRequest(answer: string, request: ExplicitCustomerRequestKey): boolean {
@@ -66,6 +67,17 @@ export function ensureMultiIntentResponseCoverage(input: {
   officialBusinessContext: OfficialBusinessContext | null;
 }): { answer: string; coverage: MultiIntentResponseCoverage } {
   const explicitRequests = input.turn.explicitRequests;
+  if (explicitRequests.length < 2) {
+    return {
+      answer: input.answer,
+      coverage: {
+        coveredRequests: explicitRequests.filter((request) => coversRequest(input.answer, request)),
+        unresolvedRequests: input.turn.unresolvedRequests,
+        addedAcknowledgements: [],
+        deterministicAcknowledgementApplied: false,
+      },
+    };
+  }
   const initialCovered = explicitRequests.filter((request) => coversRequest(input.answer, request));
   const missing = explicitRequests.filter((request) => !initialCovered.includes(request));
   const acknowledgements = missing
@@ -82,8 +94,12 @@ export function ensureMultiIntentResponseCoverage(input: {
     answer,
     coverage: {
       coveredRequests,
-      unresolvedRequests: explicitRequests.filter((request) => !coveredRequests.includes(request)),
+      // Acknowledging a technical, pricing, or warranty request is intentionally
+      // not the same as resolving it. Keep the canonical pending set visible to
+      // the next turn without creating a broad memory record.
+      unresolvedRequests: input.turn.unresolvedRequests,
       addedAcknowledgements: acknowledgements.map((item) => item.request),
+      deterministicAcknowledgementApplied: acknowledgements.length > 0,
     },
   };
 }

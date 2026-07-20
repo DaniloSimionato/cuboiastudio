@@ -278,7 +278,12 @@ export type AssistantConversationRuntime = {
     inboundFragmentCount?: number;
     explicitRequestCount?: number;
     secondaryIntentCount?: number;
+    acknowledgedRequestCount?: number;
+    deterministicAcknowledgementApplied?: boolean;
     unresolvedRequestCount?: number;
+    providerCount?: number;
+    responseBlockCount?: number;
+    outboundCount?: number;
     triageFlowIncluded?: boolean;
     knownFieldKeys?: string[];
     pendingFieldKeys?: string[];
@@ -4391,36 +4396,6 @@ export class AssistantConversationsService {
       contextMetadata.requestedDetailChangeReason = "CUSTOMER_UNABLE_TO_PROVIDE_DETAIL";
     }
 
-    if (multiIntentTurn.explicitRequests.length > 1) {
-      const coverage = ensureMultiIntentResponseCoverage({
-        answer,
-        turn: multiIntentTurn,
-        currentMessage: customerIntentText,
-        officialBusinessContext,
-      });
-      answer = coverage.answer;
-      if (coverage.coverage.addedAcknowledgements.includes("business_hours")) {
-        sources = [
-          ...sources,
-          {
-            id: "official-structured-data",
-            title: "Dados oficiais da empresa",
-          },
-        ];
-      }
-      Object.assign(contextMetadata, {
-        responseCoverage: coverage.coverage.coveredRequests,
-        unresolvedRequests: coverage.coverage.unresolvedRequests,
-        unresolvedRequestCount: coverage.coverage.unresolvedRequests.length,
-      });
-      contextMetadata.contextManifest = {
-        ...contextMetadata.contextManifest,
-        responseCoverage: contextMetadata.responseCoverage,
-        unresolvedRequests: contextMetadata.unresolvedRequests,
-        unresolvedRequestCount: contextMetadata.unresolvedRequestCount,
-      };
-    }
-
     const expectedAuthority = deriveExpectedAuthorityCategory({
       currentMessage: customerIntentText,
       normalizedIntent: contextMetadata.detectedIntent,
@@ -4465,6 +4440,45 @@ export class AssistantConversationsService {
         },
       ];
     }
+
+    // This is the last deterministic composition step before the response is
+    // persisted and sent. It must run after the V1 authority guard because a
+    // safe guard replacement can otherwise discard a provider-independent
+    // acknowledgement of a secondary explicit request.
+    if (multiIntentTurn.explicitRequests.length > 1) {
+      const coverage = ensureMultiIntentResponseCoverage({
+        answer,
+        turn: multiIntentTurn,
+        currentMessage: customerIntentText,
+        officialBusinessContext,
+      });
+      answer = coverage.answer;
+      if (coverage.coverage.addedAcknowledgements.includes("business_hours")) {
+        sources = [
+          ...sources,
+          {
+            id: "official-structured-data",
+            title: "Dados oficiais da empresa",
+          },
+        ];
+      }
+      Object.assign(contextMetadata, {
+        responseCoverage: coverage.coverage.coveredRequests,
+        acknowledgedRequestCount: coverage.coverage.coveredRequests.length,
+        deterministicAcknowledgementApplied: coverage.coverage.deterministicAcknowledgementApplied,
+        unresolvedRequests: coverage.coverage.unresolvedRequests,
+        unresolvedRequestCount: coverage.coverage.unresolvedRequests.length,
+      });
+      contextMetadata.contextManifest = {
+        ...contextMetadata.contextManifest,
+        responseCoverage: contextMetadata.responseCoverage,
+        acknowledgedRequestCount: contextMetadata.acknowledgedRequestCount,
+        deterministicAcknowledgementApplied: contextMetadata.deterministicAcknowledgementApplied,
+        unresolvedRequests: contextMetadata.unresolvedRequests,
+        unresolvedRequestCount: contextMetadata.unresolvedRequestCount,
+      };
+    }
+
     responseExecutionEnvelope = {
       ...responseExecutionEnvelope,
       responseText: answer,
@@ -4558,6 +4572,10 @@ export class AssistantConversationsService {
       }),
     };
 
+    Object.assign(contextMetadata, {
+      providerCount: runtime.provider ? 1 : 0,
+    });
+
     let blocks = [answer];
     if (source === "chatwoot") {
       if (assistant.splitResponseStyle === "NATURAL_BLOCKS") {
@@ -4571,6 +4589,7 @@ export class AssistantConversationsService {
     }
     const outboundBlockCountPlanned = blocks.length;
     Object.assign(contextMetadata, {
+      responseBlockCount: blocks.length,
       outboundBlockCountPlanned,
       outboundBlockCountSent: 0,
       outboundBlockCount: 0,
@@ -4719,8 +4738,13 @@ export class AssistantConversationsService {
             secondaryIntents: runtime.context.secondaryIntents,
             explicitRequests: runtime.context.explicitRequests,
             responseCoverage: runtime.context.responseCoverage,
+            acknowledgedRequestCount: runtime.context.acknowledgedRequestCount,
+            deterministicAcknowledgementApplied:
+              runtime.context.deterministicAcknowledgementApplied,
             unresolvedRequestCount: runtime.context.unresolvedRequestCount,
             unresolvedRequests: runtime.context.unresolvedRequests,
+            providerCount: runtime.context.providerCount,
+            responseBlockCount: runtime.context.responseBlockCount,
             knowledgeCount: runtime.ragData?.usedKnowledge?.length ?? knowledgeItems.length,
             knowledgeLimit: runtime.context.knowledgeLimit,
             knowledgeChunkCount: runtime.context.knowledgeChunkCount,
@@ -4927,6 +4951,7 @@ export class AssistantConversationsService {
               typeof log.metadata === "string" ? JSON.parse(log.metadata) : log.metadata;
             const updatedMeta = {
               ...currentMeta,
+              outboundCount: blocksSent,
               outboundBlockCountSent: blocksSent,
               outboundBlockCount: blocksSent,
               outboundStatus: contextMetadata.outboundStatus,
@@ -4934,6 +4959,7 @@ export class AssistantConversationsService {
               externalMessageReferenceFingerprint,
               contextManifest: {
                 ...(currentMeta.contextManifest ?? {}),
+                outboundCount: blocksSent,
                 outboundStatus: contextMetadata.outboundStatus,
                 externalReferenceStatus,
                 externalMessageReferenceFingerprint,

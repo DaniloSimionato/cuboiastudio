@@ -872,6 +872,12 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
       "technical_support",
       "pickup_delivery",
     ]);
+    assert.equal(runtimeLog.metadata.acknowledgedRequestCount, 2);
+    assert.equal(runtimeLog.metadata.deterministicAcknowledgementApplied, true);
+    assert.equal(runtimeLog.metadata.unresolvedRequestCount, 1);
+    assert.equal(runtimeLog.metadata.providerCount, 1);
+    assert.equal(runtimeLog.metadata.responseBlockCount, 1);
+    assert.equal(runtimeLog.metadata.outboundCount, 1);
     assert.equal(runtimeLog.metadata.knowledgeLimit, 5);
     assert.equal(runtimeLog.metadata.contextManifest.initialMessageIncluded, false);
     assert.equal(runtimeLog.metadata.contextManifest.fallbackIncluded, false);

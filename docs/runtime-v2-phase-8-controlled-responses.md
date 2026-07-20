@@ -582,8 +582,19 @@ principal, as intenções secundárias, a quantidade de fragmentos e a cobertura
 resposta. O compilador exige que a resposta curta reconheça cada solicitação
 explícita antes de fazer no máximo uma pergunta de avanço.
 
-Não há novo router, provider, flow produtivo ou outbound para cada fragmento. Se
-o provider omitir uma solicitação explícita, o runtime acrescenta somente um
-reconhecimento seguro ou uma resposta de horário baseada no contexto estruturado.
-Afirmações de coleta ou retirada continuam fail-closed: "preciso confirmar" não
-é tratado como disponibilidade prometida pelo guardião de autoridade.
+Não há novo router, provider, flow produtivo ou outbound para cada fragmento. A
+composição determinística acontece depois do último guardião factual e antes da
+persistência/sender: assim, uma substituição segura feita pelo guardião não pode
+remover o reconhecimento de uma solicitação secundária. Para mais de uma
+solicitação explícita, o runtime acrescenta somente reconhecimentos fixos e
+sanitizados das categorias extraídas — sem repetir texto do cliente, diagnosticar,
+prometer coleta ou criar um segundo provider.
+
+A telemetria registra `acknowledgedRequestCount`,
+`deterministicAcknowledgementApplied`, `unresolvedRequestCount`, contagem de
+provider, blocos de resposta e outbounds. Reconhecer uma demanda técnica, preço
+ou garantia não a marca como resolvida: ela continua pendente no contexto do
+turno, sem criar uma memória ampla. Um turno com uma única solicitação preserva o
+estilo anterior e não recebe abertura artificial. Afirmações de coleta ou retirada
+continuam fail-closed: "preciso confirmar" não é tratado como disponibilidade
+prometida pelo guardião de autoridade.
