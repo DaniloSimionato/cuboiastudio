@@ -889,6 +889,11 @@ model AssistantFlow {
   allowedToolSlugs   String? // JSON array: ["calendar_check", "calendar_create"]
   knowledgeScope     String? // JSON array de knowledgeIds ou tags
   toolContext        Json? // Defaults/escopo estruturado por ferramenta
+  runtimeScope       String? // V1_ONLY | V2_CONTROLLED; null remains fail-closed for V2
+  runtimeCategory    String? // Explicit Runtime V2 category, currently businessHours only
+  runtimeIntent      String? // Explicit Runtime V2 intent, currently ask_business_hours only
+  runtimeAuthority   String? // Explicit Runtime V2 authority, currently OFFICIAL_CONTEXT only
+  runtimeDirectOnly  Boolean? // Explicit V2 scope must never capture contextual follow-ups
   finalAction        String?  @default("respond") // respond, handoff, fixed_message
   fixedMessage       String? // Mensagem fixa se finalAction=fixed_message
   handoffTeamId      String? // ID do time no Chatwoot

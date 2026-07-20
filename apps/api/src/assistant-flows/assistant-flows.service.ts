@@ -1,8 +1,9 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../database/prisma.service";
 import { CreateAssistantFlowDto } from "./dto/create-assistant-flow.dto";
 import { UpdateAssistantFlowDto } from "./dto/update-assistant-flow.dto";
+import { validateRuntimeV2FlowScope } from "./runtime-v2-flow-scope";
 
 @Injectable()
 export class AssistantFlowsService {
@@ -63,6 +64,7 @@ export class AssistantFlowsService {
       throw new NotFoundException("Assistente não encontrado.");
     }
 
+    this.assertValidRuntimeV2FlowScope(dto);
     return this.prisma.assistantFlow.create({
       data: this.toAssistantFlowCreateData(assistantId, dto),
     });
@@ -74,7 +76,8 @@ export class AssistantFlowsService {
     flowId: string,
     dto: UpdateAssistantFlowDto,
   ) {
-    await this.findOne(companyId, assistantId, flowId);
+    const existing = await this.findOne(companyId, assistantId, flowId);
+    this.assertValidRuntimeV2FlowScope({ ...existing, ...dto });
 
     return this.prisma.assistantFlow.update({
       where: {
@@ -126,6 +129,11 @@ export class AssistantFlowsService {
       toolContext: dto.toolContext
         ? (dto.toolContext as unknown as Prisma.InputJsonValue)
         : Prisma.JsonNull,
+      runtimeScope: dto.runtimeScope,
+      runtimeCategory: dto.runtimeCategory,
+      runtimeIntent: dto.runtimeIntent,
+      runtimeAuthority: dto.runtimeAuthority,
+      runtimeDirectOnly: dto.runtimeDirectOnly,
     };
   }
 
@@ -167,6 +175,11 @@ export class AssistantFlowsService {
     if (hasField("requiresHuman"))
       data.requiresHuman = dto.requiresHuman;
     if (hasField("active")) data.active = dto.active;
+    if (hasField("runtimeScope")) data.runtimeScope = dto.runtimeScope;
+    if (hasField("runtimeCategory")) data.runtimeCategory = dto.runtimeCategory;
+    if (hasField("runtimeIntent")) data.runtimeIntent = dto.runtimeIntent;
+    if (hasField("runtimeAuthority")) data.runtimeAuthority = dto.runtimeAuthority;
+    if (hasField("runtimeDirectOnly")) data.runtimeDirectOnly = dto.runtimeDirectOnly;
 
     if (hasField("toolContext")) {
       data.toolContext = dto.toolContext
@@ -175,5 +188,12 @@ export class AssistantFlowsService {
     }
 
     return data;
+  }
+
+  private assertValidRuntimeV2FlowScope(flow: Parameters<typeof validateRuntimeV2FlowScope>[0]) {
+    const validation = validateRuntimeV2FlowScope(flow);
+    if (!validation.valid) {
+      throw new BadRequestException(validation.code);
+    }
   }
 }

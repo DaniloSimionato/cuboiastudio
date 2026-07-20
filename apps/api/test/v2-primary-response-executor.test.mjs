@@ -169,7 +169,7 @@ test("executor usa somente o contexto declarativo de flow vinculado à approval"
   const compatibleFlowContext = {
     flowFingerprint: "flow-compatible",
     flowVersionFingerprint: "flow-version-compatible",
-    matchType: "KEYWORD_SCORED",
+    matchType: "EXPLICIT_RUNTIME_SCOPE",
     category: "businessHours",
     declarativeInstructionFingerprint: createHash("sha256")
       .update(JSON.stringify(declarativeInstructions))
@@ -235,7 +235,7 @@ test("executor blocks a flow context that differs from the claimed approval befo
             compatibleFlowContext: {
               flowFingerprint: "flow-compatible",
               flowVersionFingerprint: "flow-version-compatible",
-              matchType: "KEYWORD_SCORED",
+              matchType: "EXPLICIT_RUNTIME_SCOPE",
               category: "businessHours",
               declarativeInstructionFingerprint: null,
               declarativeInstructions: null,

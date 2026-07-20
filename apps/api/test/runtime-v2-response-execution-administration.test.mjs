@@ -45,6 +45,11 @@ function flow(overrides = {}) {
     handoffTeamId: null,
     handoffTeamName: null,
     toolContext: null,
+    runtimeScope: null,
+    runtimeCategory: null,
+    runtimeIntent: null,
+    runtimeAuthority: null,
+    runtimeDirectOnly: null,
     updatedAt: new Date("2026-01-01T00:00:00.000Z"),
     ...overrides,
   };
@@ -293,12 +298,17 @@ test("preflight bloqueia escopo operacional, contexto e regras incompatíveis", 
   }
 });
 
-test("preflight permits a matched STANDARD-compatible flow without persisting its instructions", async () => {
+test("preflight permits an explicit V2 business-hours flow without persisting its instructions", async () => {
   const { administration } = createAdministration({
     flows: [
       flow({
         triggerKeywords: '["horário"]',
         flowInstructions: "Responda de forma objetiva e cordial.",
+        runtimeScope: "V2_CONTROLLED",
+        runtimeCategory: "businessHours",
+        runtimeIntent: "ask_business_hours",
+        runtimeAuthority: "OFFICIAL_CONTEXT",
+        runtimeDirectOnly: true,
       }),
     ],
   });
@@ -306,18 +316,26 @@ test("preflight permits a matched STANDARD-compatible flow without persisting it
   assert.equal(result.preflightStatus, "APPROVED");
   assert.equal(result.flowEvaluationStatus, "MATCHED_STANDARD_COMPATIBLE");
   assert.equal(result.v2FlowCompatibility, "ALLOWED_WITH_FLOW_CONTEXT");
+  assert.equal(result.flowMatchType, "EXPLICIT_RUNTIME_SCOPE");
+  assert.equal(result.flowRuntimeScope, "V2_CONTROLLED");
+  assert.equal(result.flowScopeCompatibility, "EXPLICIT_V2_MATCH");
   assert.ok(result.selectedFlowFingerprint);
   assert.ok(result.selectedFlowVersionFingerprint);
   assert.ok(result.declarativeContextFingerprint);
   assert.equal(JSON.stringify(result).includes("Responda de forma objetiva"), false);
 });
 
-test("arm binds only compatible-flow fingerprints to the single-use approval", async () => {
+test("arm binds only explicit V2 flow fingerprints to the single-use approval", async () => {
   const { administration, responseExecutionStore } = createAdministration({
     flows: [
       flow({
         triggerKeywords: '["horário"]',
         flowInstructions: "Responda de forma objetiva e cordial.",
+        runtimeScope: "V2_CONTROLLED",
+        runtimeCategory: "businessHours",
+        runtimeIntent: "ask_business_hours",
+        runtimeAuthority: "OFFICIAL_CONTEXT",
+        runtimeDirectOnly: true,
       }),
     ],
   });
@@ -331,6 +349,7 @@ test("arm binds only compatible-flow fingerprints to the single-use approval", a
   assert.ok(record?.approval.expectedFlowFingerprint);
   assert.ok(record?.approval.expectedFlowVersionFingerprint);
   assert.ok(record?.approval.declarativeContextFingerprint);
+  assert.equal(record?.approval.expectedFlowMatchType, "EXPLICIT_RUNTIME_SCOPE");
   assert.equal(JSON.stringify(record?.approval).includes("Responda de forma objetiva"), false);
 });
 

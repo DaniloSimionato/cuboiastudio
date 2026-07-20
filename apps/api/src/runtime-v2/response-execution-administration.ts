@@ -84,7 +84,7 @@ export type RuntimeV2ResponseExecutionPreflightResult = {
   matchedFlowCount: number;
   selectedFlowFingerprint: string | null;
   selectedFlowVersionFingerprint: string | null;
-  flowMatchType: "KEYWORD_SCORED" | null;
+  flowMatchType: "KEYWORD_SCORED" | "EXPLICIT_RUNTIME_SCOPE" | null;
   declarativeContextFingerprint: string | null;
   v2FlowCompatibility: "ALLOWED" | "ALLOWED_WITH_FLOW_CONTEXT" | "BLOCKED";
   flowConfigurationFingerprint: string;
@@ -93,7 +93,15 @@ export type RuntimeV2ResponseExecutionPreflightResult = {
     | "FLOW_DECLARATIVE_CONTEXT_UNSUPPORTED"
     | "FLOW_MATCH_AMBIGUOUS"
     | "FLOW_EVALUATION_INDETERMINATE"
+    | "FLOW_EXPLICIT_SCOPE_INVALID"
     | null;
+  flowRuntimeScope: "V1_ONLY" | "V2_CONTROLLED" | null;
+  explicitRuntimeCategory: "businessHours" | null;
+  explicitRuntimeIntent: "ask_business_hours" | null;
+  explicitRuntimeAuthority: "OFFICIAL_CONTEXT" | null;
+  runtimeDirectOnly: boolean | null;
+  flowScopeCompatibility: "EXPLICIT_V2_MATCH" | "LEGACY_V1_ONLY" | "NOT_APPLICABLE";
+  legacyFlowIgnoredForExplicitV2Match: boolean;
   executionConfiguration: {
     mode: "OFF" | "CONTROLLED";
     assistantAllowlisted: boolean;
@@ -462,6 +470,7 @@ export class RuntimeV2ResponseExecutionAdministrationService {
     const flowEvaluation = evaluateFlowApplicability({
       message: canonicalMessage,
       flows: activeFlows,
+      semanticDecision,
     });
     if (flowEvaluation.blockerCode) blockers.push(flowEvaluation.blockerCode);
     if (enabledToolCount > 0) blockers.push("TOOL_CONFIGURATION_PRESENT");
@@ -585,6 +594,13 @@ export class RuntimeV2ResponseExecutionAdministrationService {
         v2FlowCompatibility: flowEvaluation.v2Compatibility,
         flowConfigurationFingerprint: flowEvaluation.flowConfigurationFingerprint,
         flowBlockerCode: flowEvaluation.blockerCode,
+        flowRuntimeScope: flowEvaluation.flowRuntimeScope,
+        explicitRuntimeCategory: flowEvaluation.explicitRuntimeCategory,
+        explicitRuntimeIntent: flowEvaluation.explicitRuntimeIntent,
+        explicitRuntimeAuthority: flowEvaluation.explicitRuntimeAuthority,
+        runtimeDirectOnly: flowEvaluation.runtimeDirectOnly,
+        flowScopeCompatibility: flowEvaluation.flowScopeCompatibility,
+        legacyFlowIgnoredForExplicitV2Match: flowEvaluation.legacyFlowIgnoredForExplicitV2Match,
         executionConfiguration: {
           mode: executionMode,
           assistantAllowlisted,

@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
 import type { AssistantFlow } from "@prisma/client";
 import { flowIntentKeyForFlow, scoreFlowCandidates } from "../intent-router/intent-routing";
+import {
+  isExplicitBusinessHoursRuntimeV2Flow,
+  isSafeRuntimeV2FlowInstruction,
+  resolveRuntimeV2FlowScope,
+  validateRuntimeV2FlowScope,
+  type RuntimeV2FlowScope,
+} from "../assistant-flows/runtime-v2-flow-scope";
+import type { ResponseExecutionSemanticDecision } from "../runtime-v2/response-execution-intent";
 
 export type FlowConfigurationStatus = "FLOW_NOT_CONFIGURED" | "ACTIVE_FLOWS_PRESENT";
 export type FlowEvaluationStatus =
@@ -15,7 +23,7 @@ export type V2FlowCompatibility = "ALLOWED" | "ALLOWED_WITH_FLOW_CONTEXT" | "BLO
 export type CompatibleFlowExecutionContext = {
   flowFingerprint: string;
   flowVersionFingerprint: string;
-  matchType: "KEYWORD_SCORED";
+  matchType: "KEYWORD_SCORED" | "EXPLICIT_RUNTIME_SCOPE";
   category: "businessHours";
   declarativeInstructionFingerprint: string | null;
   declarativeInstructions: string | null;
@@ -38,7 +46,7 @@ export type FlowApplicabilityEvaluation = {
   selectedFlowFingerprint: string | null;
   selectedFlowVersionFingerprint: string | null;
   selectedFlowType: string | null;
-  flowMatchType: "KEYWORD_SCORED" | null;
+  flowMatchType: "KEYWORD_SCORED" | "EXPLICIT_RUNTIME_SCOPE" | null;
   declarativeContextFingerprint: string | null;
   compatibleFlowContext: CompatibleFlowExecutionContext | null;
   fixedMessageApplicable: boolean;
@@ -49,11 +57,19 @@ export type FlowApplicabilityEvaluation = {
   categoryOverride: string | null;
   flowConfigurationFingerprint: string;
   v2Compatibility: V2FlowCompatibility;
+  flowRuntimeScope: RuntimeV2FlowScope | null;
+  explicitRuntimeCategory: "businessHours" | null;
+  explicitRuntimeIntent: "ask_business_hours" | null;
+  explicitRuntimeAuthority: "OFFICIAL_CONTEXT" | null;
+  runtimeDirectOnly: boolean | null;
+  flowScopeCompatibility: "EXPLICIT_V2_MATCH" | "LEGACY_V1_ONLY" | "NOT_APPLICABLE";
+  legacyFlowIgnoredForExplicitV2Match: boolean;
   blockerCode:
     | "FLOW_APPLICABLE_BLOCKS_V2"
     | "FLOW_DECLARATIVE_CONTEXT_UNSUPPORTED"
     | "FLOW_MATCH_AMBIGUOUS"
     | "FLOW_EVALUATION_INDETERMINATE"
+    | "FLOW_EXPLICIT_SCOPE_INVALID"
     | null;
   redactionApplied: true;
 };
@@ -88,25 +104,23 @@ function flowVersionFingerprint(flow: AssistantFlow): string {
     handoffTeamId: flow.handoffTeamId,
     handoffTeamName: flow.handoffTeamName,
     toolContext: flow.toolContext,
+    runtimeScope: flow.runtimeScope,
+    runtimeCategory: flow.runtimeCategory,
+    runtimeIntent: flow.runtimeIntent,
+    runtimeAuthority: flow.runtimeAuthority,
+    runtimeDirectOnly: flow.runtimeDirectOnly,
   });
-}
-
-function isSafeDeclarativeInstruction(instruction: string): boolean {
-  if (instruction.length > 1200) return false;
-  return !/\b(?:ferramenta|tool|ação|acao|handoff|humano|atendente|encaminh|transfer|agend|calend[aá]rio|r\$|preço|preco|valor|estoque|garantia|prazo|documento|rag|base de conhecimento|mem[oó]ria|embedding|\b\d{1,2}:\d{2}\b)\b/i.test(
-    instruction,
-  );
 }
 
 function createCompatibleFlowExecutionContext(
   flow: AssistantFlow,
-  matchType: "KEYWORD_SCORED",
+  matchType: "EXPLICIT_RUNTIME_SCOPE",
 ): CompatibleFlowExecutionContext | null {
   const declarativeInstructions = flow.flowInstructions?.trim() || null;
   if (
-    flowIntentKeyForFlow(flow) !== "company_information" ||
-    Boolean(flow.knowledgeScope?.trim()) ||
-    (declarativeInstructions !== null && !isSafeDeclarativeInstruction(declarativeInstructions))
+    !isExplicitBusinessHoursRuntimeV2Flow(flow) ||
+    !validateRuntimeV2FlowScope(flow).valid ||
+    (declarativeInstructions !== null && !isSafeRuntimeV2FlowInstruction(declarativeInstructions))
   ) {
     return null;
   }
@@ -133,7 +147,7 @@ function createCompatibleFlowExecutionContext(
 
 export function isCompatibleFlowExecutionContext(value: CompatibleFlowExecutionContext): boolean {
   return (
-    value.matchType === "KEYWORD_SCORED" &&
+    value.matchType === "EXPLICIT_RUNTIME_SCOPE" &&
     value.category === "businessHours" &&
     value.factualAuthorityType === "OFFICIAL_CONTEXT" &&
     value.hasFixedMessage === false &&
@@ -149,7 +163,7 @@ export function isCompatibleFlowExecutionContext(value: CompatibleFlowExecutionC
     (value.declarativeInstructions === null ||
       (Boolean(value.declarativeInstructionFingerprint) &&
         value.declarativeInstructionFingerprint === fingerprint(value.declarativeInstructions) &&
-        isSafeDeclarativeInstruction(value.declarativeInstructions)))
+        isSafeRuntimeV2FlowInstruction(value.declarativeInstructions)))
   );
 }
 
@@ -174,6 +188,11 @@ function configurationFingerprint(flows: AssistantFlow[]): string {
         handoffTeamId: flow.handoffTeamId,
         handoffTeamName: flow.handoffTeamName,
         toolContext: flow.toolContext,
+        runtimeScope: flow.runtimeScope,
+        runtimeCategory: flow.runtimeCategory,
+        runtimeIntent: flow.runtimeIntent,
+        runtimeAuthority: flow.runtimeAuthority,
+        runtimeDirectOnly: flow.runtimeDirectOnly,
       }))
       .sort((left, right) => left.id.localeCompare(right.id)),
   );
@@ -204,6 +223,13 @@ function noMatch(input: {
     categoryOverride: null,
     flowConfigurationFingerprint: input.flowConfigurationFingerprint,
     v2Compatibility: indeterminate ? "BLOCKED" : "ALLOWED",
+    flowRuntimeScope: null,
+    explicitRuntimeCategory: null,
+    explicitRuntimeIntent: null,
+    explicitRuntimeAuthority: null,
+    runtimeDirectOnly: null,
+    flowScopeCompatibility: "NOT_APPLICABLE",
+    legacyFlowIgnoredForExplicitV2Match: false,
     blockerCode: indeterminate ? "FLOW_EVALUATION_INDETERMINATE" : null,
     redactionApplied: true,
   };
@@ -217,6 +243,7 @@ function noMatch(input: {
 export function evaluateFlowApplicability(input: {
   message: string;
   flows: AssistantFlow[];
+  semanticDecision?: ResponseExecutionSemanticDecision;
 }): FlowApplicabilityEvaluation {
   const activeFlows = input.flows.filter((flow) => flow.active);
   const flowConfigurationFingerprint = configurationFingerprint(activeFlows);
@@ -240,16 +267,118 @@ export function evaluateFlowApplicability(input: {
       categoryOverride: null,
       flowConfigurationFingerprint,
       v2Compatibility: "ALLOWED",
+      flowRuntimeScope: null,
+      explicitRuntimeCategory: null,
+      explicitRuntimeIntent: null,
+      explicitRuntimeAuthority: null,
+      runtimeDirectOnly: null,
+      flowScopeCompatibility: "NOT_APPLICABLE",
+      legacyFlowIgnoredForExplicitV2Match: false,
       blockerCode: null,
       redactionApplied: true,
     };
   }
 
-  const candidates = scoreFlowCandidates(input.message, activeFlows);
+  const explicitlyScopedFlows = activeFlows.filter(
+    (flow) => resolveRuntimeV2FlowScope(flow) === "V2_CONTROLLED",
+  );
+  const invalidExplicitScope = explicitlyScopedFlows.find(
+    (flow) => !validateRuntimeV2FlowScope(flow).valid,
+  );
+  if (invalidExplicitScope) {
+    return {
+      ...noMatch({ status: "INDETERMINATE", activeFlows, flowConfigurationFingerprint }),
+      selectedFlowFingerprint: fingerprint(invalidExplicitScope.id),
+      selectedFlowVersionFingerprint: flowVersionFingerprint(invalidExplicitScope),
+      selectedFlowType: "explicit_runtime_scope",
+      flowRuntimeScope: "V2_CONTROLLED",
+      flowScopeCompatibility: "NOT_APPLICABLE",
+      blockerCode: "FLOW_EXPLICIT_SCOPE_INVALID",
+    };
+  }
+
+  const directBusinessHours =
+    input.semanticDecision?.applicable === true &&
+    input.semanticDecision.category === "businessHours" &&
+    input.semanticDecision.intent === "ask_business_hours" &&
+    input.semanticDecision.authority === "OFFICIAL_CONTEXT" &&
+    input.semanticDecision.contextualResolution === false;
+  const explicitMatches = directBusinessHours
+    ? explicitlyScopedFlows.filter((flow) => isExplicitBusinessHoursRuntimeV2Flow(flow))
+    : [];
+  if (explicitMatches.length > 0) {
+    const selectedFlow = [...explicitMatches].sort(
+      (left, right) => right.priority - left.priority || left.id.localeCompare(right.id),
+    )[0];
+    const equallyRanked = explicitMatches.filter((flow) => flow.priority === selectedFlow.priority);
+    if (equallyRanked.length > 1) {
+      return {
+        ...noMatch({ status: "INDETERMINATE", activeFlows, flowConfigurationFingerprint }),
+        matchedFlowCount: explicitMatches.length,
+        flowRuntimeScope: "V2_CONTROLLED",
+        flowScopeCompatibility: "NOT_APPLICABLE",
+        blockerCode: "FLOW_MATCH_AMBIGUOUS",
+      };
+    }
+    const compatibleFlowContext = createCompatibleFlowExecutionContext(
+      selectedFlow,
+      "EXPLICIT_RUNTIME_SCOPE",
+    );
+    if (!compatibleFlowContext) {
+      return {
+        ...noMatch({ status: "INDETERMINATE", activeFlows, flowConfigurationFingerprint }),
+        matchedFlowCount: explicitMatches.length,
+        selectedFlowFingerprint: fingerprint(selectedFlow.id),
+        selectedFlowVersionFingerprint: flowVersionFingerprint(selectedFlow),
+        selectedFlowType: "explicit_runtime_scope",
+        flowRuntimeScope: "V2_CONTROLLED",
+        explicitRuntimeCategory: "businessHours",
+        explicitRuntimeIntent: "ask_business_hours",
+        explicitRuntimeAuthority: "OFFICIAL_CONTEXT",
+        runtimeDirectOnly: true,
+        flowScopeCompatibility: "NOT_APPLICABLE",
+        blockerCode: "FLOW_DECLARATIVE_CONTEXT_UNSUPPORTED",
+      };
+    }
+    return {
+      flowConfigurationStatus: "ACTIVE_FLOWS_PRESENT",
+      activeFlowCount: activeFlows.length,
+      flowEvaluationStatus: "MATCHED_STANDARD_COMPATIBLE",
+      matchedFlowCount: explicitMatches.length,
+      selectedFlowFingerprint: fingerprint(selectedFlow.id),
+      selectedFlowVersionFingerprint: flowVersionFingerprint(selectedFlow),
+      selectedFlowType: "businessHours",
+      flowMatchType: "EXPLICIT_RUNTIME_SCOPE",
+      declarativeContextFingerprint: compatibleFlowContext.declarativeInstructionFingerprint,
+      compatibleFlowContext,
+      fixedMessageApplicable: false,
+      requiresHuman: false,
+      autoRespond: true,
+      toolRequired: false,
+      handoffRequired: false,
+      categoryOverride: "businessHours",
+      flowConfigurationFingerprint,
+      v2Compatibility: "ALLOWED_WITH_FLOW_CONTEXT",
+      flowRuntimeScope: "V2_CONTROLLED",
+      explicitRuntimeCategory: "businessHours",
+      explicitRuntimeIntent: "ask_business_hours",
+      explicitRuntimeAuthority: "OFFICIAL_CONTEXT",
+      runtimeDirectOnly: true,
+      flowScopeCompatibility: "EXPLICIT_V2_MATCH",
+      legacyFlowIgnoredForExplicitV2Match: activeFlows.some(
+        (flow) => resolveRuntimeV2FlowScope(flow) === "V1_ONLY",
+      ),
+      blockerCode: null,
+      redactionApplied: true,
+    };
+  }
+
+  const legacyFlows = activeFlows.filter((flow) => resolveRuntimeV2FlowScope(flow) === "V1_ONLY");
+  const candidates = scoreFlowCandidates(input.message, legacyFlows);
   const matched = candidates.filter((candidate) => candidate.score >= 2);
   const selected = matched[0];
   if (!selected) {
-    const semanticFallbackRequired = activeFlows.some((flow) => flow.triggerDescription?.trim());
+    const semanticFallbackRequired = legacyFlows.some((flow) => flow.triggerDescription?.trim());
     return noMatch({
       status: semanticFallbackRequired ? "INDETERMINATE" : "NO_MATCH",
       activeFlows,
@@ -257,7 +386,7 @@ export function evaluateFlowApplicability(input: {
     });
   }
 
-  const selectedFlow = activeFlows.find((flow) => flow.id === selected.flowId);
+  const selectedFlow = legacyFlows.find((flow) => flow.id === selected.flowId);
   if (!selectedFlow) {
     return noMatch({ status: "INDETERMINATE", activeFlows, flowConfigurationFingerprint });
   }
@@ -285,10 +414,8 @@ export function evaluateFlowApplicability(input: {
       blockerCode: "FLOW_MATCH_AMBIGUOUS",
     };
   }
-  const compatibleFlowContext = standardCompatible
-    ? createCompatibleFlowExecutionContext(selectedFlow, "KEYWORD_SCORED")
-    : null;
-  const flowBlockedByUnsupportedContext = standardCompatible && !compatibleFlowContext;
+  const compatibleFlowContext = null;
+  const flowBlockedByUnsupportedContext = standardCompatible;
 
   return {
     flowConfigurationStatus: "ACTIVE_FLOWS_PRESENT",
@@ -299,7 +426,7 @@ export function evaluateFlowApplicability(input: {
     selectedFlowVersionFingerprint: flowVersionFingerprint(selectedFlow),
     selectedFlowType: flowIntentKeyForFlow(selectedFlow),
     flowMatchType: "KEYWORD_SCORED",
-    declarativeContextFingerprint: compatibleFlowContext?.declarativeInstructionFingerprint ?? null,
+    declarativeContextFingerprint: null,
     compatibleFlowContext,
     fixedMessageApplicable,
     requiresHuman,
@@ -309,6 +436,13 @@ export function evaluateFlowApplicability(input: {
     categoryOverride: flowIntentKeyForFlow(selectedFlow),
     flowConfigurationFingerprint,
     v2Compatibility: compatibleFlowContext ? "ALLOWED_WITH_FLOW_CONTEXT" : "BLOCKED",
+    flowRuntimeScope: "V1_ONLY",
+    explicitRuntimeCategory: null,
+    explicitRuntimeIntent: null,
+    explicitRuntimeAuthority: null,
+    runtimeDirectOnly: null,
+    flowScopeCompatibility: "LEGACY_V1_ONLY",
+    legacyFlowIgnoredForExplicitV2Match: false,
     blockerCode: flowBlockedByUnsupportedContext
       ? "FLOW_DECLARATIVE_CONTEXT_UNSUPPORTED"
       : standardCompatible

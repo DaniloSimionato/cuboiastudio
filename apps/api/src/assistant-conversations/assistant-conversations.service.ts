@@ -4037,22 +4037,6 @@ export class AssistantConversationsService {
             flow: selectedFlow,
             triageMode,
           });
-          const flowEvaluation = evaluateFlowApplicability({
-            message: customerIntentText,
-            flows: assistant.flows ?? [],
-          });
-          const revalidateV2Flow = async () => {
-            const currentAssistant = await this.prisma.assistant.findFirst({
-              where: { id: assistant.id, companyId: input.tenant.companyId },
-              select: { flows: true },
-            });
-            return currentAssistant
-              ? evaluateFlowApplicability({
-                  message: customerIntentText,
-                  flows: currentAssistant.flows,
-                })
-              : null;
-          };
           const responseExecutionConversationContext = buildResponseExecutionConversationContext({
             contextVersion: responseExecutionTurn.contextVersion ?? 1,
             currentInboundMessageId: responseExecutionTurn.internalMessageId,
@@ -4065,6 +4049,26 @@ export class AssistantConversationsService {
             contextVersion: responseExecutionTurn.contextVersion,
             conversationContext: responseExecutionConversationContext,
           });
+          const flowEvaluation = evaluateFlowApplicability({
+            message: customerIntentText,
+            flows: assistant.flows ?? [],
+            semanticDecision: responseExecutionSemanticDecision,
+          });
+          const revalidateV2Flow = async () => {
+            const currentAssistant = await this.prisma.assistant.findFirst({
+              where: { id: assistant.id, companyId: input.tenant.companyId },
+              select: { flows: true },
+            });
+            return currentAssistant
+              ? evaluateFlowApplicability({
+                  message: customerIntentText,
+                  flows: currentAssistant.flows,
+                  semanticDecision: responseExecutionSemanticDecision,
+                })
+              : null;
+          };
+          const explicitV2FlowSelected =
+            flowEvaluation.flowScopeCompatibility === "EXPLICIT_V2_MATCH";
           const v2PrimaryContext: V2PrimaryResponseExecutionContext = {
             canonicalInbound: {
               displayContent: canonicalInboundMessage.displayContent,
@@ -4097,9 +4101,11 @@ export class AssistantConversationsService {
               aiActive: conversation.aiActive,
               humanActive: conversation.pausedByHuman,
               conversationActive: conversation.status === "ACTIVE",
-              activeHandoff: humanHandoffSignal.requested || Boolean(selectedFlow?.requiresHuman),
-              fixedMessage: Boolean(selectedFlow?.fixedMessage?.trim()),
-              autoRespondBlocked: selectedFlow?.autoRespond === false,
+              activeHandoff:
+                humanHandoffSignal.requested ||
+                (!explicitV2FlowSelected && Boolean(selectedFlow?.requiresHuman)),
+              fixedMessage: !explicitV2FlowSelected && Boolean(selectedFlow?.fixedMessage?.trim()),
+              autoRespondBlocked: !explicitV2FlowSelected && selectedFlow?.autoRespond === false,
               triage: triageMode,
               toolRequired: (tools?.length ?? 0) > 0,
               customerRequestedHuman: humanHandoffSignal.requested,
@@ -4111,13 +4117,15 @@ export class AssistantConversationsService {
           };
           const v2Eligibility = {
             standardEligible:
-              v1SelectedStrategy === "STANDARD" &&
+              (explicitV2FlowSelected || v1SelectedStrategy === "STANDARD") &&
               source === "chatwoot" &&
               conversation.aiActive &&
               !conversation.pausedByHuman &&
               conversation.status === "ACTIVE" &&
               !humanHandoffSignal.requested &&
-              (!selectedFlow || flowEvaluation.v2Compatibility === "ALLOWED_WITH_FLOW_CONTEXT") &&
+              (explicitV2FlowSelected ||
+                !selectedFlow ||
+                flowEvaluation.v2Compatibility === "ALLOWED_WITH_FLOW_CONTEXT") &&
               (flowEvaluation.v2Compatibility === "ALLOWED" ||
                 flowEvaluation.v2Compatibility === "ALLOWED_WITH_FLOW_CONTEXT") &&
               (tools?.length ?? 0) === 0 &&

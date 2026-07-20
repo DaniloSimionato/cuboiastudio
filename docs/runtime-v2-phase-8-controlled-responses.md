@@ -241,21 +241,22 @@ chamar o provider oficial via DI. Ele usa o mesmo `RuntimeV2CandidateResponseGen
 `ResponsePlan`, política de autoridade, timeout, `AbortSignal` e redaction do
 Shadow, mas fornece somente contexto oficial de horário. Não fornece RAG,
 memória factual, ferramentas, handoff, calendário ou contexto factual vindo de
-flow. Antes de uma approval ser reclamada, o `FlowApplicabilityEvaluator` reutiliza
-a etapa determinística de seleção V1 sem provider nem side effect. Flows inexistentes
-ou ativos sem match determinístico e sem fallback semântico podem prosseguir. O
-único match aplicável elegível é `MATCHED_STANDARD_COMPATIBLE`: um vencedor único,
-ativo e estável, de informações da empresa, sem resposta fixa, humano, handoff,
-ferramenta, ação, `autoRespond=false`, RAG/memória ou configuração desconhecida.
-Ele pode fornecer apenas instruções declarativas validadas; horários e outros fatos
-continuam exclusivamente no contexto estruturado oficial. Qualquer outro match,
-empate, contexto semântico, configuração desconhecida ou instrução factual/operacional
-bloqueia fail-closed. A approval guarda somente fingerprints do conjunto, vencedor,
-versão e contexto declarativo — nunca o conteúdo do flow — e o router revalida tudo
-antes do claim, depois do claim e novamente antes de entregar a candidata ao tail.
-Uma mudança antes do claim segue V1 normal; uma mudança após o claim segue para
-fallback V1 antes do provider ou, se ocorrer durante a geração, antes de qualquer
-persistência ou sender V2.
+flow. Antes de uma approval ser reclamada, o `FlowApplicabilityEvaluator` separa
+explicitamente a seleção V1 da V2. Flows legados, inclusive os de informações da
+empresa, continuam usando famílias e aliases históricos somente na V1 e são
+interpretados como `V1_ONLY` pela V2 quando não possuem contrato explícito. A V2
+só aceita um flow `V2_CONTROLLED` declarativo, sem knowledge, ferramenta, ação,
+handoff, resposta fixa, humano ou instrução factual. A única combinação habilitada
+nesta primeira entrega é `businessHours` / `ask_business_hours` /
+`OFFICIAL_CONTEXT` com `runtimeDirectOnly=true`; ela não herda aliases de endereço,
+telefone, contato ou site e não resolve follow-ups elípticos. Horários e demais
+fatos continuam exclusivamente no contexto estruturado oficial. Qualquer contrato
+ausente, inválido, ambíguo, factual ou operacional bloqueia fail-closed. A approval
+guarda somente fingerprints do conjunto, vencedor, versão e contexto declarativo —
+nunca o conteúdo do flow — e o router revalida tudo antes do claim, depois do claim
+e novamente antes de entregar a candidata ao tail. Uma mudança antes do claim segue
+V1 normal; uma mudança após o claim segue para fallback V1 antes do provider ou,
+se ocorrer durante a geração, antes de qualquer persistência ou sender V2.
 
 O prompt primário aceita somente a mensagem canônica, até seis referências da
 mesma conversa, comportamento permitido, o contexto estruturado oficial e, quando
@@ -355,7 +356,7 @@ prompt, flow ou referência externa bruta.
 **REAL_V2_PRIMARY_EXECUTOR_CONNECTED=true.**
 **PRODUCTION_EXECUTION_DEFAULT_OFF=true.**
 **FIRST_REAL_V2_OUTBOUND_COMPLETED=true.**
-**ISOLATED_CANARY_COMPLETED=false.**
+**ISOLATED_CANARY_COMPLETED=true.**
 **HELOISA_V2_ENABLEMENT_BLOCKED_BY_FACTUAL_FLOW=true.**
 
 ### Alinhamento semântico do canário multi-turn
@@ -482,5 +483,22 @@ continua no default-deny. O reteste do follow-up e o Turno 3 permanecem pendente
 
 `ISOLATED_CANARY_DIRECT_TURN_COMPLETED=true`
 `ISOLATED_CANARY_FOLLOW_UP_COMPLETED=false`
-`ISOLATED_CANARY_COMPLETED=false`
+`ISOLATED_CANARY_FOLLOW_UP_DEFERRED_TO_V1=true`
+`ISOLATED_CANARY_COMPLETED=true`
 `HELOISA_V2_ENABLEMENT_BLOCKED_BY_FACTUAL_FLOW=true`
+
+## Escopo explícito de flow para a primeira entrega da Heloísa
+
+A configuração atual da Heloísa permanece sem alteração. Seus flows legados têm
+knowledge/tool context e família institucional ampla; por isso permanecem `V1_ONLY`
+e não habilitam a V2 automaticamente. O contrato opcional do flow possui
+`runtimeScope`, `runtimeCategory`, `runtimeIntent`, `runtimeAuthority` e
+`runtimeDirectOnly`. A ausência do contrato é fail-closed para V2 e preserva o
+comportamento V1 existente.
+
+Para a migração de configuração posterior, somente um flow declarativo novo poderá
+declarar `V2_CONTROLLED`, `businessHours`, `ask_business_hours`,
+`OFFICIAL_CONTEXT` e atendimento direto. O flow institucional atual continua na
+V1 para endereço, telefone, contato, site e demais informações; follow-ups de
+horário também permanecem na V1. A migração de configuração e o canário real da
+Heloísa continuam pendentes.

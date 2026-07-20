@@ -49,7 +49,7 @@ export type RuntimeV2ResponseExecutionApproval = {
   flowConfigurationFingerprint?: string | null;
   expectedFlowFingerprint?: string | null;
   expectedFlowVersionFingerprint?: string | null;
-  expectedFlowMatchType?: "KEYWORD_SCORED" | null;
+  expectedFlowMatchType?: "KEYWORD_SCORED" | "EXPLICIT_RUNTIME_SCOPE" | null;
   flowCompatibility?: "STANDARD_COMPATIBLE" | null;
   declarativeContextFingerprint?: string | null;
   redactionApplied: true;
@@ -87,7 +87,7 @@ export function createRuntimeV2ResponseExecutionApproval(input: {
   flowConfigurationFingerprint?: string | null;
   expectedFlowFingerprint?: string | null;
   expectedFlowVersionFingerprint?: string | null;
-  expectedFlowMatchType?: "KEYWORD_SCORED" | null;
+  expectedFlowMatchType?: "KEYWORD_SCORED" | "EXPLICIT_RUNTIME_SCOPE" | null;
   flowCompatibility?: "STANDARD_COMPATIBLE" | null;
   declarativeContextFingerprint?: string | null;
   now?: Date;

@@ -3,6 +3,7 @@ import { Type } from "class-transformer";
 import {
   IsArray,
   IsBoolean,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -10,6 +11,7 @@ import {
   Min,
   ValidateNested,
 } from "class-validator";
+import { RUNTIME_V2_FLOW_SCOPES } from "../runtime-v2-flow-scope";
 
 export class AssistantFlowCalendarToolContextDto {
   @ApiPropertyOptional({ example: "Padel" })
@@ -124,6 +126,31 @@ export class CreateAssistantFlowDto {
   @ValidateNested()
   @Type(() => AssistantFlowToolContextDto)
   toolContext?: AssistantFlowToolContextDto | null;
+
+  @ApiPropertyOptional({ enum: RUNTIME_V2_FLOW_SCOPES })
+  @IsOptional()
+  @IsIn(RUNTIME_V2_FLOW_SCOPES)
+  runtimeScope?: "V1_ONLY" | "V2_CONTROLLED" | null;
+
+  @ApiPropertyOptional({ example: "businessHours" })
+  @IsOptional()
+  @IsString()
+  runtimeCategory?: string | null;
+
+  @ApiPropertyOptional({ example: "ask_business_hours" })
+  @IsOptional()
+  @IsString()
+  runtimeIntent?: string | null;
+
+  @ApiPropertyOptional({ example: "OFFICIAL_CONTEXT" })
+  @IsOptional()
+  @IsString()
+  runtimeAuthority?: string | null;
+
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  runtimeDirectOnly?: boolean | null;
 
   @ApiPropertyOptional({ example: "respond" })
   @IsString()
