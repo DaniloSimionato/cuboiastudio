@@ -248,12 +248,12 @@ export class RuntimeV2ResponseExecutionCoordinator {
   }
 
   async beginV2Generation(
-    input: ResponseExecutionScope & { generationId: string },
+    input: ResponseExecutionScope & { generationId: string; providerCallCount?: 0 | 1 },
   ): Promise<boolean> {
     return this.transition(input, ["V2_OWNED"], (record) =>
       next(record, {
         owner: "V2_GENERATION_PENDING",
-        providerV2CallCount: record.providerV2CallCount + 1,
+        providerV2CallCount: record.providerV2CallCount + (input.providerCallCount ?? 1),
         approval: record.approval.generationId
           ? record.approval
           : { ...record.approval, generationId: input.generationId },

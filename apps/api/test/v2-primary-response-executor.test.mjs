@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { buildOfficialBusinessContext } from "../dist/assistants/official-business-context.js";
-import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
 import {
   createRuntimeV2ResponseExecutionApproval,
   resolveResponseExecutionIntent,
@@ -120,14 +119,11 @@ function input(overrides = {}) {
   };
 }
 
-function executor(provider) {
-  return new RuntimeV2PrimaryResponseExecutor({
-    candidateProvider: provider,
-    promptCompiler: new PromptCompilerService(),
-  });
+function executor() {
+  return new RuntimeV2PrimaryResponseExecutor();
 }
 
-test("executor primário gera apenas businessHours estruturado com provider fake", async () => {
+test("executor primário renderiza businessHours estruturado sem provider", async () => {
   const calls = [];
   const result = await executor({
     async generate(value) {
@@ -141,27 +137,19 @@ test("executor primário gera apenas businessHours estruturado com provider fake
     },
   }).execute(input());
 
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 0);
   assert.equal(result.category, "businessHours");
   assert.equal(result.authority, "OFFICIAL_CONTEXT");
   assert.equal(result.candidateStatus, "CANDIDATE_APPROVED");
   assert.equal(result.qualityGateResult, "APPROVED");
   assert.equal(result.outboundAllowed, true);
-  assert.equal(result.sanitizedTelemetry.providerCallCount, 1);
+  assert.equal(result.sanitizedTelemetry.providerCallCount, 0);
+  assert.equal(result.sanitizedTelemetry.deterministicResponderCount, 1);
+  assert.equal(result.sanitizedTelemetry.responseStrategy, "V2_BUSINESS_HOURS_DETERMINISTIC");
   assert.equal(result.sanitizedTelemetry.toolCallCount, 0);
   assert.equal(result.sanitizedTelemetry.primaryExecutionNoShadowComparison, true);
-  assert.equal(
-    calls[0].messages.some((message) => /CONTEÚDO FACTUAL:/i.test(message.content)),
-    false,
-  );
-  assert.equal(
-    calls[0].messages.some((message) => /CONTEXTO DE MEMÓRIA/i.test(message.content)),
-    false,
-  );
-  assert.equal(
-    calls[0].messages.some((message) => /EXECUÇÃO PRIMÁRIA CONTROLADA/i.test(message.content)),
-    true,
-  );
+  assert.match(result.responseText, /segunda a sexta/i);
+  assert.match(result.responseText, /sábado/i);
 });
 
 test("executor usa somente o contexto declarativo de flow vinculado à approval", async () => {
@@ -209,14 +197,8 @@ test("executor usa somente o contexto declarativo de flow vinculado à approval"
       context: context({ compatibleFlowContext }),
     }),
   );
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 0);
   assert.equal(result.sanitizedTelemetry.compatibleFlowContextFingerprint, "flow-compatible");
-  assert.equal(
-    calls[0].messages.some((message) =>
-      /INSTRUÇÕES DECLARATIVAS DO FLUXO VALIDADO/.test(message.content),
-    ),
-    true,
-  );
 });
 
 test("executor blocks a flow context that differs from the claimed approval before the provider", async () => {
@@ -309,24 +291,16 @@ test("executor bloqueia regra ativa que exige ferramenta ou handoff antes do pro
   }
 });
 
-test("executor bloqueia qualidade insegura e nunca persiste ou envia", async () => {
+test("executor não permite que provider adversarial substitua a agenda", async () => {
   let calls = 0;
-  await assert.rejects(
-    () =>
-      executor({
-        async generate() {
-          calls += 1;
-          return {
-            provider: "fake-v2-provider",
-            model: "fake-v2-model",
-            answer: "Funcionamos às 10:00.",
-            durationMs: 1,
-          };
-        },
-      }).execute(input()),
-    /V2_PRIMARY_QUALITY_GATE_BLOCKED/,
-  );
-  assert.equal(calls, 1);
+  const result = await executor({
+    async generate() {
+      calls += 1;
+      return { provider: "fake-v2-provider", model: "fake-v2-model", answer: "Sábado fechado." };
+    },
+  }).execute(input());
+  assert.equal(calls, 0);
+  assert.doesNotMatch(result.responseText, /sábado fechado/i);
 });
 
 test("executor bloqueia abort, escopo da approval e horários estruturados inválidos", async () => {
@@ -350,19 +324,11 @@ test("executor bloqueia abort, escopo da approval e horários estruturados invá
       ),
     /V2_PRIMARY_APPROVAL_OR_OWNERSHIP_INVALID/,
   );
-  await assert.rejects(
-    () =>
-      executor(fakeProvider).execute(
-        input({
-          context: context({
-            officialBusinessContext: officialContext({
-              weeklySchedule: { monday: [{ start: "18:00", end: "09:00" }] },
-            }),
-          }),
-        }),
-      ),
-    /V2_PRIMARY_OFFICIAL_BUSINESS_HOURS_INVALID/,
+  const missingSchedule = await executor(fakeProvider).execute(
+    input({ context: context({ officialBusinessContext: officialContext({ weeklySchedule: {} }) }) }),
   );
+  assert.equal(missingSchedule.sanitizedTelemetry.missingScheduleConfiguration, true);
+  assert.match(missingSchedule.responseText, /não tenho o horário confirmado/i);
   assert.equal(calls, 0);
 });
 
@@ -441,8 +407,8 @@ test("router, executor real e tail fake produzem um único V2_PRIMARY sem V1 par
   });
 
   assert.equal(envelope.executionOwner, "V2_PRIMARY");
-  assert.equal(envelope.strategy, "V2_BUSINESS_HOURS");
-  assert.equal(providerCalls, 1);
+  assert.equal(envelope.strategy, "V2_BUSINESS_HOURS_DETERMINISTIC");
+  assert.equal(providerCalls, 0);
   assert.equal(v1Calls, 0);
 
   const hooks = new ResponseTailLifecycleHooks(undefined, coordinator, turn);
@@ -461,10 +427,10 @@ test("router, executor real e tail fake produzem um único V2_PRIMARY sem V1 par
   await hooks.afterOutboundConfirmed(metadata, "external-fake-v2-primary");
   assert.equal(record.terminalStatus, "V2_OUTBOUND_SENT");
   assert.equal(record.approval.status, "CONSUMED");
-  assert.equal(record.providerV2CallCount, 1);
+  assert.equal(record.providerV2CallCount, 0);
 });
 
-test("falha pré-sender do executor real faz um único fallback V1", async () => {
+test("falha de segurança pré-sender do executor real faz um único fallback V1", async () => {
   const approval = claimedApproval({
     status: "ARMED",
     claimedAt: null,
@@ -526,11 +492,7 @@ test("falha pré-sender do executor real faz um único fallback V1", async () =>
         errorStage: null,
       };
     },
-    v2Executor: executor({
-      async generate() {
-        throw new Error("fake provider failed before sender");
-      },
-    }),
+    v2Executor: executor(),
   });
   const envelope = await router.route({
     turn,
@@ -548,11 +510,13 @@ test("falha pré-sender do executor real faz um único fallback V1", async () =>
         flowConfigurationFingerprint: "flow-config-primary",
       },
     },
-    v2PrimaryContext: context(),
+    v2PrimaryContext: context({
+      securityRules: [{ name: "Regra", ruleType: "Segurança", instruction: "Use uma ferramenta externa." }],
+    }),
   });
   assert.equal(envelope.executionOwner, "V1_FALLBACK");
   assert.equal(v1Calls, 1);
   assert.equal(record.outboundV2Attempted, false);
-  assert.equal(record.providerV2CallCount, 1);
+  assert.equal(record.providerV2CallCount, 0);
   assert.equal(record.providerV1FallbackCallCount, 1);
 });

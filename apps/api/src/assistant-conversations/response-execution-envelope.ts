@@ -5,7 +5,8 @@ import type {
 
 export type ResponseExecutionOwner = "V1_NORMAL" | "V1_FALLBACK" | "V2_PRIMARY";
 export type ResponseExecutionRoute = "V1_DEFAULT" | "V2_SINGLE_USE";
-export type ResponseExecutionStrategy = V1ResponseGenerationStrategy | "V2_BUSINESS_HOURS" | null;
+export type ResponseExecutionStrategy =
+  V1ResponseGenerationStrategy | "V2_BUSINESS_HOURS_DETERMINISTIC" | null;
 
 export type ResponseExecutionTurn = {
   companyId: string;
@@ -43,6 +44,12 @@ export type ResponseExecutionEnvelope = {
     toolCallCount: number;
     decision: "DEFAULT_DENY" | "SINGLE_USE_V2" | "V1_FALLBACK";
     reason: string;
+    deterministicResponderCount?: number;
+    responseStrategy?: "V2_BUSINESS_HOURS_DETERMINISTIC";
+    requestedScheduleScope?: "weekly" | "specific_day" | "today" | "open_now";
+    requestedDay?: string | null;
+    scheduleSource?: "OFFICIAL_STRUCTURED_SCHEDULE";
+    missingScheduleConfiguration?: boolean;
   };
 };
 
@@ -107,16 +114,24 @@ export function createV2PrimaryResponseExecutionEnvelope(input: {
   generationId: string;
   approvalFingerprint: string;
   providerMetadata?: { provider: string | null; model: string | null };
+  providerCallCount?: 0;
+  deterministicTelemetry?: {
+    deterministicResponderCount: 1;
+    requestedScheduleScope: "weekly" | "specific_day" | "today" | "open_now";
+    requestedDay: string | null;
+    scheduleSource: "OFFICIAL_STRUCTURED_SCHEDULE";
+    missingScheduleConfiguration: boolean;
+  };
 }): ResponseExecutionEnvelope {
   return {
     executionOwner: "V2_PRIMARY",
     route: "V2_SINGLE_USE",
     turn: input.turn,
-    strategy: "V2_BUSINESS_HOURS",
+    strategy: "V2_BUSINESS_HOURS_DETERMINISTIC",
     responseText: input.responseText,
-    providerCallCount: 1,
+    providerCallCount: input.providerCallCount ?? 0,
     toolCallCount: 0,
-    providerMetadata: input.providerMetadata ?? { provider: "v2-fake", model: "v2-fake" },
+    providerMetadata: input.providerMetadata ?? { provider: null, model: null },
     generationMetadata: null,
     generatedResponse: null,
     outboundAllowed: true,
@@ -129,11 +144,17 @@ export function createV2PrimaryResponseExecutionEnvelope(input: {
     sanitizedTelemetry: {
       executionOwner: "V2_PRIMARY",
       route: "V2_SINGLE_USE",
-      strategy: "V2_BUSINESS_HOURS",
-      providerCallCount: 1,
+      strategy: "V2_BUSINESS_HOURS_DETERMINISTIC",
+      providerCallCount: input.providerCallCount ?? 0,
       toolCallCount: 0,
       decision: "SINGLE_USE_V2",
       reason: "APPROVAL_CLAIMED",
+      ...(input.deterministicTelemetry
+        ? {
+            responseStrategy: "V2_BUSINESS_HOURS_DETERMINISTIC" as const,
+            ...input.deterministicTelemetry,
+          }
+        : {}),
     },
   };
 }

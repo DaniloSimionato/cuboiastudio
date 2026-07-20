@@ -386,6 +386,7 @@ export class ResponseGenerationRouter {
       !(await this.dependencies.coordinator.beginV2Generation({
         ...input.turn,
         generationId: claimed.generationId,
+        providerCallCount: 0,
       }))
     ) {
       return this.deferred({ status: "PENDING_OR_TERMINAL" });
@@ -429,6 +430,17 @@ export class ResponseGenerationRouter {
         generationId: claimed.generationId,
         approvalFingerprint: claimed.approval.creationFingerprint.slice(0, 12),
         providerMetadata: generated.providerMetadata,
+        providerCallCount: generated.sanitizedTelemetry?.providerCallCount ?? 0,
+        deterministicTelemetry: generated.sanitizedTelemetry
+          ? {
+              deterministicResponderCount: generated.sanitizedTelemetry.deterministicResponderCount,
+              requestedScheduleScope: generated.sanitizedTelemetry.requestedScheduleScope,
+              requestedDay: generated.sanitizedTelemetry.requestedDay,
+              scheduleSource: generated.sanitizedTelemetry.scheduleSource,
+              missingScheduleConfiguration:
+                generated.sanitizedTelemetry.missingScheduleConfiguration,
+            }
+          : undefined,
       });
     } catch (error) {
       const reason = error instanceof Error ? error.message.slice(0, 80) : "V2_GENERATION_FAILED";

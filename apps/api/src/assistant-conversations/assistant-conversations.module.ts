@@ -71,15 +71,7 @@ import { RuntimeV2ResponseExecutionAdministrationService } from "../runtime-v2/r
     },
     {
       provide: V2_PRIMARY_RESPONSE_EXECUTOR,
-      useFactory: (
-        candidateProvider: RuntimeV2CandidateResponseProvider,
-        promptCompiler: PromptCompilerService,
-      ) =>
-        new RuntimeV2PrimaryResponseExecutor({
-          candidateProvider,
-          promptCompiler,
-        }),
-      inject: [RuntimeV2CandidateResponseProvider, PromptCompilerService],
+      useFactory: () => new RuntimeV2PrimaryResponseExecutor(),
     },
     {
       provide: RuntimeV2ResponseExecutionAdministrationService,

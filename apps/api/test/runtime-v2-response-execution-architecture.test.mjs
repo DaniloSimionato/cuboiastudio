@@ -46,7 +46,8 @@ test("the real primary executor is DI-registered but has no constructor side eff
   ]);
   assert.match(moduleSource, /V2_PRIMARY_RESPONSE_EXECUTOR/);
   assert.match(moduleSource, /RuntimeV2PrimaryResponseExecutor/);
-  assert.match(executorSource, /RuntimeV2CandidateResponseGenerator/);
+  assert.match(executorSource, /buildDeterministicBusinessHoursResponse/);
+  assert.doesNotMatch(executorSource, /candidateGenerator\.generate/);
   assert.doesNotMatch(executorSource, /Chatwoot|sendChatwootOutboundText|fetch\(/);
   assert.match(executorSource, /ragRequested/);
   assert.match(executorSource, /memoryRequested/);

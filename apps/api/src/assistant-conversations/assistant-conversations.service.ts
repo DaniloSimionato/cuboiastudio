@@ -383,6 +383,12 @@ export type AssistantConversationRuntime = {
     triageAttemptCount?: number;
     responseMode?: string;
     responseExecutionReason?: string;
+    responseStrategy?: string | null;
+    scheduleSource?: string | null;
+    requestedScheduleScope?: string | null;
+    requestedDay?: string | null;
+    deterministicResponderCount?: number;
+    missingScheduleConfiguration?: boolean;
     outboundBlockCountPlanned?: number;
     outboundBlockCountSent?: number;
     outboundBlockCount?: number;
@@ -4236,14 +4242,23 @@ export class AssistantConversationsService {
               mode: "ai-runtime",
               fallback: false,
               outcome: "success",
-              provider: routedGeneration.providerMetadata.provider ?? "v2-fake",
-              model: routedGeneration.providerMetadata.model ?? "v2-fake",
+              provider: routedGeneration.providerMetadata.provider ?? undefined,
+              model: routedGeneration.providerMetadata.model ?? undefined,
               reason: undefined,
             };
             Object.assign(contextMetadata, {
               responseMode: "V2_SINGLE_USE",
               triageMode: false,
               toolCallCount: 0,
+              responseStrategy: routedGeneration.sanitizedTelemetry.responseStrategy ?? null,
+              scheduleSource: routedGeneration.sanitizedTelemetry.scheduleSource ?? null,
+              requestedScheduleScope:
+                routedGeneration.sanitizedTelemetry.requestedScheduleScope ?? null,
+              requestedDay: routedGeneration.sanitizedTelemetry.requestedDay ?? null,
+              deterministicResponderCount:
+                routedGeneration.sanitizedTelemetry.deterministicResponderCount ?? 0,
+              missingScheduleConfiguration:
+                routedGeneration.sanitizedTelemetry.missingScheduleConfiguration ?? false,
             });
           }
 
@@ -4573,7 +4588,7 @@ export class AssistantConversationsService {
     };
 
     Object.assign(contextMetadata, {
-      providerCount: runtime.provider ? 1 : 0,
+      providerCount: responseExecutionEnvelope.providerCallCount,
     });
 
     let blocks = [answer];
@@ -4652,6 +4667,12 @@ export class AssistantConversationsService {
             responseExecutionOwner: responseExecutionEnvelope.executionOwner,
             responseGenerationRoute: responseExecutionEnvelope.route,
             responseExecutionReason: runtime.context.responseExecutionReason,
+            responseStrategy: runtime.context.responseStrategy,
+            scheduleSource: runtime.context.scheduleSource,
+            requestedScheduleScope: runtime.context.requestedScheduleScope,
+            requestedDay: runtime.context.requestedDay,
+            deterministicResponderCount: runtime.context.deterministicResponderCount,
+            missingScheduleConfiguration: runtime.context.missingScheduleConfiguration,
             llmSkipped: runtime.context.llmSkipped,
             handoffPending: runtime.context.handoffPending,
             autoRespond: runtime.context.autoRespond,

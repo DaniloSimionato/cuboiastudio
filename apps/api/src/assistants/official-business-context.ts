@@ -120,6 +120,16 @@ const DAY_SHORT_LABELS: Record<BusinessDayKey, string> = {
   sunday: "domingo",
 };
 
+const WEEKDAY_ALIASES: Array<[string, BusinessDayKey]> = [
+  ["domingo", "sunday"],
+  ["segunda", "monday"],
+  ["terca", "tuesday"],
+  ["quarta", "wednesday"],
+  ["quinta", "thursday"],
+  ["sexta", "friday"],
+  ["sabado", "saturday"],
+];
+
 const TIME_PATTERN = /^\d{2}:\d{2}$/;
 
 function normalizeString(value: unknown): string | null {
@@ -771,6 +781,22 @@ function buildLunchAnswer(context: OfficialBusinessContext): string {
 function buildHoursAnswer(question: string, context: OfficialBusinessContext): string {
   const normalized = normalizeQuestion(question);
 
+  if (!Object.values(context.businessHours).some((intervals) => intervals.length > 0)) {
+    return "Não tenho o horário confirmado no momento. Vou precisar que a equipe confirme essa informação.";
+  }
+
+  const formatTime = (value: string): string => {
+    const [hour, minute] = value.split(":");
+    return minute === "00" ? `${hour}h` : `${hour}h${minute}`;
+  };
+  const formatIntervals = (intervals: BusinessHoursInterval[]): string =>
+    intervals
+      .map((interval) => `das ${formatTime(interval.start)} às ${formatTime(interval.end)}`)
+      .join(" e ");
+  const requestedDay = WEEKDAY_ALIASES.find(([alias]) =>
+    new RegExp(`\\b${alias}\\b`).test(normalized),
+  )?.[1] as BusinessDayKey | undefined;
+
   if (
     normalized.includes("aberto agora") ||
     normalized.includes("aberta agora") ||
@@ -779,6 +805,32 @@ function buildHoursAnswer(question: string, context: OfficialBusinessContext): s
     normalized.includes("funcionando agora")
   ) {
     return buildOpenNowAnswer(context);
+  }
+
+  if (normalized.includes("hoje")) {
+    const intervals = context.businessStatus.todayIntervals;
+    return intervals.length > 0
+      ? `Hoje, ${context.businessStatus.dayLabel}, atendemos ${formatIntervals(intervals)}.`
+      : `Hoje, ${context.businessStatus.dayLabel}, não há atendimento.`;
+  }
+
+  // A day explicitly named by the customer is authoritative over generic
+  // "abre"/"fecha" wording. This prevents asking about Saturday from being
+  // evaluated against the current day.
+  if (requestedDay) {
+    const intervals = context.businessHours[requestedDay];
+    const dayLabel: Record<BusinessDayKey, string> = {
+      monday: "segundas-feiras",
+      tuesday: "terças-feiras",
+      wednesday: "quartas-feiras",
+      thursday: "quintas-feiras",
+      friday: "sextas-feiras",
+      saturday: "sábados",
+      sunday: "domingos",
+    };
+    return intervals.length > 0
+      ? `Sim. Aos ${dayLabel[requestedDay]} atendemos ${formatIntervals(intervals)}.`
+      : `Não. Aos ${dayLabel[requestedDay]} não há atendimento.`;
   }
 
   if (normalized.includes("almoco") || normalized.includes("intervalo")) {
@@ -805,7 +857,85 @@ function buildHoursAnswer(question: string, context: OfficialBusinessContext): s
     }
   }
 
-  return `Nosso horário de atendimento é ${context.businessStatus.weeklySummary.join("; ")}. ${buildTodayHoursSentence(context)}`;
+  const weekdays = BUSINESS_DAY_KEYS.slice(0, 5);
+  const weekdayIntervals = context.businessHours.monday;
+  const weekdaysMatch = weekdays.every(
+    (day) => JSON.stringify(context.businessHours[day]) === JSON.stringify(weekdayIntervals),
+  );
+  const parts: string[] = [];
+  if (weekdaysMatch) {
+    parts.push(
+      weekdayIntervals.length > 0
+        ? `de segunda a sexta, ${formatIntervals(weekdayIntervals)}`
+        : "de segunda a sexta, não há atendimento",
+    );
+  } else {
+    for (const day of weekdays) {
+      const intervals = context.businessHours[day];
+      parts.push(
+        intervals.length > 0
+          ? `${DAY_LABELS[day]}, ${formatIntervals(intervals)}`
+          : `${DAY_LABELS[day]}, fechado`,
+      );
+    }
+  }
+  const saturday = context.businessHours.saturday;
+  parts.push(
+    saturday.length > 0 ? `aos sábados, ${formatIntervals(saturday)}` : "aos sábados, fechado",
+  );
+  const sunday = context.businessHours.sunday;
+  parts.push(
+    sunday.length > 0
+      ? `aos domingos, ${formatIntervals(sunday)}`
+      : "aos domingos estamos fechados",
+  );
+  return `Atendemos ${parts.join("; ")}.`;
+}
+
+export type DeterministicBusinessHoursResponse = {
+  answer: string;
+  requestedScheduleScope: "weekly" | "specific_day" | "today" | "open_now";
+  requestedDay: BusinessDayKey | null;
+  timezone: string;
+  scheduleSource: "OFFICIAL_STRUCTURED_SCHEDULE";
+  missingScheduleConfiguration: boolean;
+};
+
+/**
+ * Canonical factual responder for Runtime V2 business-hours turns. It never
+ * delegates schedule wording or day resolution to a model.
+ */
+export function buildDeterministicBusinessHoursResponse(
+  question: string,
+  context: OfficialBusinessContext | null | undefined,
+): DeterministicBusinessHoursResponse {
+  const normalized = normalizeQuestion(question);
+  const requestedDay = (WEEKDAY_ALIASES.find(([alias]) =>
+    new RegExp(`\\b${alias}\\b`).test(normalized),
+  )?.[1] ?? null) as BusinessDayKey | null;
+  const requestedScheduleScope =
+    /(?:aberto|aberta|funcionando).*(?:agora)|(?:agora).*(?:aberto|aberta|funcionando)/.test(
+      normalized,
+    )
+      ? "open_now"
+      : normalized.includes("hoje")
+        ? "today"
+        : requestedDay
+          ? "specific_day"
+          : "weekly";
+  const missingScheduleConfiguration =
+    !context || !Object.values(context.businessHours).some((intervals) => intervals.length > 0);
+
+  return {
+    answer: context
+      ? buildHoursAnswer(question, context)
+      : "Não tenho o horário confirmado no momento. Vou precisar que a equipe confirme essa informação.",
+    requestedScheduleScope,
+    requestedDay,
+    timezone: context?.timezone ?? "UNAVAILABLE",
+    scheduleSource: "OFFICIAL_STRUCTURED_SCHEDULE",
+    missingScheduleConfiguration,
+  };
 }
 
 function buildAddressAnswer(context: OfficialBusinessContext): string | null {

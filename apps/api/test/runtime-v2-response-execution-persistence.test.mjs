@@ -402,7 +402,7 @@ test("PostgreSQL allows one real V2 primary executor and one shared tail complet
   const winner = results.find((result) => result.executionOwner === "V2_PRIMARY");
   assert.ok(winner);
   assert.equal(results.filter((result) => result.state === "PENDING_OR_TERMINAL").length, 1);
-  assert.equal(providerCalls, 1);
+  assert.equal(providerCalls, 0);
   assert.equal(v1Calls, 0);
 
   const persistedMessage = await prisma.assistantConversationMessage.create({

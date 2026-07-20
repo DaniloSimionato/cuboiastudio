@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildOfficialBusinessContext,
+  buildDeterministicBusinessHoursResponse,
   buildStructuredBusinessAnswer,
 } from "../dist/assistants/official-business-context.js";
 
@@ -58,6 +59,53 @@ test("FG sexta-feira 08:30 em America/Campo_Grande responde que está aberta", (
   assert.match(answer.answer, /não fechamos para almoço/i);
 });
 
+test("formatter determinístico responde sábado, domingo, hoje e aberto agora no timezone oficial", () => {
+  const saturdayContext = buildFgContext(new Date("2026-07-11T15:00:00.000Z"));
+  const saturday = buildDeterministicBusinessHoursResponse("Vocês abrem sábado?", saturdayContext);
+  assert.equal(saturday.requestedScheduleScope, "specific_day");
+  assert.equal(saturday.requestedDay, "saturday");
+  assert.match(saturday.answer, /^Sim\./);
+  assert.match(saturday.answer, /07h30 às 12h/i);
+
+  const sundayContext = buildFgContext(new Date("2026-07-12T15:00:00.000Z"));
+  const sunday = buildDeterministicBusinessHoursResponse("Vocês abrem domingo?", sundayContext);
+  assert.match(sunday.answer, /^Não\./);
+  assert.match(sunday.answer, /não há atendimento/i);
+
+  const today = buildDeterministicBusinessHoursResponse("Qual o horário de hoje?", saturdayContext);
+  assert.equal(today.requestedScheduleScope, "today");
+  assert.match(today.answer, /sábado/i);
+  assert.match(today.answer, /07h30 às 12h/i);
+
+  const openNow = buildDeterministicBusinessHoursResponse("Vocês estão abertos agora?", saturdayContext);
+  assert.equal(openNow.requestedScheduleScope, "open_now");
+  assert.equal(openNow.timezone, "America/Campo_Grande");
+  assert.match(openNow.answer, /abertos agora/i);
+});
+
+test("formatter determinístico não inventa horário quando a agenda está ausente", () => {
+  const context = buildOfficialBusinessContext({ companyName: "Empresa sem agenda", weeklySchedule: {} });
+  const answer = buildDeterministicBusinessHoursResponse("Qual o horário de atendimento?", context);
+  assert.equal(answer.missingScheduleConfiguration, true);
+  assert.match(answer.answer, /não tenho o horário confirmado/i);
+  assert.doesNotMatch(answer.answer, /08h|18h|07h30/i);
+});
+
+test("formatter determinístico lista todos os intervalos de um dia", () => {
+  const context = buildOfficialBusinessContext({
+    companyName: "Empresa com dois intervalos",
+    assistantTimezone: "America/Campo_Grande",
+    weeklySchedule: {
+      saturday: [
+        { start: "08:00", end: "12:00" },
+        { start: "13:00", end: "18:00" },
+      ],
+    },
+  });
+  const answer = buildDeterministicBusinessHoursResponse("Qual o horário de sábado?", context);
+  assert.match(answer.answer, /08h às 12h e das 13h às 18h/i);
+});
+
 test("pergunta de horário informa a agenda oficial mesmo fora do expediente local", () => {
   const context = buildFgContext(new Date("2026-07-20T22:00:00.000Z"));
   const answer = buildStructuredBusinessAnswer("Qual o horário de atendimento?", context);
@@ -66,7 +114,9 @@ test("pergunta de horário informa a agenda oficial mesmo fora do expediente loc
   assert.equal(context.businessStatus.timezone, "America/Campo_Grande");
   assert.equal(context.businessStatus.localTime, "18:00");
   assert.equal(context.businessStatus.isOpenNow, false);
-  assert.match(answer.answer, /08:00 às 18:00/i);
+  assert.match(answer.answer, /08h às 18h/i);
+  assert.match(answer.answer, /07h30 às 12h/i);
+  assert.match(answer.answer, /domingos estamos fechados/i);
   assert.doesNotMatch(answer.answer, /fora do funcionamento oficial/i);
 });
 

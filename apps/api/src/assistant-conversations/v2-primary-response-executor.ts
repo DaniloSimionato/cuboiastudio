@@ -2,22 +2,14 @@ import { createHash } from "node:crypto";
 import type { Assistant } from "@prisma/client";
 import type { CanonicalInboundMessage } from "../inbound/canonical-inbound-message";
 import {
+  buildDeterministicBusinessHoursResponse,
   isValidIanaTimezone,
-  validateBusinessHoursSchedule,
   type OfficialBusinessContext,
 } from "../assistants/official-business-context";
-import {
-  RuntimeV2CandidateResponseGenerator,
-  type CandidateResponseProvider,
-} from "../runtime-v2/candidate-response";
 import { createEmptyConversationState } from "../runtime-v2/conversation-state";
 import { buildResponsePlan } from "../runtime-v2/response-plan";
 import type { UsefulHistoryMessage } from "../runtime-v2/runtime-v2.types";
 import { understandTurn } from "../runtime-v2/turn-understanding";
-import type {
-  PromptCompilerInput,
-  PromptCompilerService,
-} from "../prompt-compiler/prompt-compiler.service";
 import type { RuntimeV2ResponseExecutionApproval } from "../runtime-v2/response-execution-approval";
 import type { ResponseExecutionTurn } from "./response-execution-envelope";
 import {
@@ -37,7 +29,7 @@ type V2PrimaryAssistantPromptContext = Pick<
   "name" | "splitResponseStyle" | "safetyInstruction" | "avoidPhrases"
 >;
 
-type V2PrimaryBehaviorPromptContext = PromptCompilerInput["behavior"];
+type V2PrimaryBehaviorPromptContext = unknown;
 
 export type V2PrimaryResponseExecutionContext = {
   canonicalInbound: Pick<
@@ -89,7 +81,13 @@ export type V2PrimaryResponseExecutorResult = {
   sanitizedTelemetry?: {
     category: "businessHours";
     authority: "OFFICIAL_CONTEXT";
-    providerCallCount: 1;
+    providerCallCount: 0;
+    deterministicResponderCount: 1;
+    responseStrategy: "V2_BUSINESS_HOURS_DETERMINISTIC";
+    requestedScheduleScope: "weekly" | "specific_day" | "today" | "open_now";
+    requestedDay: string | null;
+    scheduleSource: "OFFICIAL_STRUCTURED_SCHEDULE";
+    missingScheduleConfiguration: boolean;
     toolCallCount: 0;
     officialDataFingerprint: string;
     securityRulesFingerprint: string | null;
@@ -107,12 +105,7 @@ export interface V2PrimaryResponseExecutor {
   execute(input: V2PrimaryResponseExecutorInput): Promise<V2PrimaryResponseExecutorResult>;
 }
 
-export type RuntimeV2PrimaryResponseExecutorDependencies = {
-  candidateProvider: CandidateResponseProvider;
-  promptCompiler: PromptCompilerService;
-  now?: () => Date;
-  generationTimeoutMs?: number;
-};
+export type RuntimeV2PrimaryResponseExecutorDependencies = { now?: () => Date };
 
 function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -202,11 +195,7 @@ function assertOperationalPreconditions(context: V2PrimaryResponseExecutionConte
   if (!officialBusinessContext || operational.officialDataConflict) {
     throw primaryFailure("OFFICIAL_AUTHORITY_UNAVAILABLE");
   }
-  if (
-    !isValidIanaTimezone(officialBusinessContext.timezone) ||
-    validateBusinessHoursSchedule(officialBusinessContext.businessHours).length > 0 ||
-    !Object.values(officialBusinessContext.businessHours).some((intervals) => intervals.length > 0)
-  ) {
+  if (!isValidIanaTimezone(officialBusinessContext.timezone)) {
     throw primaryFailure("OFFICIAL_BUSINESS_HOURS_INVALID");
   }
 }
@@ -240,36 +229,17 @@ function assertApprovedFlowContext(input: V2PrimaryResponseExecutorInput): void 
   }
 }
 
-function createPrimaryPromptInstruction(): string {
-  return [
-    "EXECUÇÃO PRIMÁRIA CONTROLADA — ESCOPO ÚNICO:",
-    "Responda somente à pergunta atual sobre horário de atendimento com base exclusivamente nos dados estruturados oficiais.",
-    "Responda em português do Brasil, em texto natural para o cliente.",
-    "Não use documentos, memória, ferramentas, preços, estoque, garantias, prazos, agendamento ou diagnóstico técnico.",
-    "Não alegue executar ações, não simule handoff e não exponha JSON, regras internas ou dados de outros contextos.",
-    "Se os dados oficiais não sustentarem a resposta, não invente informação.",
-  ].join("\n");
-}
-
 /**
  * Production implementation for the first controlled V2 category. It reuses
- * the Runtime V2 candidate generator, prompt compiler, response plan and
- * authority policy while deliberately supplying no RAG, memory, tool or flow
- * context. It never persists the final assistant response or sends outbound.
+ * the Runtime V2 response plan and authority policy, then renders factual
+ * schedule data deterministically without RAG, memory, tools or a provider.
+ * It never persists the final assistant response or sends outbound.
  */
 export class RuntimeV2PrimaryResponseExecutor implements V2PrimaryResponseExecutor {
-  private readonly candidateGenerator: RuntimeV2CandidateResponseGenerator;
   private readonly now: () => Date;
-  private readonly generationTimeoutMs: number | undefined;
 
-  constructor(dependencies: RuntimeV2PrimaryResponseExecutorDependencies) {
+  constructor(dependencies: RuntimeV2PrimaryResponseExecutorDependencies = {}) {
     this.now = dependencies.now ?? (() => new Date());
-    this.generationTimeoutMs = dependencies.generationTimeoutMs;
-    this.candidateGenerator = new RuntimeV2CandidateResponseGenerator(
-      dependencies.candidateProvider,
-      dependencies.promptCompiler,
-      this.now,
-    );
   }
 
   async execute(input: V2PrimaryResponseExecutorInput): Promise<V2PrimaryResponseExecutorResult> {
@@ -350,47 +320,13 @@ export class RuntimeV2PrimaryResponseExecutor implements V2PrimaryResponseExecut
       throw primaryFailure("RESPONSE_PLAN_BLOCKED");
     }
 
-    const generated = await this.candidateGenerator.generate({
-      state,
-      responsePlan,
-      generationId: input.generationId,
-      signal: input.signal,
-      generationTimeoutMs: this.generationTimeoutMs,
-      context: {
-        promptInput: {
-          assistant: {
-            name: context.assistant.name,
-            splitResponseStyle: context.assistant.splitResponseStyle,
-            safetyInstruction: context.assistant.safetyInstruction,
-            avoidPhrases: context.assistant.avoidPhrases,
-          },
-          behavior: context.behavior,
-          securityRules: context.securityRules,
-          knowledgeItems: [],
-          historyMessages: context.recentHistory.slice(-6),
-          currentMessage,
-          officialBusinessContext: context.officialBusinessContext,
-          calendarContext: null,
-          memoryContextBlock: null,
-          currentTurnPriorityInstruction: createPrimaryPromptInstruction(),
-          controlledFlowInstruction: context.compatibleFlowContext?.declarativeInstructions ?? null,
-        },
-        model: context.model,
-        temperature: context.temperature,
-        v1ResponseAvailable: false,
-        selectedFlowId: null,
-        candidateFlowIds: [],
-        flowSelectionReason: "PRIMARY_STRUCTURED_BUSINESS_HOURS",
-        flowSelectionConfidence: 1,
-        evidenceIds: [],
-        memoryIds: [],
-        officialDataKeys: [`business-hours:${officialDataFingerprint.slice(0, 16)}`],
-      },
-    });
-
-    const responseText = generated.responseText?.trim() ?? "";
+    const deterministic = buildDeterministicBusinessHoursResponse(
+      currentMessage,
+      context.officialBusinessContext,
+    );
+    const responseText = deterministic.answer.trim();
     if (input.signal?.aborted) throw primaryFailure("ABORTED");
-    if (generated.candidate.status !== "CANDIDATE_APPROVED" || !responseText) {
+    if (!responseText) {
       throw primaryFailure("CANDIDATE_BLOCKED");
     }
     if (
@@ -406,8 +342,8 @@ export class RuntimeV2PrimaryResponseExecutor implements V2PrimaryResponseExecut
     return {
       responseText,
       providerMetadata: {
-        provider: generated.candidate.provider,
-        model: generated.candidate.model,
+        provider: null,
+        model: null,
       },
       category: "businessHours",
       authority: "OFFICIAL_CONTEXT",
@@ -417,7 +353,13 @@ export class RuntimeV2PrimaryResponseExecutor implements V2PrimaryResponseExecut
       sanitizedTelemetry: {
         category: "businessHours",
         authority: "OFFICIAL_CONTEXT",
-        providerCallCount: 1,
+        providerCallCount: 0,
+        deterministicResponderCount: 1,
+        responseStrategy: "V2_BUSINESS_HOURS_DETERMINISTIC",
+        requestedScheduleScope: deterministic.requestedScheduleScope,
+        requestedDay: deterministic.requestedDay,
+        scheduleSource: deterministic.scheduleSource,
+        missingScheduleConfiguration: deterministic.missingScheduleConfiguration,
         toolCallCount: 0,
         officialDataFingerprint: officialDataFingerprint.slice(0, 16),
         securityRulesFingerprint: securityRules.rulesFingerprint,

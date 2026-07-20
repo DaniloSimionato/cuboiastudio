@@ -598,3 +598,21 @@ turno, sem criar uma memória ampla. Um turno com uma única solicitação prese
 estilo anterior e não recebe abertura artificial. Afirmações de coleta ou retirada
 continuam fail-closed: "preciso confirmar" não é tratado como disponibilidade
 prometida pelo guardião de autoridade.
+
+### Horário oficial determinístico na V2
+
+O canário real confirmou que a agenda estruturada chegava corretamente à V2, mas
+um provider podia omitir o sábado ou contradizer o dado oficial. Para a categoria
+direta e explicitamente autorizada `businessHours`, a Runtime V2 agora renderiza
+a resposta a partir da agenda semanal e do timezone oficiais, sem chamada ao
+provider. A estratégia registrada é `V2_BUSINESS_HOURS_DETERMINISTIC`, com
+`deterministicResponderCount=1` e `providerCount=0`; o restante do lifecycle
+single-use, claim CAS, sender único e replay terminal permanece inalterado.
+
+O formatter cobre horário geral, dia específico, horário de hoje e estado
+aberto/fechado no instante local. Ele sempre inclui sábado e domingo no resumo
+semanal, lista múltiplos intervalos quando existirem e usa `America/Campo_Grande`
+quando este for o timezone oficial. Sem agenda válida, não infere expediente nem
+consulta knowledge como substituição: devolve uma resposta segura de confirmação
+pendente. Esta correção não altera flows, knowledge ou a agenda cadastrada; o
+reteste real em staging continua pendente.

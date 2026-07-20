@@ -165,7 +165,7 @@ test("authorized V2 fake owns one turn and the shared tail consumes the approval
   assert.equal(persisted.owner, "V2_OUTBOUND_SENT");
   assert.equal(persisted.terminalStatus, "V2_OUTBOUND_SENT");
   assert.equal(persisted.approval.status, "CONSUMED");
-  assert.equal(persisted.providerV2CallCount, 1);
+  assert.equal(persisted.providerV2CallCount, 0);
   assert.equal(persisted.outboundV2Attempted, true);
   assert.equal(persisted.outboundV2Performed, true);
   assert.equal(persisted.externalMessageId, "external-fake-c1");
