@@ -174,6 +174,7 @@ test("an explicit V2 flow accepts only direct business-hours semantic decisions"
   const explicit = explicitBusinessHoursFlow();
   for (const message of [
     "Qual o horário de atendimento?",
+    "Qual é o horário de atendimento?",
     "Que horas vocês abrem?",
     "Que horas vocês fecham?",
     "Vocês atendem aos sábados?",

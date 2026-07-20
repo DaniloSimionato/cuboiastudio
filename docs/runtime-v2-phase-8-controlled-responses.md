@@ -542,10 +542,18 @@ e ao `internalMessageId` do inbound que a criou; o preflight exclui esse inbound
 histórico antes de aplicar a janela conversacional. A criação concorrente reutiliza
 somente a approval compatível já armada e o claim continua protegido por CAS.
 
+Uma approval terminal de um turno anterior não participa da decisão semântica de
+um novo inbound automático: ela é arquivada pelo store quando o novo preflight/arm
+canônico cria a próxima attempt. Em contraste, uma approval automática terminal
+vinculada ao mesmo `internalMessageId` é um replay e permanece terminal, sem novo
+preflight, provider, sender ou fallback V1. Essa separação evita que uma approval
+MANUAL histórica provoque `RESPONSE_EXECUTION_SEMANTIC_MISMATCH` antes da criação
+da approval automática do novo turno.
+
 Contexto legado é aceito apenas quando todos os campos contextuais são nulos ou
 ausentes. Um contexto parcialmente persistido, ou qualquer diferença de versão,
 fingerprint ou antecedente, bloqueia antes do claim. Fingerprints opacos permanecem
 íntegros no `stateJson`; redaction ocorre apenas nas superfícies de observabilidade.
 
-Esta alteração é somente de código e testes locais: staging e a configuração real
-da Heloísa permanecem inalterados até um canário controlado posterior.
+O contrato continua fail-closed: a correção é somente de código e testes locais e
+não altera flows, knowledge ou configuração real da Heloísa.

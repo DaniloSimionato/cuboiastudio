@@ -13,12 +13,16 @@ function resolve(message, recentHistory = []) {
 
 test("shared response-execution intent accepts deterministic business-hours formulations", () => {
   const positiveCases = [
+    "Qual o horário de atendimento?",
+    "Qual é o horário de atendimento?",
     "Qual é o horário de atendimento de segunda a sexta?",
     "Que horas vocês atendem de segunda a sexta?",
     "Qual o horário de funcionamento?",
     "Até que horas vocês atendem?",
     "Vocês abrem que horas?",
+    "Que horas vocês fecham?",
     "Vocês atendem aos sábados?",
+    "Qual o horário de segunda a sexta?",
     "Qual é o expediente de vocês?",
     "Que dia e horário vocês funcionam?",
     "Hoje vocês atendem até que horas?",

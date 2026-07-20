@@ -182,6 +182,23 @@ export class ResponseGenerationRouter {
     }
 
     let approval = await this.dependencies.coordinator.loadApproval(input.turn);
+    if (
+      approval &&
+      approvalMode === "AUTO_SINGLE_USE" &&
+      approval.status !== "ARMED" &&
+      approval.status !== "CLAIMED"
+    ) {
+      // A terminal approval from an earlier turn must not prevent the new inbound
+      // from reaching the canonical preflight/arm path. A terminal AUTO approval
+      // bound to this same inbound is a replay and must remain terminal.
+      if (
+        approval.approvalSource === "AUTO_SINGLE_USE" &&
+        approval.internalMessageId === input.turn.internalMessageId
+      ) {
+        return this.deferred({ status: "PENDING_OR_TERMINAL" });
+      }
+      approval = null;
+    }
 
     if (!approval && approvalMode === "AUTO_SINGLE_USE") {
       // Validar restrições estritas do primeiro escopo suportado

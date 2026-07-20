@@ -283,6 +283,175 @@ test("AUTO_SINGLE_USE com horário direto cria, claims e executa V2", async () =
   assert.equal(result.responseText, "V2 Resp");
 });
 
+test("AUTO_SINGLE_USE substitui uma approval MANUAL terminal antes do preflight do novo inbound", async () => {
+  const stateStore = new InMemoryConversationStateStore();
+  const store = new ConversationStateResponseExecutionStore(stateStore);
+  const coordinator = new RuntimeV2ResponseExecutionCoordinator({ store });
+  const priorTurn = testTurn({
+    internalMessageId: "manual-inbound",
+    canonicalComparisonHash: "manual-hash",
+  });
+  await store.arm({
+    approval: armedApproval(priorTurn, {
+      expectedSemanticDecisionFingerprint: "manual-decision-fp",
+      internalMessageId: null,
+      approvalSource: "MANUAL",
+    }),
+    contextVersion: 1,
+  });
+  const priorApproval = await coordinator.loadApproval(priorTurn);
+  const claimed = await coordinator.claim({ ...priorTurn, approval: priorApproval });
+  assert.equal(claimed.status, "CLAIMED");
+  if (claimed.status !== "CLAIMED") throw new Error("Expected the legacy approval to claim.");
+  assert.equal(
+    await coordinator.beginV2Generation({ ...priorTurn, generationId: claimed.generationId }),
+    true,
+  );
+  assert.equal(
+    await coordinator.approveV2Candidate({ ...priorTurn, generationId: claimed.generationId }),
+    true,
+  );
+  assert.equal(
+    await coordinator.beforeOutbound({
+      ...priorTurn,
+      owner: "V2_PRIMARY",
+      generationId: claimed.generationId,
+    }),
+    true,
+  );
+  assert.equal(
+    await coordinator.afterOutboundConfirmed({
+      ...priorTurn,
+      owner: "V2_PRIMARY",
+      generationId: claimed.generationId,
+      externalMessageId: "external-manual",
+    }),
+    true,
+  );
+
+  let preflightCalls = 0;
+  const administration = createMockAdministration({ store });
+  const originalPreflight = administration.preflight;
+  administration.preflight = async (input) => {
+    preflightCalls += 1;
+    return originalPreflight(input);
+  };
+  const router = new ResponseGenerationRouter({
+    executeV1: async () => ({ responseText: "V1 Resp", providerMetadata: {} }),
+    coordinator,
+    administration,
+    v2Executor: {
+      execute: async () => ({
+        responseText: "V2 Resp",
+        category: "businessHours",
+        authority: "OFFICIAL_CONTEXT",
+        candidateStatus: "CANDIDATE_APPROVED",
+        qualityGateResult: "APPROVED",
+        outboundAllowed: true,
+        providerMetadata: {},
+      }),
+    },
+  });
+  const result = await router.route({
+    turn: testTurn({ internalMessageId: "auto-inbound" }),
+    executionMode: "CONTROLLED",
+    executionAssistantIds: [scope.assistantId],
+    executionConversationIds: [],
+    executionConversationScope: "ASSISTANT_WIDE",
+    v2Eligibility: mockEligibility(),
+    revalidateV2Flow: async () => mockEligibility().flowEvaluation,
+    approvalMode: "AUTO_SINGLE_USE",
+    messageText: "Qual o horário de atendimento?",
+    v1Input: {},
+  });
+
+  assert.equal(result.executionOwner, "V2_PRIMARY", JSON.stringify(result.sanitizedTelemetry));
+  assert.equal(preflightCalls, 1);
+});
+
+test("AUTO_SINGLE_USE mantém terminal o replay do mesmo inbound automático", async () => {
+  const stateStore = new InMemoryConversationStateStore();
+  const store = new ConversationStateResponseExecutionStore(stateStore);
+  const coordinator = new RuntimeV2ResponseExecutionCoordinator({ store });
+  const turn = testTurn({ internalMessageId: "auto-replay-inbound" });
+  await store.arm({
+    approval: armedApproval(turn, {
+      approvalSource: "AUTO_SINGLE_USE",
+      internalMessageId: turn.internalMessageId,
+    }),
+    contextVersion: 1,
+  });
+  const approval = await coordinator.loadApproval(turn);
+  const claimed = await coordinator.claim({ ...turn, approval });
+  assert.equal(claimed.status, "CLAIMED");
+  if (claimed.status !== "CLAIMED") throw new Error("Expected the AUTO approval to claim.");
+  assert.equal(
+    await coordinator.beginV2Generation({ ...turn, generationId: claimed.generationId }),
+    true,
+  );
+  assert.equal(
+    await coordinator.approveV2Candidate({ ...turn, generationId: claimed.generationId }),
+    true,
+  );
+  assert.equal(
+    await coordinator.beforeOutbound({
+      ...turn,
+      owner: "V2_PRIMARY",
+      generationId: claimed.generationId,
+    }),
+    true,
+  );
+  assert.equal(
+    await coordinator.afterOutboundConfirmed({
+      ...turn,
+      owner: "V2_PRIMARY",
+      generationId: claimed.generationId,
+      externalMessageId: "external-auto",
+    }),
+    true,
+  );
+
+  let v1Calls = 0;
+  let v2Calls = 0;
+  let preflightCalls = 0;
+  const administration = createMockAdministration({ store });
+  administration.preflight = async () => {
+    preflightCalls += 1;
+    throw new Error("A terminal replay must not run preflight.");
+  };
+  const router = new ResponseGenerationRouter({
+    executeV1: async () => {
+      v1Calls += 1;
+      return { responseText: "V1 Resp", providerMetadata: {} };
+    },
+    coordinator,
+    administration,
+    v2Executor: {
+      execute: async () => {
+        v2Calls += 1;
+        throw new Error("A terminal replay must not run V2.");
+      },
+    },
+  });
+  const result = await router.route({
+    turn,
+    executionMode: "CONTROLLED",
+    executionAssistantIds: [scope.assistantId],
+    executionConversationIds: [],
+    executionConversationScope: "ASSISTANT_WIDE",
+    v2Eligibility: mockEligibility(),
+    revalidateV2Flow: async () => mockEligibility().flowEvaluation,
+    approvalMode: "AUTO_SINGLE_USE",
+    messageText: "Qual o horário de atendimento?",
+    v1Input: {},
+  });
+
+  assert.equal(result.state, "PENDING_OR_TERMINAL");
+  assert.equal(preflightCalls, 0);
+  assert.equal(v1Calls, 0);
+  assert.equal(v2Calls, 0);
+});
+
 test("AUTO_SINGLE_USE accepts an exact conversation scope and rejects scope misses before preflight", async () => {
   const stateStore = new InMemoryConversationStateStore();
   const store = new ConversationStateResponseExecutionStore(stateStore);
