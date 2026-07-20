@@ -112,10 +112,12 @@ import {
 } from "./runtime-authority-guard";
 import {
   extractCustomerStructuredFields,
+  buildMultiIntentTurn,
   getCustomerUnableToAnswerReason,
   flowIntentKeyForFlow,
   flowObjectiveForFlow,
 } from "../intent-router/intent-routing";
+import { ensureMultiIntentResponseCoverage } from "./multi-intent-response-coverage";
 import { evaluateFlowApplicability } from "./flow-applicability-evaluator";
 import { selectV1ResponseGenerationStrategy } from "./v1-response-generation-executor";
 import { ResponseGenerationRouter } from "./response-generation-router";
@@ -268,6 +270,15 @@ export type AssistantConversationRuntime = {
     candidateScores?: Array<{ flowId: string; score: number }>;
     matchedAliases?: string[];
     secondaryIntentKeys?: string[];
+    primaryIntent?: string | null;
+    secondaryIntents?: string[];
+    explicitRequests?: string[];
+    unresolvedRequests?: string[];
+    responseCoverage?: string[];
+    inboundFragmentCount?: number;
+    explicitRequestCount?: number;
+    secondaryIntentCount?: number;
+    unresolvedRequestCount?: number;
     triageFlowIncluded?: boolean;
     knownFieldKeys?: string[];
     pendingFieldKeys?: string[];
@@ -2958,6 +2969,7 @@ export class AssistantConversationsService {
       (attachment) => attachment.type === "audio" && Boolean(attachment.transcript?.trim()),
     );
     const extractedCustomerFields = extractCustomerStructuredFields(customerIntentText);
+    let multiIntentTurn = buildMultiIntentTurn({ message: customerIntentText });
     const mergedKnownFieldKeys = [
       ...new Set([
         ...(loadedTriageState?.knownFieldKeys ?? []),
@@ -2996,6 +3008,17 @@ export class AssistantConversationsService {
       candidateScores: [],
       matchedAliases: [],
       secondaryIntentKeys: extractedCustomerFields.secondaryIntentKeys,
+      primaryIntent: multiIntentTurn.primaryIntent,
+      secondaryIntents: multiIntentTurn.secondaryIntents,
+      explicitRequests: multiIntentTurn.explicitRequests,
+      unresolvedRequests: multiIntentTurn.unresolvedRequests,
+      responseCoverage: [],
+      inboundFragmentCount: customerIntentText
+        .split(/\n+/)
+        .filter((fragment) => fragment.trim().length > 0).length,
+      explicitRequestCount: multiIntentTurn.explicitRequests.length,
+      secondaryIntentCount: multiIntentTurn.secondaryIntents.length,
+      unresolvedRequestCount: multiIntentTurn.unresolvedRequests.length,
       triageFlowIncluded: false,
       knownFieldKeys: mergedKnownFieldKeys,
       pendingFieldKeys: mergedPendingFieldKeys,
@@ -3174,6 +3197,14 @@ export class AssistantConversationsService {
       candidateScores: contextMetadata.candidateScores,
       matchedAliases: contextMetadata.matchedAliases,
       secondaryIntentKeys: contextMetadata.secondaryIntentKeys,
+      primaryIntent: contextMetadata.primaryIntent,
+      secondaryIntents: contextMetadata.secondaryIntents,
+      explicitRequests: contextMetadata.explicitRequests,
+      unresolvedRequests: contextMetadata.unresolvedRequests,
+      inboundFragmentCount: contextMetadata.inboundFragmentCount,
+      explicitRequestCount: contextMetadata.explicitRequestCount,
+      secondaryIntentCount: contextMetadata.secondaryIntentCount,
+      unresolvedRequestCount: contextMetadata.unresolvedRequestCount,
       triageFlowIncluded: contextMetadata.triageFlowIncluded,
       knownFieldKeys: contextMetadata.knownFieldKeys,
       pendingFieldKeys: contextMetadata.pendingFieldKeys,
@@ -3450,6 +3481,10 @@ export class AssistantConversationsService {
           const selectedFlow = routeResult.flowId
             ? (assistant.flows ?? []).find((f) => f.id === routeResult.flowId)
             : null;
+          multiIntentTurn = buildMultiIntentTurn({
+            message: customerIntentText,
+            selectedIntentKey: selectedFlow ? flowIntentKeyForFlow(selectedFlow) : null,
+          });
           const triageFlowContext: TriageFlowContext | null = selectedFlow
             ? {
                 flowId: selectedFlow.id,
@@ -3544,6 +3579,13 @@ export class AssistantConversationsService {
                 ...extractedCustomerFields.secondaryIntentKeys,
               ]),
             ],
+            primaryIntent: multiIntentTurn.primaryIntent,
+            secondaryIntents: multiIntentTurn.secondaryIntents,
+            explicitRequests: multiIntentTurn.explicitRequests,
+            unresolvedRequests: multiIntentTurn.unresolvedRequests,
+            explicitRequestCount: multiIntentTurn.explicitRequests.length,
+            secondaryIntentCount: multiIntentTurn.secondaryIntents.length,
+            unresolvedRequestCount: multiIntentTurn.unresolvedRequests.length,
             intentSelectionMethod:
               routeResult.flowSelectionMethod === "keyword_scored"
                 ? "keyword"
@@ -3571,6 +3613,13 @@ export class AssistantConversationsService {
             candidateScores: contextMetadata.candidateScores,
             matchedAliases: contextMetadata.matchedAliases,
             secondaryIntentKeys: contextMetadata.secondaryIntentKeys,
+            primaryIntent: contextMetadata.primaryIntent,
+            secondaryIntents: contextMetadata.secondaryIntents,
+            explicitRequests: contextMetadata.explicitRequests,
+            unresolvedRequests: contextMetadata.unresolvedRequests,
+            explicitRequestCount: contextMetadata.explicitRequestCount,
+            secondaryIntentCount: contextMetadata.secondaryIntentCount,
+            unresolvedRequestCount: contextMetadata.unresolvedRequestCount,
             knownFieldKeys: contextMetadata.knownFieldKeys,
             pendingFieldKeys: contextMetadata.pendingFieldKeys,
             requestedDetailKey: contextMetadata.requestedDetailKey,
@@ -3628,6 +3677,7 @@ export class AssistantConversationsService {
                   }
                 : null,
               memoryContextBlock,
+              multiIntentTurn,
               currentTurnPriorityInstruction: [
                 "PRIORIDADE DO TURNO ATUAL:",
                 "Responda primeiro à mensagem atual do cliente. O histórico é apenas contexto e não pode substituir a intenção explícita deste turno.",
@@ -3636,7 +3686,7 @@ export class AssistantConversationsService {
                   ? `Resultado conversacional protegido: ${conversationalOutcome}. Esta saída prevalece sobre qualquer categoria inferida da resposta do modelo.`
                   : "A categoria factual deve seguir a intenção atual; não reutilize a categoria de respostas antigas.",
                 selectedFlow
-                  ? `Flow atual selecionado: ${selectedFlow.id}. Execute somente o objetivo configurado para este flow.`
+                  ? `Flow atual selecionado: ${selectedFlow.id}. Use-o como condutor operacional, sem ignorar as demais solicitações explícitas deste turno.`
                   : "Nenhum flow foi selecionado para este turno.",
                 triageExitReason
                   ? "O cliente não consegue fornecer o detalhe técnico solicitado. Não repita a pergunta; reconheça os dados já informados e indique que a avaliação técnica poderá verificar o detalhe pendente."
@@ -4341,6 +4391,36 @@ export class AssistantConversationsService {
       contextMetadata.requestedDetailChangeReason = "CUSTOMER_UNABLE_TO_PROVIDE_DETAIL";
     }
 
+    if (multiIntentTurn.explicitRequests.length > 1) {
+      const coverage = ensureMultiIntentResponseCoverage({
+        answer,
+        turn: multiIntentTurn,
+        currentMessage: customerIntentText,
+        officialBusinessContext,
+      });
+      answer = coverage.answer;
+      if (coverage.coverage.addedAcknowledgements.includes("business_hours")) {
+        sources = [
+          ...sources,
+          {
+            id: "official-structured-data",
+            title: "Dados oficiais da empresa",
+          },
+        ];
+      }
+      Object.assign(contextMetadata, {
+        responseCoverage: coverage.coverage.coveredRequests,
+        unresolvedRequests: coverage.coverage.unresolvedRequests,
+        unresolvedRequestCount: coverage.coverage.unresolvedRequests.length,
+      });
+      contextMetadata.contextManifest = {
+        ...contextMetadata.contextManifest,
+        responseCoverage: contextMetadata.responseCoverage,
+        unresolvedRequests: contextMetadata.unresolvedRequests,
+        unresolvedRequestCount: contextMetadata.unresolvedRequestCount,
+      };
+    }
+
     const expectedAuthority = deriveExpectedAuthorityCategory({
       currentMessage: customerIntentText,
       normalizedIntent: contextMetadata.detectedIntent,
@@ -4632,6 +4712,15 @@ export class AssistantConversationsService {
             lastRelevantQuestionUpdated: runtime.context.lastRelevantQuestionUpdated,
             lastRelevantQuestionUpdateReason: runtime.context.lastRelevantQuestionUpdateReason,
             historyDuplicateResponsesRemoved: runtime.context.historyDuplicateResponsesRemoved,
+            inboundFragmentCount: runtime.context.inboundFragmentCount,
+            explicitRequestCount: runtime.context.explicitRequestCount,
+            primaryIntent: runtime.context.primaryIntent,
+            secondaryIntentCount: runtime.context.secondaryIntentCount,
+            secondaryIntents: runtime.context.secondaryIntents,
+            explicitRequests: runtime.context.explicitRequests,
+            responseCoverage: runtime.context.responseCoverage,
+            unresolvedRequestCount: runtime.context.unresolvedRequestCount,
+            unresolvedRequests: runtime.context.unresolvedRequests,
             knowledgeCount: runtime.ragData?.usedKnowledge?.length ?? knowledgeItems.length,
             knowledgeLimit: runtime.context.knowledgeLimit,
             knowledgeChunkCount: runtime.context.knowledgeChunkCount,

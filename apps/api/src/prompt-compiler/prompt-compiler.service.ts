@@ -3,6 +3,7 @@ import type { AiChatCompletionMessage } from "../ai/ai.types";
 import { Assistant, AssistantBehavior, AssistantFlow } from "@prisma/client";
 import type { OfficialBusinessContext } from "../assistants/official-business-context";
 import { MAX_HISTORY_MESSAGE_LENGTH } from "../assistant-conversations/conversation-history-format";
+import type { MultiIntentTurn } from "../intent-router/intent-routing";
 
 const MAX_PROMPT_TEXT_LENGTH = 10000;
 const MAX_TRIAGE_HISTORY_MESSAGES = 12;
@@ -228,7 +229,36 @@ export type PromptCompilerInput = {
   /** A validated, declarative-only flow fragment for controlled V2 execution. */
   controlledFlowInstruction?: string | null;
   currentTurnPriorityInstruction?: string | null;
+  multiIntentTurn?: MultiIntentTurn | null;
 };
+
+function requestLabel(request: MultiIntentTurn["explicitRequests"][number]): string {
+  switch (request) {
+    case "technical_support":
+      return "problema técnico informado";
+    case "pickup_delivery":
+      return "pergunta sobre coleta ou retirada";
+    case "business_hours":
+      return "pergunta sobre horário";
+    case "pricing":
+      return "pergunta sobre preço";
+    case "warranty":
+      return "pergunta sobre garantia";
+  }
+}
+
+function buildMultiIntentCoverageBlock(turn: MultiIntentTurn): string | null {
+  if (turn.explicitRequests.length < 2) return null;
+
+  return [
+    "COBERTURA OBRIGATÓRIA DAS SOLICITAÇÕES EXPLÍCITAS DO TURNO:",
+    `- Solicitação principal para condução: ${turn.primaryIntent ? requestLabel(turn.primaryIntent) : "não definida"}.`,
+    `- Também reconheça de forma curta: ${turn.secondaryIntents.map(requestLabel).join("; ") || "nenhuma"}.`,
+    "- Uma única resposta deve reconhecer todas as solicitações explícitas antes de fazer, no máximo, uma pergunta de avanço.",
+    "- Use apenas fatos confirmados; quando uma informação exigir validação, diga isso sem prometer disponibilidade, preço, prazo ou política.",
+    "- Não transforme a resposta em lista, catálogo ou respostas separadas. Não ignore uma solicitação explícita só porque outro flow foi selecionado como principal.",
+  ].join("\n");
+}
 
 function buildSecurityBlock(
   assistant: Partial<Assistant>,
@@ -329,7 +359,7 @@ function buildTriageDecisionBlock(currentMessage: string): string {
     currentMessageRule,
     "- Escolha a única pergunta de maior alavancagem para o próximo passo: um identificador, modelo, contexto, produto ou necessidade principal que destrave as demais respostas.",
     "- Confirme somente o essencial e faça uma pergunta principal. Explique detalhes extras apenas quando forem pedidos ou necessários depois dessa resposta.",
-    "- Não responda cada serviço, não faça checklist, não use numeração e não use 'Vamos por partes'.",
+    "- Reconheça cada solicitação explícita de forma curta, sem checklist, numeração ou 'Vamos por partes'.",
     "- Não antecipe preço, prazo, orçamento ou compatibilidade de vários itens sem a informação principal.",
     'Inadequado: "Vamos por partes: 1. Serviço A... 2. Serviço B... 3. Serviço C..."',
     'Adequado: "Consigo te ajudar com tudo isso. Me passa o modelo do equipamento primeiro?"',
@@ -419,6 +449,7 @@ export class PromptCompilerService {
       triageState = null,
       triageFlowContext = null,
       currentTurnPriorityInstruction = null,
+      multiIntentTurn = null,
     } = input;
 
     if (triageMode) {
@@ -472,6 +503,13 @@ export class PromptCompilerService {
         messages.push({ role: "system", content: flowContextBlock });
       }
 
+      const multiIntentCoverageBlock = multiIntentTurn
+        ? buildMultiIntentCoverageBlock(multiIntentTurn)
+        : null;
+      if (multiIntentCoverageBlock) {
+        messages.push({ role: "system", content: multiIntentCoverageBlock });
+      }
+
       if (isSecondAttempt) {
         const strictBlock = [
           "CONTRATO CRÍTICO DE TRIAGEM (SEGUNDA TENTATIVA OBRIGATÓRIA):",
@@ -491,7 +529,7 @@ export class PromptCompilerService {
         const objectiveBlock = [
           "OBJETIVO DA TRIAGEM:",
           "Escolha a única pergunta de maior alavancagem para o próximo passo. Escolha a única pergunta que mais destrava o atendimento (um identificador, modelo, contexto, produto ou necessidade principal que destrave as demais respostas).",
-          "Não tente responder a cada serviço individualmente, não faça checklist, não faça múltiplas perguntas na mesma resposta e não use numeração ou listas.",
+          "Reconheça cada solicitação explícita do turno de forma curta, mas mantenha uma única pergunta de avanço e não use numeração ou listas.",
         ].join("\n");
         messages.push({ role: "system", content: objectiveBlock });
 
@@ -504,7 +542,7 @@ export class PromptCompilerService {
           "- Sem cabeçalhos ou títulos.",
           "- Sem checklist.",
           "- Sem usar a expressão \"Vamos por partes\".",
-          "- Sem explicar separadamente cada solicitação.",
+          "- Não separe a resposta em explicações por solicitação; reconheça todos os pedidos de forma curta e natural.",
           "- Sem antecipar preço, prazo, orçamento ou compatibilidade de vários itens sem a informação principal.",
           "- Utilize linguagem natural e amigável típica de WhatsApp.",
           "- NÃO sugira agendamento de horário, não mencione ligar ou marcar reuniões, e não passe contatos de equipe nesta etapa.",
@@ -655,6 +693,13 @@ export class PromptCompilerService {
     // 8. This late anchor prevents flows, knowledge and old messages from turning triage into a catalog.
     if (isMultiNeedTriageMessage(currentMessage)) {
       messages.push({ role: "system", content: buildTriageDecisionBlock(currentMessage) });
+    }
+
+    const multiIntentCoverageBlock = multiIntentTurn
+      ? buildMultiIntentCoverageBlock(multiIntentTurn)
+      : null;
+    if (multiIntentCoverageBlock) {
+      messages.push({ role: "system", content: multiIntentCoverageBlock });
     }
 
     // 9. History is context only; it must not become a style example.

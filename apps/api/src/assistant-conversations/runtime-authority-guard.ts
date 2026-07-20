@@ -306,7 +306,12 @@ export function validateV1AnswerAuthority(input: {
     (/\br\$\s*\d|\b\d+(?:[.,]\d{2})?\s*(?:reais|real)\b/.test(normalizedAnswer) ||
       (/(?:preco|valor|custa|custaria)/.test(normalizedAnswer) &&
         /\b\d{2,}\b/.test(normalizedAnswer)));
+  const pickupExplicitlyUnconfirmed =
+    /(?:nao posso|preciso confirmar|nao tenho como|nao consigo confirmar|sem confirmacao)/.test(
+      normalizedAnswer,
+    ) && /(?:busca|buscar|retirada|retirar|coleta|entrega)/.test(normalizedAnswer);
   const pickupClaim =
+    !pickupExplicitlyUnconfirmed &&
     /(?:busca|buscar|retirada|retirar|domicilio|domiciliar)/.test(normalizedAnswer) &&
     /(?:realiz|dispon|fazemos|nao fazemos|nao realiz|buscamos)/.test(normalizedAnswer);
   const availabilityExplicitlyUnconfirmed =
@@ -315,6 +320,7 @@ export function validateV1AnswerAuthority(input: {
     ) && /(?:vaga|disponibilidade|horario|agendamento)/.test(normalizedAnswer);
   const availabilityClaim =
     !availabilityExplicitlyUnconfirmed &&
+    !pickupExplicitlyUnconfirmed &&
     !/(?:telefone|whatsapp|contato|numero)/.test(normalizedAnswer) &&
     /(?:disponivel|temos horario|posso te atender|atendimento hoje|atendimento amanha|agendar|confirmar o agendamento|vaga)/.test(
       normalizedAnswer,

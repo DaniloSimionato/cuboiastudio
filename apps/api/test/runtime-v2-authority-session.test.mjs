@@ -292,10 +292,25 @@ test("lote multiassunto não converte uma resposta segura de coleta em indisponi
     officialBusinessContext: officialContext(),
   });
 
-  assert.equal(result.finalSafeResponseCategory, "pickup");
+  assert.equal(result.finalSafeResponseCategory, null);
   assert.equal(result.authorityCategorySource, "explicit_intent");
   assert.match(result.answer, /retirada/i);
   assert.doesNotMatch(result.answer, /fora do funcionamento oficial/i);
+});
+
+test("guardião preserva reconhecimento secundário quando coleta ainda exige confirmação", () => {
+  const result = validateV1AnswerAuthority({
+    answer:
+      "Entendi que seu notebook não está ligando. Preciso confirmar se a retirada está disponível para esse atendimento.",
+    currentMessage: "Meu notebook não está ligando\nVocês fazem coleta?",
+    selectedFlowKey: "pickup_delivery",
+    sources: [],
+    officialBusinessContext: officialContext(),
+  });
+
+  assert.equal(result.replacementReason, null);
+  assert.match(result.answer, /notebook não está ligando/i);
+  assert.match(result.answer, /retirada/i);
 });
 
 test("proteção factual diferencia especificações do cliente de afirmações comerciais", () => {

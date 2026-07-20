@@ -7,6 +7,22 @@ export type CustomerStructuredFields = {
   secondaryIntentKeys: string[];
 };
 
+/**
+ * A deliberately small, non-routing view of customer-authored requests in the
+ * current turn. It lets a single selected flow keep operational ownership
+ * while the response still acknowledges every explicit need in a buffered
+ * turn.
+ */
+export type ExplicitCustomerRequestKey =
+  | "technical_support" | "pickup_delivery" | "business_hours" | "pricing" | "warranty";
+
+export type MultiIntentTurn = {
+  primaryIntent: ExplicitCustomerRequestKey | null;
+  secondaryIntents: ExplicitCustomerRequestKey[];
+  explicitRequests: ExplicitCustomerRequestKey[];
+  unresolvedRequests: ExplicitCustomerRequestKey[];
+};
+
 export type FlowKeywordEvidence = {
   flowId: string;
   flowName: string;
@@ -278,6 +294,71 @@ export function flowObjectiveForFlow(flow: AssistantFlow): string {
     default:
       return "entender a necessidade principal do cliente";
   }
+}
+
+export function extractExplicitCustomerRequestKeys(message: string): ExplicitCustomerRequestKey[] {
+  const text = normalizeIntentText(message);
+  const requests: ExplicitCustomerRequestKey[] = [];
+  const add = (request: ExplicitCustomerRequestKey, condition: boolean) => {
+    if (condition && !requests.includes(request)) requests.push(request);
+  };
+
+  add(
+    "technical_support",
+    /\b(?:notebook|computador|pc|equipamento)\b/.test(text) &&
+      /\b(?:nao liga|nao esta ligando|nao ta ligando|nao inicia|nao funciona|defeito|problema)\b/.test(
+        text,
+      ),
+  );
+  add("pickup_delivery", /\b(?:coleta|retirada|retirar|buscar|busca|entrega)\b/.test(text));
+  add(
+    "business_hours",
+    /\b(?:horario|funcionamento|que horas|abrem|abre|fecham|fecha|sabado|domingo)\b/.test(text),
+  );
+  add("pricing", /\b(?:preco|valor|orcamento|quanto custa|quanto fica)\b/.test(text));
+  add("warranty", /\bgarantia\b/.test(text));
+
+  return requests;
+}
+
+function toExplicitRequestKey(
+  intentKey: string | null | undefined,
+): ExplicitCustomerRequestKey | null {
+  switch (intentKey) {
+    case "technical_support":
+    case "pickup_delivery":
+    case "business_hours":
+    case "pricing":
+    case "warranty":
+      return intentKey;
+    default:
+      return null;
+  }
+}
+
+export function buildMultiIntentTurn(input: {
+  message: string;
+  selectedIntentKey?: string | null;
+}): MultiIntentTurn {
+  const explicitRequests = extractExplicitCustomerRequestKeys(input.message);
+  const selectedIntent = toExplicitRequestKey(input.selectedIntentKey);
+  const primaryIntent =
+    selectedIntent && explicitRequests.includes(selectedIntent)
+      ? selectedIntent
+      : (explicitRequests[0] ?? null);
+  const secondaryIntents = explicitRequests.filter((request) => request !== primaryIntent);
+
+  return {
+    primaryIntent,
+    secondaryIntents,
+    explicitRequests,
+    // These categories need a safe acknowledgement or structured source before
+    // the response can claim they have been fully answered.
+    unresolvedRequests: explicitRequests.filter(
+      (request) =>
+        request === "pricing" || request === "warranty" || request === "technical_support",
+    ),
+  };
 }
 
 export function extractCustomerStructuredFields(message: string): CustomerStructuredFields {

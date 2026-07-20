@@ -4,9 +4,12 @@ import { IntentRouterService } from "../dist/intent-router/intent-router.service
 import { AttachmentInterpreterService } from "../dist/attachments/attachment-interpreter.service.js";
 import {
   extractCustomerStructuredFields,
+  buildMultiIntentTurn,
+  extractExplicitCustomerRequestKeys,
   detectCustomerUnableToAnswer,
   normalizeIntentText,
 } from "../dist/intent-router/intent-routing.js";
+import { ensureMultiIntentResponseCoverage } from "../dist/assistant-conversations/multi-intent-response-coverage.js";
 import { compactRepeatedAssistantHistoryMessages } from "../dist/assistant-conversations/conversation-history-format.js";
 import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
 
@@ -119,6 +122,52 @@ test("extração preserva capacidades, acessórios e pendências técnicas", () 
   assert.equal(result.knownFieldKeys.includes("ssd_model"), false);
   assert.deepEqual(result.secondaryIntentKeys, ["accessories"]);
   assert.equal(normalizeIntentText("formatação e memória"), "formatacao e memoria");
+});
+
+test("turno multi-intent preserva solicitação técnica e coleta sem criar outro flow", () => {
+  const message = "Meu notebook não está ligando\nVocês fazem coleta?";
+  assert.deepEqual(extractExplicitCustomerRequestKeys(message), [
+    "technical_support",
+    "pickup_delivery",
+  ]);
+  const turn = buildMultiIntentTurn({ message, selectedIntentKey: "pickup_delivery" });
+  assert.equal(turn.primaryIntent, "pickup_delivery");
+  assert.deepEqual(turn.secondaryIntents, ["technical_support"]);
+  assert.deepEqual(turn.explicitRequests, ["technical_support", "pickup_delivery"]);
+
+  const result = ensureMultiIntentResponseCoverage({
+    answer: "Preciso confirmar se a retirada está disponível para esse atendimento.",
+    turn,
+    currentMessage: message,
+    officialBusinessContext: null,
+  });
+  assert.match(result.answer, /notebook não está ligando/i);
+  assert.match(result.answer, /retirada/i);
+  assert.deepEqual(result.coverage.coveredRequests, ["technical_support", "pickup_delivery"]);
+  assert.deepEqual(result.coverage.addedAcknowledgements, ["technical_support"]);
+
+  const prompt = new PromptCompilerService().compile({
+    assistant: { name: "Assistente" },
+    behavior: {},
+    securityRules: [],
+    knowledgeItems: [],
+    historyMessages: [],
+    currentMessage: message,
+    multiIntentTurn: turn,
+  });
+  const promptText = prompt.map((entry) => String(entry.content)).join("\n");
+  assert.match(promptText, /COBERTURA OBRIGATÓRIA/);
+  assert.match(promptText, /problema técnico informado/i);
+  assert.match(promptText, /coleta ou retirada/i);
+});
+
+test("turno multi-intent mantém horário, preço e garantia explícitos sem ampliar aliases", () => {
+  assert.deepEqual(
+    extractExplicitCustomerRequestKeys("Qual o horário? E a coleta? Qual o valor e a garantia?"),
+    ["pickup_delivery", "business_hours", "pricing", "warranty"],
+  );
+  assert.deepEqual(extractExplicitCustomerRequestKeys("Qual é o endereço?"), []);
+  assert.deepEqual(extractExplicitCustomerRequestKeys("E até que horas?"), ["business_hours"]);
 });
 
 test("triagem recebe apenas resumo seguro do flow", () => {

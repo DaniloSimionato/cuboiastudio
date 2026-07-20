@@ -573,3 +573,17 @@ horário sobrescrever a categoria segura de coleta. Agora `business_hours` só t
 precedência para pergunta direta, sem outra solicitação operacional explícita.
 Perguntas diretas de horário usam a agenda estruturada mesmo fora do expediente;
 o estado aberto/fechado só complementa perguntas sobre o momento atual.
+
+### Cobertura de múltiplas solicitações no mesmo turno V1
+
+Um lote pode ter um único flow operacional principal e ainda conter solicitações
+explícitas secundárias. O runtime agora registra, de forma sanitizada, a intenção
+principal, as intenções secundárias, a quantidade de fragmentos e a cobertura da
+resposta. O compilador exige que a resposta curta reconheça cada solicitação
+explícita antes de fazer no máximo uma pergunta de avanço.
+
+Não há novo router, provider, flow produtivo ou outbound para cada fragmento. Se
+o provider omitir uma solicitação explícita, o runtime acrescenta somente um
+reconhecimento seguro ou uma resposta de horário baseada no contexto estruturado.
+Afirmações de coleta ou retirada continuam fail-closed: "preciso confirmar" não
+é tratado como disponibilidade prometida pelo guardião de autoridade.

@@ -619,8 +619,7 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
   const conversationId = `conversation_chatwoot_policy_${randomUUID()}`;
   const flowId = `flow_chatwoot_policy_${randomUUID()}`;
   const auth = createAuth(companyId);
-  const answer =
-    "Fazemos sim 😊 Me passa o modelo do computador? Aí já verifico o que é compatível.";
+  const answer = "Preciso confirmar se a retirada está disponível para esse atendimento.";
   const ragCalls = [];
   const shadowSnapshots = [];
 
@@ -843,7 +842,9 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
       assert.match(String(bufferedUserTurn.content), new RegExp(message));
     }
     assert.equal(outboundCalls.length, 1);
-    assert.equal(outboundCalls[0].content, answer);
+    assert.match(outboundCalls[0].content, /notebook não está ligando/i);
+    assert.match(outboundCalls[0].content, /retirada/i);
+    assert.equal((outboundCalls[0].content.match(/\?/g) ?? []).length, 0);
 
     const runtimeLog = await prisma.assistantRuntimeLog.findFirst({
       where: { assistantId },
@@ -862,6 +863,15 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
     ]);
     assert.equal(runtimeLog.metadata.temperatureParameterApplied, true);
     assert.equal(runtimeLog.metadata.triageMode, false);
+    assert.equal(runtimeLog.metadata.inboundFragmentCount, 3);
+    assert.deepEqual(runtimeLog.metadata.explicitRequests, [
+      "technical_support",
+      "pickup_delivery",
+    ]);
+    assert.deepEqual(runtimeLog.metadata.responseCoverage, [
+      "technical_support",
+      "pickup_delivery",
+    ]);
     assert.equal(runtimeLog.metadata.knowledgeLimit, 5);
     assert.equal(runtimeLog.metadata.contextManifest.initialMessageIncluded, false);
     assert.equal(runtimeLog.metadata.contextManifest.fallbackIncluded, false);

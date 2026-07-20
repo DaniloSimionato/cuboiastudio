@@ -58,7 +58,7 @@ test("PromptCompiler prioriza segurança, comportamento e depois fluxo/conhecime
   assert.match(contents[behaviorIndex], /Blocos Naturais/);
   const historyPolicyIndex = contents.findIndex((content) => content.includes("HISTÓRICO DA CONVERSA"));
   assert.ok(triageIndex > knowledgeIndex);
-  assert.match(contents[triageIndex], /não responda cada serviço/i);
+  assert.match(contents[triageIndex], /Reconheça cada solicitação explícita/i);
   assert.match(contents[triageIndex], /uma pergunta principal/i);
   assert.ok(historyPolicyIndex > knowledgeIndex);
   assert.match(contents[historyPolicyIndex], /Não imite listas/);
