@@ -18,6 +18,7 @@ import { evaluateV2PrimarySecurityRules } from "../assistant-conversations/v2-pr
 import { evaluateFlowApplicability } from "../assistant-conversations/flow-applicability-evaluator";
 import type { PrismaService } from "../database/prisma.service";
 import {
+  evaluateResponseExecutionScope,
   resolveRuntimeV2ResponseExecutionAssistantIds,
   resolveRuntimeV2ResponseExecutionConversationIds,
   resolveRuntimeV2ResponseExecutionMode,
@@ -104,8 +105,15 @@ export type RuntimeV2ResponseExecutionPreflightResult = {
   legacyFlowIgnoredForExplicitV2Match: boolean;
   executionConfiguration: {
     mode: "OFF" | "CONTROLLED";
+    conversationScope: string;
     assistantAllowlisted: boolean;
-    conversationAllowlisted: boolean;
+    conversationExplicitlyAllowlisted: boolean;
+    assistantWideEligible: boolean;
+    assistantOwnershipCompatible: boolean;
+    companyCompatible: boolean;
+    inboxCompatible: boolean;
+    scopeEligibility: boolean;
+    rejectionCode: string | null;
   };
   blockers: string[];
   redactionApplied: true;
@@ -173,6 +181,7 @@ export type RuntimeV2ResponseExecutionAdministrationDependencies = {
     | "assistantFlow"
     | "assistantToolConfig"
     | "assistantConversationStateV2"
+    | "chatwootInboxConfig"
   > &
     Partial<Pick<PrismaService, "assistantConversationMessage">>;
   securityRules: Pick<AssistantSecurityRulesService, "findActiveForRuntime">;
@@ -542,12 +551,23 @@ export class RuntimeV2ResponseExecutionAdministrationService {
     }
 
     const executionMode = resolveRuntimeV2ResponseExecutionMode(this.environment);
-    const assistantAllowlisted = resolveRuntimeV2ResponseExecutionAssistantIds(
-      this.environment,
-    ).includes(input.assistantId);
-    const conversationAllowlisted = resolveRuntimeV2ResponseExecutionConversationIds(
-      this.environment,
-    ).includes(input.conversationId);
+    const inboxConfigCount = assistant
+      ? await this.dependencies.prisma.chatwootInboxConfig.count({
+          where: { assistantId: assistant.id },
+        })
+      : 0;
+    const inboxCompatible = inboxConfigCount > 0;
+
+    const evaluationScopeResult = evaluateResponseExecutionScope({
+      environment: this.environment,
+      companyId: input.companyId,
+      assistantId: input.assistantId,
+      conversationId: input.conversationId,
+      conversationExists: Boolean(conversation),
+      companyExists: Boolean(company),
+      inboxExists: inboxCompatible,
+    });
+
     return {
       canonicalComparisonHash: canonicalHash,
       canonicalMessage,
@@ -603,8 +623,16 @@ export class RuntimeV2ResponseExecutionAdministrationService {
         legacyFlowIgnoredForExplicitV2Match: flowEvaluation.legacyFlowIgnoredForExplicitV2Match,
         executionConfiguration: {
           mode: executionMode,
-          assistantAllowlisted,
-          conversationAllowlisted,
+          conversationScope: evaluationScopeResult.conversationScope,
+          assistantAllowlisted: evaluationScopeResult.assistantAllowlisted,
+          conversationExplicitlyAllowlisted:
+            evaluationScopeResult.conversationExplicitlyAllowlisted,
+          assistantWideEligible: evaluationScopeResult.assistantWideEligible,
+          assistantOwnershipCompatible: evaluationScopeResult.assistantOwnershipCompatible,
+          companyCompatible: evaluationScopeResult.companyCompatible,
+          inboxCompatible: evaluationScopeResult.inboxCompatible,
+          scopeEligibility: evaluationScopeResult.allowed,
+          rejectionCode: evaluationScopeResult.rejectionCode,
         },
         blockers: sortUnique(blockers),
         redactionApplied: true,

@@ -124,7 +124,10 @@ after(async () => {
 test("PostgreSQL cria, carrega, reinicia e mantém ledger após expiresAt", async () => {
   const scope = await createFixture();
   const message = await createMessage(scope, `${prefix}-message-1`);
-  const store = new PrismaConversationStateStore(prisma);
+  const store = new PrismaConversationStateStore(
+    prisma,
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  );
   const initial = nextState(scope, message);
   const created = await store.saveTurn(initial, 0, {
     internalMessageId: message.id,
@@ -133,7 +136,10 @@ test("PostgreSQL cria, carrega, reinicia e mantém ledger após expiresAt", asyn
   assert.equal(created.persistenceResult, "CREATED");
   assert.equal(created.state.revision, 1);
 
-  const restartedStore = new PrismaConversationStateStore(prisma);
+  const restartedStore = new PrismaConversationStateStore(
+    prisma,
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  );
   const loaded = await restartedStore.load(storeScope(scope));
   assert.equal(loaded.revision, 1);
 
@@ -184,10 +190,16 @@ test("stateJson preserva IDs estruturais mesmo quando parecem números de telefo
     },
   });
   const message = await createMessage(scope, `${prefix}-structural-message`);
-  const store = new PrismaConversationStateStore(prisma);
+  const store = new PrismaConversationStateStore(
+    prisma,
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  );
   await store.saveTurn(nextState(scope, message), 0, { internalMessageId: message.id });
 
-  const loaded = await new PrismaConversationStateStore(prisma).load(storeScope(scope));
+  const loaded = await new PrismaConversationStateStore(
+    prisma,
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  ).load(storeScope(scope));
   assert.equal(loaded.companyId, scope.companyId);
   assert.equal(loaded.assistantId, scope.assistantId);
   assert.equal(loaded.conversationId, scope.conversationId);
@@ -197,7 +209,10 @@ test("stateJson preserva IDs estruturais mesmo quando parecem números de telefo
 test("PostgreSQL mantém candidata V2 limitada e redigida após restart", async () => {
   const scope = await createFixture();
   const message = await createMessage(scope, `${prefix}-candidate-message`);
-  const store = new PrismaConversationStateStore(prisma);
+  const store = new PrismaConversationStateStore(
+    prisma,
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  );
   const persistedTurn = await store.saveTurn(nextState(scope, message), 0, {
     internalMessageId: message.id,
   });
@@ -250,7 +265,10 @@ test("PostgreSQL mantém candidata V2 limitada e redigida após restart", async 
   });
   state.revision = persistedTurn.state.revision + 1;
   const saved = await store.save(state, persistedTurn.state.revision);
-  const restarted = await new PrismaConversationStateStore(prisma).load(storeScope(scope));
+  const restarted = await new PrismaConversationStateStore(
+    prisma,
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  ).load(storeScope(scope));
   assert.equal(saved.candidateResponses.length, 1);
   assert.equal(restarted.candidateResponses[0].generationId, "generation-candidate");
   assert.equal(restarted.candidateResponses[0].outboundPerformed, false);
@@ -340,7 +358,10 @@ test("redaction preserva IDs estruturais e sanitiza texto livre aninhado", () =>
 
 test("stateJson valida schema, redaction e limite de 64 KB sem truncamento", async () => {
   const scope = await createFixture();
-  const store = new PrismaConversationStateStore(prisma);
+  const store = new PrismaConversationStateStore(
+    prisma,
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  );
   const safeState = createEmptyConversationState(scope);
   safeState.lastRelevantQuestion = {
     key: "question:1",
@@ -388,7 +409,10 @@ test("stateJson valida schema, redaction e limite de 64 KB sem truncamento", asy
 
 test("internalMessageId é obrigatório e externalMessageId permanece opcional", async () => {
   const scope = await createFixture();
-  const store = new PrismaConversationStateStore(prisma);
+  const store = new PrismaConversationStateStore(
+    prisma,
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  );
   const state = createEmptyConversationState(scope);
   await assert.rejects(
     () => store.saveTurn({ ...state, revision: 1 }, 0, { externalMessageId: "external-only" }),
@@ -399,7 +423,10 @@ test("internalMessageId é obrigatório e externalMessageId permanece opcional",
 test("isolamento por tenant, assistant, conversation, contextVersion e mode", async () => {
   const first = await createFixture(1);
   const second = await createFixture(2);
-  const store = new PrismaConversationStateStore(prisma);
+  const store = new PrismaConversationStateStore(
+    prisma,
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  );
   await store.create(createEmptyConversationState(first));
   await store.create(createEmptyConversationState(second));
   assert.ok(await store.load(storeScope(first)));
@@ -411,7 +438,10 @@ test("isolamento por tenant, assistant, conversation, contextVersion e mode", as
 
 test("optimistic concurrency rejeita revisão antiga", async () => {
   const scope = await createFixture();
-  const store = new PrismaConversationStateStore(prisma);
+  const store = new PrismaConversationStateStore(
+    prisma,
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  );
   const initial = createEmptyConversationState(scope);
   await store.create(initial);
   const next = {
@@ -427,16 +457,22 @@ test("optimistic concurrency rejeita revisão antiga", async () => {
 test("duas instâncias processam a mesma mensagem uma vez e mensagens diferentes avançam", async () => {
   const sameScope = await createFixture();
   const sameMessage = await createMessage(sameScope, `${prefix}-concurrent-same`);
-  const first = new RuntimeV2ShadowOrchestrator(new PrismaConversationStateStore(prisma), {
-    ...shadowEnvironment,
-    RUNTIME_V2_SHADOW_ASSISTANT_IDS: sameScope.assistantId,
-    RUNTIME_V2_SHADOW_CONVERSATION_IDS: sameScope.conversationId,
-  });
-  const second = new RuntimeV2ShadowOrchestrator(new PrismaConversationStateStore(prisma), {
-    ...shadowEnvironment,
-    RUNTIME_V2_SHADOW_ASSISTANT_IDS: sameScope.assistantId,
-    RUNTIME_V2_SHADOW_CONVERSATION_IDS: sameScope.conversationId,
-  });
+  const first = new RuntimeV2ShadowOrchestrator(
+    new PrismaConversationStateStore(prisma, () => new Date("2026-07-13T12:00:00.000Z")),
+    {
+      ...shadowEnvironment,
+      RUNTIME_V2_SHADOW_ASSISTANT_IDS: sameScope.assistantId,
+      RUNTIME_V2_SHADOW_CONVERSATION_IDS: sameScope.conversationId,
+    },
+  );
+  const second = new RuntimeV2ShadowOrchestrator(
+    new PrismaConversationStateStore(prisma, () => new Date("2026-07-13T12:00:00.000Z")),
+    {
+      ...shadowEnvironment,
+      RUNTIME_V2_SHADOW_ASSISTANT_IDS: sameScope.assistantId,
+      RUNTIME_V2_SHADOW_CONVERSATION_IDS: sameScope.conversationId,
+    },
+  );
   const sameResults = await Promise.all([
     first.process(snapshot(sameScope, sameMessage)),
     second.process(snapshot(sameScope, sameMessage)),
@@ -459,16 +495,22 @@ test("duas instâncias processam a mesma mensagem uma vez e mensagens diferentes
   const differentScope = await createFixture();
   const messageA = await createMessage(differentScope, `${prefix}-concurrent-a`, "Quero formatar");
   const messageB = await createMessage(differentScope, `${prefix}-concurrent-b`, "Quero SSD");
-  const left = new RuntimeV2ShadowOrchestrator(new PrismaConversationStateStore(prisma), {
-    ...shadowEnvironment,
-    RUNTIME_V2_SHADOW_ASSISTANT_IDS: differentScope.assistantId,
-    RUNTIME_V2_SHADOW_CONVERSATION_IDS: differentScope.conversationId,
-  });
-  const right = new RuntimeV2ShadowOrchestrator(new PrismaConversationStateStore(prisma), {
-    ...shadowEnvironment,
-    RUNTIME_V2_SHADOW_ASSISTANT_IDS: differentScope.assistantId,
-    RUNTIME_V2_SHADOW_CONVERSATION_IDS: differentScope.conversationId,
-  });
+  const left = new RuntimeV2ShadowOrchestrator(
+    new PrismaConversationStateStore(prisma, () => new Date("2026-07-13T12:00:00.000Z")),
+    {
+      ...shadowEnvironment,
+      RUNTIME_V2_SHADOW_ASSISTANT_IDS: differentScope.assistantId,
+      RUNTIME_V2_SHADOW_CONVERSATION_IDS: differentScope.conversationId,
+    },
+  );
+  const right = new RuntimeV2ShadowOrchestrator(
+    new PrismaConversationStateStore(prisma, () => new Date("2026-07-13T12:00:00.000Z")),
+    {
+      ...shadowEnvironment,
+      RUNTIME_V2_SHADOW_ASSISTANT_IDS: differentScope.assistantId,
+      RUNTIME_V2_SHADOW_CONVERSATION_IDS: differentScope.conversationId,
+    },
+  );
   const differentResults = await Promise.all([
     left.process(snapshot(differentScope, messageA, "Quero formatar")),
     right.process(snapshot(differentScope, messageB, "Quero SSD")),
@@ -478,9 +520,10 @@ test("duas instâncias processam a mesma mensagem uma vez e mensagens diferentes
     differentResults.map((result) => result.manifest.revisionAfter).sort((a, b) => a - b),
     [1, 2],
   );
-  const finalState = await new PrismaConversationStateStore(prisma).load(
-    storeScope(differentScope),
-  );
+  const finalState = await new PrismaConversationStateStore(
+    prisma,
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  ).load(storeScope(differentScope));
   assert.equal(finalState.revision, 2);
 });
 
@@ -507,7 +550,10 @@ test("PostgreSQL não cria state, evento nem Runtime log para outra conversa do 
   };
   const integration = new RuntimeV2ShadowIntegrationService(
     prisma,
-    new RuntimeV2ShadowOrchestrator(new PrismaConversationStateStore(prisma), environment),
+    new RuntimeV2ShadowOrchestrator(
+      new PrismaConversationStateStore(prisma, () => new Date("2026-07-13T12:00:00.000Z")),
+      environment,
+    ),
     environment,
   );
 
@@ -556,12 +602,12 @@ test("restart preserva idempotência, aceita externalMessageId ausente e não de
     RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
   };
   const firstRun = new RuntimeV2ShadowOrchestrator(
-    new PrismaConversationStateStore(prisma),
+    new PrismaConversationStateStore(prisma, () => new Date("2026-07-13T12:00:00.000Z")),
     environment,
   );
   const firstResult = await firstRun.process(snapshot(scope, firstMessage, "mesmo conteúdo"));
   const restarted = new RuntimeV2ShadowOrchestrator(
-    new PrismaConversationStateStore(prisma),
+    new PrismaConversationStateStore(prisma, () => new Date("2026-07-13T12:00:00.000Z")),
     environment,
   );
   const replay = await restarted.process(snapshot(scope, firstMessage, "mesmo conteúdo"));
@@ -581,11 +627,14 @@ test("contextVersion incompatível é rejeitado sem atualizar o estado", async (
   const scope = await createFixture(1);
   const message = await createMessage(scope, `${prefix}-stale-context`, "mensagem antiga", 1);
   const staleScope = { ...scope, contextVersion: 2 };
-  const result = await new RuntimeV2ShadowOrchestrator(new PrismaConversationStateStore(prisma), {
-    ...shadowEnvironment,
-    RUNTIME_V2_SHADOW_ASSISTANT_IDS: staleScope.assistantId,
-    RUNTIME_V2_SHADOW_CONVERSATION_IDS: staleScope.conversationId,
-  }).process(snapshot(staleScope, message, "mensagem antiga"));
+  const result = await new RuntimeV2ShadowOrchestrator(
+    new PrismaConversationStateStore(prisma, () => new Date("2026-07-13T12:00:00.000Z")),
+    {
+      ...shadowEnvironment,
+      RUNTIME_V2_SHADOW_ASSISTANT_IDS: staleScope.assistantId,
+      RUNTIME_V2_SHADOW_CONVERSATION_IDS: staleScope.conversationId,
+    },
+  ).process(snapshot(staleScope, message, "mensagem antiga"));
   assert.equal(result.manifest.shadowErrorCode, "STALE_CONTEXT");
   assert.equal(
     await prisma.assistantConversationStateV2.count({
@@ -599,7 +648,10 @@ test("evento claramente atrasado entra no ledger como STALE_EVENT sem alterar re
   const scope = await createFixture();
   const firstMessage = await createMessage(scope, `${prefix}-ordered-1`, "primeiro");
   const lateMessage = await createMessage(scope, `${prefix}-ordered-2`, "atrasado");
-  const store = new PrismaConversationStateStore(prisma);
+  const store = new PrismaConversationStateStore(
+    prisma,
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  );
   const first = await store.saveTurn(nextState(scope, firstMessage), 0, {
     internalMessageId: firstMessage.id,
     sourceOccurredAt: new Date("2026-07-13T12:00:00.000Z"),

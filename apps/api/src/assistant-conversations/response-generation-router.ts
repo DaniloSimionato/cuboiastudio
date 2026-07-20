@@ -31,6 +31,7 @@ export type ResponseGenerationRouterInput = {
   executionMode?: unknown;
   executionAssistantIds?: readonly string[] | null;
   executionConversationIds?: readonly string[] | null;
+  executionConversationScope?: unknown;
   v2Eligibility?: {
     standardEligible: boolean;
     category: "businessHours" | null;
@@ -73,8 +74,18 @@ function resolveDefaultDenyReason(
   | "V2_EXECUTION_NOT_CONNECTED"
   | "RESPONSE_EXECUTION_SEMANTIC_MISMATCH" {
   if (input.executionMode !== "CONTROLLED") return "EXECUTION_MODE_OFF";
-  if (!input.executionAssistantIds?.length || !input.executionConversationIds?.length) {
-    return "EXECUTION_SCOPE_EMPTY";
+  const scope = input.executionConversationScope ?? "EXPLICIT_CONVERSATIONS";
+  if (scope === "ASSISTANT_WIDE") {
+    if (
+      !input.executionAssistantIds?.length ||
+      (input.executionConversationIds && input.executionConversationIds.length > 0)
+    ) {
+      return "EXECUTION_SCOPE_EMPTY";
+    }
+  } else {
+    if (!input.executionAssistantIds?.length || !input.executionConversationIds?.length) {
+      return "EXECUTION_SCOPE_EMPTY";
+    }
   }
   if (input.v2Eligibility?.semanticDecision && !input.v2Eligibility.semanticDecision.applicable) {
     return "RESPONSE_EXECUTION_SEMANTIC_MISMATCH";
@@ -83,11 +94,19 @@ function resolveDefaultDenyReason(
 }
 
 function isExecutionScopeEnabled(input: ResponseGenerationRouterInput): boolean {
-  return (
-    input.executionMode === "CONTROLLED" &&
-    Boolean(input.executionAssistantIds?.includes(input.turn.assistantId)) &&
-    Boolean(input.executionConversationIds?.includes(input.turn.conversationId))
-  );
+  if (input.executionMode !== "CONTROLLED") return false;
+  if (!input.executionAssistantIds?.includes(input.turn.assistantId)) return false;
+
+  const scope = input.executionConversationScope ?? "EXPLICIT_CONVERSATIONS";
+  if (scope === "ASSISTANT_WIDE") {
+    if (!input.executionAssistantIds || input.executionAssistantIds.length === 0) return false;
+    if (input.executionConversationIds && input.executionConversationIds.length > 0) return false;
+    return true;
+  }
+  if (scope === "EXPLICIT_CONVERSATIONS") {
+    return Boolean(input.executionConversationIds?.includes(input.turn.conversationId));
+  }
+  return false;
 }
 
 function isEligibleForV2(input: ResponseGenerationRouterInput): boolean {

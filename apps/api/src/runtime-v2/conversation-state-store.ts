@@ -121,11 +121,17 @@ export class InMemoryConversationStateStore implements ConversationStateStore {
     string,
     { internal: Set<string>; external: Set<string> }
   >();
+  private readonly now: () => Date;
+
+  constructor(now?: () => Date) {
+    this.now = now ?? (() => new Date());
+  }
 
   async load(scope: ConversationStateStoreScope): Promise<ConversationState | null> {
     await this.deleteExpired();
     const state = this.states.get(scopeKey(scope));
-    if (!state || (state.expiresAt && state.expiresAt.getTime() <= Date.now())) return null;
+    if (!state || (state.expiresAt && state.expiresAt.getTime() <= this.now().getTime()))
+      return null;
     return cloneState(state);
   }
 
@@ -207,7 +213,9 @@ export class InMemoryConversationStateStore implements ConversationStateStore {
       };
     }
 
-    const expired = Boolean(current?.expiresAt && current.expiresAt.getTime() <= Date.now());
+    const expired = Boolean(
+      current?.expiresAt && current.expiresAt.getTime() <= this.now().getTime(),
+    );
     if (!current) {
       if (expectedRevision !== 0 || state.revision !== 1) throw new StateRevisionConflictError();
       const stored = cloneState(state);
@@ -251,7 +259,7 @@ export class InMemoryConversationStateStore implements ConversationStateStore {
     return expired;
   }
 
-  async deleteExpired(now = new Date()): Promise<number> {
+  async deleteExpired(now = this.now()): Promise<number> {
     let deleted = 0;
     for (const [key, state] of this.states) {
       const purgeAt = state.updatedAt.getTime() + STATE_PURGE_RETENTION_MS;

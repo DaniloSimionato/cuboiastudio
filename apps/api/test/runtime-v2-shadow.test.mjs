@@ -39,7 +39,7 @@ function snapshot(message, id, extra = {}) {
 }
 
 test("InMemoryConversationStateStore serializa, isola escopo e aplica optimistic concurrency", async () => {
-  const store = new InMemoryConversationStateStore();
+  const store = new InMemoryConversationStateStore(() => new Date("2026-07-13T12:00:00.000Z"));
   const initial = createEmptyConversationState(scope, new Date("2026-07-13T12:00:00.000Z"));
   const created = await store.create(initial);
   assert.equal(created.revision, 0);
@@ -57,19 +57,13 @@ test("InMemoryConversationStateStore serializa, isola escopo e aplica optimistic
 
 test("feature flag fica OFF por padrão e SHADOW exige allowlists de assistant e conversa", () => {
   assert.equal(isRuntimeV2ShadowEnabled(scope, {}), false);
+  assert.equal(isRuntimeV2ShadowEnabled(scope, shadowEnvironment), true);
   assert.equal(
-    isRuntimeV2ShadowEnabled(scope, shadowEnvironment),
-    true,
-  );
-  assert.equal(
-    isRuntimeV2ShadowEnabled(
-      scope,
-      {
-        RUNTIME_V2_MODE: "OUTBOUND",
-        RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
-        RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
-      },
-    ),
+    isRuntimeV2ShadowEnabled(scope, {
+      RUNTIME_V2_MODE: "OUTBOUND",
+      RUNTIME_V2_SHADOW_ASSISTANT_IDS: scope.assistantId,
+      RUNTIME_V2_SHADOW_CONVERSATION_IDS: scope.conversationId,
+    }),
     false,
   );
   assert.equal(
@@ -83,7 +77,7 @@ test("feature flag fica OFF por padrão e SHADOW exige allowlists de assistant e
 });
 
 test("shadow mantém estado ao longo dos turnos e não produz provider, ferramenta ou outbound", async () => {
-  const store = new InMemoryConversationStateStore();
+  const store = new InMemoryConversationStateStore(() => new Date("2026-07-13T12:00:00.000Z"));
   const orchestrator = new RuntimeV2ShadowOrchestrator(
     store,
     shadowEnvironment,
@@ -139,7 +133,7 @@ test("shadow mantém estado ao longo dos turnos e não produz provider, ferramen
 });
 
 test("shadow mantém referência de confirmação, correção, áudio e fala humana sem tratá-la como cliente", async () => {
-  const store = new InMemoryConversationStateStore();
+  const store = new InMemoryConversationStateStore(() => new Date("2026-07-13T12:00:00.000Z"));
   const orchestrator = new RuntimeV2ShadowOrchestrator(
     store,
     shadowEnvironment,
@@ -192,7 +186,7 @@ test("shadow mantém referência de confirmação, correção, áudio e fala hum
 });
 
 test("triagem técnica sai com segurança quando o cliente não consegue responder", async () => {
-  const store = new InMemoryConversationStateStore();
+  const store = new InMemoryConversationStateStore(() => new Date("2026-07-13T12:00:00.000Z"));
   const orchestrator = new RuntimeV2ShadowOrchestrator(
     store,
     shadowEnvironment,
@@ -211,7 +205,7 @@ test("triagem técnica sai com segurança quando o cliente não consegue respond
 });
 
 test("reset cria novo escopo e erro do shadow não bloqueia o V1", async () => {
-  const store = new InMemoryConversationStateStore();
+  const store = new InMemoryConversationStateStore(() => new Date("2026-07-13T12:00:00.000Z"));
   const orchestrator = new RuntimeV2ShadowOrchestrator(store, shadowEnvironment);
   await orchestrator.process(snapshot("Quero formatar meu Mac M1 e colocar SSD.", "message-old"));
   const oldScopeState = await store.load({ ...scope, runtimeVersion: "V2", mode: "SHADOW" });
@@ -243,7 +237,7 @@ test("trabalho Shadow lento, capacidade e erro assíncrono são isolados do V1",
       return super.load(storeScope);
     }
   }
-  const slowStore = new SlowStore();
+  const slowStore = new SlowStore(() => new Date("2026-07-13T12:00:00.000Z"));
   const slowOrchestrator = new RuntimeV2ShadowOrchestrator(slowStore, {
     ...shadowEnvironment,
     // The old shared timeout must not turn a valid non-provider Shadow turn
@@ -261,7 +255,7 @@ test("trabalho Shadow lento, capacidade e erro assíncrono são isolados do V1",
     }
   }
 
-  const delayedStore = new DelayedStore();
+  const delayedStore = new DelayedStore(() => new Date("2026-07-13T12:00:00.000Z"));
   const orchestrator = new RuntimeV2ShadowOrchestrator(delayedStore, {
     ...shadowEnvironment,
     RUNTIME_V2_SHADOW_TIMEOUT_MS: "250",
@@ -353,7 +347,7 @@ test("retry de revisão recarrega o estado mais recente antes de persistir", asy
 });
 
 test("store possui limpeza lazy, TTL, limite de IDs e isolamento por tenant/contextVersion", async () => {
-  const store = new InMemoryConversationStateStore();
+  const store = new InMemoryConversationStateStore(() => new Date("2026-07-13T12:00:00.000Z"));
   const expiringScope = { ...scope, conversationId: "conversation-expiring" };
   const expired = createEmptyConversationState(expiringScope, new Date("2026-07-13T12:00:00.000Z"));
   expired.expiresAt = new Date("2026-07-13T11:59:00.000Z");
@@ -397,7 +391,9 @@ test("store possui limpeza lazy, TTL, limite de IDs e isolamento por tenant/cont
 });
 
 test("instâncias do orquestrador compartilham explicitamente o store singleton", async () => {
-  const sharedStore = new InMemoryConversationStateStore();
+  const sharedStore = new InMemoryConversationStateStore(
+    () => new Date("2026-07-13T12:00:00.000Z"),
+  );
   const firstOrchestrator = new RuntimeV2ShadowOrchestrator(sharedStore, shadowEnvironment);
   const secondOrchestrator = new RuntimeV2ShadowOrchestrator(sharedStore, shadowEnvironment);
 

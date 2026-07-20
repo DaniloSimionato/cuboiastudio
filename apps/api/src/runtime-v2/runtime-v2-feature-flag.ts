@@ -235,10 +235,6 @@ export function resolveRuntimeV2ResponseConversationIds(
   return parseAllowlist(environment.RUNTIME_V2_RESPONSE_CONVERSATION_IDS);
 }
 
-/**
- * Execution is deliberately independent from Shadow generation/comparison.
- * It is default-deny and must be combined with the single-use approval gate.
- */
 export function resolveRuntimeV2ResponseExecutionMode(
   environment: NodeJS.ProcessEnv = process.env,
 ): RuntimeV2ResponseExecutionMode {
@@ -257,16 +253,243 @@ export function resolveRuntimeV2ResponseExecutionConversationIds(
   return parseAllowlist(environment.RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS);
 }
 
+export type RuntimeV2ResponseExecutionConversationScope =
+  "EXPLICIT_CONVERSATIONS" | "ASSISTANT_WIDE";
+
+export function resolveRuntimeV2ResponseExecutionConversationScope(
+  environment: NodeJS.ProcessEnv = process.env,
+): RuntimeV2ResponseExecutionConversationScope {
+  const scope = environment.RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE;
+  return scope === "ASSISTANT_WIDE" ? "ASSISTANT_WIDE" : "EXPLICIT_CONVERSATIONS";
+}
+
+export function evaluateResponseExecutionScope(input: {
+  environment: NodeJS.ProcessEnv;
+  companyId: string;
+  assistantId: string;
+  conversationId: string;
+  conversationExists: boolean;
+  companyExists: boolean;
+  inboxExists: boolean;
+}): {
+  allowed: boolean;
+  conversationScope: RuntimeV2ResponseExecutionConversationScope;
+  assistantAllowlisted: boolean;
+  conversationExplicitlyAllowlisted: boolean;
+  assistantWideEligible: boolean;
+  assistantOwnershipCompatible: boolean;
+  companyCompatible: boolean;
+  inboxCompatible: boolean;
+  rejectionCode: string | null;
+} {
+  const executionMode = resolveRuntimeV2ResponseExecutionMode(input.environment);
+  const conversationScope = resolveRuntimeV2ResponseExecutionConversationScope(input.environment);
+  const assistants = resolveRuntimeV2ResponseExecutionAssistantIds(input.environment);
+  const conversations = resolveRuntimeV2ResponseExecutionConversationIds(input.environment);
+
+  const assistantAllowlisted = assistants.includes(input.assistantId);
+  const conversationExplicitlyAllowlisted = conversations.includes(input.conversationId);
+
+  const rawScope = input.environment.RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE;
+  const isScopeValueUnknown =
+    rawScope !== undefined &&
+    rawScope !== "EXPLICIT_CONVERSATIONS" &&
+    rawScope !== "ASSISTANT_WIDE";
+
+  if (executionMode !== "CONTROLLED") {
+    return {
+      allowed: false,
+      conversationScope,
+      assistantAllowlisted,
+      conversationExplicitlyAllowlisted,
+      assistantWideEligible: false,
+      assistantOwnershipCompatible: input.conversationExists,
+      companyCompatible: input.companyExists,
+      inboxCompatible: input.inboxExists,
+      rejectionCode: "EXECUTION_MODE_OFF",
+    };
+  }
+
+  if (isScopeValueUnknown) {
+    return {
+      allowed: false,
+      conversationScope,
+      assistantAllowlisted,
+      conversationExplicitlyAllowlisted,
+      assistantWideEligible: false,
+      assistantOwnershipCompatible: input.conversationExists,
+      companyCompatible: input.companyExists,
+      inboxCompatible: input.inboxExists,
+      rejectionCode: "VALUE_UNKNOWN",
+    };
+  }
+
+  const assistantOwnershipCompatible = input.conversationExists;
+  const companyCompatible = input.companyExists;
+  const inboxCompatible = input.inboxExists;
+
+  if (!companyCompatible) {
+    return {
+      allowed: false,
+      conversationScope,
+      assistantAllowlisted,
+      conversationExplicitlyAllowlisted,
+      assistantWideEligible: false,
+      assistantOwnershipCompatible,
+      companyCompatible,
+      inboxCompatible,
+      rejectionCode: "COMPANY_MISMATCH",
+    };
+  }
+
+  if (!assistantOwnershipCompatible) {
+    return {
+      allowed: false,
+      conversationScope,
+      assistantAllowlisted,
+      conversationExplicitlyAllowlisted,
+      assistantWideEligible: false,
+      assistantOwnershipCompatible,
+      companyCompatible,
+      inboxCompatible,
+      rejectionCode: "ASSISTANT_OWNERSHIP_MISMATCH",
+    };
+  }
+
+  if (!inboxCompatible) {
+    return {
+      allowed: false,
+      conversationScope,
+      assistantAllowlisted,
+      conversationExplicitlyAllowlisted,
+      assistantWideEligible: false,
+      assistantOwnershipCompatible,
+      companyCompatible,
+      inboxCompatible,
+      rejectionCode: "INBOX_NOT_CONNECTED",
+    };
+  }
+
+  if (conversationScope === "ASSISTANT_WIDE") {
+    const assistantWideEligible = assistants.length > 0 && conversations.length === 0;
+
+    if (assistants.length === 0) {
+      return {
+        allowed: false,
+        conversationScope,
+        assistantAllowlisted,
+        conversationExplicitlyAllowlisted,
+        assistantWideEligible,
+        assistantOwnershipCompatible,
+        companyCompatible,
+        inboxCompatible,
+        rejectionCode: "ASSISTANT_ALLOWLIST_EMPTY",
+      };
+    }
+
+    if (conversations.length > 0) {
+      return {
+        allowed: false,
+        conversationScope,
+        assistantAllowlisted,
+        conversationExplicitlyAllowlisted,
+        assistantWideEligible,
+        assistantOwnershipCompatible,
+        companyCompatible,
+        inboxCompatible,
+        rejectionCode: "CONVERSATION_ALLOWLIST_NOT_EMPTY",
+      };
+    }
+
+    if (!assistantAllowlisted) {
+      return {
+        allowed: false,
+        conversationScope,
+        assistantAllowlisted,
+        conversationExplicitlyAllowlisted,
+        assistantWideEligible,
+        assistantOwnershipCompatible,
+        companyCompatible,
+        inboxCompatible,
+        rejectionCode: "ASSISTANT_NOT_ALLOWLISTED",
+      };
+    }
+
+    return {
+      allowed: true,
+      conversationScope,
+      assistantAllowlisted,
+      conversationExplicitlyAllowlisted,
+      assistantWideEligible,
+      assistantOwnershipCompatible,
+      companyCompatible,
+      inboxCompatible,
+      rejectionCode: null,
+    };
+  }
+
+  // EXPLICIT_CONVERSATIONS
+  if (!assistantAllowlisted) {
+    return {
+      allowed: false,
+      conversationScope,
+      assistantAllowlisted,
+      conversationExplicitlyAllowlisted,
+      assistantWideEligible: false,
+      assistantOwnershipCompatible,
+      companyCompatible,
+      inboxCompatible,
+      rejectionCode: "ASSISTANT_NOT_ALLOWLISTED",
+    };
+  }
+
+  if (!conversationExplicitlyAllowlisted) {
+    return {
+      allowed: false,
+      conversationScope,
+      assistantAllowlisted,
+      conversationExplicitlyAllowlisted,
+      assistantWideEligible: false,
+      assistantOwnershipCompatible,
+      companyCompatible,
+      inboxCompatible,
+      rejectionCode: "CONVERSATION_NOT_ALLOWLISTED",
+    };
+  }
+
+  return {
+    allowed: true,
+    conversationScope,
+    assistantAllowlisted,
+    conversationExplicitlyAllowlisted,
+    assistantWideEligible: false,
+    assistantOwnershipCompatible,
+    companyCompatible,
+    inboxCompatible,
+    rejectionCode: null,
+  };
+}
+
 export function isRuntimeV2ResponseExecutionScopeEnabled(
   input: { companyId?: string; assistantId: string; conversationId: string },
   environment: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return (
-    resolveRuntimeV2ResponseExecutionMode(environment) === "CONTROLLED" &&
-    evaluateRuntimeV2BaseScopeGate(input, environment, "RESPONSE_GENERATION").allowed &&
-    resolveRuntimeV2ResponseExecutionAssistantIds(environment).includes(input.assistantId) &&
-    resolveRuntimeV2ResponseExecutionConversationIds(environment).includes(input.conversationId)
-  );
+  if (resolveRuntimeV2ResponseExecutionMode(environment) !== "CONTROLLED") {
+    return false;
+  }
+  if (!evaluateRuntimeV2BaseScopeGate(input, environment, "RESPONSE_GENERATION").allowed) {
+    return false;
+  }
+  const evalResult = evaluateResponseExecutionScope({
+    environment,
+    companyId: input.companyId ?? "",
+    assistantId: input.assistantId,
+    conversationId: input.conversationId,
+    conversationExists: true,
+    companyExists: true,
+    inboxExists: true,
+  });
+  return evalResult.allowed;
 }
 
 export function isRuntimeV2ResponseGenerationEnabled(

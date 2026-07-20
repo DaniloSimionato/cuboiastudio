@@ -127,6 +127,7 @@ import {
   resolveRuntimeV2ResponseExecutionAssistantIds,
   resolveRuntimeV2ResponseExecutionConversationIds,
   resolveRuntimeV2ResponseExecutionMode,
+  resolveRuntimeV2ResponseExecutionConversationScope,
 } from "../runtime-v2/runtime-v2-feature-flag";
 import {
   ResponseTailLifecycleHooks,
@@ -4146,6 +4147,7 @@ export class AssistantConversationsService {
             executionMode: resolveRuntimeV2ResponseExecutionMode(),
             executionAssistantIds: resolveRuntimeV2ResponseExecutionAssistantIds(),
             executionConversationIds: resolveRuntimeV2ResponseExecutionConversationIds(),
+            executionConversationScope: resolveRuntimeV2ResponseExecutionConversationScope(),
             v2Eligibility,
             revalidateV2Flow,
             v2PrimaryContext,

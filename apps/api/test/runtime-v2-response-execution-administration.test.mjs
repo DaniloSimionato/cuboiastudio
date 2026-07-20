@@ -142,6 +142,7 @@ function createAdministration(overrides = {}) {
     },
     assistantFlow: { findMany: async () => overrides.flows ?? [] },
     assistantToolConfig: { count: async () => overrides.enabledToolCount ?? 0 },
+    chatwootInboxConfig: { count: async () => overrides.inboxConfigCount ?? 1 },
     assistantConversationStateV2: {
       findMany: async () => {
         const state = await stateStore.load({
@@ -762,4 +763,110 @@ test("arm limita duração e CLI não aceita categoria fora do contrato", async 
   ]);
   assert.equal(parsed.command, "preflight");
   assert.equal(JSON.stringify({ command: parsed.command }).includes("mensagem privada"), false);
+});
+
+test("valida escopo ASSISTANT_WIDE e EXPLICIT_CONVERSATIONS nas allowlists", async () => {
+  const preflightInput = () => ({
+    companyId: scope.companyId,
+    assistantId: scope.assistantId,
+    conversationId: scope.conversationId,
+    message: "Qual é o horário de atendimento?",
+    canonicalVersion: "canonical-inbound-message-v1",
+    allowedCategory: "businessHours",
+    allowedAuthority: "OFFICIAL_CONTEXT",
+  });
+
+  // 1. EXPLICIT_CONVERSATIONS (Default) - passa se conversa estiver na allowlist
+  {
+    const { administration } = createAdministration({
+      environment: {
+        RUNTIME_V2_RESPONSE_EXECUTION_MODE: "CONTROLLED",
+        RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE: "EXPLICIT_CONVERSATIONS",
+        RUNTIME_V2_RESPONSE_EXECUTION_ASSISTANT_IDS: scope.assistantId,
+        RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS: scope.conversationId,
+      },
+    });
+    const preflight = await administration.preflight(preflightInput());
+    assert.equal(preflight.executionConfiguration.conversationScope, "EXPLICIT_CONVERSATIONS");
+    assert.equal(preflight.executionConfiguration.scopeEligibility, true);
+  }
+
+  // 2. EXPLICIT_CONVERSATIONS - bloqueia se conversa NÃO estiver na allowlist
+  {
+    const { administration } = createAdministration({
+      environment: {
+        RUNTIME_V2_RESPONSE_EXECUTION_MODE: "CONTROLLED",
+        RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE: "EXPLICIT_CONVERSATIONS",
+        RUNTIME_V2_RESPONSE_EXECUTION_ASSISTANT_IDS: scope.assistantId,
+        RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS: "another-conversa",
+      },
+    });
+    const preflight = await administration.preflight(preflightInput());
+    assert.equal(preflight.executionConfiguration.scopeEligibility, false);
+    assert.equal(preflight.executionConfiguration.rejectionCode, "CONVERSATION_NOT_ALLOWLISTED");
+  }
+
+  // 3. ASSISTANT_WIDE - passa se assistente na allowlist e conversas vazias
+  {
+    const { administration } = createAdministration({
+      environment: {
+        RUNTIME_V2_RESPONSE_EXECUTION_MODE: "CONTROLLED",
+        RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE: "ASSISTANT_WIDE",
+        RUNTIME_V2_RESPONSE_EXECUTION_ASSISTANT_IDS: scope.assistantId,
+        RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS: "",
+      },
+    });
+    const preflight = await administration.preflight(preflightInput());
+    assert.equal(preflight.executionConfiguration.conversationScope, "ASSISTANT_WIDE");
+    assert.equal(preflight.executionConfiguration.scopeEligibility, true);
+  }
+
+  // 4. ASSISTANT_WIDE - bloqueia se conversas NÃO vazias
+  {
+    const { administration } = createAdministration({
+      environment: {
+        RUNTIME_V2_RESPONSE_EXECUTION_MODE: "CONTROLLED",
+        RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE: "ASSISTANT_WIDE",
+        RUNTIME_V2_RESPONSE_EXECUTION_ASSISTANT_IDS: scope.assistantId,
+        RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS: scope.conversationId,
+      },
+    });
+    const preflight = await administration.preflight(preflightInput());
+    assert.equal(preflight.executionConfiguration.scopeEligibility, false);
+    assert.equal(
+      preflight.executionConfiguration.rejectionCode,
+      "CONVERSATION_ALLOWLIST_NOT_EMPTY",
+    );
+  }
+
+  // 5. ASSISTANT_WIDE - bloqueia se assistente não está allowlisted
+  {
+    const { administration } = createAdministration({
+      environment: {
+        RUNTIME_V2_RESPONSE_EXECUTION_MODE: "CONTROLLED",
+        RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE: "ASSISTANT_WIDE",
+        RUNTIME_V2_RESPONSE_EXECUTION_ASSISTANT_IDS: "other-assistant-id",
+        RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS: "",
+      },
+    });
+    const preflight = await administration.preflight(preflightInput());
+    assert.equal(preflight.executionConfiguration.scopeEligibility, false);
+    assert.equal(preflight.executionConfiguration.rejectionCode, "ASSISTANT_NOT_ALLOWLISTED");
+  }
+
+  // 6. ASSISTANT_WIDE - bloqueia se inboxes associadas forem 0
+  {
+    const { administration } = createAdministration({
+      environment: {
+        RUNTIME_V2_RESPONSE_EXECUTION_MODE: "CONTROLLED",
+        RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE: "ASSISTANT_WIDE",
+        RUNTIME_V2_RESPONSE_EXECUTION_ASSISTANT_IDS: scope.assistantId,
+        RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS: "",
+      },
+      inboxConfigCount: 0,
+    });
+    const preflight = await administration.preflight(preflightInput());
+    assert.equal(preflight.executionConfiguration.scopeEligibility, false);
+    assert.equal(preflight.executionConfiguration.rejectionCode, "INBOX_NOT_CONNECTED");
+  }
 });
