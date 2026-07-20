@@ -200,7 +200,12 @@ export function deriveExpectedAuthorityCategory(input: {
   if (/(?:para agora|imediato|disponibilidade|tem vaga|tem horario)/.test(message)) {
     return { category: "availability", source: "explicit_intent", officialHours };
   }
-  if (/(?:horario|funcionamento|abrem|aberto|fechado)/.test(message)) {
+  const hasBusinessHoursRequest = /(?:horario|funcionamento|abrem|aberto|fechado)/.test(message);
+  const hasCompetingOperationalRequest =
+    /(?:busca|buscar|retirada|retirar|coleta|domicilio|endereco|onde fica|localizacao|como chegar|suporte|assistencia tecnica|notebook|computador|orcamento|preco|valor|telefone|whatsapp|contato)/.test(
+      message,
+    );
+  if (hasBusinessHoursRequest && !hasCompetingOperationalRequest) {
     return { category: "business_hours", source: "explicit_intent", officialHours };
   }
   if (/(?:busca|buscar|retirada|retirar|coleta|domicilio)/.test(message)) {

@@ -282,6 +282,22 @@ test("guardião usa a intenção atual para escolher a resposta segura", () => {
   assert.match(result.answer, /valor confirmado/i);
 });
 
+test("lote multiassunto não converte uma resposta segura de coleta em indisponibilidade de horário", () => {
+  const result = validateV1AnswerAuthority({
+    answer: "Preciso confirmar se existe disponibilidade para a retirada desse atendimento.",
+    currentMessage:
+      "Meu notebook nao ta ligando\nVoces fazem coleta?\nE qual horário ode atendimento ai?",
+    selectedFlowKey: "coleta",
+    sources: [],
+    officialBusinessContext: officialContext(),
+  });
+
+  assert.equal(result.finalSafeResponseCategory, "pickup");
+  assert.equal(result.authorityCategorySource, "explicit_intent");
+  assert.match(result.answer, /retirada/i);
+  assert.doesNotMatch(result.answer, /fora do funcionamento oficial/i);
+});
+
 test("proteção factual diferencia especificações do cliente de afirmações comerciais", () => {
   const context = officialContext();
   const customerSpecs = validateV1AnswerAuthority({

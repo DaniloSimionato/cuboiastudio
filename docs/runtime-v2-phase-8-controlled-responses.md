@@ -557,3 +557,19 @@ fingerprint ou antecedente, bloqueia antes do claim. Fingerprints opacos permane
 
 O contrato continua fail-closed: a correção é somente de código e testes locais e
 não altera flows, knowledge ou configuração real da Heloísa.
+
+### Incidente pós-ativação: lotes de inbound e horário empresarial
+
+Em um incidente real posterior à ativação controlada, a evidência sanitizada
+confirmou que o buffer de mensagens preservou todos os inbounds: uma saudação
+que chegou antes da janela foi processada isoladamente e os fragmentos seguintes
+foram reunidos em um único turno. A regressão garante que cada fragmento presente
+na janela chega ao prompt do único turno, sem criar resposta duplicada ou
+descartar conteúdo persistido.
+
+O mesmo turno combinava coleta e horário. O fuso `America/Campo_Grande` já era
+aplicado corretamente; o problema era o guardião V1, que deixava uma menção a
+horário sobrescrever a categoria segura de coleta. Agora `business_hours` só tem
+precedência para pergunta direta, sem outra solicitação operacional explícita.
+Perguntas diretas de horário usam a agenda estruturada mesmo fora do expediente;
+o estado aberto/fechado só complementa perguntas sobre o momento atual.

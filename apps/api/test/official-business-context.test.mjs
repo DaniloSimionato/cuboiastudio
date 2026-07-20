@@ -58,6 +58,18 @@ test("FG sexta-feira 08:30 em America/Campo_Grande responde que está aberta", (
   assert.match(answer.answer, /não fechamos para almoço/i);
 });
 
+test("pergunta de horário informa a agenda oficial mesmo fora do expediente local", () => {
+  const context = buildFgContext(new Date("2026-07-20T22:00:00.000Z"));
+  const answer = buildStructuredBusinessAnswer("Qual o horário de atendimento?", context);
+
+  assert.ok(answer);
+  assert.equal(context.businessStatus.timezone, "America/Campo_Grande");
+  assert.equal(context.businessStatus.localTime, "18:00");
+  assert.equal(context.businessStatus.isOpenNow, false);
+  assert.match(answer.answer, /08:00 às 18:00/i);
+  assert.doesNotMatch(answer.answer, /fora do funcionamento oficial/i);
+});
+
 test("FG sábado 11:00 em America/Campo_Grande responde que está aberta", () => {
   const context = buildFgContext(new Date("2026-07-11T15:00:00.000Z"));
   const answer = buildStructuredBusinessAnswer("Vocês estão abertos agora?", context);

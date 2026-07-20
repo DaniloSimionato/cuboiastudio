@@ -775,11 +775,9 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
     );
 
     const messages = [
-      "Oi bom dia",
-      "Quero formatar",
-      "Pode me ajudar",
-      "Qual o prazo?",
-      "Obrigado",
+      "Oi boa tarde",
+      "Meu notebook nao ta ligando",
+      "Voces fazem coleta?",
     ];
     for (const [index, content] of messages.entries()) {
       await webhookService.processMessageCreated({
@@ -839,11 +837,11 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
     assert.match(systemText, /BASE DE CONHECIMENTO RELEVANTE/);
     assert.match(systemText, /Formatação do computador/);
     assert.match(systemText, /Instalação de SSD: verificar modelo/i);
-    assert.ok(
-      aiCalls[0].messages.some(
-        (message) => message.role === "user" && String(message.content).includes("Quero formatar"),
-      ),
-    );
+    const bufferedUserTurn = aiCalls[0].messages.find((message) => message.role === "user");
+    assert.ok(bufferedUserTurn);
+    for (const message of messages) {
+      assert.match(String(bufferedUserTurn.content), new RegExp(message));
+    }
     assert.equal(outboundCalls.length, 1);
     assert.equal(outboundCalls[0].content, answer);
 
