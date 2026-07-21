@@ -60,7 +60,7 @@ type FollowUpResolution = {
 
 function isBusinessHoursText(value: string): boolean {
   const normalized = normalizeCategoryText(value);
-  return /(?:\bhorario\b|funcionamento|expediente|\babre\b|\babrem\b|\bfecha\b|\bfecham\b|que horas|almoco)/.test(
+  return /(?:\bhorario\b|funcionamento|expediente|\babert(?:o|a|os|as)\b|\babre\b|\babrem\b|\bfunciona(?:m)?\b|\bfecha\b|\bfecham\b|que horas|almoco)/.test(
     normalized,
   );
 }
@@ -319,7 +319,7 @@ export function understandTurn(input: TurnUnderstandingInput): TurnUnderstanding
     /\b(?:visita|entrega|agendamento)\b.*\b(?:individual|confirmad)/.test(categoryText);
   const explicitBusinessHoursLanguage =
     !asksIndividualSchedule &&
-    (/\bhorario\b|funcionamento|expediente|\babre\b|\babrem\b|\bfecha\b|\bfecham\b|que horas/.test(
+    (/\bhorario\b|funcionamento|expediente|\babert(?:o|a|os|as)\b|\babre\b|\babrem\b|\bfunciona(?:m)?\b|\bfecha\b|\bfecham\b|que horas/.test(
       categoryText,
     ) ||
       (weekdayMentioned && /\b(?:atende|atendem)\b/.test(categoryText)));

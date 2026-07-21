@@ -26,7 +26,7 @@ const semanticDecision = resolveResponseExecutionIntent({
   messageId: turn.internalMessageId,
 });
 
-function officialContext(overrides = {}) {
+function officialContext(overrides = {}, now) {
   return buildOfficialBusinessContext({
     companyName: "Empresa de teste",
     assistantName: "Heloísa",
@@ -42,7 +42,7 @@ function officialContext(overrides = {}) {
       sunday: [],
     },
     ...overrides,
-  });
+  }, now);
 }
 
 function claimedApproval(overrides = {}) {
@@ -154,6 +154,130 @@ test("executor primário renderiza businessHours estruturado sem provider", asyn
   assert.equal(result.sanitizedTelemetry.primaryExecutionNoShadowComparison, true);
   assert.match(result.responseText, /segunda a sexta/i);
   assert.match(result.responseText, /sábado/i);
+});
+
+test("executor primário cobre agenda fechada, aberta, atual, ausente e inválida sem provider", async () => {
+  const baseSchedule = {
+    monday: [{ start: "08:00", end: "18:00" }],
+    tuesday: [{ start: "08:00", end: "18:00" }],
+    wednesday: [{ start: "08:00", end: "18:00" }],
+    thursday: [{ start: "08:00", end: "18:00" }],
+    friday: [{ start: "08:00", end: "18:00" }],
+    saturday: [{ start: "07:30", end: "12:00" }],
+    sunday: [],
+  };
+  const cases = [
+    {
+      name: "domingo fechado",
+      message: "Vocês abrem domingo?",
+      now: "2026-07-12T15:00:00.000Z",
+      expectedBranch: "SPECIFIC_DAY",
+      expectedScope: "specific_day",
+      expectedOpenNow: null,
+      expectedText: "Não, aos domingos estamos fechados.",
+    },
+    {
+      name: "sábado aberto",
+      message: "Vocês abrem sábado?",
+      now: "2026-07-11T15:00:00.000Z",
+      expectedBranch: "SPECIFIC_DAY",
+      expectedScope: "specific_day",
+      expectedOpenNow: null,
+      expectedText: /Sim\. Aos sábados atendemos das 07h30 às 12h\./,
+    },
+    {
+      name: "OPEN_NOW aberto",
+      message: "Vocês estão abertos agora?",
+      now: "2026-07-20T17:00:00.000Z",
+      expectedBranch: "OPEN_NOW",
+      expectedScope: "open_now",
+      expectedOpenNow: true,
+      expectedText: /estamos abertos agora/i,
+    },
+    {
+      name: "OPEN_NOW fechado",
+      message: "Vocês estão abertos agora?",
+      now: "2026-07-20T23:00:00.000Z",
+      expectedBranch: "CLOSED_NOW",
+      expectedScope: "open_now",
+      expectedOpenNow: false,
+      expectedText: /estamos fechados/i,
+    },
+    {
+      name: "TODAY aberto",
+      message: "Qual o horário de hoje?",
+      now: "2026-07-20T17:00:00.000Z",
+      expectedBranch: "TODAY",
+      expectedScope: "today",
+      expectedOpenNow: null,
+      expectedText: /Hoje, segunda-feira, atendemos das 08h às 18h\./,
+    },
+    {
+      name: "TODAY fechado",
+      message: "Qual o horário de hoje?",
+      now: "2026-07-12T15:00:00.000Z",
+      expectedBranch: "TODAY",
+      expectedScope: "today",
+      expectedOpenNow: null,
+      expectedText: /Hoje, domingo, não há atendimento\./,
+    },
+    {
+      name: "agenda ausente",
+      message: "Qual o horário de atendimento?",
+      now: "2026-07-20T17:00:00.000Z",
+      schedule: {},
+      expectedBranch: "MISSING_SCHEDULE",
+      expectedScope: "weekly",
+      expectedOpenNow: null,
+      expectedText: /não tenho o horário confirmado/i,
+    },
+    {
+      name: "agenda inválida",
+      message: "Qual o horário de atendimento?",
+      now: "2026-07-20T17:00:00.000Z",
+      schedule: { ...baseSchedule, monday: [{ start: "99:00", end: "18:00" }] },
+      expectedBranch: "MISSING_SCHEDULE",
+      expectedScope: "weekly",
+      expectedOpenNow: null,
+      expectedText: /não tenho o horário confirmado/i,
+    },
+  ];
+
+  for (const scenario of cases) {
+    const businessContext = officialContext(
+      { weeklySchedule: scenario.schedule ?? baseSchedule },
+      new Date(scenario.now),
+    );
+    const executionContext = context({
+      officialBusinessContext: businessContext,
+      canonicalInbound: {
+        ...context().canonicalInbound,
+        displayContent: scenario.message,
+      },
+    });
+    const result = await new RuntimeV2PrimaryResponseExecutor({
+      now: () => new Date(scenario.now),
+    }).execute(input({ context: executionContext }));
+
+    assert.equal(result.candidateStatus, "CANDIDATE_APPROVED", scenario.name);
+    assert.equal(result.qualityGateResult, "APPROVED", scenario.name);
+    assert.equal(result.outboundAllowed, true, scenario.name);
+    assert.equal(result.sanitizedTelemetry.providerCallCount, 0, scenario.name);
+    assert.equal(result.sanitizedTelemetry.deterministicResponderCount, 1, scenario.name);
+    assert.equal(result.sanitizedTelemetry.deterministicBranch, scenario.expectedBranch, scenario.name);
+    assert.equal(
+      result.sanitizedTelemetry.requestedScheduleScope,
+      scenario.expectedScope,
+      scenario.name,
+    );
+    assert.equal(result.sanitizedTelemetry.isOpenNow, scenario.expectedOpenNow, scenario.name);
+    if (typeof scenario.expectedText === "string") {
+      assert.equal(result.responseText, scenario.expectedText, scenario.name);
+    } else {
+      assert.match(result.responseText, scenario.expectedText, scenario.name);
+    }
+    assert.doesNotMatch(result.responseText, /fora do funcionamento oficial/i, scenario.name);
+  }
 });
 
 test("executor usa somente o contexto declarativo de flow vinculado à approval", async () => {

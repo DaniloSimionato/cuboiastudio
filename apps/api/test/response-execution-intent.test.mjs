@@ -26,6 +26,8 @@ test("shared response-execution intent accepts deterministic business-hours form
     "Qual é o expediente de vocês?",
     "Que dia e horário vocês funcionam?",
     "Hoje vocês atendem até que horas?",
+    "Vocês estão abertos agora?",
+    "Vocês abrem domingo?",
   ];
   for (const message of positiveCases) {
     const decision = resolve(message);

@@ -837,7 +837,7 @@ function buildHoursAnswer(question: string, context: OfficialBusinessContext): s
     };
     return intervals.length > 0
       ? `Sim. Aos ${dayLabel[requestedDay]} atendemos ${formatIntervals(intervals)}.`
-      : `Não. Aos ${dayLabel[requestedDay]} não há atendimento.`;
+      : `Não, aos ${dayLabel[requestedDay]} estamos fechados.`;
   }
 
   if (normalized.includes("almoco") || normalized.includes("intervalo")) {

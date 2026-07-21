@@ -178,6 +178,8 @@ test("an explicit V2 flow accepts only direct business-hours semantic decisions"
     "Que horas vocês abrem?",
     "Que horas vocês fecham?",
     "Vocês atendem aos sábados?",
+    "Vocês estão abertos agora?",
+    "Vocês abrem domingo?",
     "Qual o horário de segunda a sexta?",
   ]) {
     const semanticDecision = resolveResponseExecutionIntent({

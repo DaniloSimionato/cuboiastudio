@@ -157,7 +157,7 @@ function responseUsesOnlyStructuredSchedule(
 }
 
 function hasPortugueseSignal(value: string): boolean {
-  return /\b(?:hor[aá]rio|atendimento|funcionamos|abrimos|fechamos|segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo)\b/i.test(
+  return /\b(?:hor[aá]rio|atendimento|funcionamos|abrimos|fechamos|fechad[oa]s?|abert[oa]s?|segundas?|ter[cç]as?|quartas?|quintas?|sextas?|s[aá]bados?|domingos?)\b/i.test(
     value,
   );
 }

@@ -69,8 +69,10 @@ test("formatter determinístico responde sábado, domingo, hoje e aberto agora n
 
   const sundayContext = buildFgContext(new Date("2026-07-12T15:00:00.000Z"));
   const sunday = buildDeterministicBusinessHoursResponse("Vocês abrem domingo?", sundayContext);
-  assert.match(sunday.answer, /^Não\./);
-  assert.match(sunday.answer, /não há atendimento/i);
+  assert.equal(sunday.requestedScheduleScope, "specific_day");
+  assert.equal(sunday.requestedDay, "sunday");
+  assert.equal(sunday.deterministicBranch, "SPECIFIC_DAY");
+  assert.equal(sunday.answer, "Não, aos domingos estamos fechados.");
 
   const today = buildDeterministicBusinessHoursResponse("Qual o horário de hoje?", saturdayContext);
   assert.equal(today.requestedScheduleScope, "today");
@@ -184,7 +186,7 @@ test("formatter separa dia específico, hoje e estado atual do resumo semanal", 
   );
 
   assert.equal(saturdayClosed.deterministicBranch, "SPECIFIC_DAY");
-  assert.match(saturdayClosed.answer, /^Não\./);
+  assert.equal(saturdayClosed.answer, "Não, aos sábados estamos fechados.");
   assert.equal(sundayOpen.deterministicBranch, "SPECIFIC_DAY");
   assert.match(sundayOpen.answer, /^Sim\./);
   assert.equal(today.deterministicBranch, "TODAY");
