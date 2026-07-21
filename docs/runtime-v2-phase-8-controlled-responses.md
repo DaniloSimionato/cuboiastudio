@@ -616,3 +616,20 @@ quando este for o timezone oficial. Sem agenda válida, não infere expediente n
 consulta knowledge como substituição: devolve uma resposta segura de confirmação
 pendente. Esta correção não altera flows, knowledge ou a agenda cadastrada; o
 reteste real em staging continua pendente.
+
+A precedência factual é explícita: agenda ausente ou inválida, resumo semanal,
+dia específico, hoje e, somente quando a pergunta solicita o estado atual,
+aberto/agora ou fechado/agora. O resumo semanal nunca é convertido para uma
+avaliação de abertura atual. A telemetria sanitizada propaga
+`deterministicBranch`, `requestedScheduleScope`, contagens normalizadas de dias
+e intervalos, `scheduleValidationIssueCount` e `isOpenNow` apenas para o branch
+de estado atual. Assim, um canário pode comprovar `WEEKLY_SUMMARY` sem expor a
+agenda textual ou dados de clientes.
+
+O guardião factual legado da V1 permanece obrigatório para V1 normal e fallback
+V1, mas não pode reescrever uma resposta V2 primária que já tenha sido aprovada
+como `V2_BUSINESS_HOURS_DETERMINISTIC`: escopo explícito, autoridade
+`OFFICIAL_CONTEXT`, categoria `businessHours`, zero provider e responder
+determinístico único são verificados no tail. A telemetria sanitizada registra
+`v1AuthorityGuardApplied`; nesse contrato estrito o valor é `false`, preservando
+o texto do formatter até a persistência e o sender.

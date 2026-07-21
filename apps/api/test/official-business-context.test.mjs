@@ -77,14 +77,166 @@ test("formatter determinístico responde sábado, domingo, hoje e aberto agora n
   assert.match(today.answer, /sábado/i);
   assert.match(today.answer, /07h30 às 12h/i);
 
-  const openNow = buildDeterministicBusinessHoursResponse("Vocês estão abertos agora?", saturdayContext);
+  const openNow = buildDeterministicBusinessHoursResponse(
+    "Vocês estão abertos agora?",
+    saturdayContext,
+  );
   assert.equal(openNow.requestedScheduleScope, "open_now");
   assert.equal(openNow.timezone, "America/Campo_Grande");
   assert.match(openNow.answer, /abertos agora/i);
 });
 
+test("resumo semanal tem precedência sobre estado atual em qualquer dia ou horário", () => {
+  const weeklyQuestions = [
+    "Qual o horário de funcionamento?",
+    "Quais os horários?",
+    "Que horas vocês funcionam?",
+    "Qual o horário durante a semana?",
+    "Me passa o horário de atendimento",
+    "Qual o expediente?",
+  ];
+  const referenceInstants = [
+    new Date("2026-07-20T17:00:00.000Z"), // segunda, 13:00 local: aberto
+    new Date("2026-07-20T23:00:00.000Z"), // segunda, 19:00 local: fechado
+    new Date("2026-07-11T17:00:00.000Z"), // sábado, 13:00 local: fechado
+    new Date("2026-07-12T15:00:00.000Z"), // domingo, 11:00 local: fechado
+  ];
+
+  for (const now of referenceInstants) {
+    for (const question of weeklyQuestions) {
+      const answer = buildDeterministicBusinessHoursResponse(question, buildFgContext(now));
+      assert.equal(answer.requestedScheduleScope, "weekly");
+      assert.equal(answer.deterministicBranch, "WEEKLY_SUMMARY");
+      assert.equal(answer.isOpenNow, null);
+      assert.equal(answer.timezone, "America/Campo_Grande");
+      assert.equal(answer.normalizedScheduleDayCount, 6);
+      assert.equal(answer.normalizedScheduleIntervalCount, 6);
+      assert.match(answer.answer, /segunda a sexta/i);
+      assert.match(answer.answer, /sábado/i);
+      assert.match(answer.answer, /domingo/i);
+      assert.doesNotMatch(answer.answer, /fora do funcionamento oficial/i);
+    }
+  }
+});
+
+test("formatter separa dia específico, hoje e estado atual do resumo semanal", () => {
+  const openContext = buildFgContext(new Date("2026-07-20T17:00:00.000Z"));
+  const closedContext = buildFgContext(new Date("2026-07-20T23:00:00.000Z"));
+  const saturdayClosedContext = buildOfficialBusinessContext(
+    {
+      companyName: "Empresa teste",
+      assistantTimezone: "America/Campo_Grande",
+      weeklySchedule: { ...fgSchedule, saturday: [] },
+    },
+    new Date("2026-07-11T15:00:00.000Z"),
+  );
+  const sundayOpenContext = buildOfficialBusinessContext(
+    {
+      companyName: "Empresa teste",
+      assistantTimezone: "America/Campo_Grande",
+      weeklySchedule: { ...fgSchedule, sunday: [{ start: "09:00", end: "12:00" }] },
+    },
+    new Date("2026-07-12T15:00:00.000Z"),
+  );
+
+  const saturdayClosed = buildDeterministicBusinessHoursResponse(
+    "Vocês abrem sábado?",
+    saturdayClosedContext,
+  );
+  const sundayOpen = buildDeterministicBusinessHoursResponse(
+    "Vocês abrem domingo?",
+    sundayOpenContext,
+  );
+  const today = buildDeterministicBusinessHoursResponse("Qual o horário de hoje?", openContext);
+  const openNow = buildDeterministicBusinessHoursResponse(
+    "Vocês estão abertos agora?",
+    openContext,
+  );
+  const closedNow = buildDeterministicBusinessHoursResponse(
+    "Vocês estão abertos agora?",
+    closedContext,
+  );
+
+  assert.equal(saturdayClosed.deterministicBranch, "SPECIFIC_DAY");
+  assert.match(saturdayClosed.answer, /^Não\./);
+  assert.equal(sundayOpen.deterministicBranch, "SPECIFIC_DAY");
+  assert.match(sundayOpen.answer, /^Sim\./);
+  assert.equal(today.deterministicBranch, "TODAY");
+  assert.equal(openNow.deterministicBranch, "OPEN_NOW");
+  assert.equal(openNow.isOpenNow, true);
+  assert.equal(closedNow.deterministicBranch, "CLOSED_NOW");
+  assert.equal(closedNow.isOpenNow, false);
+});
+
+test("agenda ausente, vazia ou inválida usa somente o fallback seguro determinístico", () => {
+  const contexts = [
+    [null, 0],
+    [buildOfficialBusinessContext({ companyName: "Sem agenda", weeklySchedule: {} }), 0],
+    [
+      buildOfficialBusinessContext({
+        companyName: "Agenda inválida",
+        weeklySchedule: { monday: [{ start: "99:00", end: "18:00" }] },
+      }),
+      1,
+    ],
+  ];
+
+  for (const [context, expectedIssueCount] of contexts) {
+    const answer = buildDeterministicBusinessHoursResponse(
+      "Qual o horário de funcionamento?",
+      context,
+    );
+    assert.equal(answer.deterministicBranch, "MISSING_SCHEDULE");
+    assert.equal(answer.missingScheduleConfiguration, true);
+    assert.equal(answer.scheduleValidationIssueCount, expectedIssueCount);
+    if (expectedIssueCount === 0) {
+      assert.equal(answer.normalizedScheduleDayCount, 0);
+      assert.equal(answer.normalizedScheduleIntervalCount, 0);
+    }
+    assert.match(answer.answer, /não tenho o horário confirmado/i);
+    assert.doesNotMatch(answer.answer, /fora do funcionamento oficial/i);
+  }
+
+  const invalid = buildDeterministicBusinessHoursResponse(
+    "Qual o horário de funcionamento?",
+    contexts[2][0],
+  );
+  assert.ok(invalid.scheduleValidationIssueCount > 0);
+});
+
+test("resumo semanal lista dias diferentes e múltiplos intervalos estruturados", () => {
+  const context = buildOfficialBusinessContext({
+    companyName: "Empresa teste",
+    assistantTimezone: "America/Campo_Grande",
+    weeklySchedule: {
+      monday: [
+        { start: "08:00", end: "12:00" },
+        { start: "13:30", end: "18:00" },
+      ],
+      tuesday: [{ start: "09:00", end: "17:00" }],
+      saturday: [{ start: "08:00", end: "12:00" }],
+      sunday: [],
+    },
+  });
+  const answer = buildDeterministicBusinessHoursResponse(
+    "Qual o horário de funcionamento?",
+    context,
+  );
+
+  assert.equal(answer.deterministicBranch, "WEEKLY_SUMMARY");
+  assert.equal(answer.normalizedScheduleDayCount, 3);
+  assert.equal(answer.normalizedScheduleIntervalCount, 4);
+  assert.match(answer.answer, /segunda-feira, das 08h às 12h e das 13h30 às 18h/i);
+  assert.match(answer.answer, /terça-feira, das 09h às 17h/i);
+  assert.match(answer.answer, /sábado/i);
+  assert.match(answer.answer, /domingo/i);
+});
+
 test("formatter determinístico não inventa horário quando a agenda está ausente", () => {
-  const context = buildOfficialBusinessContext({ companyName: "Empresa sem agenda", weeklySchedule: {} });
+  const context = buildOfficialBusinessContext({
+    companyName: "Empresa sem agenda",
+    weeklySchedule: {},
+  });
   const answer = buildDeterministicBusinessHoursResponse("Qual o horário de atendimento?", context);
   assert.equal(answer.missingScheduleConfiguration, true);
   assert.match(answer.answer, /não tenho o horário confirmado/i);

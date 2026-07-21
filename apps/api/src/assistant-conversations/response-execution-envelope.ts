@@ -47,9 +47,15 @@ export type ResponseExecutionEnvelope = {
     deterministicResponderCount?: number;
     responseStrategy?: "V2_BUSINESS_HOURS_DETERMINISTIC";
     requestedScheduleScope?: "weekly" | "specific_day" | "today" | "open_now";
+    deterministicBranch?:
+      "MISSING_SCHEDULE" | "WEEKLY_SUMMARY" | "SPECIFIC_DAY" | "TODAY" | "OPEN_NOW" | "CLOSED_NOW";
     requestedDay?: string | null;
     scheduleSource?: "OFFICIAL_STRUCTURED_SCHEDULE";
     missingScheduleConfiguration?: boolean;
+    scheduleValidationIssueCount?: number;
+    normalizedScheduleDayCount?: number;
+    normalizedScheduleIntervalCount?: number;
+    isOpenNow?: boolean | null;
   };
 };
 
@@ -118,9 +124,15 @@ export function createV2PrimaryResponseExecutionEnvelope(input: {
   deterministicTelemetry?: {
     deterministicResponderCount: 1;
     requestedScheduleScope: "weekly" | "specific_day" | "today" | "open_now";
+    deterministicBranch:
+      "MISSING_SCHEDULE" | "WEEKLY_SUMMARY" | "SPECIFIC_DAY" | "TODAY" | "OPEN_NOW" | "CLOSED_NOW";
     requestedDay: string | null;
     scheduleSource: "OFFICIAL_STRUCTURED_SCHEDULE";
     missingScheduleConfiguration: boolean;
+    scheduleValidationIssueCount: number;
+    normalizedScheduleDayCount: number;
+    normalizedScheduleIntervalCount: number;
+    isOpenNow: boolean | null;
   };
 }): ResponseExecutionEnvelope {
   return {

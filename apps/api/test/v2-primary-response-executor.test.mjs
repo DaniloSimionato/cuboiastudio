@@ -146,6 +146,10 @@ test("executor primário renderiza businessHours estruturado sem provider", asyn
   assert.equal(result.sanitizedTelemetry.providerCallCount, 0);
   assert.equal(result.sanitizedTelemetry.deterministicResponderCount, 1);
   assert.equal(result.sanitizedTelemetry.responseStrategy, "V2_BUSINESS_HOURS_DETERMINISTIC");
+  assert.equal(result.sanitizedTelemetry.deterministicBranch, "WEEKLY_SUMMARY");
+  assert.equal(result.sanitizedTelemetry.normalizedScheduleDayCount, 5);
+  assert.equal(result.sanitizedTelemetry.normalizedScheduleIntervalCount, 5);
+  assert.equal(result.sanitizedTelemetry.isOpenNow, null);
   assert.equal(result.sanitizedTelemetry.toolCallCount, 0);
   assert.equal(result.sanitizedTelemetry.primaryExecutionNoShadowComparison, true);
   assert.match(result.responseText, /segunda a sexta/i);

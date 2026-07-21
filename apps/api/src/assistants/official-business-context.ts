@@ -75,6 +75,8 @@ export type OfficialBusinessContext = {
   websiteUrl: string | null;
   aiRespondsOutsideBusinessHours: boolean;
   businessHours: BusinessHoursSchedule;
+  businessHoursConfigurationValid: boolean;
+  businessHoursValidationIssueCount: number;
   businessStatus: BusinessOpenStatus;
   localityLabel: string | null;
   promptBlock: string;
@@ -586,6 +588,9 @@ export function buildOfficialBusinessContext(
   },
   now: Date = new Date(),
 ): OfficialBusinessContext {
+  const businessHoursValidationIssueCount = validateBusinessHoursSchedule(
+    input.weeklySchedule,
+  ).length;
   const businessStatus = getBusinessOpenStatus(
     {
       weeklySchedule: input.weeklySchedule,
@@ -664,6 +669,8 @@ export function buildOfficialBusinessContext(
     websiteUrl: normalizeString(input.websiteUrl),
     aiRespondsOutsideBusinessHours: input.aiAlwaysAvailable !== false,
     businessHours: businessStatus.schedule,
+    businessHoursConfigurationValid: businessHoursValidationIssueCount === 0,
+    businessHoursValidationIssueCount,
     businessStatus,
     localityLabel,
     promptBlock: promptLines.join("\n"),
@@ -895,10 +902,16 @@ function buildHoursAnswer(question: string, context: OfficialBusinessContext): s
 export type DeterministicBusinessHoursResponse = {
   answer: string;
   requestedScheduleScope: "weekly" | "specific_day" | "today" | "open_now";
+  deterministicBranch:
+    "MISSING_SCHEDULE" | "WEEKLY_SUMMARY" | "SPECIFIC_DAY" | "TODAY" | "OPEN_NOW" | "CLOSED_NOW";
   requestedDay: BusinessDayKey | null;
   timezone: string;
   scheduleSource: "OFFICIAL_STRUCTURED_SCHEDULE";
   missingScheduleConfiguration: boolean;
+  scheduleValidationIssueCount: number;
+  normalizedScheduleDayCount: number;
+  normalizedScheduleIntervalCount: number;
+  isOpenNow: boolean | null;
 };
 
 /**
@@ -924,17 +937,43 @@ export function buildDeterministicBusinessHoursResponse(
           ? "specific_day"
           : "weekly";
   const missingScheduleConfiguration =
-    !context || !Object.values(context.businessHours).some((intervals) => intervals.length > 0);
+    !context ||
+    !context.businessHoursConfigurationValid ||
+    !Object.values(context.businessHours).some((intervals) => intervals.length > 0);
+  const normalizedScheduleDayCount = context
+    ? Object.values(context.businessHours).filter((intervals) => intervals.length > 0).length
+    : 0;
+  const normalizedScheduleIntervalCount = context
+    ? Object.values(context.businessHours).reduce((total, intervals) => total + intervals.length, 0)
+    : 0;
+  const deterministicBranch = missingScheduleConfiguration
+    ? "MISSING_SCHEDULE"
+    : requestedScheduleScope === "weekly"
+      ? "WEEKLY_SUMMARY"
+      : requestedScheduleScope === "specific_day"
+        ? "SPECIFIC_DAY"
+        : requestedScheduleScope === "today"
+          ? "TODAY"
+          : context?.businessStatus.isOpenNow
+            ? "OPEN_NOW"
+            : "CLOSED_NOW";
 
   return {
-    answer: context
-      ? buildHoursAnswer(question, context)
-      : "Não tenho o horário confirmado no momento. Vou precisar que a equipe confirme essa informação.",
+    answer:
+      context && context.businessHoursConfigurationValid
+        ? buildHoursAnswer(question, context)
+        : "Não tenho o horário confirmado no momento. Vou precisar que a equipe confirme essa informação.",
     requestedScheduleScope,
+    deterministicBranch,
     requestedDay,
     timezone: context?.timezone ?? "UNAVAILABLE",
     scheduleSource: "OFFICIAL_STRUCTURED_SCHEDULE",
     missingScheduleConfiguration,
+    scheduleValidationIssueCount: context?.businessHoursValidationIssueCount ?? 0,
+    normalizedScheduleDayCount,
+    normalizedScheduleIntervalCount,
+    isOpenNow:
+      requestedScheduleScope === "open_now" ? (context?.businessStatus.isOpenNow ?? null) : null,
   };
 }
 

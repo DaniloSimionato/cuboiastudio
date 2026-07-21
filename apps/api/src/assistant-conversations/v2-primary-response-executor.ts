@@ -85,9 +85,15 @@ export type V2PrimaryResponseExecutorResult = {
     deterministicResponderCount: 1;
     responseStrategy: "V2_BUSINESS_HOURS_DETERMINISTIC";
     requestedScheduleScope: "weekly" | "specific_day" | "today" | "open_now";
+    deterministicBranch:
+      "MISSING_SCHEDULE" | "WEEKLY_SUMMARY" | "SPECIFIC_DAY" | "TODAY" | "OPEN_NOW" | "CLOSED_NOW";
     requestedDay: string | null;
     scheduleSource: "OFFICIAL_STRUCTURED_SCHEDULE";
     missingScheduleConfiguration: boolean;
+    scheduleValidationIssueCount: number;
+    normalizedScheduleDayCount: number;
+    normalizedScheduleIntervalCount: number;
+    isOpenNow: boolean | null;
     toolCallCount: 0;
     officialDataFingerprint: string;
     securityRulesFingerprint: string | null;
@@ -357,9 +363,14 @@ export class RuntimeV2PrimaryResponseExecutor implements V2PrimaryResponseExecut
         deterministicResponderCount: 1,
         responseStrategy: "V2_BUSINESS_HOURS_DETERMINISTIC",
         requestedScheduleScope: deterministic.requestedScheduleScope,
+        deterministicBranch: deterministic.deterministicBranch,
         requestedDay: deterministic.requestedDay,
         scheduleSource: deterministic.scheduleSource,
         missingScheduleConfiguration: deterministic.missingScheduleConfiguration,
+        scheduleValidationIssueCount: deterministic.scheduleValidationIssueCount,
+        normalizedScheduleDayCount: deterministic.normalizedScheduleDayCount,
+        normalizedScheduleIntervalCount: deterministic.normalizedScheduleIntervalCount,
+        isOpenNow: deterministic.isOpenNow,
         toolCallCount: 0,
         officialDataFingerprint: officialDataFingerprint.slice(0, 16),
         securityRulesFingerprint: securityRules.rulesFingerprint,

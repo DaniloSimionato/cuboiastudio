@@ -435,10 +435,17 @@ export class ResponseGenerationRouter {
           ? {
               deterministicResponderCount: generated.sanitizedTelemetry.deterministicResponderCount,
               requestedScheduleScope: generated.sanitizedTelemetry.requestedScheduleScope,
+              deterministicBranch: generated.sanitizedTelemetry.deterministicBranch,
               requestedDay: generated.sanitizedTelemetry.requestedDay,
               scheduleSource: generated.sanitizedTelemetry.scheduleSource,
               missingScheduleConfiguration:
                 generated.sanitizedTelemetry.missingScheduleConfiguration,
+              scheduleValidationIssueCount:
+                generated.sanitizedTelemetry.scheduleValidationIssueCount,
+              normalizedScheduleDayCount: generated.sanitizedTelemetry.normalizedScheduleDayCount,
+              normalizedScheduleIntervalCount:
+                generated.sanitizedTelemetry.normalizedScheduleIntervalCount,
+              isOpenNow: generated.sanitizedTelemetry.isOpenNow,
             }
           : undefined,
       });

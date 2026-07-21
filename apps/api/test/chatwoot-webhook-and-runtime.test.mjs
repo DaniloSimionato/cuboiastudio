@@ -576,6 +576,7 @@ function createAssistantServiceDeps(overrides = {}) {
     status: "ACTIVE",
     createdAt: new Date(),
     updatedAt: new Date(),
+    ...(overrides.conversation ?? {}),
   };
 
   const tx = {
@@ -794,6 +795,7 @@ function createAssistantServiceDeps(overrides = {}) {
     undefined,
     overrides.cacheService,
     overrides.runtimeV2ShadowIntegration,
+    overrides.responseGenerationRouter,
   );
 
   return {
@@ -2010,6 +2012,117 @@ test("sendMessage chama outbound somente depois do runtime", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("tail preserva a resposta determinística V2 de horário sem reescrita do guardião V1", async () => {
+  const deterministicAnswer =
+    "Atendemos de segunda a sexta, das 08h às 18h; aos sábados, das 07h30 às 12h; aos domingos estamos fechados.";
+  const routedTurns = [];
+  const coordinator = {
+    beforeOutbound: async () => true,
+    afterOutboundUncertain: async () => true,
+  };
+  const responseGenerationRouter = {
+    route: async ({ turn }) => {
+      routedTurns.push(turn);
+      return {
+        executionOwner: "V2_PRIMARY",
+        route: "V2_SINGLE_USE",
+        turn,
+        strategy: "V2_BUSINESS_HOURS_DETERMINISTIC",
+        responseText: deterministicAnswer,
+        providerCallCount: 0,
+        toolCallCount: 0,
+        providerMetadata: { provider: null, model: null },
+        generationMetadata: null,
+        generatedResponse: null,
+        outboundAllowed: true,
+        generationId: "v2-deterministic-generation",
+        approvalFingerprint: "approval-fingerprint",
+        allowedCategory: "businessHours",
+        allowedAuthority: "OFFICIAL_CONTEXT",
+        candidateStatus: "CANDIDATE_APPROVED",
+        qualityGateResult: "APPROVED",
+        sanitizedTelemetry: {
+          executionOwner: "V2_PRIMARY",
+          route: "V2_SINGLE_USE",
+          strategy: "V2_BUSINESS_HOURS_DETERMINISTIC",
+          providerCallCount: 0,
+          toolCallCount: 0,
+          decision: "SINGLE_USE_V2",
+          reason: "APPROVAL_CLAIMED",
+          deterministicResponderCount: 1,
+          responseStrategy: "V2_BUSINESS_HOURS_DETERMINISTIC",
+          requestedScheduleScope: "weekly",
+          deterministicBranch: "WEEKLY_SUMMARY",
+          requestedDay: null,
+          scheduleSource: "OFFICIAL_STRUCTURED_SCHEDULE",
+          missingScheduleConfiguration: false,
+          scheduleValidationIssueCount: 0,
+          normalizedScheduleDayCount: 6,
+          normalizedScheduleIntervalCount: 6,
+          isOpenNow: null,
+        },
+      };
+    },
+    getCoordinator: () => coordinator,
+  };
+  const { service, calls } = createAssistantServiceDeps({
+    assistant: {
+      timezone: "America/Campo_Grande",
+      aiAlwaysAvailable: true,
+      weeklySchedule: {
+        monday: [{ start: "08:00", end: "18:00" }],
+        tuesday: [{ start: "08:00", end: "18:00" }],
+        wednesday: [{ start: "08:00", end: "18:00" }],
+        thursday: [{ start: "08:00", end: "18:00" }],
+        friday: [{ start: "08:00", end: "18:00" }],
+        saturday: [{ start: "07:30", end: "12:00" }],
+        sunday: [],
+      },
+      company: { name: "Empresa Teste", timezone: "America/Campo_Grande" },
+    },
+    conversation: { aiActive: true },
+    outboundConfig: { baseUrl: "" },
+    responseGenerationRouter,
+  });
+
+  await service.sendMessage({
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    dto: {
+      source: "chatwoot",
+      externalConversationId: "conversation-1",
+      externalAccountId: "account-1",
+      externalContactId: "contact-1",
+      externalInboxId: "inbox-1",
+      message: "Qual o horário de atendimento de vocês?",
+    },
+    user: {
+      id: "user-1",
+      companyId: "company-1",
+      email: "user@cubo.local",
+      name: "User",
+      roles: [],
+      permissions: [],
+    },
+    tenant: { companyId: "company-1" },
+    preparedAttachments: [],
+  });
+
+  const assistantMessage = calls.messageCreates.find((message) => message.role === "assistant");
+  const runtimeLog = calls.runtimeLogCreates.at(-1);
+  assert.equal(routedTurns.length, 1);
+  assert.equal(assistantMessage?.content, deterministicAnswer);
+  assert.doesNotMatch(assistantMessage?.content ?? "", /fora do funcionamento oficial/i);
+  assert.equal(calls.providerPayloads.length, 0);
+  assert.equal(runtimeLog.metadata.responseGenerationRoute, "V2_SINGLE_USE");
+  assert.equal(runtimeLog.metadata.responseStrategy, "V2_BUSINESS_HOURS_DETERMINISTIC");
+  assert.equal(runtimeLog.metadata.providerCount, 0);
+  assert.equal(runtimeLog.metadata.deterministicResponderCount, 1);
+  assert.equal(runtimeLog.metadata.deterministicBranch, "WEEKLY_SUMMARY");
+  assert.equal(runtimeLog.metadata.v1AuthorityGuardApplied, false);
+  assert.equal(runtimeLog.metadata.replacementReason, null);
 });
 
 test("sendMessage preserva continuidade além de nove mensagens e mantém transcrição no payload", async () => {

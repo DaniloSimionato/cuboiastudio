@@ -354,6 +354,7 @@ export type AssistantConversationRuntime = {
     conversationalOutcome?: string | null;
     triageResponseProtected?: boolean;
     replacementReason?: string | null;
+    v1AuthorityGuardApplied?: boolean;
     officialHoursEvaluated?: boolean;
     requestedDayOpen?: boolean | null;
     requestedTimeWithinHours?: boolean | null;
@@ -386,9 +387,14 @@ export type AssistantConversationRuntime = {
     responseStrategy?: string | null;
     scheduleSource?: string | null;
     requestedScheduleScope?: string | null;
+    deterministicBranch?: string | null;
     requestedDay?: string | null;
     deterministicResponderCount?: number;
     missingScheduleConfiguration?: boolean;
+    scheduleValidationIssueCount?: number;
+    normalizedScheduleDayCount?: number;
+    normalizedScheduleIntervalCount?: number;
+    deterministicIsOpenNow?: boolean | null;
     outboundBlockCountPlanned?: number;
     outboundBlockCountSent?: number;
     outboundBlockCount?: number;
@@ -4254,11 +4260,19 @@ export class AssistantConversationsService {
               scheduleSource: routedGeneration.sanitizedTelemetry.scheduleSource ?? null,
               requestedScheduleScope:
                 routedGeneration.sanitizedTelemetry.requestedScheduleScope ?? null,
+              deterministicBranch: routedGeneration.sanitizedTelemetry.deterministicBranch ?? null,
               requestedDay: routedGeneration.sanitizedTelemetry.requestedDay ?? null,
               deterministicResponderCount:
                 routedGeneration.sanitizedTelemetry.deterministicResponderCount ?? 0,
               missingScheduleConfiguration:
                 routedGeneration.sanitizedTelemetry.missingScheduleConfiguration ?? false,
+              scheduleValidationIssueCount:
+                routedGeneration.sanitizedTelemetry.scheduleValidationIssueCount ?? 0,
+              normalizedScheduleDayCount:
+                routedGeneration.sanitizedTelemetry.normalizedScheduleDayCount ?? 0,
+              normalizedScheduleIntervalCount:
+                routedGeneration.sanitizedTelemetry.normalizedScheduleIntervalCount ?? 0,
+              deterministicIsOpenNow: routedGeneration.sanitizedTelemetry.isOpenNow ?? null,
             });
           }
 
@@ -4420,32 +4434,46 @@ export class AssistantConversationsService {
       conversationalOutcome,
       officialBusinessContext,
     });
-    const authorityGuard = validateV1AnswerAuthority({
-      answer,
-      currentMessage: customerIntentText,
-      sources,
-      officialBusinessContext,
-      flowText: selectedFlowForAuthority
-        ? `${selectedFlowForAuthority.flowInstructions ?? ""} ${selectedFlowForAuthority.fixedMessage ?? ""}`
-        : null,
-      normalizedIntent: contextMetadata.detectedIntent,
-      selectedFlowId: contextMetadata.selectedFlowId,
-      selectedFlowKey: selectedFlowForAuthority
-        ? flowIntentKeyForFlow(selectedFlowForAuthority)
-        : null,
-      expectedAuthorityCategory: expectedAuthority.category,
-      conversationalOutcome,
-      triageExitReason,
-      customerUnableToAnswer,
-      officialHoursEvaluation: expectedAuthority.officialHours,
-      officialContactAvailable: contextMetadata.officialContactAvailable,
-      currentCustomerIntentSource: contextMetadata.intentInputSource,
-      currentTurnIsExplicitIntent: Boolean(expectedAuthority.category),
-    });
+    const isDeterministicV2BusinessHoursPrimary =
+      responseExecutionEnvelope.executionOwner === "V2_PRIMARY" &&
+      responseExecutionEnvelope.strategy === "V2_BUSINESS_HOURS_DETERMINISTIC" &&
+      responseExecutionEnvelope.allowedCategory === "businessHours" &&
+      responseExecutionEnvelope.allowedAuthority === "OFFICIAL_CONTEXT" &&
+      responseExecutionEnvelope.candidateStatus === "CANDIDATE_APPROVED" &&
+      responseExecutionEnvelope.qualityGateResult === "APPROVED" &&
+      responseExecutionEnvelope.outboundAllowed &&
+      responseExecutionEnvelope.providerCallCount === 0 &&
+      responseExecutionEnvelope.sanitizedTelemetry.deterministicResponderCount === 1;
+    const v1AuthorityGuardApplied = !isDeterministicV2BusinessHoursPrimary;
+    const authorityGuard = v1AuthorityGuardApplied
+      ? validateV1AnswerAuthority({
+          answer,
+          currentMessage: customerIntentText,
+          sources,
+          officialBusinessContext,
+          flowText: selectedFlowForAuthority
+            ? `${selectedFlowForAuthority.flowInstructions ?? ""} ${selectedFlowForAuthority.fixedMessage ?? ""}`
+            : null,
+          normalizedIntent: contextMetadata.detectedIntent,
+          selectedFlowId: contextMetadata.selectedFlowId,
+          selectedFlowKey: selectedFlowForAuthority
+            ? flowIntentKeyForFlow(selectedFlowForAuthority)
+            : null,
+          expectedAuthorityCategory: expectedAuthority.category,
+          conversationalOutcome,
+          triageExitReason,
+          customerUnableToAnswer,
+          officialHoursEvaluation: expectedAuthority.officialHours,
+          officialContactAvailable: contextMetadata.officialContactAvailable,
+          currentCustomerIntentSource: contextMetadata.intentInputSource,
+          currentTurnIsExplicitIntent: Boolean(expectedAuthority.category),
+        })
+      : null;
     if (
-      authorityGuard.unsupportedClaimDetected ||
-      authorityGuard.triageResponseProtected ||
-      authorityGuard.replacementReason
+      authorityGuard &&
+      (authorityGuard.unsupportedClaimDetected ||
+        authorityGuard.triageResponseProtected ||
+        authorityGuard.replacementReason)
     ) {
       answer = authorityGuard.answer;
       sources = [
@@ -4533,19 +4561,20 @@ export class AssistantConversationsService {
       responseExecutionOwner: responseExecutionEnvelope.executionOwner,
       responseGenerationRoute: responseExecutionEnvelope.route,
       responseExecutionReason: responseExecutionEnvelope.sanitizedTelemetry.reason,
-      v1UnsupportedClaimDetected: authorityGuard.unsupportedClaimDetected,
-      v1UnsupportedClaimCategories: authorityGuard.blockedCategories,
+      v1UnsupportedClaimDetected: authorityGuard?.unsupportedClaimDetected ?? false,
+      v1UnsupportedClaimCategories: authorityGuard?.blockedCategories ?? [],
       expectedAuthorityCategory: expectedAuthority.category,
-      generatedClaimCategory: authorityGuard.generatedClaimCategory,
-      finalSafeResponseCategory: authorityGuard.finalSafeResponseCategory,
-      authorityCategorySource: authorityGuard.authorityCategorySource,
-      authorityConflictDetected: authorityGuard.authorityConflictDetected,
-      authorityConflictCategories: authorityGuard.authorityConflictCategories,
-      winningSourceTypes: authorityGuard.winningSourceTypes,
-      rejectedSourceTypes: authorityGuard.rejectedSourceTypes,
+      generatedClaimCategory: authorityGuard?.generatedClaimCategory ?? null,
+      finalSafeResponseCategory: authorityGuard?.finalSafeResponseCategory ?? null,
+      authorityCategorySource: authorityGuard?.authorityCategorySource ?? null,
+      authorityConflictDetected: authorityGuard?.authorityConflictDetected ?? false,
+      authorityConflictCategories: authorityGuard?.authorityConflictCategories ?? [],
+      winningSourceTypes: authorityGuard?.winningSourceTypes ?? [],
+      rejectedSourceTypes: authorityGuard?.rejectedSourceTypes ?? [],
       conversationalOutcome,
-      triageResponseProtected: authorityGuard.triageResponseProtected,
-      replacementReason: authorityGuard.replacementReason,
+      triageResponseProtected: authorityGuard?.triageResponseProtected ?? false,
+      replacementReason: authorityGuard?.replacementReason ?? null,
+      v1AuthorityGuardApplied,
       officialHoursEvaluated: expectedAuthority.officialHours.evaluated,
       requestedDayOpen: expectedAuthority.officialHours.requestedDayOpen,
       requestedTimeWithinHours: expectedAuthority.officialHours.requestedTimeWithinHours,
@@ -4556,19 +4585,20 @@ export class AssistantConversationsService {
       ...contextMetadata.contextManifest,
       responseExecutionOwner: responseExecutionEnvelope.executionOwner,
       responseGenerationRoute: responseExecutionEnvelope.route,
-      authorityConflictDetected: authorityGuard.authorityConflictDetected,
-      authorityConflictCategories: authorityGuard.authorityConflictCategories,
-      winningSourceTypes: authorityGuard.winningSourceTypes,
-      rejectedSourceTypes: authorityGuard.rejectedSourceTypes,
-      v1UnsupportedClaimDetected: authorityGuard.unsupportedClaimDetected,
-      v1UnsupportedClaimCategories: authorityGuard.blockedCategories,
+      authorityConflictDetected: authorityGuard?.authorityConflictDetected ?? false,
+      authorityConflictCategories: authorityGuard?.authorityConflictCategories ?? [],
+      winningSourceTypes: authorityGuard?.winningSourceTypes ?? [],
+      rejectedSourceTypes: authorityGuard?.rejectedSourceTypes ?? [],
+      v1UnsupportedClaimDetected: authorityGuard?.unsupportedClaimDetected ?? false,
+      v1UnsupportedClaimCategories: authorityGuard?.blockedCategories ?? [],
       expectedAuthorityCategory: expectedAuthority.category,
-      generatedClaimCategory: authorityGuard.generatedClaimCategory,
-      finalSafeResponseCategory: authorityGuard.finalSafeResponseCategory,
-      authorityCategorySource: authorityGuard.authorityCategorySource,
+      generatedClaimCategory: authorityGuard?.generatedClaimCategory ?? null,
+      finalSafeResponseCategory: authorityGuard?.finalSafeResponseCategory ?? null,
+      authorityCategorySource: authorityGuard?.authorityCategorySource ?? null,
       conversationalOutcome,
-      triageResponseProtected: authorityGuard.triageResponseProtected,
-      replacementReason: authorityGuard.replacementReason,
+      triageResponseProtected: authorityGuard?.triageResponseProtected ?? false,
+      replacementReason: authorityGuard?.replacementReason ?? null,
+      v1AuthorityGuardApplied,
       officialHoursEvaluated: expectedAuthority.officialHours.evaluated,
       requestedDayOpen: expectedAuthority.officialHours.requestedDayOpen,
       requestedTimeWithinHours: expectedAuthority.officialHours.requestedTimeWithinHours,
@@ -4670,9 +4700,14 @@ export class AssistantConversationsService {
             responseStrategy: runtime.context.responseStrategy,
             scheduleSource: runtime.context.scheduleSource,
             requestedScheduleScope: runtime.context.requestedScheduleScope,
+            deterministicBranch: runtime.context.deterministicBranch,
             requestedDay: runtime.context.requestedDay,
             deterministicResponderCount: runtime.context.deterministicResponderCount,
             missingScheduleConfiguration: runtime.context.missingScheduleConfiguration,
+            scheduleValidationIssueCount: runtime.context.scheduleValidationIssueCount,
+            normalizedScheduleDayCount: runtime.context.normalizedScheduleDayCount,
+            normalizedScheduleIntervalCount: runtime.context.normalizedScheduleIntervalCount,
+            deterministicIsOpenNow: runtime.context.deterministicIsOpenNow,
             llmSkipped: runtime.context.llmSkipped,
             handoffPending: runtime.context.handoffPending,
             autoRespond: runtime.context.autoRespond,
@@ -4736,6 +4771,7 @@ export class AssistantConversationsService {
             conversationalOutcome: runtime.context.conversationalOutcome,
             triageResponseProtected: runtime.context.triageResponseProtected,
             replacementReason: runtime.context.replacementReason,
+            v1AuthorityGuardApplied: runtime.context.v1AuthorityGuardApplied,
             officialHoursEvaluated: runtime.context.officialHoursEvaluated,
             requestedDayOpen: runtime.context.requestedDayOpen,
             requestedTimeWithinHours: runtime.context.requestedTimeWithinHours,
