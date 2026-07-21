@@ -289,6 +289,51 @@ test("eligible single-use approval claims before V2 fake and suppresses V1", asy
   assert.equal(result.candidateStatus, "CANDIDATE_APPROVED");
 });
 
+test("handoff explícito tem precedência e não entra no handler primário de horários", async () => {
+  const handoffDecision = resolveResponseExecutionIntent({
+    canonicalMessage: "Quero falar com humano, vocês estão abertos?",
+    messageId: "message-1",
+  });
+  let approvalLookups = 0;
+  let v2Calls = 0;
+  const calls = [];
+  const router = new ResponseGenerationRouter({
+    executeV1: async (value) => {
+      calls.push(value);
+      return v1Response({ handoffRequired: true });
+    },
+    coordinator: {
+      async loadApproval() {
+        approvalLookups += 1;
+        throw new Error("não deve carregar approval para handoff");
+      },
+    },
+    v2Executor: {
+      async execute() {
+        v2Calls += 1;
+        throw new Error("não deve executar V2 para handoff");
+      },
+    },
+  });
+
+  const result = await router.route(
+    controlledInput({
+      v2Eligibility: {
+        standardEligible: false,
+        category: handoffDecision.category,
+        authority: handoffDecision.authority,
+        semanticDecision: handoffDecision,
+        flowEvaluation: { v2Compatibility: "ALLOWED", flowConfigurationFingerprint: "flow-config-1" },
+      },
+    }),
+  );
+
+  assert.equal(result.executionOwner, "V1_NORMAL");
+  assert.equal(calls.length, 1);
+  assert.equal(approvalLookups, 0);
+  assert.equal(v2Calls, 0);
+});
+
 test("router default-denies a semantic decision that differs from the approval before claim", async () => {
   let claims = 0;
   let v2 = 0;

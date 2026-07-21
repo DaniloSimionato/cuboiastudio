@@ -51,6 +51,18 @@ test("sendMessage reaches the ownership-aware tail through the single-use-capabl
   assert.match(routerSource, /RuntimeV2ResponseExecutionCoordinator/);
   assert.match(routerSource, /loadApproval/);
   assert.match(routerSource, /claim/);
+  assert.match(routerSource, /routeBusinessHoursPrimary/);
+  assert.match(routerSource, /isBusinessHoursPrimaryEligible/);
+  assert.match(serviceSource, /const buildStandardPromptMessages/);
+  assert.match(serviceSource, /promptMessages: buildStandardPromptMessages\(\)/);
+  assert.match(serviceSource, /deterministic turn never compiles[\s\S]*LLM prompt/);
+  assert.match(
+    await readFile(
+      new URL("../src/assistant-conversations/v2-primary-response-executor.ts", import.meta.url),
+      "utf8",
+    ),
+    /recentHistory: \[\]/,
+  );
   assert.doesNotMatch(routerSource, /generateChatCompletion|sendChatwootOutboundText|scheduleRuntimeV2Shadow/);
   assert.match(serviceSource, /sendChatwootOutboundText\(/);
   assert.match(serviceSource, /scheduleRuntimeV2Shadow\(/);

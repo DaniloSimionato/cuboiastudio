@@ -156,6 +156,82 @@ test("executor primário renderiza businessHours estruturado sem provider", asyn
   assert.match(result.responseText, /sábado/i);
 });
 
+test("handler primário ignora histórico incorreto e usa a agenda oficial da quarta-feira", async () => {
+  const weeklySchedule = {
+    monday: [{ start: "08:00", end: "22:00" }],
+    tuesday: [{ start: "08:00", end: "23:00" }],
+    wednesday: [
+      { start: "08:00", end: "11:00" },
+      { start: "13:00", end: "21:00" },
+    ],
+    thursday: [{ start: "08:00", end: "18:00" }],
+    friday: [{ start: "08:00", end: "18:00" }],
+    saturday: [{ start: "07:30", end: "12:00" }],
+    sunday: [],
+  };
+  const result = await new RuntimeV2PrimaryResponseExecutor({
+    now: () => new Date("2026-07-22T14:00:00.000Z"),
+  }).execute(
+    input({
+      context: context({
+        officialBusinessContext: officialContext(
+          { weeklySchedule },
+          new Date("2026-07-22T14:00:00.000Z"),
+        ),
+        canonicalInbound: {
+          ...context().canonicalInbound,
+          displayContent: "Qual horário de quarta?",
+        },
+        // This property is intentionally ignored by the typed primary context.
+        // It models a wrong V1 answer retained in the conversation history.
+        recentHistory: [
+          { id: "old-wrong-answer", role: "assistant", content: "Quarta até 22h." },
+        ],
+      }),
+    }),
+  );
+
+  assert.equal(result.sanitizedTelemetry.providerCallCount, 0);
+  assert.equal(result.sanitizedTelemetry.deterministicResponderCount, 1);
+  assert.equal(result.sanitizedTelemetry.deterministicBranch, "SPECIFIC_DAY");
+  assert.match(result.responseText, /quartas-feiras.*08h às 11h.*13h às 21h/i);
+  assert.doesNotMatch(result.responseText, /22h/i);
+});
+
+test("handler primário responde OPEN_NOW e almoço somente pela agenda oficial", async () => {
+  const weeklySchedule = {
+    monday: [
+      { start: "08:00", end: "11:00" },
+      { start: "13:00", end: "21:00" },
+    ],
+    tuesday: [],
+    wednesday: [],
+    thursday: [],
+    friday: [],
+    saturday: [],
+    sunday: [],
+  };
+  const now = new Date("2026-07-20T17:30:00.000Z");
+  const businessContext = officialContext({ weeklySchedule }, now);
+  for (const [message, branch, expectedText] of [
+    ["Vocês estão abertos agora?", "OPEN_NOW", /estamos abertos agora.*13:00 às 21:00/i],
+    ["Vocês fecham para almoço?", "WEEKLY_SUMMARY", /fechamos para almoço.*11:00.*13:00/i],
+  ]) {
+    const result = await new RuntimeV2PrimaryResponseExecutor({ now: () => now }).execute(
+      input({
+        context: context({
+          officialBusinessContext: businessContext,
+          canonicalInbound: { ...context().canonicalInbound, displayContent: message },
+        }),
+      }),
+    );
+    assert.equal(result.sanitizedTelemetry.providerCallCount, 0, message);
+    assert.equal(result.sanitizedTelemetry.deterministicResponderCount, 1, message);
+    assert.equal(result.sanitizedTelemetry.deterministicBranch, branch, message);
+    assert.match(result.responseText, expectedText, message);
+  }
+});
+
 test("executor primário cobre agenda fechada, aberta, atual, ausente e inválida sem provider", async () => {
   const baseSchedule = {
     monday: [{ start: "08:00", end: "18:00" }],

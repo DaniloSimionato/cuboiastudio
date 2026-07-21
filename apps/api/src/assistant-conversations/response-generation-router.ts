@@ -137,7 +137,7 @@ function isExecutionScopeEnabled(input: ResponseGenerationRouterInput): boolean 
   return false;
 }
 
-function isEligibleForV2(input: ResponseGenerationRouterInput): boolean {
+function isBusinessHoursPrimaryEligible(input: ResponseGenerationRouterInput): boolean {
   return (
     input.v2Eligibility?.standardEligible === true &&
     input.v2Eligibility.category === "businessHours" &&
@@ -149,9 +149,10 @@ function isEligibleForV2(input: ResponseGenerationRouterInput): boolean {
 }
 
 /**
- * Default-deny generation seam. The V2 path exists only when an explicitly injected
- * single-use coordinator, fake V2 executor, exact scope and eligible turn are all present.
- * Production registers no V2 executor in this phase.
+ * Default-deny generation seam. Business-hours turns first pass through the
+ * controlled primary handler. The provider is reached only when that handler
+ * is not enabled for this exact assistant/conversation or cannot safely own
+ * the inbound.
  */
 export class ResponseGenerationRouter {
   constructor(
@@ -159,13 +160,25 @@ export class ResponseGenerationRouter {
   ) {}
 
   async route(input: ResponseGenerationRouterInput): Promise<ResponseGenerationRouterResult> {
+    const primaryResult = await this.routeBusinessHoursPrimary(input);
+    return primaryResult ?? this.executeV1Normal(input);
+  }
+
+  /**
+   * The only primary route that can own business-hours facts. It remains
+   * default-deny: CONTROLLED mode, existing allowlists, a valid official
+   * context decision, approval, and a safe flow are all required.
+   */
+  private async routeBusinessHoursPrimary(
+    input: ResponseGenerationRouterInput,
+  ): Promise<ResponseGenerationRouterResult | null> {
     if (
       !isExecutionScopeEnabled(input) ||
-      !isEligibleForV2(input) ||
+      !isBusinessHoursPrimaryEligible(input) ||
       !this.dependencies.coordinator ||
       !this.dependencies.v2Executor
     ) {
-      return this.executeV1Normal(input);
+      return null;
     }
 
     let currentFlow = await this.currentFlowEvaluation(input);

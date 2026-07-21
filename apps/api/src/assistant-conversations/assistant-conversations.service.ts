@@ -3669,11 +3669,16 @@ export class AssistantConversationsService {
             triageMode,
           });
 
-          let promptMessages: any[] = [];
-          if (selectedGenerationStrategy !== "FLOW_BYPASS") {
-            // Every Chatwoot path uses the same compiler, even if dependency injection is absent.
+          let standardPromptMessages: any[] | null = null;
+          const buildStandardPromptMessages = (): any[] => {
+            if (standardPromptMessages) return standardPromptMessages;
+            if (selectedGenerationStrategy === "FLOW_BYPASS") return [];
+
+            // The primary business-hours handler is decided before this lazy
+            // factory is called. Therefore a deterministic turn never compiles
+            // an LLM prompt or exposes conversation history to a provider.
             const compiler = this.promptCompilerService ?? new PromptCompilerService();
-            promptMessages = compiler.compile({
+            const promptMessages = compiler.compile({
               assistant: {
                 ...assistant,
                 instructions: promptInstructions,
@@ -3775,37 +3780,40 @@ export class AssistantConversationsService {
                 })}`,
               );
             }
-          }
 
-          if (isDebugLogsEnabled && selectedGenerationStrategy !== "FLOW_BYPASS") {
-            // TEMPORARY DIAGNOSTIC LOGS
-            console.log("\n=== TEMPORARY DIAGNOSTIC LOGS: START ===");
-            console.log("Source:", input.dto.source || conversation.source);
-            console.log("CompanyId (Tenant):", input.tenant.companyId);
-            console.log("AssistantId:", assistant.id);
-            console.log("Assistant CompanyId:", input.tenant.companyId);
-            console.log("CalendarToolsActive:", calendarToolsActive);
-            console.log("Tools count:", tools?.length || 0);
-            console.log(
-              "Has calendar_checkAvailability:",
-              tools?.some((t) => t.function.name === "calendar_checkAvailability") || false,
-            );
-            console.log(
-              "ResourcesContext populated:",
-              !!resourcesContext,
-              "| Length:",
-              resourcesContext?.length || 0,
-            );
-            console.log(
-              "Prompt Messages Calendar Context:",
-              promptMessages.some(
-                (m) =>
-                  typeof m.content === "string" &&
-                  m.content.includes("Instruções do Sistema de Reservas"),
-              ),
-            );
-            console.log("=== TEMPORARY DIAGNOSTIC LOGS: END ===\n");
-          }
+            if (isDebugLogsEnabled) {
+              // TEMPORARY DIAGNOSTIC LOGS
+              console.log("\n=== TEMPORARY DIAGNOSTIC LOGS: START ===");
+              console.log("Source:", input.dto.source || conversation.source);
+              console.log("CompanyId (Tenant):", input.tenant.companyId);
+              console.log("AssistantId:", assistant.id);
+              console.log("Assistant CompanyId:", input.tenant.companyId);
+              console.log("CalendarToolsActive:", calendarToolsActive);
+              console.log("Tools count:", tools?.length || 0);
+              console.log(
+                "Has calendar_checkAvailability:",
+                tools?.some((t) => t.function.name === "calendar_checkAvailability") || false,
+              );
+              console.log(
+                "ResourcesContext populated:",
+                !!resourcesContext,
+                "| Length:",
+                resourcesContext?.length || 0,
+              );
+              console.log(
+                "Prompt Messages Calendar Context:",
+                promptMessages.some(
+                  (m) =>
+                    typeof m.content === "string" &&
+                    m.content.includes("Instruções do Sistema de Reservas"),
+                ),
+              );
+              console.log("=== TEMPORARY DIAGNOSTIC LOGS: END ===\n");
+            }
+
+            standardPromptMessages = promptMessages;
+            return standardPromptMessages;
+          };
 
           const createTriageInput = async (): Promise<TriageResponseGenerationInput> => {
             return {
@@ -3859,7 +3867,7 @@ export class AssistantConversationsService {
           const createStandardInput = async (): Promise<StandardResponseGenerationInput> => {
             return {
               companyId: input.tenant.companyId,
-              promptMessages,
+              promptMessages: buildStandardPromptMessages(),
               model: resolvedModel.model,
               temperature,
               tools,
@@ -4112,7 +4120,6 @@ export class AssistantConversationsService {
             currentInboundMessageId: responseExecutionTurn.internalMessageId,
             messages: conversationHistory,
           });
-          const v2RecentHistory = responseExecutionConversationContext.messages;
           const responseExecutionSemanticDecision = resolveResponseExecutionIntent({
             canonicalMessage: canonicalInboundMessage.canonicalComparisonContent,
             messageId: responseExecutionTurn.internalMessageId,
@@ -4162,7 +4169,6 @@ export class AssistantConversationsService {
               instruction: rule.instruction,
             })),
             officialBusinessContext,
-            recentHistory: v2RecentHistory,
             model: resolvedModel.model,
             temperature,
             compatibleFlowContext: flowEvaluation.compatibleFlowContext,

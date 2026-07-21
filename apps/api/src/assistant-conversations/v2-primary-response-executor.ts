@@ -8,7 +8,6 @@ import {
 } from "../assistants/official-business-context";
 import { createEmptyConversationState } from "../runtime-v2/conversation-state";
 import { buildResponsePlan } from "../runtime-v2/response-plan";
-import type { UsefulHistoryMessage } from "../runtime-v2/runtime-v2.types";
 import { understandTurn } from "../runtime-v2/turn-understanding";
 import type { RuntimeV2ResponseExecutionApproval } from "../runtime-v2/response-execution-approval";
 import type { ResponseExecutionTurn } from "./response-execution-envelope";
@@ -40,7 +39,6 @@ export type V2PrimaryResponseExecutionContext = {
   behavior?: V2PrimaryBehaviorPromptContext | null;
   securityRules: V2PrimarySecurityRule[];
   officialBusinessContext: OfficialBusinessContext | null;
-  recentHistory: UsefulHistoryMessage[];
   model: string | null;
   temperature: number | undefined;
   compatibleFlowContext?: CompatibleFlowExecutionContext | null;
@@ -270,7 +268,10 @@ export class RuntimeV2PrimaryResponseExecutor implements V2PrimaryResponseExecut
       messageId: input.turn.internalMessageId,
       contextVersion: input.turn.contextVersion ?? 1,
       now: this.now(),
-      recentHistory: context.recentHistory.slice(-6),
+      // Horários comerciais têm fonte factual estruturada. A classificação da
+      // rota já recebeu o contexto conversacional; o handler não deve reler
+      // respostas anteriores nem usá-las como autoridade factual.
+      recentHistory: [],
     });
     if (
       understanding.requiresClarification ||
