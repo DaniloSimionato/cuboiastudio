@@ -27,6 +27,12 @@ export const MAX_IN_MEMORY_PROCESSED_MESSAGE_IDS = 512;
 
 export interface ConversationStateStore {
   load(scope: ConversationStateStoreScope): Promise<ConversationState | null>;
+  /**
+   * Optional physical-size probe for stores that persist PostgreSQL jsonb.
+   * Response-execution compaction uses it to make its byte decision against
+   * the exact representation guarded by the database constraint.
+   */
+  estimatePersistedStateBytes?(state: ConversationState): Promise<number>;
   create(initialState: ConversationState): Promise<ConversationState>;
   save(state: ConversationState, expectedRevision: number): Promise<ConversationState>;
   saveTurn(
@@ -87,6 +93,38 @@ export class StaleContextError extends Error {
 export const MAX_STATE_JSON_BYTES = 64 * 1024;
 export const STATE_EXPIRY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const STATE_PURGE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Conservative upper bound for PostgreSQL's on-disk jsonb value. PostgreSQL
+ * stores a container header and a JEntry for every object key/value or array
+ * item; JSON.stringify() omits that binary bookkeeping and can therefore pass
+ * locally while pg_column_size(stateJson) rejects the write.
+ */
+export function estimatePostgresJsonbStorageBytes(value: unknown): number {
+  if (value === null || typeof value === "boolean") return 0;
+  if (typeof value === "string") return Buffer.byteLength(value, "utf8");
+  if (typeof value === "number") return Buffer.byteLength(String(value), "utf8");
+  if (Array.isArray(value)) {
+    return (
+      4 +
+      value.length * 4 +
+      value.reduce((total, item) => total + estimatePostgresJsonbStorageBytes(item), 0)
+    );
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    return (
+      4 +
+      entries.length * 8 +
+      entries.reduce(
+        (total, [key, item]) =>
+          total + Buffer.byteLength(key, "utf8") + estimatePostgresJsonbStorageBytes(item),
+        0,
+      )
+    );
+  }
+  return 0;
+}
 
 function scopeKey(scope: ConversationStateStoreScope): string {
   return [

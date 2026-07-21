@@ -1,7 +1,9 @@
 import { createEmptyConversationState, serializeConversationState } from "./conversation-state";
 import {
   MAX_STATE_JSON_BYTES,
+  estimatePostgresJsonbStorageBytes,
   StateAlreadyExistsError,
+  StatePayloadTooLargeError,
   StateRevisionConflictError,
   type ConversationStateStore,
   type ConversationStateStoreScope,
@@ -150,26 +152,29 @@ function stateWithSnapshot(
  * rejecting an otherwise safe automatic approval solely due to retained audit
  * entries.
  */
-function compactTerminalHistoryForNextAttempt(input: {
+async function compactTerminalHistoryForNextAttempt(input: {
   state: ConversationState;
   current: ResponseExecutionRecord;
   history: ResponseExecutionRecord[];
   historyStartAttemptNumber: number;
-}): { history: ResponseExecutionRecord[]; historyStartAttemptNumber: number } {
+  estimatePersistedStateBytes: (state: ConversationState) => Promise<number>;
+}): Promise<{ history: ResponseExecutionRecord[]; historyStartAttemptNumber: number }> {
   const history = [...input.history];
   let historyStartAttemptNumber = input.historyStartAttemptNumber;
-  while (history.length > 0) {
+  while (true) {
     const candidate = stateWithSnapshot(
       input.state,
       input.current,
       history,
       historyStartAttemptNumber,
     );
-    const sizeBytes = Buffer.byteLength(
-      JSON.stringify(serializeConversationState(candidate)),
-      "utf8",
-    );
+    const sizeBytes = await input.estimatePersistedStateBytes(candidate);
     if (sizeBytes <= MAX_STATE_JSON_BYTES) break;
+    // History is contiguous. Removing anything after a non-terminal first
+    // record would create a gap and could discard an active execution.
+    if (history.length === 0 || history[0]?.terminalStatus == null) {
+      throw new StatePayloadTooLargeError(sizeBytes);
+    }
     history.shift();
     historyStartAttemptNumber += 1;
   }
@@ -311,11 +316,17 @@ export class ConversationStateResponseExecutionStore implements ResponseExecutio
       return record;
     }
     const next = { ...record, revision: existing.revision + 1 };
-    const compacted = compactTerminalHistoryForNextAttempt({
+    const compacted = await compactTerminalHistoryForNextAttempt({
       state: existing,
       current: next,
       history: archived,
       historyStartAttemptNumber: snapshot?.historyStartAttemptNumber ?? 1,
+      estimatePersistedStateBytes: async (candidate) => {
+        if (this.stateStore.estimatePersistedStateBytes) {
+          return this.stateStore.estimatePersistedStateBytes(candidate);
+        }
+        return 4 + estimatePostgresJsonbStorageBytes(serializeConversationState(candidate));
+      },
     });
     try {
       await this.stateStore.save(

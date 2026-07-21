@@ -15,6 +15,7 @@ import {
   RuntimeV2ResponseExecutionCoordinator,
   createRuntimeV2ResponseExecutionApproval,
   resolveResponseExecutionIntent,
+  serializeConversationState,
 } from "../dist/runtime-v2/index.js";
 
 if (!process.env.DATABASE_URL) {
@@ -98,6 +99,65 @@ function assertArmMatchesStatus(armed, status) {
   ]) {
     assert.equal(armed[field], status[field], `PostgreSQL arm/status mismatch for ${field}`);
   }
+}
+
+function legacyPadding(length) {
+  const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let seed = 0x4d595df4;
+  let output = "";
+  for (let index = 0; index < length; index += 1) {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    output += alphabet[seed % alphabet.length];
+  }
+  return output;
+}
+
+async function consumeTerminalV2Turn({ store, executionCoordinator, scope, approval, index }) {
+  const armed = await store.arm({ approval, contextVersion: scope.contextVersion });
+  const claim = await executionCoordinator.claim({
+    ...scope,
+    internalMessageId: approval.internalMessageId,
+    canonicalComparisonHash: approval.expectedCanonicalComparisonHash,
+    approval,
+  });
+  assert.equal(claim.status, "CLAIMED");
+  assert.equal(
+    await executionCoordinator.beginV2Generation({
+      ...scope,
+      internalMessageId: approval.internalMessageId,
+      generationId: claim.generationId,
+      providerCallCount: 0,
+    }),
+    true,
+  );
+  assert.equal(
+    await executionCoordinator.approveV2Candidate({
+      ...scope,
+      internalMessageId: approval.internalMessageId,
+      generationId: claim.generationId,
+    }),
+    true,
+  );
+  assert.equal(
+    await executionCoordinator.beforeOutbound({
+      ...scope,
+      internalMessageId: approval.internalMessageId,
+      owner: "V2_PRIMARY",
+      generationId: claim.generationId,
+    }),
+    true,
+  );
+  assert.equal(
+    await executionCoordinator.afterOutboundConfirmed({
+      ...scope,
+      internalMessageId: approval.internalMessageId,
+      owner: "V2_PRIMARY",
+      generationId: claim.generationId,
+      externalMessageId: `outbound-${index}`,
+    }),
+    true,
+  );
+  return armed;
 }
 
 before(async () => {
@@ -580,7 +640,136 @@ test("PostgreSQL concurrent rearm returns the persisted current/history snapshot
   assert.equal(snapshot?.current.attemptNumber, 2);
 });
 
-test("PostgreSQL retains automatic single-use execution through 20 terminal business-hours turns without exhausting stateJson", async () => {
+test("PostgreSQL arm normalizes a legacy execution envelope before attempt 18", async () => {
+  const { scope } = await fixture();
+  const stateStore = new PrismaConversationStateStore(prisma);
+  const store = new ConversationStateResponseExecutionStore(stateStore);
+  const executionCoordinator = new RuntimeV2ResponseExecutionCoordinator({ store });
+
+  for (let index = 1; index <= 17; index += 1) {
+    const approval = createRuntimeV2ResponseExecutionApproval({
+      companyId: scope.companyId,
+      assistantId: scope.assistantId,
+      conversationId: scope.conversationId,
+      expectedCanonicalComparisonHash: `legacy-hash-${index}`,
+      canonicalVersion: "canonical-inbound-message-v1",
+      expiresAt: new Date(Date.now() + 60_000),
+      operatorPurpose: `legacy terminal ${index}`,
+      internalMessageId: `legacy-inbound-${index}`,
+      approvalSource: "AUTO_SINGLE_USE",
+    });
+    await consumeTerminalV2Turn({ store, executionCoordinator, scope, approval, index });
+  }
+
+  const state = await stateStore.load({ ...scope, runtimeVersion: "V2", mode: "SHADOW" });
+  const execution = state.responseExecution;
+  state.responseExecution = {
+    current: execution.current,
+    history: execution.history,
+  };
+  state.temporaryFacts = {
+    legacyConversationContext: {
+      key: "legacyConversationContext",
+      value: "",
+      confidence: 1,
+      sourceType: "CUSTOMER_TEXT",
+      confirmedAt: new Date(),
+      expiresAt: null,
+    },
+  };
+  const legacyRow = await prisma.assistantConversationStateV2.findFirstOrThrow({
+    where: {
+      companyId: scope.companyId,
+      assistantId: scope.assistantId,
+      conversationId: scope.conversationId,
+    },
+  });
+  state.revision = legacyRow.revision + 1;
+  const targetLegacyTextBytes = 63_176;
+  const baseSize = await prisma.$queryRawUnsafe(
+    `SELECT octet_length("stateJson"::text)::int AS bytes FROM assistant_conversation_states_v2 WHERE id = '${legacyRow.id}'`,
+  );
+  const padding = legacyPadding(targetLegacyTextBytes);
+  let lower = 0;
+  let upper = targetLegacyTextBytes - Number(baseSize[0].bytes) + 1_024;
+  let matched = false;
+  while (lower <= upper) {
+    const length = Math.floor((lower + upper) / 2);
+    state.temporaryFacts.legacyConversationContext.value = padding.slice(0, length);
+    try {
+      await prisma.assistantConversationStateV2.update({
+        where: { id: legacyRow.id },
+        data: { revision: state.revision, stateJson: serializeConversationState(state) },
+      });
+    } catch {
+      upper = length - 1;
+      continue;
+    }
+    const size = await prisma.$queryRawUnsafe(
+      `SELECT octet_length("stateJson"::text)::int AS bytes FROM assistant_conversation_states_v2 WHERE id = '${legacyRow.id}'`,
+    );
+    const bytes = Number(size[0].bytes);
+    if (bytes === targetLegacyTextBytes) {
+      matched = true;
+      break;
+    }
+    if (bytes < targetLegacyTextBytes) lower = length + 1;
+    else upper = length - 1;
+  }
+  assert.equal(matched, true, "fixture must reproduce the observed 63,176-byte legacy state");
+
+  const before = await prisma.assistantConversationStateV2.findFirstOrThrow({
+    where: {
+      companyId: scope.companyId,
+      assistantId: scope.assistantId,
+      conversationId: scope.conversationId,
+    },
+  });
+  const beforeSize = await prisma.$queryRawUnsafe(
+    `SELECT octet_length("stateJson"::text)::int AS bytes FROM assistant_conversation_states_v2 WHERE id = '${legacyRow.id}'`,
+  );
+  assert.equal(Number(beforeSize[0].bytes), targetLegacyTextBytes);
+  assert.equal(before.stateJson.responseExecution.historyStartAttemptNumber, undefined);
+
+  const nextApproval = createRuntimeV2ResponseExecutionApproval({
+    companyId: scope.companyId,
+    assistantId: scope.assistantId,
+    conversationId: scope.conversationId,
+    expectedCanonicalComparisonHash: "legacy-hash-18",
+    canonicalVersion: "canonical-inbound-message-v1",
+    expiresAt: new Date(Date.now() + 60_000),
+    operatorPurpose: "legacy compacted attempt",
+    internalMessageId: "legacy-inbound-18",
+    approvalSource: "AUTO_SINGLE_USE",
+  });
+  const armed = await store.arm({ approval: nextApproval, contextVersion: scope.contextVersion });
+  assert.equal(armed.attemptNumber, 18);
+
+  const after = await prisma.assistantConversationStateV2.findFirstOrThrow({
+    where: {
+      companyId: scope.companyId,
+      assistantId: scope.assistantId,
+      conversationId: scope.conversationId,
+    },
+  });
+  const afterSize = await prisma.$queryRawUnsafe(
+    `SELECT pg_column_size("stateJson")::int AS bytes FROM assistant_conversation_states_v2 WHERE id = '${legacyRow.id}'`,
+  );
+  assert.ok(Number(afterSize[0].bytes) <= 64 * 1024);
+  const snapshot = await store.loadSnapshot(scope);
+  assert.equal(snapshot.invalid, false);
+  assert.equal(snapshot.current.attemptNumber, 18);
+  assert.equal(snapshot.current.approval.approvalId, nextApproval.approvalId);
+  assert.ok(snapshot.historyStartAttemptNumber >= 1);
+  assert.equal(snapshot.history[0].attemptNumber, snapshot.historyStartAttemptNumber);
+  assert.ok(snapshot.history.length < 17, "terminal legacy history was compacted before arm");
+  assert.equal(
+    snapshot.history.some((record) => record.terminalStatus === null),
+    false,
+  );
+});
+
+test("PostgreSQL retains automatic single-use execution through 30 terminal business-hours turns without exhausting stateJson", async () => {
   const { scope } = await fixture();
   const stateStore = new PrismaConversationStateStore(prisma);
   const store = new ConversationStateResponseExecutionStore(stateStore);
@@ -606,6 +795,16 @@ test("PostgreSQL retains automatic single-use execution through 20 terminal busi
     "Sábado funciona pela manhã?",
     "Domingo está fechado?",
     "Qual o horário de quarta?",
+    "Qual o horário de atendimento?",
+    "Que horas vocês fecham hoje?",
+    "Vocês estão abertos agora?",
+    "Qual o horário na segunda?",
+    "Qual o horário na terça?",
+    "Qual o horário na quarta?",
+    "Quarta fecha para almoço?",
+    "Quarta volta às 13?",
+    "Sábado abre?",
+    "Domingo funciona?",
   ];
   const approvals = [];
   let outboundCount = 0;
@@ -701,12 +900,12 @@ test("PostgreSQL retains automatic single-use execution through 20 terminal busi
 
   const snapshot = await store.loadSnapshot(scope);
   assert.equal(snapshot?.invalid, false);
-  assert.equal(snapshot?.current.attemptNumber, 20);
-  assert.ok(snapshot.history.length < 19, "terminal history was compacted before the byte cap");
+  assert.equal(snapshot?.current.attemptNumber, 30);
+  assert.ok(snapshot.history.length < 29, "terminal history was compacted before the byte cap");
   assert.equal(snapshot.current.approval.status, "CONSUMED");
   assert.equal(snapshot.current.owner, "V2_OUTBOUND_SENT");
-  assert.equal(outboundCount, 20);
-  assert.equal(approvals.length, 20);
+  assert.equal(outboundCount, 30);
+  assert.equal(approvals.length, 30);
   assert.equal(
     approvals.every((approval) => approval.approvalSource === "AUTO_SINGLE_USE"),
     true,
@@ -729,8 +928,8 @@ test("PostgreSQL retains automatic single-use execution through 20 terminal busi
 
   const replay = await executionCoordinator.claim({
     ...scope,
-    internalMessageId: `${scope.conversationId}-auto-20`,
-    canonicalComparisonHash: "hash-auto-20",
+    internalMessageId: `${scope.conversationId}-auto-30`,
+    canonicalComparisonHash: "hash-auto-30",
     approval: snapshot.current.approval,
   });
   assert.equal(replay.status, "PENDING_OR_TERMINAL", "terminal replay cannot send twice");

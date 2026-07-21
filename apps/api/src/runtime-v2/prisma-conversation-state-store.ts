@@ -9,6 +9,7 @@ import {
 } from "./conversation-state";
 import {
   MAX_STATE_JSON_BYTES,
+  estimatePostgresJsonbStorageBytes,
   STATE_EXPIRY_RETENTION_MS,
   STATE_PURGE_RETENTION_MS,
   MissingInternalMessageIdError,
@@ -152,7 +153,7 @@ export function sanitizeConversationStateForPersistence(state: ConversationState
     throw new Error("STATE_SCHEMA_INVALID");
   }
   const json = redacted as Prisma.InputJsonValue;
-  const sizeBytes = Buffer.byteLength(JSON.stringify(json), "utf8");
+  const sizeBytes = 4 + estimatePostgresJsonbStorageBytes(json);
   if (sizeBytes > MAX_STATE_JSON_BYTES) throw new StatePayloadTooLargeError(sizeBytes);
   return { json, sizeBytes };
 }
@@ -540,6 +541,14 @@ export class PrismaConversationStateStore implements ConversationStateStore {
       },
     });
     return Boolean(event);
+  }
+
+  async estimatePersistedStateBytes(state: ConversationState): Promise<number> {
+    const { json } = sanitizeConversationStateForPersistence(state);
+    const rows = await this.prisma.$queryRaw<Array<{ bytes: number | bigint }>>`
+      SELECT pg_column_size(CAST(${JSON.stringify(json)} AS jsonb)) AS bytes
+    `;
+    return Number(rows[0]?.bytes ?? 0);
   }
 
   private prepareState(
