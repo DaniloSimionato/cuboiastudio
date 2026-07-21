@@ -86,6 +86,32 @@ test("formatter determinístico responde sábado, domingo, hoje e aberto agora n
   assert.match(openNow.answer, /abertos agora/i);
 });
 
+test("variantes explícitas de sábado preservam SPECIFIC_DAY e o sábado oficial", () => {
+  const context = buildFgContext(new Date("2026-07-20T23:00:00.000Z"));
+  const variants = [
+    "sábado",
+    "sabado",
+    "E sábado?",
+    "e sábado",
+    "E no sábado?",
+    "Vocês abrem sábado?",
+  ];
+
+  for (const question of variants) {
+    const answer = buildDeterministicBusinessHoursResponse(question, context);
+    assert.equal(answer.requestedScheduleScope, "specific_day");
+    assert.equal(answer.requestedDay, "saturday");
+    assert.equal(answer.deterministicBranch, "SPECIFIC_DAY");
+    assert.equal(answer.isOpenNow, null);
+    assert.match(answer.answer, /^Sim\./);
+    assert.match(answer.answer, /07h30 às 12h/i);
+  }
+
+  const typo = buildDeterministicBusinessHoursResponse("E sabido?", context);
+  assert.equal(typo.requestedScheduleScope, "weekly");
+  assert.equal(typo.requestedDay, null);
+});
+
 test("resumo semanal tem precedência sobre estado atual em qualquer dia ou horário", () => {
   const weeklyQuestions = [
     "Qual o horário de funcionamento?",
