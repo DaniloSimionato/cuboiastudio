@@ -579,3 +579,159 @@ test("PostgreSQL concurrent rearm returns the persisted current/history snapshot
   assert.equal(snapshot?.history.length, 1);
   assert.equal(snapshot?.current.attemptNumber, 2);
 });
+
+test("PostgreSQL retains automatic single-use execution through 20 terminal business-hours turns without exhausting stateJson", async () => {
+  const { scope } = await fixture();
+  const stateStore = new PrismaConversationStateStore(prisma);
+  const store = new ConversationStateResponseExecutionStore(stateStore);
+  const executionCoordinator = new RuntimeV2ResponseExecutionCoordinator({ store });
+  const messages = [
+    "Qual o horário de atendimento?",
+    "Que horas vocês fecham hoje?",
+    "Vocês estão abertos agora?",
+    "Qual o horário na segunda?",
+    "Qual o horário na terça?",
+    "Qual o horário na quarta?",
+    "Quarta fecha para almoço?",
+    "Quarta volta às 13?",
+    "Quinta funciona até as 18?",
+    "Sábado abre?",
+    "Domingo funciona?",
+    "Qual o horário na quarta-feira?",
+    "Qual o horário na terça-feira?",
+    "Segunda funciona até que horas?",
+    "Quarta abre de tarde?",
+    "Quinta abre?",
+    "Sexta fecha que horas?",
+    "Sábado funciona pela manhã?",
+    "Domingo está fechado?",
+    "Qual o horário de quarta?",
+  ];
+  const approvals = [];
+  let outboundCount = 0;
+
+  for (const [index, message] of messages.entries()) {
+    const internalMessageId = `${scope.conversationId}-auto-${index + 1}`;
+    const approval = createRuntimeV2ResponseExecutionApproval({
+      companyId: scope.companyId,
+      assistantId: scope.assistantId,
+      conversationId: scope.conversationId,
+      expectedCanonicalComparisonHash: `hash-auto-${index + 1}`,
+      canonicalVersion: "canonical-inbound-message-v1",
+      expiresAt: new Date(Date.now() + 60_000),
+      operatorPurpose: `automatic business-hours turn ${index + 1}`,
+      internalMessageId,
+      approvalSource: "AUTO_SINGLE_USE",
+    });
+    const armed = await store.arm({ approval, contextVersion: scope.contextVersion });
+    assert.equal(armed.approval.approvalSource, "AUTO_SINGLE_USE");
+    assert.equal(armed.attemptNumber, index + 1);
+
+    // Mimics the non-execution V2 state carried by a real, long-lived staging
+    // conversation. It makes the test cross the same 64 KiB persistence edge
+    // that blocked the fifth real automatic approval.
+    if (index === 0) {
+      const state = await stateStore.load({
+        ...scope,
+        runtimeVersion: "V2",
+        mode: "SHADOW",
+      });
+      state.temporaryFacts = {
+        padding: {
+          key: "padding",
+          value: "x".repeat(30 * 1024),
+          confirmedAt: new Date(),
+          expiresAt: null,
+        },
+      };
+      await stateStore.save({ ...state, revision: state.revision + 1 }, state.revision);
+    }
+
+    const claim = await executionCoordinator.claim({
+      ...scope,
+      internalMessageId,
+      canonicalComparisonHash: approval.expectedCanonicalComparisonHash,
+      approval,
+    });
+    assert.equal(claim.status, "CLAIMED", message);
+    assert.equal(
+      await executionCoordinator.beginV2Generation({
+        ...scope,
+        internalMessageId,
+        generationId: claim.generationId,
+        providerCallCount: 0,
+      }),
+      true,
+    );
+    assert.equal(
+      await executionCoordinator.approveV2Candidate({
+        ...scope,
+        internalMessageId,
+        generationId: claim.generationId,
+      }),
+      true,
+    );
+    assert.equal(
+      await executionCoordinator.beforeOutbound({
+        ...scope,
+        internalMessageId,
+        owner: "V2_PRIMARY",
+        generationId: claim.generationId,
+      }),
+      true,
+    );
+    assert.equal(
+      await executionCoordinator.afterOutboundConfirmed({
+        ...scope,
+        internalMessageId,
+        owner: "V2_PRIMARY",
+        generationId: claim.generationId,
+        externalMessageId: `outbound-auto-${index + 1}`,
+      }),
+      true,
+    );
+    outboundCount += 1;
+    approvals.push(approval);
+
+    const terminal = await store.load({ ...scope, internalMessageId });
+    assert.equal(terminal.approval.status, "CONSUMED");
+    assert.equal(terminal.owner, "V2_OUTBOUND_SENT");
+    assert.equal(terminal.providerV2CallCount, 0);
+  }
+
+  const snapshot = await store.loadSnapshot(scope);
+  assert.equal(snapshot?.invalid, false);
+  assert.equal(snapshot?.current.attemptNumber, 20);
+  assert.ok(snapshot.history.length < 19, "terminal history was compacted before the byte cap");
+  assert.equal(snapshot.current.approval.status, "CONSUMED");
+  assert.equal(snapshot.current.owner, "V2_OUTBOUND_SENT");
+  assert.equal(outboundCount, 20);
+  assert.equal(approvals.length, 20);
+  assert.equal(
+    approvals.every((approval) => approval.approvalSource === "AUTO_SINGLE_USE"),
+    true,
+  );
+  assert.equal(
+    [snapshot.current, ...snapshot.history].every((record) => record.providerV2CallCount === 0),
+    true,
+  );
+
+  const row = await prisma.assistantConversationStateV2.findFirstOrThrow({
+    where: {
+      companyId: scope.companyId,
+      assistantId: scope.assistantId,
+      conversationId: scope.conversationId,
+      contextVersion: scope.contextVersion,
+      mode: "SHADOW",
+    },
+  });
+  assert.ok(Buffer.byteLength(JSON.stringify(row.stateJson), "utf8") <= 64 * 1024);
+
+  const replay = await executionCoordinator.claim({
+    ...scope,
+    internalMessageId: `${scope.conversationId}-auto-20`,
+    canonicalComparisonHash: "hash-auto-20",
+    approval: snapshot.current.approval,
+  });
+  assert.equal(replay.status, "PENDING_OR_TERMINAL", "terminal replay cannot send twice");
+});
