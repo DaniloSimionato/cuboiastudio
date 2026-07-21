@@ -127,6 +127,7 @@ import {
 } from "./response-execution-envelope";
 import {
   resolveRuntimeV2ResponseExecutionAssistantIds,
+  resolveRuntimeV2ResponseExecutionChatwootInboxBindings,
   resolveRuntimeV2ResponseExecutionConversationIds,
   resolveRuntimeV2ResponseExecutionMode,
   resolveRuntimeV2ResponseExecutionConversationScope,
@@ -4223,6 +4224,10 @@ export class AssistantConversationsService {
             executionAssistantIds: resolveRuntimeV2ResponseExecutionAssistantIds(),
             executionConversationIds: resolveRuntimeV2ResponseExecutionConversationIds(),
             executionConversationScope: resolveRuntimeV2ResponseExecutionConversationScope(),
+            executionChatwootInboxBindings:
+              resolveRuntimeV2ResponseExecutionChatwootInboxBindings(),
+            chatwootAccountId: conversation.externalAccountId,
+            chatwootInboxId: conversation.externalInboxId,
             approvalMode: resolveRuntimeV2ResponseExecutionApprovalMode(),
             messageText: input.dto.message ?? "",
             v2Eligibility,

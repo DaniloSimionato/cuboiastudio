@@ -541,7 +541,7 @@ test("router claims a follow-up approval after an earlier V1 follow-up when the 
   assert.equal(result.executionOwner, "V2_PRIMARY");
 });
 
-test("V2 fake failure falls back once to V1 before any sender", async () => {
+test("V2 fake failure uses the provider-free safety fallback before any sender", async () => {
   let v1 = 0;
   let v2 = 0;
   const router = new ResponseGenerationRouter({
@@ -565,7 +565,7 @@ test("V2 fake failure falls back once to V1 before any sender", async () => {
   });
 
   const result = await router.route(controlledInput());
-  assert.deepEqual([v2, v1], [1, 1]);
+  assert.deepEqual([v2, v1], [1, 0]);
   assert.equal(result.executionOwner, "V1_FALLBACK");
   assert.equal(result.route, "V2_SINGLE_USE");
   assert.equal(result.sanitizedTelemetry.decision, "V1_FALLBACK");
@@ -634,7 +634,7 @@ test("router rejects a changed flow configuration before claim and falls back sa
     }),
   );
   assert.equal(changedAfterClaim.executionOwner, "V1_FALLBACK");
-  assert.equal(v1Calls, 2);
+  assert.equal(v1Calls, 1);
   assert.equal(v2Calls, 0);
 });
 
@@ -760,5 +760,5 @@ test("a compatible flow changed after generation falls back before the tail", as
   );
   assert.equal(result.executionOwner, "V1_FALLBACK");
   assert.equal(v2, 1);
-  assert.equal(v1, 1);
+  assert.equal(v1, 0);
 });

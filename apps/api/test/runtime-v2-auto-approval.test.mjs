@@ -6,6 +6,10 @@ import { ConversationStateResponseExecutionStore } from "../dist/runtime-v2/conv
 import { RuntimeV2ResponseExecutionCoordinator } from "../dist/runtime-v2/response-execution-coordinator.js";
 import { createRuntimeV2ResponseExecutionApproval } from "../dist/runtime-v2/response-execution-approval.js";
 import { resolveRuntimeV2ResponseExecutionApprovalMode } from "../dist/runtime-v2/runtime-v2-feature-flag.js";
+import {
+  buildDeterministicBusinessHoursResponse,
+  buildOfficialBusinessContext,
+} from "../dist/assistants/official-business-context.js";
 
 const scope = {
   companyId: "company-auto",
@@ -42,7 +46,7 @@ function createMockAdministration(overrides = {}) {
       // Simula a criação de uma approval no store
       const store = overrides.store;
       const approval = {
-        approvalId: "approval-auto-id",
+        approvalId: `approval-auto-${input.currentInboundMessageId ?? "manual"}`,
         companyId: input.companyId,
         assistantId: input.assistantId,
         conversationId: input.conversationId,
@@ -69,7 +73,7 @@ function createMockAdministration(overrides = {}) {
         expectedFlowMatchType: "EXPLICIT_RUNTIME_SCOPE",
         flowCompatibility: "STANDARD_COMPATIBLE",
         declarativeContextFingerprint: "decl-fp",
-        creationFingerprint: "create-fp",
+        creationFingerprint: `create-fp-${input.currentInboundMessageId ?? "manual"}`,
         allowedCategory: "businessHours",
         allowedAuthority: "OFFICIAL_CONTEXT",
         status: "ARMED",
@@ -78,7 +82,7 @@ function createMockAdministration(overrides = {}) {
         generationId: null,
       };
       await store.arm({ approval, contextVersion: 1 });
-      return { executionId: "approval-auto-id" };
+      return { executionId: `approval-auto-${input.currentInboundMessageId ?? "manual"}` };
     },
   };
 }
@@ -885,7 +889,7 @@ test("legacy null context remains compatible, but partial context fails closed b
   );
   assert.equal(partial.result.executionOwner, "V1_NORMAL");
   assert.equal(partial.result.sanitizedTelemetry.reason, "RESPONSE_EXECUTION_CONTEXT_MISMATCH");
-  assert.equal(partial.v1Calls, 1);
+  assert.equal(partial.v1Calls, 0);
   assert.equal(partial.v2Calls, 0);
 });
 
@@ -1029,4 +1033,239 @@ test("approval JSON round-trip preserves nulls and opaque fingerprints without r
   assert.equal(restored.expectedAntecedentFingerprint, null);
   assert.equal(restored.expectedSemanticDecisionFingerprint, "opaque-5511999990000-fingerprint");
   assert.equal(JSON.stringify(restored).includes("[REDACTED]"), false);
+});
+
+test("AUTO_SINGLE_USE atende uma sequência contínua somente pela agenda oficial no inbox autorizado", async () => {
+  const weeklySchedule = {
+    monday: [{ start: "08:00", end: "22:00" }],
+    tuesday: [{ start: "08:00", end: "23:00" }],
+    wednesday: [
+      { start: "08:00", end: "11:00" },
+      { start: "13:00", end: "21:00" },
+    ],
+    thursday: [{ start: "08:00", end: "18:00" }],
+    friday: [{ start: "08:00", end: "18:00" }],
+    saturday: [{ start: "07:30", end: "12:00" }],
+    sunday: [],
+  };
+  const official = buildOfficialBusinessContext(
+    {
+      companyName: "Empresa fixture",
+      companyTimezone: "America/Campo_Grande",
+      assistantName: "Assistente fixture",
+      assistantTimezone: "America/Campo_Grande",
+      weeklySchedule,
+    },
+    new Date("2026-07-21T14:00:00.000Z"),
+  );
+  const stateStore = new InMemoryConversationStateStore();
+  const store = new ConversationStateResponseExecutionStore(stateStore);
+  const coordinator = new RuntimeV2ResponseExecutionCoordinator({ store });
+  let providerCalls = 0;
+  const router = new ResponseGenerationRouter({
+    executeV1: async () => {
+      providerCalls += 1;
+      return { responseText: "provider must not run", providerMetadata: {} };
+    },
+    coordinator,
+    administration: createMockAdministration({ store }),
+    v2Executor: {
+      execute: async ({ context }) => {
+        const deterministic = buildDeterministicBusinessHoursResponse(
+          context.canonicalInbound.displayContent,
+          official,
+        );
+        return {
+          responseText: deterministic.answer,
+          category: "businessHours",
+          authority: "OFFICIAL_CONTEXT",
+          candidateStatus: "CANDIDATE_APPROVED",
+          qualityGateResult: "APPROVED",
+          outboundAllowed: true,
+          providerMetadata: { provider: null, model: null },
+          sanitizedTelemetry: {
+            category: "businessHours",
+            authority: "OFFICIAL_CONTEXT",
+            providerCallCount: 0,
+            deterministicResponderCount: 1,
+            responseStrategy: "V2_BUSINESS_HOURS_DETERMINISTIC",
+            requestedScheduleScope: deterministic.requestedScheduleScope,
+            deterministicBranch: deterministic.deterministicBranch,
+            requestedDay: deterministic.requestedDay,
+            scheduleSource: "OFFICIAL_STRUCTURED_SCHEDULE",
+            missingScheduleConfiguration: deterministic.missingScheduleConfiguration,
+            scheduleValidationIssueCount: deterministic.scheduleValidationIssueCount,
+            normalizedScheduleDayCount: deterministic.normalizedScheduleDayCount,
+            normalizedScheduleIntervalCount: deterministic.normalizedScheduleIntervalCount,
+            isOpenNow: deterministic.isOpenNow,
+            toolCallCount: 0,
+            officialDataFingerprint: "fixture",
+            securityRulesFingerprint: null,
+            primaryExecutionNoShadowComparison: true,
+          },
+        };
+      },
+    },
+  });
+
+  const messages = [
+    "Qual o horário de atendimento?",
+    "Que horas vocês fecham hoje?",
+    "Vocês estão abertos agora?",
+    "Qual o horário na segunda?",
+    "Qual o horário na terça?",
+    "Qual o horário na quarta?",
+    "Quarta fecha para almoço?",
+    "Quarta volta às 13?",
+    "Quinta funciona até 18?",
+    "Sábado abre?",
+    "Domingo funciona?",
+    "Qual o horário na quarta-feira?",
+  ];
+  const contaminatedHistory = ["quarta até 23h", "sábado fechado", "não fecha para almoço"];
+
+  for (const [index, message] of messages.entries()) {
+    const result = await router.route({
+      turn: testTurn({ internalMessageId: `sequence-${index}` }),
+      executionMode: "CONTROLLED",
+      executionAssistantIds: [scope.assistantId],
+      executionConversationIds: [],
+      executionConversationScope: "ASSISTANT_WIDE",
+      executionChatwootInboxBindings: ["106:533"],
+      chatwootAccountId: "106",
+      chatwootInboxId: "533",
+      approvalMode: "AUTO_SINGLE_USE",
+      messageText: message,
+      v2Eligibility: mockEligibility(),
+      revalidateV2Flow: async () => mockEligibility().flowEvaluation,
+      v2PrimaryContext: { canonicalInbound: { displayContent: message } },
+      // Simulates contaminated prior V1 facts. The deterministic executor never
+      // receives this input as factual context.
+      v1Input: { contaminatedHistory },
+    });
+    assert.equal(result.executionOwner, "V2_PRIMARY", message);
+    assert.equal(result.route, "V2_SINGLE_USE", message);
+    assert.equal(result.strategy, "V2_BUSINESS_HOURS_DETERMINISTIC", message);
+    assert.equal(result.providerCallCount, 0, message);
+    assert.equal(result.sanitizedTelemetry.deterministicResponderCount, 1, message);
+    assert.equal(result.sanitizedTelemetry.scheduleSource, "OFFICIAL_STRUCTURED_SCHEDULE", message);
+    if (/quarta/i.test(message)) {
+      assert.match(result.responseText, /08h às 11h.*13h às 21h/i, message);
+      assert.doesNotMatch(result.responseText, /até 23h/i, message);
+    }
+    assert.equal(
+      await coordinator.beforeOutbound({
+        ...result.turn,
+        owner: "V2_PRIMARY",
+        generationId: result.generationId,
+      }),
+      true,
+    );
+    assert.equal(
+      await coordinator.afterOutboundConfirmed({
+        ...result.turn,
+        owner: "V2_PRIMARY",
+        generationId: result.generationId,
+        externalMessageId: `outbound-${index}`,
+      }),
+      true,
+    );
+  }
+
+  assert.equal(providerCalls, 0);
+});
+
+test("rollout contínuo isola assistant/inbox e não envia agenda ausente ao provider", async () => {
+  for (const variant of ["missing", "invalid"]) {
+    const stateStore = new InMemoryConversationStateStore();
+    const store = new ConversationStateResponseExecutionStore(stateStore);
+    let providerCalls = 0;
+    const router = new ResponseGenerationRouter({
+      executeV1: async () => {
+        providerCalls += 1;
+        return { responseText: "provider must not run", providerMetadata: {} };
+      },
+      coordinator: new RuntimeV2ResponseExecutionCoordinator({ store }),
+      administration: createMockAdministration({
+        store,
+        preflightBlocked: true,
+        officialContextStatus: "BLOCKED",
+      }),
+      v2Executor: { execute: async () => { throw new Error("must not execute"); } },
+    });
+    const result = await router.route({
+      turn: testTurn({ internalMessageId: `safe-${variant}` }),
+      executionMode: "CONTROLLED",
+      executionAssistantIds: [scope.assistantId],
+      executionConversationIds: [],
+      executionConversationScope: "ASSISTANT_WIDE",
+      executionChatwootInboxBindings: ["106:533"],
+      chatwootAccountId: "106",
+      chatwootInboxId: "533",
+      approvalMode: "AUTO_SINGLE_USE",
+      messageText: "Qual o horário?",
+      v2Eligibility: mockEligibility(),
+      revalidateV2Flow: async () => mockEligibility().flowEvaluation,
+      v1Input: {},
+    });
+    assert.equal(result.providerCallCount, 0, variant);
+    assert.match(result.responseText, /não tenho o horário confirmado/i, variant);
+    assert.equal(providerCalls, 0, variant);
+  }
+
+  let v1Calls = 0;
+  const router = new ResponseGenerationRouter({
+    executeV1: async () => {
+      v1Calls += 1;
+      return { responseText: "pipeline atual", providerMetadata: {} };
+    },
+    coordinator: new RuntimeV2ResponseExecutionCoordinator({
+      store: new ConversationStateResponseExecutionStore(new InMemoryConversationStateStore()),
+    }),
+    administration: createMockAdministration({
+      store: new ConversationStateResponseExecutionStore(new InMemoryConversationStateStore()),
+    }),
+    v2Executor: { execute: async () => { throw new Error("must not execute"); } },
+  });
+  const isolated = await router.route({
+    turn: testTurn({ assistantId: "other-assistant" }),
+    executionMode: "CONTROLLED",
+    executionAssistantIds: [scope.assistantId],
+    executionConversationIds: [],
+    executionConversationScope: "ASSISTANT_WIDE",
+    executionChatwootInboxBindings: ["106:533"],
+    chatwootAccountId: "106",
+    chatwootInboxId: "524",
+    approvalMode: "AUTO_SINGLE_USE",
+    messageText: "Qual o horário?",
+    v2Eligibility: mockEligibility(),
+    v1Input: {},
+  });
+  assert.equal(isolated.executionOwner, "V1_NORMAL");
+  assert.equal(v1Calls, 1);
+
+  for (const [label, overrides] of [
+    ["same assistant, other inbox", { chatwootInboxId: "524" }],
+    ["non-business-hours", { v2Eligibility: { ...mockEligibility(), category: null } }],
+    ["handoff", { v2Eligibility: { ...mockEligibility(), standardEligible: false } }],
+    ["kill switch", { executionMode: "OFF" }],
+  ]) {
+    const result = await router.route({
+      turn: testTurn({ internalMessageId: `isolated-${label}` }),
+      executionMode: "CONTROLLED",
+      executionAssistantIds: [scope.assistantId],
+      executionConversationIds: [],
+      executionConversationScope: "ASSISTANT_WIDE",
+      executionChatwootInboxBindings: ["106:533"],
+      chatwootAccountId: "106",
+      chatwootInboxId: "533",
+      approvalMode: "AUTO_SINGLE_USE",
+      messageText: label === "handoff" ? "Quero falar com um humano" : "Qual o horário?",
+      v2Eligibility: mockEligibility(),
+      v1Input: {},
+      ...overrides,
+    });
+    assert.equal(result.executionOwner, "V1_NORMAL", label);
+  }
+  assert.equal(v1Calls, 5);
 });

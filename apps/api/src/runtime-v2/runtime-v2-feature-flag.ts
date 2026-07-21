@@ -253,6 +253,30 @@ export function resolveRuntimeV2ResponseExecutionConversationIds(
   return parseAllowlist(environment.RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS);
 }
 
+/**
+ * Exact Chatwoot account/inbox pairs admitted to the assistant-wide execution
+ * rollout. Values use the stable `accountId:inboxId` form, for example
+ * `106:533`. Keeping the pair together avoids a cross-product between two
+ * independent allowlists.
+ */
+export function resolveRuntimeV2ResponseExecutionChatwootInboxBindings(
+  environment: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return parseAllowlist(environment.RUNTIME_V2_RESPONSE_EXECUTION_CHATWOOT_INBOX_BINDINGS);
+}
+
+export function isRuntimeV2ResponseExecutionInboxBindingAllowed(
+  input: { externalAccountId?: string | null; externalInboxId?: string | null },
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const accountId = input.externalAccountId?.trim();
+  const inboxId = input.externalInboxId?.trim();
+  if (!accountId || !inboxId) return false;
+  return resolveRuntimeV2ResponseExecutionChatwootInboxBindings(environment).includes(
+    `${accountId}:${inboxId}`,
+  );
+}
+
 export type RuntimeV2ResponseExecutionConversationScope =
   "EXPLICIT_CONVERSATIONS" | "ASSISTANT_WIDE";
 
@@ -271,6 +295,8 @@ export function evaluateResponseExecutionScope(input: {
   conversationExists: boolean;
   companyExists: boolean;
   inboxExists: boolean;
+  /** Required only for the continuous ASSISTANT_WIDE rollout. */
+  inboxBindingCompatible?: boolean;
 }): {
   allowed: boolean;
   conversationScope: RuntimeV2ResponseExecutionConversationScope;
@@ -280,6 +306,7 @@ export function evaluateResponseExecutionScope(input: {
   assistantOwnershipCompatible: boolean;
   companyCompatible: boolean;
   inboxCompatible: boolean;
+  inboxBindingCompatible: boolean;
   rejectionCode: string | null;
 } {
   const executionMode = resolveRuntimeV2ResponseExecutionMode(input.environment);
@@ -289,6 +316,7 @@ export function evaluateResponseExecutionScope(input: {
 
   const assistantAllowlisted = assistants.includes(input.assistantId);
   const conversationExplicitlyAllowlisted = conversations.includes(input.conversationId);
+  const inboxBindingCompatible = input.inboxBindingCompatible ?? true;
 
   const rawScope = input.environment.RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE;
   const isScopeValueUnknown =
@@ -306,6 +334,7 @@ export function evaluateResponseExecutionScope(input: {
       assistantOwnershipCompatible: input.conversationExists,
       companyCompatible: input.companyExists,
       inboxCompatible: input.inboxExists,
+      inboxBindingCompatible,
       rejectionCode: "EXECUTION_MODE_OFF",
     };
   }
@@ -320,6 +349,7 @@ export function evaluateResponseExecutionScope(input: {
       assistantOwnershipCompatible: input.conversationExists,
       companyCompatible: input.companyExists,
       inboxCompatible: input.inboxExists,
+      inboxBindingCompatible,
       rejectionCode: "VALUE_UNKNOWN",
     };
   }
@@ -338,6 +368,7 @@ export function evaluateResponseExecutionScope(input: {
       assistantOwnershipCompatible,
       companyCompatible,
       inboxCompatible,
+      inboxBindingCompatible,
       rejectionCode: "COMPANY_MISMATCH",
     };
   }
@@ -352,6 +383,7 @@ export function evaluateResponseExecutionScope(input: {
       assistantOwnershipCompatible,
       companyCompatible,
       inboxCompatible,
+      inboxBindingCompatible,
       rejectionCode: "ASSISTANT_OWNERSHIP_MISMATCH",
     };
   }
@@ -366,6 +398,7 @@ export function evaluateResponseExecutionScope(input: {
       assistantOwnershipCompatible,
       companyCompatible,
       inboxCompatible,
+      inboxBindingCompatible,
       rejectionCode: "INBOX_NOT_CONNECTED",
     };
   }
@@ -383,6 +416,7 @@ export function evaluateResponseExecutionScope(input: {
         assistantOwnershipCompatible,
         companyCompatible,
         inboxCompatible,
+        inboxBindingCompatible,
         rejectionCode: "ASSISTANT_ALLOWLIST_EMPTY",
       };
     }
@@ -397,6 +431,7 @@ export function evaluateResponseExecutionScope(input: {
         assistantOwnershipCompatible,
         companyCompatible,
         inboxCompatible,
+        inboxBindingCompatible,
         rejectionCode: "CONVERSATION_ALLOWLIST_NOT_EMPTY",
       };
     }
@@ -411,7 +446,23 @@ export function evaluateResponseExecutionScope(input: {
         assistantOwnershipCompatible,
         companyCompatible,
         inboxCompatible,
+        inboxBindingCompatible,
         rejectionCode: "ASSISTANT_NOT_ALLOWLISTED",
+      };
+    }
+
+    if (!inboxBindingCompatible) {
+      return {
+        allowed: false,
+        conversationScope,
+        assistantAllowlisted,
+        conversationExplicitlyAllowlisted,
+        assistantWideEligible,
+        assistantOwnershipCompatible,
+        companyCompatible,
+        inboxCompatible,
+        inboxBindingCompatible,
+        rejectionCode: "CHATWOOT_INBOX_NOT_ALLOWLISTED",
       };
     }
 
@@ -424,6 +475,7 @@ export function evaluateResponseExecutionScope(input: {
       assistantOwnershipCompatible,
       companyCompatible,
       inboxCompatible,
+      inboxBindingCompatible,
       rejectionCode: null,
     };
   }
@@ -439,6 +491,7 @@ export function evaluateResponseExecutionScope(input: {
       assistantOwnershipCompatible,
       companyCompatible,
       inboxCompatible,
+      inboxBindingCompatible,
       rejectionCode: "ASSISTANT_NOT_ALLOWLISTED",
     };
   }
@@ -453,6 +506,7 @@ export function evaluateResponseExecutionScope(input: {
       assistantOwnershipCompatible,
       companyCompatible,
       inboxCompatible,
+      inboxBindingCompatible,
       rejectionCode: "CONVERSATION_NOT_ALLOWLISTED",
     };
   }
@@ -466,12 +520,19 @@ export function evaluateResponseExecutionScope(input: {
     assistantOwnershipCompatible,
     companyCompatible,
     inboxCompatible,
+    inboxBindingCompatible,
     rejectionCode: null,
   };
 }
 
 export function isRuntimeV2ResponseExecutionScopeEnabled(
-  input: { companyId?: string; assistantId: string; conversationId: string },
+  input: {
+    companyId?: string;
+    assistantId: string;
+    conversationId: string;
+    externalAccountId?: string | null;
+    externalInboxId?: string | null;
+  },
   environment: NodeJS.ProcessEnv = process.env,
 ): boolean {
   if (resolveRuntimeV2ResponseExecutionMode(environment) !== "CONTROLLED") {
@@ -488,6 +549,10 @@ export function isRuntimeV2ResponseExecutionScopeEnabled(
     conversationExists: true,
     companyExists: true,
     inboxExists: true,
+    inboxBindingCompatible: isRuntimeV2ResponseExecutionInboxBindingAllowed(
+      input,
+      environment,
+    ),
   });
   return evalResult.allowed;
 }

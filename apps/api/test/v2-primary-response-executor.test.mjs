@@ -634,7 +634,7 @@ test("router, executor real e tail fake produzem um único V2_PRIMARY sem V1 par
   assert.equal(record.providerV2CallCount, 0);
 });
 
-test("falha de segurança pré-sender do executor real faz um único fallback V1", async () => {
+test("falha de segurança pré-sender do executor real faz fallback seguro sem provider", async () => {
   const approval = claimedApproval({
     status: "ARMED",
     claimedAt: null,
@@ -719,8 +719,8 @@ test("falha de segurança pré-sender do executor real faz um único fallback V1
     }),
   });
   assert.equal(envelope.executionOwner, "V1_FALLBACK");
-  assert.equal(v1Calls, 1);
+  assert.equal(v1Calls, 0);
   assert.equal(record.outboundV2Attempted, false);
   assert.equal(record.providerV2CallCount, 0);
-  assert.equal(record.providerV1FallbackCallCount, 1);
+  assert.equal(record.providerV1FallbackCallCount, 0);
 });

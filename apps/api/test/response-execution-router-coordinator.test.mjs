@@ -321,7 +321,7 @@ test("inbounds reais de domingo e OPEN_NOW percorrem V2 até um único outbound"
   }
 });
 
-test("V2 fake failure claims one V1 fallback before the shared sender", async () => {
+test("V2 fake failure claims one provider-free safety fallback before the shared sender", async () => {
   const store = createStore();
   const coordinator = new RuntimeV2ResponseExecutionCoordinator({ store });
   let v1 = 0;
@@ -340,7 +340,7 @@ test("V2 fake failure claims one V1 fallback before the shared sender", async ()
 
   const envelope = await router.route(routerInput());
   assert.equal(envelope.executionOwner, "V1_FALLBACK");
-  assert.equal(v1, 1);
+  assert.equal(v1, 0);
   assert.equal(store.value().outboundV2Attempted, false);
 
   const hooks = new ResponseTailLifecycleHooks(undefined, coordinator, turn);
@@ -348,7 +348,7 @@ test("V2 fake failure claims one V1 fallback before the shared sender", async ()
   await hooks.afterOutboundConfirmed(metadata(envelope), "external-fallback-c1");
   const persisted = store.value();
   assert.equal(persisted.terminalStatus, "V1_FALLBACK_SENT");
-  assert.equal(persisted.providerV1FallbackCallCount, 1);
+  assert.equal(persisted.providerV1FallbackCallCount, 0);
   assert.equal(persisted.outboundV1Performed, true);
 });
 

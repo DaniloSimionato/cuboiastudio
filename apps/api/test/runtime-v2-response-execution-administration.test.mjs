@@ -116,6 +116,8 @@ function createAdministration(overrides = {}) {
     pausedByHuman: false,
     status: "ACTIVE",
     currentContextVersion: 1,
+    externalAccountId: "106",
+    externalInboxId: "533",
     ...overrides.conversation,
   };
   const prisma = {
@@ -860,6 +862,7 @@ test("valida escopo ASSISTANT_WIDE e EXPLICIT_CONVERSATIONS nas allowlists", asy
         RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE: "ASSISTANT_WIDE",
         RUNTIME_V2_RESPONSE_EXECUTION_ASSISTANT_IDS: scope.assistantId,
         RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS: "",
+        RUNTIME_V2_RESPONSE_EXECUTION_CHATWOOT_INBOX_BINDINGS: "106:533",
       },
     });
     const preflight = await administration.preflight(preflightInput());
@@ -875,6 +878,7 @@ test("valida escopo ASSISTANT_WIDE e EXPLICIT_CONVERSATIONS nas allowlists", asy
         RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE: "ASSISTANT_WIDE",
         RUNTIME_V2_RESPONSE_EXECUTION_ASSISTANT_IDS: scope.assistantId,
         RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS: scope.conversationId,
+        RUNTIME_V2_RESPONSE_EXECUTION_CHATWOOT_INBOX_BINDINGS: "106:533",
       },
     });
     const preflight = await administration.preflight(preflightInput());
@@ -893,6 +897,7 @@ test("valida escopo ASSISTANT_WIDE e EXPLICIT_CONVERSATIONS nas allowlists", asy
         RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE: "ASSISTANT_WIDE",
         RUNTIME_V2_RESPONSE_EXECUTION_ASSISTANT_IDS: "other-assistant-id",
         RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS: "",
+        RUNTIME_V2_RESPONSE_EXECUTION_CHATWOOT_INBOX_BINDINGS: "106:533",
       },
     });
     const preflight = await administration.preflight(preflightInput());
@@ -908,11 +913,33 @@ test("valida escopo ASSISTANT_WIDE e EXPLICIT_CONVERSATIONS nas allowlists", asy
         RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE: "ASSISTANT_WIDE",
         RUNTIME_V2_RESPONSE_EXECUTION_ASSISTANT_IDS: scope.assistantId,
         RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS: "",
+        RUNTIME_V2_RESPONSE_EXECUTION_CHATWOOT_INBOX_BINDINGS: "106:533",
       },
       inboxConfigCount: 0,
     });
     const preflight = await administration.preflight(preflightInput());
     assert.equal(preflight.executionConfiguration.scopeEligibility, false);
     assert.equal(preflight.executionConfiguration.rejectionCode, "INBOX_NOT_CONNECTED");
+  }
+
+  // 7. ASSISTANT_WIDE - exige o par exato account:inbox, não apenas qualquer inbox do assistant
+  {
+    const { administration } = createAdministration({
+      conversation: { externalAccountId: "106", externalInboxId: "524" },
+      environment: {
+        RUNTIME_V2_RESPONSE_EXECUTION_MODE: "CONTROLLED",
+        RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE: "ASSISTANT_WIDE",
+        RUNTIME_V2_RESPONSE_EXECUTION_ASSISTANT_IDS: scope.assistantId,
+        RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS: "",
+        RUNTIME_V2_RESPONSE_EXECUTION_CHATWOOT_INBOX_BINDINGS: "106:533",
+      },
+    });
+    const preflight = await administration.preflight(preflightInput());
+    assert.equal(preflight.executionConfiguration.inboxBindingCompatible, false);
+    assert.equal(preflight.executionConfiguration.scopeEligibility, false);
+    assert.equal(
+      preflight.executionConfiguration.rejectionCode,
+      "CHATWOOT_INBOX_NOT_ALLOWLISTED",
+    );
   }
 });

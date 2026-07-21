@@ -19,6 +19,7 @@ import { evaluateFlowApplicability } from "../assistant-conversations/flow-appli
 import type { PrismaService } from "../database/prisma.service";
 import {
   evaluateResponseExecutionScope,
+  isRuntimeV2ResponseExecutionInboxBindingAllowed,
   resolveRuntimeV2ResponseExecutionAssistantIds,
   resolveRuntimeV2ResponseExecutionConversationIds,
   resolveRuntimeV2ResponseExecutionMode,
@@ -114,6 +115,7 @@ export type RuntimeV2ResponseExecutionPreflightResult = {
     assistantOwnershipCompatible: boolean;
     companyCompatible: boolean;
     inboxCompatible: boolean;
+    inboxBindingCompatible: boolean;
     scopeEligibility: boolean;
     rejectionCode: string | null;
   };
@@ -421,6 +423,8 @@ export class RuntimeV2ResponseExecutionAdministrationService {
         pausedByHuman: true,
         status: true,
         currentContextVersion: true,
+        externalAccountId: true,
+        externalInboxId: true,
       },
     });
     if (!conversation) blockers.push("CONVERSATION_NOT_FOUND");
@@ -560,10 +564,22 @@ export class RuntimeV2ResponseExecutionAdministrationService {
     const executionMode = resolveRuntimeV2ResponseExecutionMode(this.environment);
     const inboxConfigCount = assistant
       ? await this.dependencies.prisma.chatwootInboxConfig.count({
-          where: { assistantId: assistant.id },
+          where: {
+            assistantId: assistant.id,
+            isActive: true,
+            accountId: conversation?.externalAccountId ?? "",
+            inboxId: conversation?.externalInboxId ?? "",
+          },
         })
       : 0;
     const inboxCompatible = inboxConfigCount > 0;
+    const inboxBindingCompatible = isRuntimeV2ResponseExecutionInboxBindingAllowed(
+      {
+        externalAccountId: conversation?.externalAccountId,
+        externalInboxId: conversation?.externalInboxId,
+      },
+      this.environment,
+    );
 
     const evaluationScopeResult = evaluateResponseExecutionScope({
       environment: this.environment,
@@ -573,6 +589,7 @@ export class RuntimeV2ResponseExecutionAdministrationService {
       conversationExists: Boolean(conversation),
       companyExists: Boolean(company),
       inboxExists: inboxCompatible,
+      inboxBindingCompatible,
     });
 
     return {
@@ -638,6 +655,7 @@ export class RuntimeV2ResponseExecutionAdministrationService {
           assistantOwnershipCompatible: evaluationScopeResult.assistantOwnershipCompatible,
           companyCompatible: evaluationScopeResult.companyCompatible,
           inboxCompatible: evaluationScopeResult.inboxCompatible,
+          inboxBindingCompatible: evaluationScopeResult.inboxBindingCompatible,
           scopeEligibility: evaluationScopeResult.allowed,
           rejectionCode: evaluationScopeResult.rejectionCode,
         },

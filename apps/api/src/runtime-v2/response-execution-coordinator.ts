@@ -297,6 +297,8 @@ export class RuntimeV2ResponseExecutionCoordinator {
     input: ResponseExecutionScope & {
       generationId: string;
       reason: string;
+      /** Defaults to the legacy provider-backed fallback count. */
+      providerCallCount?: 0 | 1;
     },
   ): Promise<boolean> {
     const current = await this.dependencies.store.load(input);
@@ -323,7 +325,8 @@ export class RuntimeV2ResponseExecutionCoordinator {
     }
     const pending = next(required, {
       owner: "V1_FALLBACK_PENDING",
-      providerV1FallbackCallCount: required.providerV1FallbackCallCount + 1,
+      providerV1FallbackCallCount:
+        required.providerV1FallbackCallCount + (input.providerCallCount ?? 1),
     });
     return this.dependencies.store.compareAndSet({
       expectedRevision: required.revision,

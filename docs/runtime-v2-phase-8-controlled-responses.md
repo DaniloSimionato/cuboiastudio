@@ -513,11 +513,12 @@ O escopo de rollout de respostas controladas é governado pela variável de ambi
 
 - `RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_SCOPE`: Define a granularidade do escopo.
   - `EXPLICIT_CONVERSATIONS` (padrão): Exige que cada conversa esteja listada explicitamente na allowlist de conversas (`RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS`).
-  - `ASSISTANT_WIDE`: Ativa a avaliação da Runtime V2 para todas as conversas do assistente ativo, sob as seguintes regras rígidas de segurança multi-tenant:
+  - `ASSISTANT_WIDE`: Ativa a avaliação da Runtime V2 somente nas conversas do assistente que chegam por um vínculo Chatwoot autorizado, sob as seguintes regras rígidas de segurança multi-tenant:
     1. O assistente correspondente deve estar listado na allowlist de assistentes (`RUNTIME_V2_RESPONSE_EXECUTION_ASSISTANT_IDS`).
     2. A allowlist de conversas (`RUNTIME_V2_RESPONSE_EXECUTION_CONVERSATION_IDS`) deve estar **completamente vazia** (para garantir que não haja configurações híbridas confusas).
-    3. O assistente deve possuir pelo menos uma caixa de entrada (inbox) vinculada no banco de dados (avaliado por `chatwootInboxConfig` > 0).
-    4. Qualquer violação dessas regras falha fechada (fail-closed) com códigos de rejeição específicos (ex: `CONVERSATION_ALLOWLIST_NOT_EMPTY`, `ASSISTANT_NOT_ALLOWLISTED`, `INBOX_NOT_CONNECTED`).
+    3. A conversa deve pertencer a uma configuração Chatwoot ativa do próprio assistente.
+    4. O par exato `accountId:inboxId` deve constar em `RUNTIME_V2_RESPONSE_EXECUTION_CHATWOOT_INBOX_BINDINGS` (por exemplo, `106:533`). Uma lista vazia falha fechada.
+    5. Qualquer violação dessas regras falha fechada (fail-closed) com códigos de rejeição específicos (ex: `CONVERSATION_ALLOWLIST_NOT_EMPTY`, `ASSISTANT_NOT_ALLOWLISTED`, `INBOX_NOT_CONNECTED`, `CHATWOOT_INBOX_NOT_ALLOWLISTED`).
 
 Esta mudança permite habilitar a V2 para todo o assistente da Heloísa de forma limpa, mantendo o controle centralizado de escopo e isolamento multi-tenant.
 

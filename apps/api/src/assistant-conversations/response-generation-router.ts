@@ -10,6 +10,7 @@ import {
   type ResponseExecutionEnvelope,
   type ResponseExecutionTurn,
 } from "./response-execution-envelope";
+import { buildDeterministicBusinessHoursResponse } from "../assistants/official-business-context";
 import type { RuntimeV2ResponseExecutionApproval } from "../runtime-v2/response-execution-approval";
 import {
   RuntimeV2ResponseExecutionCoordinator,
@@ -33,6 +34,10 @@ export type ResponseGenerationRouterInput = {
   executionAssistantIds?: readonly string[] | null;
   executionConversationIds?: readonly string[] | null;
   executionConversationScope?: unknown;
+  /** Exact account:inbox bindings required by the assistant-wide rollout. */
+  executionChatwootInboxBindings?: readonly string[] | null;
+  chatwootAccountId?: string | null;
+  chatwootInboxId?: string | null;
   v2Eligibility?: {
     standardEligible: boolean;
     category: "businessHours" | null;
@@ -129,6 +134,17 @@ function isExecutionScopeEnabled(input: ResponseGenerationRouterInput): boolean 
   if (scope === "ASSISTANT_WIDE") {
     if (!input.executionAssistantIds || input.executionAssistantIds.length === 0) return false;
     if (input.executionConversationIds && input.executionConversationIds.length > 0) return false;
+    // The service always provides this array. Keeping absent input compatible
+    // with isolated router tests avoids weakening the production gate, where
+    // an empty array is explicitly default-deny.
+    if (input.executionChatwootInboxBindings) {
+      const accountId = input.chatwootAccountId?.trim();
+      const inboxId = input.chatwootInboxId?.trim();
+      if (!accountId || !inboxId) return false;
+      if (!input.executionChatwootInboxBindings.includes(`${accountId}:${inboxId}`)) {
+        return false;
+      }
+    }
     return true;
   }
   if (scope === "EXPLICIT_CONVERSATIONS") {
@@ -191,7 +207,7 @@ export class ResponseGenerationRouter {
     if (!this.isCurrentFlowEligible(input, currentFlow)) return this.executeV1Normal(input);
 
     if (approvalMode === "INVALID") {
-      return this.executeV1Normal(input, "AUTO_APPROVAL_MODE_INVALID");
+      return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_MODE_INVALID");
     }
 
     let approval = await this.dependencies.coordinator.loadApproval(input.turn);
@@ -231,15 +247,15 @@ export class ResponseGenerationRouter {
         flowEval.fixedMessageApplicable ||
         flowEval.autoRespond === false
       ) {
-        return this.executeV1Normal(input, "AUTO_APPROVAL_FLOW_INELIGIBLE");
+        return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_FLOW_INELIGIBLE");
       }
 
       if (!input.turn.canonicalComparisonHash || !input.turn.internalMessageId) {
-        return this.executeV1Normal(input, "AUTO_APPROVAL_IDENTITY_UNAVAILABLE");
+        return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_IDENTITY_UNAVAILABLE");
       }
 
       if (!this.dependencies.administration) {
-        return this.executeV1Normal(input, "AUTO_APPROVAL_PREFLIGHT_BLOCKED");
+        return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_PREFLIGHT_BLOCKED");
       }
 
       // Reutilizar validações puras de preflight
@@ -255,22 +271,22 @@ export class ResponseGenerationRouter {
       });
 
       if (!preflight.executionConfiguration.scopeEligibility) {
-        return this.executeV1Normal(input, "AUTO_APPROVAL_SCOPE_BLOCKED");
+        return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_SCOPE_BLOCKED");
       }
 
       if (preflight.preflightStatus !== "APPROVED") {
-        return this.executeV1Normal(input, "AUTO_APPROVAL_PREFLIGHT_BLOCKED");
+        return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_PREFLIGHT_BLOCKED");
       }
 
       if (preflight.officialContextStatus !== "AVAILABLE") {
-        return this.executeV1Normal(input, "AUTO_APPROVAL_CONTEXT_UNAVAILABLE");
+        return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_CONTEXT_UNAVAILABLE");
       }
       if (
         preflight.resolvedCategory !== "businessHours" ||
         preflight.resolvedIntent !== "ask_business_hours" ||
         preflight.contextualResolution !== false
       ) {
-        return this.executeV1Normal(input, "AUTO_APPROVAL_PREFLIGHT_BLOCKED");
+        return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_PREFLIGHT_BLOCKED");
       }
 
       // Armar approval de forma idempotente
@@ -293,12 +309,12 @@ export class ResponseGenerationRouter {
         // Carregar a approval recém-criada
         approval = await this.dependencies.coordinator.loadApproval(input.turn);
         if (!approval) {
-          return this.executeV1Normal(input, "AUTO_APPROVAL_CLAIM_FAILED");
+          return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_CLAIM_FAILED");
         }
         currentFlow = await this.currentFlowEvaluation(input);
         if (!this.isCurrentFlowEligible(input, currentFlow)) {
           await this.cancelAutomaticApproval(input, approval);
-          return this.executeV1Normal(input, "AUTO_APPROVAL_FLOW_INELIGIBLE");
+          return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_FLOW_INELIGIBLE");
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : "";
@@ -306,10 +322,10 @@ export class ResponseGenerationRouter {
           // A concurrent worker might have already created it! Try reloading first
           approval = await this.dependencies.coordinator.loadApproval(input.turn);
           if (!approval) {
-            return this.executeV1Normal(input, "AUTO_APPROVAL_CREATE_CONFLICT");
+            return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_CREATE_CONFLICT");
           }
         } else {
-          return this.executeV1Normal(input, "AUTO_APPROVAL_PREFLIGHT_BLOCKED");
+          return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_PREFLIGHT_BLOCKED");
         }
       }
     }
@@ -319,13 +335,13 @@ export class ResponseGenerationRouter {
     }
     if (!this.isCurrentFlowEligible(input, currentFlow)) {
       await this.cancelAutomaticApproval(input, approval);
-      return this.executeV1Normal(input, "AUTO_APPROVAL_FLOW_INELIGIBLE");
+      return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_FLOW_INELIGIBLE");
     }
     if (
       approval.approvalSource === "AUTO_SINGLE_USE" &&
       approval.internalMessageId !== input.turn.internalMessageId
     ) {
-      return this.executeV1Normal(input, "AUTO_APPROVAL_IDENTITY_UNAVAILABLE");
+      return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_IDENTITY_UNAVAILABLE");
     }
 
     const semanticDecision = input.v2Eligibility?.semanticDecision;
@@ -335,7 +351,7 @@ export class ResponseGenerationRouter {
       approval.expectedIntent !== semanticDecision?.intent
     ) {
       await this.cancelAutomaticApproval(input, approval);
-      return this.executeV1Normal(input, "RESPONSE_EXECUTION_SEMANTIC_MISMATCH");
+      return this.executeSafeBusinessHoursBeforeClaim(input, "RESPONSE_EXECUTION_SEMANTIC_MISMATCH");
     }
     const approvalContextState = contextApprovalState(approval);
     if (
@@ -349,7 +365,7 @@ export class ResponseGenerationRouter {
           approval.contextualResolution !== semanticDecision?.contextualResolution))
     ) {
       await this.cancelAutomaticApproval(input, approval);
-      return this.executeV1Normal(input, "RESPONSE_EXECUTION_CONTEXT_MISMATCH");
+      return this.executeSafeBusinessHoursBeforeClaim(input, "RESPONSE_EXECUTION_CONTEXT_MISMATCH");
     }
     if (
       approval.status !== "ARMED" ||
@@ -370,7 +386,7 @@ export class ResponseGenerationRouter {
       Date.parse(approval.expiresAt) <= Date.now()
     ) {
       await this.cancelAutomaticApproval(input, approval);
-      return this.executeV1Normal(input);
+      return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_PREFLIGHT_BLOCKED");
     }
 
     const claimed = await this.dependencies.coordinator.claim({
@@ -382,14 +398,14 @@ export class ResponseGenerationRouter {
         return this.deferred(claimed);
       }
       if (approvalMode === "AUTO_SINGLE_USE") {
-        return this.executeV1Normal(input, "AUTO_APPROVAL_CLAIM_FAILED");
+        return this.executeSafeBusinessHoursBeforeClaim(input, "AUTO_APPROVAL_CLAIM_FAILED");
       }
       return this.deferred(claimed);
     }
 
     const flowAfterClaim = await this.currentFlowEvaluation(input);
     if (!this.isCurrentFlowEligible(input, flowAfterClaim)) {
-      return this.executeV1Fallback(
+      return this.executeSafeBusinessHoursFallback(
         input,
         claimed.generationId,
         "FLOW_CONFIGURATION_CHANGED_AFTER_CLAIM",
@@ -423,7 +439,7 @@ export class ResponseGenerationRouter {
       }
       const flowBeforeTail = await this.currentFlowEvaluation(input);
       if (!this.isCurrentFlowEligible(input, flowBeforeTail)) {
-        return this.executeV1Fallback(
+        return this.executeSafeBusinessHoursFallback(
           input,
           claimed.generationId,
           "FLOW_CONFIGURATION_CHANGED_BEFORE_TAIL",
@@ -464,7 +480,7 @@ export class ResponseGenerationRouter {
       });
     } catch (error) {
       const reason = error instanceof Error ? error.message.slice(0, 80) : "V2_GENERATION_FAILED";
-      return this.executeV1Fallback(input, claimed.generationId, reason);
+      return this.executeSafeBusinessHoursFallback(input, claimed.generationId, reason);
     }
   }
 
@@ -489,6 +505,32 @@ export class ResponseGenerationRouter {
     return createV1NormalResponseExecutionEnvelope({
       turn: input.turn,
       response,
+      reason,
+    });
+  }
+
+  /**
+   * Strict business-hours turns never use the V1 provider when the structured
+   * authority cannot be used. The renderer supplies its existing safe,
+   * non-factual missing-schedule wording.
+   */
+  private async executeSafeBusinessHoursBeforeClaim(
+    input: ResponseGenerationRouterInput,
+    reason:
+      | "AUTO_APPROVAL_MODE_INVALID"
+      | "AUTO_APPROVAL_SCOPE_BLOCKED"
+      | "AUTO_APPROVAL_FLOW_INELIGIBLE"
+      | "AUTO_APPROVAL_PREFLIGHT_BLOCKED"
+      | "AUTO_APPROVAL_CONTEXT_UNAVAILABLE"
+      | "AUTO_APPROVAL_IDENTITY_UNAVAILABLE"
+      | "AUTO_APPROVAL_CREATE_CONFLICT"
+      | "AUTO_APPROVAL_CLAIM_FAILED"
+      | "RESPONSE_EXECUTION_SEMANTIC_MISMATCH"
+      | "RESPONSE_EXECUTION_CONTEXT_MISMATCH",
+  ): Promise<ResponseGenerationRouterResult> {
+    return createV1NormalResponseExecutionEnvelope({
+      turn: input.turn,
+      response: this.safeBusinessHoursResponse(input),
       reason,
     });
   }
@@ -541,7 +583,7 @@ export class ResponseGenerationRouter {
     );
   }
 
-  private async executeV1Fallback(
+  private async executeSafeBusinessHoursFallback(
     input: ResponseGenerationRouterInput,
     generationId: string,
     reason: string,
@@ -550,14 +592,41 @@ export class ResponseGenerationRouter {
       ...input.turn,
       generationId,
       reason,
+      providerCallCount: 0,
     });
     if (!fallbackClaimed) return this.deferred({ status: "PENDING_OR_TERMINAL" });
-    const response = await this.dependencies.executeV1(input.v1Input);
     return createV1FallbackResponseExecutionEnvelope({
       turn: input.turn,
-      response,
+      response: this.safeBusinessHoursResponse(input),
       reason,
     });
+  }
+
+  private safeBusinessHoursResponse(input: ResponseGenerationRouterInput): V1GeneratedResponse {
+    const deterministic = buildDeterministicBusinessHoursResponse(input.messageText ?? "", null);
+    return {
+      owner: "V1",
+      // STANDARD keeps the existing response-tail contract. A zero count and
+      // null metadata make it impossible to mistake this for provider output.
+      strategy: "STANDARD",
+      responseText: deterministic.answer,
+      providerCallCount: 0,
+      providerMetadata: { provider: null, model: null },
+      toolCallCount: 0,
+      toolExecutionMetadata: { loopCount: 0 },
+      handoffRequired: false,
+      requiresHuman: true,
+      autoRespond: true,
+      generationMetadata: {
+        finalAction: "respond",
+        outcome: "business_hours_safe_fallback",
+        triageValidationPassed: null,
+        triageAttemptCount: null,
+        triageResolved: null,
+      },
+      sanitizedTelemetry: { strategy: "STANDARD", providerCallCount: 0, toolCallCount: 0 },
+      errorStage: "BUSINESS_HOURS_SAFE_FALLBACK",
+    };
   }
 
   private deferred(
