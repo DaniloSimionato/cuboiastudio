@@ -257,7 +257,9 @@ test("guardião bloqueia preço, pickup e disponibilidade sem fonte e vence conf
   });
   assert.deepEqual(sunday.authorityConflictCategories, ["businessHours"]);
   assert.deepEqual(sunday.rejectedSourceTypes, ["FLOW"]);
-  assert.ok(sunday.blockedCategories.includes("businessHours"));
+  assert.equal(sunday.answer, "Não, aos domingos estamos fechados.");
+  assert.deepEqual(sunday.blockedCategories, []);
+  assert.equal(sunday.replacementReason, "official_business_hours_deterministic_override");
 
   const availability = validateV1AnswerAuthority({
     answer: "Temos horário amanhã e posso agendar.",
@@ -266,6 +268,40 @@ test("guardião bloqueia preço, pickup e disponibilidade sem fonte e vence conf
     officialBusinessContext: context,
   });
   assert.ok(availability.blockedCategories.includes("availability"));
+});
+
+test("guardião V1 restaura a agenda oficial para domingo fechado e OPEN_NOW", () => {
+  const sundayContext = officialContext();
+  const openNowContext = buildOfficialBusinessContext(
+    {
+      companyName: "Empresa de teste",
+      companyTimezone: "America/Campo_Grande",
+      weeklySchedule: {
+        monday: [{ start: "08:00", end: "22:00" }],
+        sunday: [],
+      },
+    },
+    new Date("2026-07-20T17:00:00.000Z"),
+  );
+  const sunday = validateV1AnswerAuthority({
+    answer: "Esse horário está fora do funcionamento oficial informado.",
+    currentMessage: "Vocês abrem aos domingos?",
+    sources: [],
+    officialBusinessContext: sundayContext,
+  });
+  const openNow = validateV1AnswerAuthority({
+    answer: "Sim, estamos abertos! O horário de atendimento é de segunda a sexta, das 08:00 às 18:00.",
+    currentMessage: "Vocês estão abertos agora?",
+    sources: [],
+    officialBusinessContext: openNowContext,
+  });
+
+  assert.equal(sunday.answer, "Não, aos domingos estamos fechados.");
+  assert.equal(sunday.replacementReason, "official_business_hours_deterministic_override");
+  assert.match(openNow.answer, /estamos abertos agora/i);
+  assert.match(openNow.answer, /08:00 às 22:00/i);
+  assert.doesNotMatch(openNow.answer, /08:00 às 18:00/i);
+  assert.equal(openNow.replacementReason, "official_business_hours_deterministic_override");
 });
 
 test("guardião usa a intenção atual para escolher a resposta segura", () => {

@@ -88,6 +88,33 @@ test("formatter determinístico responde sábado, domingo, hoje e aberto agora n
   assert.match(openNow.answer, /abertos agora/i);
 });
 
+test("formatter estruturado V1 reconhece domingo fechado e OPEN_NOW como horários oficiais", () => {
+  const schedule = { ...fgSchedule, monday: [{ start: "08:00", end: "22:00" }] };
+  const sundayContext = buildOfficialBusinessContext(
+    {
+      companyName: "Empresa de teste",
+      assistantTimezone: "America/Campo_Grande",
+      weeklySchedule: schedule,
+    },
+    new Date("2026-07-12T15:00:00.000Z"),
+  );
+  const mondayContext = buildOfficialBusinessContext(
+    {
+      companyName: "Empresa de teste",
+      assistantTimezone: "America/Campo_Grande",
+      weeklySchedule: schedule,
+    },
+    new Date("2026-07-20T17:00:00.000Z"),
+  );
+
+  const sunday = buildStructuredBusinessAnswer("Vocês abrem aos domingos?", sundayContext);
+  const openNow = buildStructuredBusinessAnswer("Vocês estão abertos agora?", mondayContext);
+
+  assert.equal(sunday?.answer, "Não, aos domingos estamos fechados.");
+  assert.match(openNow?.answer ?? "", /estamos abertos agora/i);
+  assert.match(openNow?.answer ?? "", /08:00 às 22:00/i);
+});
+
 test("variantes explícitas de sábado preservam SPECIFIC_DAY e o sábado oficial", () => {
   const context = buildFgContext(new Date("2026-07-20T23:00:00.000Z"));
   const variants = [

@@ -132,6 +132,10 @@ const WEEKDAY_ALIASES: Array<[string, BusinessDayKey]> = [
   ["sabado", "saturday"],
 ];
 
+function findRequestedBusinessDay(question: string): BusinessDayKey | undefined {
+  return WEEKDAY_ALIASES.find(([alias]) => new RegExp(`\\b${alias}(?:s)?\\b`).test(question))?.[1];
+}
+
 const TIME_PATTERN = /^\d{2}:\d{2}$/;
 
 function normalizeString(value: unknown): string | null {
@@ -693,8 +697,12 @@ function isHoursQuestion(question: string): boolean {
     "atendimento",
     "aberto",
     "aberta",
+    "abertos",
+    "abertas",
     "funciona",
+    "funcionam",
     "abre",
+    "abrem",
     "fecha",
     "almoco",
     "intervalo",
@@ -800,9 +808,7 @@ function buildHoursAnswer(question: string, context: OfficialBusinessContext): s
     intervals
       .map((interval) => `das ${formatTime(interval.start)} às ${formatTime(interval.end)}`)
       .join(" e ");
-  const requestedDay = WEEKDAY_ALIASES.find(([alias]) =>
-    new RegExp(`\\b${alias}\\b`).test(normalized),
-  )?.[1] as BusinessDayKey | undefined;
+  const requestedDay = findRequestedBusinessDay(normalized);
 
   if (
     normalized.includes("aberto agora") ||
@@ -923,9 +929,7 @@ export function buildDeterministicBusinessHoursResponse(
   context: OfficialBusinessContext | null | undefined,
 ): DeterministicBusinessHoursResponse {
   const normalized = normalizeQuestion(question);
-  const requestedDay = (WEEKDAY_ALIASES.find(([alias]) =>
-    new RegExp(`\\b${alias}\\b`).test(normalized),
-  )?.[1] ?? null) as BusinessDayKey | null;
+  const requestedDay = findRequestedBusinessDay(normalized) ?? null;
   const requestedScheduleScope =
     /(?:aberto|aberta|funcionando).*(?:agora)|(?:agora).*(?:aberto|aberta|funcionando)/.test(
       normalized,

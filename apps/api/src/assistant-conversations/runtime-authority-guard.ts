@@ -1,5 +1,8 @@
 import type { AssistantRuntimeSource } from "../assistants/assistant-runtime";
-import type { OfficialBusinessContext } from "../assistants/official-business-context";
+import {
+  buildStructuredBusinessAnswer,
+  type OfficialBusinessContext,
+} from "../assistants/official-business-context";
 
 export type RuntimeAuthorityGuardResult = {
   answer: string;
@@ -251,6 +254,20 @@ function isHistoricalCustomerAmountReference(answer: string): boolean {
   return customerReference && !currentPriceStatement;
 }
 
+function isDirectBusinessHoursQuestion(question: string): boolean {
+  const normalizedQuestion = normalize(question);
+  return /(?:horario|funcionamento|expediente|\babert|\babre(?:m)?\b|\bfecha(?:m)?\b|\batende(?:m)?\b|funciona(?:m)?)/.test(
+    normalizedQuestion,
+  );
+}
+
+function isOpenNowQuestion(question: string): boolean {
+  const normalizedQuestion = normalize(question);
+  return /(?:abert[oa]s?|funcionando).*(?:agora)|(?:agora).*(?:abert[oa]s?|funcionando)/.test(
+    normalizedQuestion,
+  );
+}
+
 export function validateV1AnswerAuthority(input: {
   answer: string;
   currentMessage: string;
@@ -352,6 +369,35 @@ export function validateV1AnswerAuthority(input: {
             : exceptionClaim
               ? "exceptionRequest"
               : null;
+
+  const officialBusinessHoursAnswer = buildStructuredBusinessAnswer(
+    input.currentMessage,
+    input.officialBusinessContext,
+  )?.answer;
+  const shouldRestoreOfficialBusinessHours =
+    Boolean(officialBusinessHoursAnswer) &&
+    expectedCategory === "business_hours" &&
+    (isOpenNowQuestion(input.currentMessage) ||
+      (isDirectBusinessHoursQuestion(input.currentMessage) &&
+        officialHours.evaluated &&
+        officialHours.requestedDayOpen === false));
+
+  if (shouldRestoreOfficialBusinessHours) {
+    return {
+      answer: officialBusinessHoursAnswer!,
+      blockedCategories: [],
+      unsupportedClaimDetected: false,
+      generatedClaimCategory,
+      finalSafeResponseCategory: "business_hours",
+      authorityCategorySource: "official_context",
+      replacementReason: "official_business_hours_deterministic_override",
+      triageResponseProtected: false,
+      authorityConflictDetected,
+      authorityConflictCategories: Array.from(new Set(authorityConflictCategories)),
+      winningSourceTypes: Array.from(new Set([...winningSourceTypes, "OFFICIAL_CONTEXT"])),
+      rejectedSourceTypes: Array.from(new Set(rejectedSourceTypes)),
+    };
+  }
 
   if (expectedCategory === "technical_evaluation") {
     if (generatedClaimCategory) {
