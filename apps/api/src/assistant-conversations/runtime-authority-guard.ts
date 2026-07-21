@@ -107,6 +107,23 @@ const WEEKDAY_ALIASES: Array<[string, string]> = [
   ["sabado", "saturday"],
 ];
 
+function mentionsBusinessDay(text: string, day: string | null): boolean {
+  if (!day) return false;
+  const alias = WEEKDAY_ALIASES.find(([, candidate]) => candidate === day)?.[0];
+  return alias ? new RegExp(`\\b${alias}(?:s)?\\b`).test(normalize(text)) : false;
+}
+
+function claimsBusinessHoursOpen(text: string): boolean {
+  const normalizedText = normalize(text);
+  const saysClosed =
+    /(?:fechad|fora do horario|nao (?:abre|abrimos|atende|atendemos)|sem atendimento)/.test(
+      normalizedText,
+    );
+  return (
+    !saysClosed && /(?:abert|funcionando|atende|atendemos|abre|abrimos)/.test(normalizedText)
+  );
+}
+
 function parseRequestedTime(message: string): string | null {
   const match = message.match(/\b(\d{1,2})(?::(\d{2}))?\s*(?:h|hrs?|horas?)?\b/);
   if (!match) return null;
@@ -420,11 +437,14 @@ export function validateV1AnswerAuthority(input: {
   const authorityCategorySource = derivedExpected.source;
   const officialHours = input.officialHoursEvaluation ?? derivedExpected.officialHours;
 
-  const flowText = normalize(input.flowText ?? "");
-  const sundayClosed = input.officialBusinessContext.businessHours.sunday.length === 0;
-  const flowClaimsSundayOpen =
-    flowText.includes("domingo") && /07:30|08:00|abert|atend/.test(flowText);
-  if (sundayClosed && flowClaimsSundayOpen) {
+  const flowText = input.flowText ?? "";
+  const requestedDayIsClosed =
+    officialHours.evaluated && officialHours.requestedDayOpen === false;
+  const flowClaimsClosedRequestedDayOpen =
+    requestedDayIsClosed &&
+    mentionsBusinessDay(flowText, officialHours.requestedDay) &&
+    claimsBusinessHoursOpen(flowText);
+  if (flowClaimsClosedRequestedDayOpen) {
     authorityConflictDetected = true;
     authorityConflictCategories.push("businessHours");
     winningSourceTypes.push("OFFICIAL_CONTEXT");
@@ -459,17 +479,17 @@ export function validateV1AnswerAuthority(input: {
     /(?:esperar|aguardar|excecao|apos o horario|depois de fechar|consigo te atender)/.test(
       normalizedAnswer,
     ) && /(?:posso|consigo|sim|nao|não|atender|esperar)/.test(normalizedAnswer);
-  const sundayOpenClaim =
-    sundayClosed &&
-    normalizedAnswer.includes("domingo") &&
-    /(?:abert|atend|07:30|08:00|12:00)/.test(normalizedAnswer);
+  const closedRequestedDayOpenClaim =
+    requestedDayIsClosed &&
+    mentionsBusinessDay(normalizedAnswer, officialHours.requestedDay) &&
+    claimsBusinessHoursOpen(normalizedAnswer);
   const contactClaim =
     /(?:telefone|whatsapp|contato|numero)/.test(normalizedAnswer) &&
     /(?:oficial|empresa|assistencia|atendimento|informar|disponivel)/.test(normalizedAnswer);
 
   const generatedClaimCategory = priceClaim
     ? "price"
-    : sundayOpenClaim
+    : closedRequestedDayOpenClaim
       ? "business_hours"
       : pickupClaim
         ? "pickup"

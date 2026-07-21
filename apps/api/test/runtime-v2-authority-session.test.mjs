@@ -49,6 +49,17 @@ function officialContext() {
   );
 }
 
+function officialContextForCompany({ companyName, weeklySchedule, now }) {
+  return buildOfficialBusinessContext(
+    {
+      companyName,
+      companyTimezone: "America/Campo_Grande",
+      weeklySchedule,
+    },
+    now,
+  );
+}
+
 test("sessão nova não herda pergunta antiga e aceita referência somente da sessão atual", async () => {
   const store = new InMemoryConversationStateStore();
   const now = new Date("2026-07-13T15:00:00.000Z");
@@ -253,7 +264,7 @@ test("guardião bloqueia preço, pickup e disponibilidade sem fonte e vence conf
     currentMessage: "Vocês abrem domingo?",
     sources: [],
     officialBusinessContext: context,
-    flowText: "Informações da Empresa: domingo 07:30 às 12:00",
+    flowText: "Informações da Empresa: aos domingos atendemos das 07:30 às 12:00",
   });
   assert.deepEqual(sunday.authorityConflictCategories, ["businessHours"]);
   assert.deepEqual(sunday.rejectedSourceTypes, ["FLOW"]);
@@ -268,6 +279,94 @@ test("guardião bloqueia preço, pickup e disponibilidade sem fonte e vence conf
     officialBusinessContext: context,
   });
   assert.ok(availability.blockedCategories.includes("availability"));
+});
+
+test("guardião deriva alegações de domingo e OPEN_NOW exclusivamente da agenda oficial de cada empresa", () => {
+  const companyA = officialContextForCompany({
+    companyName: "Empresa A",
+    weeklySchedule: {
+      monday: [{ start: "09:00", end: "17:00" }],
+      sunday: [],
+    },
+    now: new Date("2026-07-20T15:00:00.000Z"),
+  });
+  const companyB = officialContextForCompany({
+    companyName: "Empresa B",
+    weeklySchedule: {
+      monday: [{ start: "09:00", end: "17:00" }],
+      sunday: [{ start: "08:00", end: "12:00" }],
+    },
+    now: new Date("2026-07-20T15:00:00.000Z"),
+  });
+  const companyC = officialContextForCompany({
+    companyName: "Empresa C",
+    weeklySchedule: {
+      monday: [{ start: "10:00", end: "14:00" }],
+      sunday: [{ start: "10:00", end: "14:00" }],
+    },
+    now: new Date("2026-07-20T15:00:00.000Z"),
+  });
+
+  const correctClosedSunday = validateV1AnswerAuthority({
+    answer: "Não, aos domingos estamos fechados.",
+    currentMessage: "Vocês abrem domingo?",
+    sources: [],
+    officialBusinessContext: companyA,
+  });
+  const wrongClosedSunday = validateV1AnswerAuthority({
+    answer: "Sim, aos domingos atendemos das 10h às 14h.",
+    currentMessage: "Vocês abrem domingo?",
+    sources: [],
+    officialBusinessContext: companyA,
+    flowText: "Aos domingos atendemos das 10h às 14h.",
+  });
+  const correctOpenSundayB = validateV1AnswerAuthority({
+    answer: "Sim, aos domingos atendemos das 08h às 12h.",
+    currentMessage: "Vocês abrem domingo?",
+    sources: [],
+    officialBusinessContext: companyB,
+  });
+  const correctOpenSundayC = validateV1AnswerAuthority({
+    answer: "Sim, aos domingos atendemos das 10h às 14h.",
+    currentMessage: "Vocês abrem domingo?",
+    sources: [],
+    officialBusinessContext: companyC,
+  });
+
+  const openNowContext = officialContextForCompany({
+    companyName: "Empresa C",
+    weeklySchedule: {
+      monday: [{ start: "10:00", end: "14:00" }],
+      sunday: [{ start: "10:00", end: "14:00" }],
+    },
+    now: new Date("2026-07-20T15:00:00.000Z"),
+  });
+  const correctOpenNow = validateV1AnswerAuthority({
+    answer: "Sim, estamos abertos agora. Hoje atendemos das 10:00 às 14:00.",
+    currentMessage: "Vocês estão abertos agora?",
+    sources: [],
+    officialBusinessContext: openNowContext,
+  });
+  const wrongOpenNow = validateV1AnswerAuthority({
+    answer: "Sim, estamos abertos agora. Hoje atendemos das 08:00 às 12:00.",
+    currentMessage: "Vocês estão abertos agora?",
+    sources: [],
+    officialBusinessContext: openNowContext,
+  });
+
+  assert.equal(correctClosedSunday.replacementReason, null);
+  assert.equal(correctClosedSunday.answer, "Não, aos domingos estamos fechados.");
+  assert.equal(wrongClosedSunday.replacementReason, "official_business_hours_deterministic_override");
+  assert.equal(wrongClosedSunday.answer, "Não, aos domingos estamos fechados.");
+  assert.equal(correctOpenSundayB.replacementReason, null);
+  assert.equal(correctOpenSundayB.answer, "Sim, aos domingos atendemos das 08h às 12h.");
+  assert.equal(correctOpenSundayC.replacementReason, null);
+  assert.equal(correctOpenSundayC.answer, "Sim, aos domingos atendemos das 10h às 14h.");
+  assert.equal(correctOpenNow.replacementReason, null);
+  assert.equal(correctOpenNow.answer, "Sim, estamos abertos agora. Hoje atendemos das 10:00 às 14:00.");
+  assert.equal(wrongOpenNow.replacementReason, "official_business_hours_deterministic_override");
+  assert.match(wrongOpenNow.answer, /10:00 às 14:00/i);
+  assert.doesNotMatch(wrongOpenNow.answer, /08:00 às 12:00/i);
 });
 
 test("guardião V1 restaura a agenda oficial para domingo fechado e OPEN_NOW", () => {
