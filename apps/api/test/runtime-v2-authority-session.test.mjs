@@ -290,7 +290,8 @@ test("guardião V1 restaura a agenda oficial para domingo fechado e OPEN_NOW", (
     officialBusinessContext: sundayContext,
   });
   const openNow = validateV1AnswerAuthority({
-    answer: "Sim, estamos abertos! O horário de atendimento é de segunda a sexta, das 08:00 às 18:00.",
+    answer:
+      "Sim, estamos abertos! O horário de atendimento é de segunda a sexta, das 08:00 às 18:00.",
     currentMessage: "Vocês estão abertos agora?",
     sources: [],
     officialBusinessContext: openNowContext,
@@ -302,6 +303,145 @@ test("guardião V1 restaura a agenda oficial para domingo fechado e OPEN_NOW", (
   assert.match(openNow.answer, /08:00 às 22:00/i);
   assert.doesNotMatch(openNow.answer, /08:00 às 18:00/i);
   assert.equal(openNow.replacementReason, "official_business_hours_deterministic_override");
+});
+
+test("override V1 de horário só corrige contradição com agenda oficial válida e intenção exclusiva", () => {
+  const openNowContext = buildOfficialBusinessContext(
+    {
+      companyName: "Empresa de teste",
+      companyTimezone: "America/Campo_Grande",
+      weeklySchedule: {
+        monday: [{ start: "08:00", end: "22:00" }],
+        sunday: [],
+      },
+    },
+    new Date("2026-07-20T17:00:00.000Z"),
+  );
+  const noScheduleContext = buildOfficialBusinessContext(
+    {
+      companyName: "Empresa sem agenda",
+      companyTimezone: "America/Campo_Grande",
+      weeklySchedule: {},
+    },
+    new Date("2026-07-20T17:00:00.000Z"),
+  );
+  const invalidScheduleContext = buildOfficialBusinessContext(
+    {
+      companyName: "Empresa com agenda inválida",
+      companyTimezone: "America/Campo_Grande",
+      weeklySchedule: { monday: [{ start: "22:00", end: "08:00" }] },
+    },
+    new Date("2026-07-20T17:00:00.000Z"),
+  );
+  const correctOpenNow =
+    "Sim, estamos abertos agora. Hoje atendemos das 08:00 às 22:00 e não fechamos para almoço.";
+  const wrongOpenNow =
+    "Sim, estamos abertos! O horário de atendimento é de segunda a sexta, das 08:00 às 18:00.";
+
+  const correctOpen = validateV1AnswerAuthority({
+    answer: correctOpenNow,
+    currentMessage: "Vocês estão abertos agora?",
+    sources: [],
+    officialBusinessContext: openNowContext,
+  });
+  const wrongOpen = validateV1AnswerAuthority({
+    answer: wrongOpenNow,
+    currentMessage: "Vocês estão abertos agora?",
+    sources: [],
+    officialBusinessContext: openNowContext,
+  });
+  const missingSchedule = validateV1AnswerAuthority({
+    answer: "Esse horário está fora do funcionamento oficial informado.",
+    currentMessage: "Vocês estão abertos agora?",
+    sources: [],
+    officialBusinessContext: noScheduleContext,
+  });
+  const invalidSchedule = validateV1AnswerAuthority({
+    answer: "Esse horário está fora do funcionamento oficial informado.",
+    currentMessage: "Vocês estão abertos agora?",
+    sources: [],
+    officialBusinessContext: invalidScheduleContext,
+  });
+  const humanHandoff = validateV1AnswerAuthority({
+    answer: "Vou encaminhar você para um atendente humano; estamos abertos agora.",
+    currentMessage: "Quero falar com um humano; vocês estão abertos agora?",
+    sources: [],
+    officialBusinessContext: openNowContext,
+  });
+  const complaint = validateV1AnswerAuthority({
+    answer: "Vou registrar sua reclamação para a equipe.",
+    currentMessage: "Quero reclamar; vocês estão abertos agora?",
+    sources: [],
+    officialBusinessContext: openNowContext,
+  });
+  const nonHoursAnswer = validateV1AnswerAuthority({
+    answer: "Vou verificar essa informação com a equipe.",
+    currentMessage: "Vocês estão abertos agora?",
+    sources: [],
+    officialBusinessContext: openNowContext,
+  });
+  const invalidTimezone = validateV1AnswerAuthority({
+    answer: "Esse horário está fora do funcionamento oficial informado.",
+    currentMessage: "Vocês estão abertos agora?",
+    sources: [],
+    officialBusinessContext: { ...openNowContext, timezone: "Invalid/Timezone" },
+  });
+  const wrongSunday = validateV1AnswerAuthority({
+    answer: "Esse horário está fora do funcionamento oficial informado.",
+    currentMessage: "Vocês abrem aos domingos?",
+    sources: [],
+    officialBusinessContext: openNowContext,
+  });
+  const correctSunday = validateV1AnswerAuthority({
+    answer: "Não, aos domingos estamos fechados.",
+    currentMessage: "Vocês abrem aos domingos?",
+    sources: [],
+    officialBusinessContext: openNowContext,
+  });
+  const weekly = validateV1AnswerAuthority({
+    answer: "Atendemos de segunda a sexta, das 08h às 22h; aos domingos estamos fechados.",
+    currentMessage: "Qual é o horário de funcionamento?",
+    sources: [],
+    officialBusinessContext: openNowContext,
+  });
+
+  assert.equal(correctOpen.answer, correctOpenNow);
+  assert.equal(correctOpen.replacementReason, null);
+  assert.match(wrongOpen.answer, /08:00 às 22:00/i);
+  assert.equal(wrongOpen.replacementReason, "official_business_hours_deterministic_override");
+  assert.equal(
+    missingSchedule.answer,
+    "Esse horário está fora do funcionamento oficial informado.",
+  );
+  assert.equal(missingSchedule.replacementReason, null);
+  assert.equal(
+    invalidSchedule.answer,
+    "Esse horário está fora do funcionamento oficial informado.",
+  );
+  assert.equal(invalidSchedule.replacementReason, null);
+  assert.equal(
+    humanHandoff.answer,
+    "Vou encaminhar você para um atendente humano; estamos abertos agora.",
+  );
+  assert.equal(humanHandoff.replacementReason, null);
+  assert.equal(complaint.answer, "Vou registrar sua reclamação para a equipe.");
+  assert.equal(complaint.replacementReason, null);
+  assert.equal(nonHoursAnswer.answer, "Vou verificar essa informação com a equipe.");
+  assert.equal(nonHoursAnswer.replacementReason, null);
+  assert.equal(
+    invalidTimezone.answer,
+    "Esse horário está fora do funcionamento oficial informado.",
+  );
+  assert.equal(invalidTimezone.replacementReason, null);
+  assert.equal(wrongSunday.answer, "Não, aos domingos estamos fechados.");
+  assert.equal(wrongSunday.replacementReason, "official_business_hours_deterministic_override");
+  assert.equal(correctSunday.answer, "Não, aos domingos estamos fechados.");
+  assert.equal(correctSunday.replacementReason, null);
+  assert.equal(
+    weekly.answer,
+    "Atendemos de segunda a sexta, das 08h às 22h; aos domingos estamos fechados.",
+  );
+  assert.equal(weekly.replacementReason, null);
 });
 
 test("guardião usa a intenção atual para escolher a resposta segura", () => {
@@ -474,7 +614,7 @@ test("saída explícita da triagem vence a categoria inventada pelo provider", (
   assert.doesNotMatch(result.answer, /disponibilidade|horário|horario/i);
 });
 
-test("domingo fechado vence booking e produz categoria de horário comercial", () => {
+test("domingo fechado não sobrescreve uma resposta de booking", () => {
   const result = validateV1AnswerAuthority({
     answer: "Posso verificar a disponibilidade para domingo às 13h.",
     currentMessage: "Domingo às 13h posso levar?",
@@ -483,10 +623,10 @@ test("domingo fechado vence booking e produz categoria de horário comercial", (
     normalizedIntent: "request_booking_date",
   });
 
-  assert.equal(result.finalSafeResponseCategory, "business_hours");
+  assert.equal(result.finalSafeResponseCategory, null);
   assert.equal(result.authorityCategorySource, "official_context");
-  assert.equal(result.replacementReason, "official_business_hours_precedence");
-  assert.match(result.answer, /funcionamento oficial/i);
+  assert.equal(result.replacementReason, null);
+  assert.equal(result.answer, "Posso verificar a disponibilidade para domingo às 13h.");
 });
 
 test("contato oficial ausente não é inventado e contato estruturado é permitido", () => {

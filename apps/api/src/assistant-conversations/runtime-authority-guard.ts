@@ -268,6 +268,119 @@ function isOpenNowQuestion(question: string): boolean {
   );
 }
 
+function hasPriorityNonBusinessHoursIntent(
+  question: string,
+  selectedFlowKey?: string | null,
+): boolean {
+  const normalizedQuestion = normalize(question);
+  const normalizedFlow = normalize(selectedFlowKey ?? "");
+  return (
+    /(?:humano|pessoa|atendente|transfer|encaminh|reclam|insatisfeit|queixa|procon|cancel|estorno)/.test(
+      normalizedQuestion,
+    ) ||
+    /(?:preco|valor|orcamento|agendar|agendamento|marcar|reserva|busca|buscar|retirada|retirar|coleta|endereco|onde fica|localizacao|suporte|assistencia tecnica|notebook|computador|telefone|whatsapp|contato)/.test(
+      normalizedQuestion,
+    ) ||
+    /(?:handoff|human|transfer)/.test(normalizedFlow)
+  );
+}
+
+function hasValidOfficialBusinessHours(context: OfficialBusinessContext): boolean {
+  if (
+    !context.businessHoursConfigurationValid ||
+    context.businessHoursValidationIssueCount > 0 ||
+    !hasOfficialSchedule(context)
+  ) {
+    return false;
+  }
+
+  return Object.values(context.businessHours).every((intervals) =>
+    intervals.every((interval) => {
+      if (!/^\d{2}:\d{2}$/.test(interval.start) || !/^\d{2}:\d{2}$/.test(interval.end)) {
+        return false;
+      }
+      const [startHour, startMinute] = interval.start.split(":").map(Number);
+      const [endHour, endMinute] = interval.end.split(":").map(Number);
+      return startHour * 60 + startMinute < endHour * 60 + endMinute;
+    }),
+  );
+}
+
+function hasValidTimezone(timezone: string): boolean {
+  try {
+    Intl.DateTimeFormat("en-US", { timeZone: timezone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function answerTreatsBusinessHours(answer: string): boolean {
+  return /(?:horario|abert|fechad|funcion|atend|expediente|domingo|segunda|terca|quarta|quinta|sexta|sabado)/.test(
+    normalize(answer),
+  );
+}
+
+function answerContainsTime(answer: string, time: string): boolean {
+  const [hour, minute] = time.split(":");
+  const normalizedAnswer = normalize(answer);
+  const hourNumber = Number(hour);
+  return new RegExp(
+    `(?:\\b0?${hourNumber}:${minute}\\b|\\b0?${hourNumber}h${minute === "00" ? "(?:00)?" : minute}\\b|\\b0?${hourNumber} horas?\\b)`,
+  ).test(normalizedAnswer);
+}
+
+function answerContradictsOfficialBusinessHours(input: {
+  answer: string;
+  question: string;
+  context: OfficialBusinessContext;
+  officialHours: OfficialHoursEvaluation;
+}): boolean {
+  const normalizedAnswer = normalize(input.answer);
+  if (normalizedAnswer === normalize(safeUnavailable("business_hours"))) {
+    return true;
+  }
+
+  const saysClosed =
+    /(?:fechad|fora do horario|nao (?:abre|abrimos|atende|atendemos)|sem atendimento)/.test(
+      normalizedAnswer,
+    );
+  const saysOpen =
+    !saysClosed && /(?:abert|funcionando|atende|atendemos|abre|abrimos)/.test(normalizedAnswer);
+
+  if (isOpenNowQuestion(input.question)) {
+    if (input.context.businessStatus.isOpenNow) {
+      if (saysClosed || !saysOpen) return true;
+      const officialTimes = input.context.businessStatus.todayIntervals.flatMap((interval) => [
+        interval.start,
+        interval.end,
+      ]);
+      const declaredTimes = normalizedAnswer.match(/\b\d{1,2}(?::\d{2})?h?\b/g) ?? [];
+      return declaredTimes.some((value) => {
+        const match = value.match(/^(\d{1,2})(?::(\d{2}))?h?$/);
+        if (!match) return false;
+        const candidate = `${match[1].padStart(2, "0")}:${match[2] ?? "00"}`;
+        return !officialTimes.includes(candidate);
+      });
+    }
+
+    return (
+      saysOpen ||
+      !saysClosed ||
+      Boolean(
+        input.context.businessStatus.nextOpening &&
+        !answerContainsTime(input.answer, input.context.businessStatus.nextOpening.time),
+      )
+    );
+  }
+
+  if (input.officialHours.requestedDayOpen === false) {
+    return saysOpen || !saysClosed;
+  }
+
+  return false;
+}
+
 export function validateV1AnswerAuthority(input: {
   answer: string;
   currentMessage: string;
@@ -370,19 +483,28 @@ export function validateV1AnswerAuthority(input: {
               ? "exceptionRequest"
               : null;
 
-  const officialBusinessHoursAnswer = buildStructuredBusinessAnswer(
-    input.currentMessage,
-    input.officialBusinessContext,
-  )?.answer;
-  const shouldRestoreOfficialBusinessHours =
-    Boolean(officialBusinessHoursAnswer) &&
+  const shouldValidateBusinessHours =
     expectedCategory === "business_hours" &&
+    isDirectBusinessHoursQuestion(input.currentMessage) &&
+    !hasPriorityNonBusinessHoursIntent(input.currentMessage, input.selectedFlowKey) &&
+    hasValidOfficialBusinessHours(input.officialBusinessContext) &&
+    hasValidTimezone(input.officialBusinessContext.timezone) &&
     (isOpenNowQuestion(input.currentMessage) ||
-      (isDirectBusinessHoursQuestion(input.currentMessage) &&
-        officialHours.evaluated &&
-        officialHours.requestedDayOpen === false));
+      (officialHours.evaluated && officialHours.requestedDayOpen === false));
+  const shouldRestoreOfficialBusinessHours =
+    shouldValidateBusinessHours &&
+    answerTreatsBusinessHours(answer) &&
+    answerContradictsOfficialBusinessHours({
+      answer,
+      question: input.currentMessage,
+      context: input.officialBusinessContext,
+      officialHours,
+    });
+  const officialBusinessHoursAnswer = shouldRestoreOfficialBusinessHours
+    ? buildStructuredBusinessAnswer(input.currentMessage, input.officialBusinessContext)?.answer
+    : null;
 
-  if (shouldRestoreOfficialBusinessHours) {
+  if (officialBusinessHoursAnswer) {
     return {
       answer: officialBusinessHoursAnswer!,
       blockedCategories: [],
@@ -419,32 +541,6 @@ export function validateV1AnswerAuthority(input: {
     };
   }
 
-  if (
-    expectedCategory === "business_hours" &&
-    officialHours.evaluated &&
-    (officialHours.requestedDayOpen === false || officialHours.requestedTimeWithinHours === false)
-  ) {
-    blockedCategories.push(
-      generatedClaimCategory && generatedClaimCategory !== "business_hours"
-        ? generatedClaimCategory
-        : "businessHours",
-    );
-    return {
-      answer: safeUnavailable("business_hours"),
-      blockedCategories: Array.from(new Set(blockedCategories)),
-      unsupportedClaimDetected: blockedCategories.length > 0,
-      generatedClaimCategory,
-      finalSafeResponseCategory: "business_hours",
-      authorityCategorySource: "official_context",
-      replacementReason: "official_business_hours_precedence",
-      triageResponseProtected: false,
-      authorityConflictDetected,
-      authorityConflictCategories: Array.from(new Set(authorityConflictCategories)),
-      winningSourceTypes: Array.from(new Set([...winningSourceTypes, "OFFICIAL_CONTEXT"])),
-      rejectedSourceTypes: Array.from(new Set(rejectedSourceTypes)),
-    };
-  }
-
   const priceResponseAlreadySafe =
     /(?:nao tenho|nao possuo|preciso confirmar|posso verificar).{0,48}(?:preco|valor|orcamento)/.test(
       normalizedAnswer,
@@ -465,9 +561,6 @@ export function validateV1AnswerAuthority(input: {
   } else if (priceClaim && !hasSourceForCategory(input.sources, "price")) {
     blockedCategories.push("price");
     replacementCategory = expectedCategory ?? "price";
-  } else if (sundayOpenClaim) {
-    blockedCategories.push("businessHours");
-    replacementCategory = expectedCategory ?? "business_hours";
   } else if (pickupClaim && !hasSourceForCategory(input.sources, "pickup")) {
     blockedCategories.push("pickup");
     replacementCategory = expectedCategory ?? "pickup";
