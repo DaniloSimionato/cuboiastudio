@@ -18,6 +18,9 @@ export type RuntimeKnowledgeSearchResult = {
 
 export const DEFAULT_RAG_SCORE_THRESHOLD = 0.7;
 
+export type RagScoreThresholdSource =
+  "default" | "explicit" | "default_invalid" | "assistant_override" | "assistant_override_invalid";
+
 export function hashRuntimeText(value: string | null | undefined): string | null {
   return hashCanonicalInboundMessageContent(value);
 }
@@ -105,8 +108,7 @@ export function selectRuntimeKnowledgeItems(input: {
       })),
       rejectedCount: input.filteredOutCount ?? 0,
       rejectedScoreRange: input.filteredOutScoreRange ?? null,
-      rejectionReason:
-        (input.filteredOutCount ?? 0) > 0 ? "score_below_threshold" : null,
+      rejectionReason: (input.filteredOutCount ?? 0) > 0 ? "score_below_threshold" : null,
       warning: input.warning ?? null,
     },
   };
@@ -114,7 +116,7 @@ export function selectRuntimeKnowledgeItems(input: {
 
 export function normalizeRagScoreThreshold(value: unknown): {
   threshold: number;
-  source: "default" | "explicit" | "default_invalid";
+  source: Extract<RagScoreThresholdSource, "default" | "explicit" | "default_invalid">;
 } {
   if (value === undefined || value === null || value === "") {
     return { threshold: DEFAULT_RAG_SCORE_THRESHOLD, source: "default" };
@@ -126,6 +128,36 @@ export function normalizeRagScoreThreshold(value: unknown): {
   }
 
   return { threshold: parsed, source: "explicit" };
+}
+
+export function resolveAssistantKnowledgeScoreThreshold(input: {
+  assistantId: string;
+  explicitValue?: unknown;
+  environment?: Record<string, string | undefined>;
+}): { threshold: number; source: RagScoreThresholdSource } {
+  if (input.explicitValue !== undefined) {
+    return normalizeRagScoreThreshold(input.explicitValue);
+  }
+
+  const overrides =
+    input.environment?.ASSISTANT_KNOWLEDGE_MIN_SCORE_OVERRIDES ??
+    process.env.ASSISTANT_KNOWLEDGE_MIN_SCORE_OVERRIDES ??
+    "";
+
+  for (const entry of overrides.split(",")) {
+    const separatorIndex = entry.lastIndexOf(":");
+    if (separatorIndex < 1) continue;
+
+    const assistantId = entry.slice(0, separatorIndex).trim();
+    if (assistantId !== input.assistantId) continue;
+
+    const normalized = normalizeRagScoreThreshold(entry.slice(separatorIndex + 1).trim());
+    return normalized.source === "explicit"
+      ? { threshold: normalized.threshold, source: "assistant_override" }
+      : { threshold: DEFAULT_RAG_SCORE_THRESHOLD, source: "assistant_override_invalid" };
+  }
+
+  return { threshold: DEFAULT_RAG_SCORE_THRESHOLD, source: "default" };
 }
 
 export function resolveRuntimeFallbackAnswer(input: {

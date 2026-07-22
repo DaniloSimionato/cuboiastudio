@@ -8,7 +8,10 @@ import { PrismaService } from "../database/prisma.service";
 import { AiService } from "../ai/ai.service";
 import { type AuthenticatedUser, type RequestTenant } from "../auth/auth.types";
 import { Status } from "@prisma/client";
-import { normalizeRagScoreThreshold } from "../assistant-conversations/runtime-context-manifest";
+import {
+  resolveAssistantKnowledgeScoreThreshold,
+  type RagScoreThresholdSource,
+} from "../assistant-conversations/runtime-context-manifest";
 
 export interface AssistantKnowledgeSearchInput {
   companyId?: string;
@@ -28,7 +31,7 @@ export interface AssistantKnowledgeSearchResult {
   eligibleChunkCount: number;
   totalChunksScanned: number;
   scoreThreshold: number;
-  scoreThresholdSource: "default" | "explicit" | "default_invalid";
+  scoreThresholdSource: RagScoreThresholdSource;
   scoredChunkCount: number;
   dimensionMismatchCount: number;
   filteredOutCount: number;
@@ -100,7 +103,10 @@ export class AssistantKnowledgeRetrievalService {
     }
 
     const topK = input.topK && input.topK > 0 ? Math.min(input.topK, 20) : 5;
-    const normalizedThreshold = normalizeRagScoreThreshold(input.scoreThreshold);
+    const normalizedThreshold = resolveAssistantKnowledgeScoreThreshold({
+      assistantId: input.assistantId,
+      explicitValue: input.scoreThreshold,
+    });
     const threshold = normalizedThreshold.threshold;
 
     // 1. Fetch chunks that belong to ACTIVE and READY knowledge items.

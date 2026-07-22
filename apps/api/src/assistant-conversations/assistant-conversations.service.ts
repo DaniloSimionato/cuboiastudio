@@ -84,7 +84,7 @@ import { decryptData, getOrMigrateWebhookCredentials } from "../common/encryptio
 import {
   buildPromptSectionManifest,
   DEFAULT_RAG_SCORE_THRESHOLD,
-  normalizeRagScoreThreshold,
+  resolveAssistantKnowledgeScoreThreshold,
   RUNTIME_CONTEXT_MANIFEST_VERSION,
   resolveRuntimeFallbackAnswer,
   selectRuntimeKnowledgeItems,
@@ -3261,7 +3261,9 @@ export class AssistantConversationsService {
 
     const knowledgeLimit = triageMode ? 2 : 5;
     let knowledgeItems: { id: string; title: string; content: string }[] = [];
-    const ragThresholdConfig = normalizeRagScoreThreshold(undefined);
+    const ragThresholdConfig = resolveAssistantKnowledgeScoreThreshold({
+      assistantId: input.assistantId,
+    });
     let ragLogData: any = {
       ragEnabled: Boolean(assistant.ragEnabled),
       scoreThreshold: ragThresholdConfig.threshold,
@@ -3347,9 +3349,16 @@ export class AssistantConversationsService {
         results: searchResult.results,
       });
 
-      this.logger.log(
-        `[RAG Runtime] Assistant ${input.assistantId} | Scanned: ${ragLogData.totalChunksScanned} | Found: ${ragLogData.usedKnowledge.length}`,
-      );
+      this.logger.log({
+        message: "RAG retrieval completed",
+        assistantId: input.assistantId,
+        effectiveThreshold: searchResult.scoreThreshold,
+        thresholdSource: searchResult.scoreThresholdSource,
+        candidateCount: searchResult.scoredChunkCount,
+        acceptedCount: searchResult.results.length,
+        topScore: searchResult.scoredScoreRange?.max ?? null,
+        knowledgeChunkIds: searchResult.results.map((result) => result.chunkId),
+      });
     } else if (assistant.ragEnabled) {
       ragLogData = {
         ...ragLogData,

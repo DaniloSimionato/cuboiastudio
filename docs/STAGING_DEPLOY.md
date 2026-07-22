@@ -50,6 +50,7 @@ IA / provider:
 - `AI_MODEL`
 - `AI_API_KEY`
 - `AI_REQUEST_TIMEOUT_MS`
+- `ASSISTANT_KNOWLEDGE_MIN_SCORE_OVERRIDES` (opcional; formato `assistant-id:0.55`; valor aprovado: `cmrcunljc008rrq01d7urn2t5:0.55`)
 - `OPENAI_API_KEY` se usar OpenAI diretamente
 - `ANTHROPIC_API_KEY` se usar Anthropic diretamente
 

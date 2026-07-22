@@ -38,6 +38,7 @@ export const environmentSchema = z.object({
   AI_MODEL: optionalText,
   AI_API_KEY: optionalText,
   AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().optional().default(30_000),
+  ASSISTANT_KNOWLEDGE_MIN_SCORE_OVERRIDES: optionalText,
   APP_ENCRYPTION_KEY: optionalText,
   DATABASE_URL: optionalText,
   REDIS_URL: optionalText,

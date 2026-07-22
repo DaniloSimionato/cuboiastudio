@@ -8,6 +8,7 @@ import {
   DEFAULT_RAG_SCORE_THRESHOLD,
   buildPromptSectionManifest,
   hashRuntimeText,
+  resolveAssistantKnowledgeScoreThreshold,
   resolveRuntimeFallbackAnswer,
   selectRuntimeKnowledgeItems,
 } from "../dist/assistant-conversations/runtime-context-manifest.js";
@@ -141,6 +142,97 @@ test("RAG usa default 0.70, rejeita scores abaixo e aceita override válido", as
   assert.equal(invalidResult.scoreThresholdSource, "default_invalid");
 });
 
+test("RAG aplica override somente ao assistant configurado e falha fechada para valores inválidos", async () => {
+  const previousOverrides = process.env.ASSISTANT_KNOWLEDGE_MIN_SCORE_OVERRIDES;
+  const chunks = [
+    {
+      id: "chunk-price",
+      knowledgeId: "knowledge-price",
+      chunkIndex: 0,
+      content: "Formatação a partir de R$ 195,00.",
+      embedding: [0.56, Math.sqrt(1 - 0.56 ** 2)],
+      embeddingDimension: 2,
+      knowledge: { title: "Formatação", metadata: null },
+    },
+  ];
+  const prisma = {
+    assistant: { findFirst: async ({ where }) => ({ id: where.id }) },
+    assistantKnowledgeChunk: { findMany: async () => chunks },
+  };
+  const retrieval = new AssistantKnowledgeRetrievalService(prisma, {
+    generateEmbedding: async () => ({ embedding: [1, 0] }),
+  });
+  const tenant = { companyId: "company-1" };
+
+  try {
+    process.env.ASSISTANT_KNOWLEDGE_MIN_SCORE_OVERRIDES = "assistant-authorized:0.55";
+
+    const authorized = await retrieval.searchRelevantKnowledge({
+      tenant,
+      assistantId: "assistant-authorized",
+      query: "Quanto sai para formatar?",
+    });
+    assert.equal(authorized.scoreThreshold, 0.55);
+    assert.equal(authorized.scoreThresholdSource, "assistant_override");
+    assert.deepEqual(
+      authorized.results.map((item) => item.chunkId),
+      ["chunk-price"],
+    );
+
+    const anotherAssistant = await retrieval.searchRelevantKnowledge({
+      tenant,
+      assistantId: "assistant-other",
+      query: "Quanto sai para formatar?",
+    });
+    assert.equal(anotherAssistant.scoreThreshold, 0.7);
+    assert.equal(anotherAssistant.scoreThresholdSource, "default");
+    assert.equal(anotherAssistant.results.length, 0);
+
+    process.env.ASSISTANT_KNOWLEDGE_MIN_SCORE_OVERRIDES = "assistant-authorized:not-a-number";
+    const invalidOverride = await retrieval.searchRelevantKnowledge({
+      tenant,
+      assistantId: "assistant-authorized",
+      query: "Quanto sai para formatar?",
+    });
+    assert.equal(invalidOverride.scoreThreshold, 0.7);
+    assert.equal(invalidOverride.scoreThresholdSource, "assistant_override_invalid");
+    assert.equal(invalidOverride.results.length, 0);
+
+    process.env.ASSISTANT_KNOWLEDGE_MIN_SCORE_OVERRIDES = "assistant-authorized:1.01";
+    const outOfRangeOverride = await retrieval.searchRelevantKnowledge({
+      tenant,
+      assistantId: "assistant-authorized",
+      query: "Quanto sai para formatar?",
+    });
+    assert.equal(outOfRangeOverride.scoreThreshold, 0.7);
+    assert.equal(outOfRangeOverride.scoreThresholdSource, "assistant_override_invalid");
+  } finally {
+    if (previousOverrides === undefined) {
+      delete process.env.ASSISTANT_KNOWLEDGE_MIN_SCORE_OVERRIDES;
+    } else {
+      process.env.ASSISTANT_KNOWLEDGE_MIN_SCORE_OVERRIDES = previousOverrides;
+    }
+  }
+});
+
+test("resolver de threshold mantém precedência explícita e default global", () => {
+  assert.deepEqual(
+    resolveAssistantKnowledgeScoreThreshold({
+      assistantId: "assistant-authorized",
+      explicitValue: 0.9,
+      environment: { ASSISTANT_KNOWLEDGE_MIN_SCORE_OVERRIDES: "assistant-authorized:0.55" },
+    }),
+    { threshold: 0.9, source: "explicit" },
+  );
+  assert.deepEqual(
+    resolveAssistantKnowledgeScoreThreshold({
+      assistantId: "assistant-without-override",
+      environment: { ASSISTANT_KNOWLEDGE_MIN_SCORE_OVERRIDES: "assistant-authorized:0.55" },
+    }),
+    { threshold: 0.7, source: "default" },
+  );
+});
+
 test("manifesto de prompt registra somente metadados e hash, nunca conteúdo", () => {
   const sections = buildPromptSectionManifest([
     { role: "system", content: "IDENTIDADE E ESCOPO\nsegredo" },
@@ -265,7 +357,12 @@ test("resumeConversation importa papéis, envia somente a última mensagem real 
   };
   const externalMessages = [
     { id: "incoming-1", message_type: "incoming", content: "Pergunta anterior" },
-    { id: "human-1", message_type: "outgoing", content: "Resposta do atendente", content_attributes: {} },
+    {
+      id: "human-1",
+      message_type: "outgoing",
+      content: "Resposta do atendente",
+      content_attributes: {},
+    },
     {
       id: "bot-1",
       message_type: "outgoing",
@@ -318,7 +415,10 @@ test("resumeConversation importa papéis, envia somente a última mensagem real 
   assert.equal(sent.length, 1);
   assert.equal(sent[0].dto.message, "Qual o horário atual?");
   assert.doesNotMatch(sent[0].dto.message, /Histórico|AVISO DE SISTEMA|Resposta do atendente/);
-  assert.deepEqual(imported.map((message) => message.role), ["user", "assistant", "assistant", "user"]);
+  assert.deepEqual(
+    imported.map((message) => message.role),
+    ["user", "assistant", "assistant", "user"],
+  );
   assert.equal(imported[1].content, "Resposta do atendente");
   assert.equal(imported[1].messageType, "resume-human");
   assert.ok(imported.every((message) => !String(message.content).includes("Histórico recente")));
