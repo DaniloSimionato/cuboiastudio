@@ -38,9 +38,16 @@ import {
 } from "../assistants/assistant-runtime";
 import {
   buildOfficialBusinessContext,
+  buildDeterministicBusinessHoursResponse,
   buildOutsideBusinessHoursReply,
   type OfficialBusinessContext,
 } from "../assistants/official-business-context";
+import {
+  detectDirectBusinessHours,
+  hasExplicitHumanRequest,
+  isDirectBusinessHoursBindingAllowed,
+  type DirectBusinessHoursScope,
+} from "./business-hours-direct-deterministic";
 import { type CreateAssistantConversationDto } from "./dto/create-assistant-conversation.dto";
 import { type SendAssistantConversationMessageDto } from "./dto/send-assistant-conversation-message.dto";
 import { CalendarToolsService } from "../apps/calendar-tools.service";
@@ -882,6 +889,146 @@ export class AssistantConversationsService {
           instructionsIncluded: false,
         },
       },
+    };
+  }
+
+  private async tryDirectBusinessHoursResponse(input: {
+    assistant: AssistantConversationRuntimeAssistantRecord;
+    conversation: AssistantConversationSafeRecord;
+    dto: SendAssistantConversationMessageDto;
+    tenant: RequestTenant;
+    userMessage: AssistantConversationMessageSafeRecord;
+    message: string;
+    runtimeStartedAt: number;
+  }): Promise<SendAssistantConversationMessageResponse | null> {
+    if (
+      input.dto.source !== "chatwoot" ||
+      !isDirectBusinessHoursBindingAllowed({
+        assistantId: input.assistant.id,
+        accountId: input.dto.externalAccountId,
+        inboxId: input.dto.externalInboxId,
+      }) ||
+      hasExplicitHumanRequest(input.message)
+    ) {
+      return null;
+    }
+    const scope: DirectBusinessHoursScope | null = detectDirectBusinessHours(input.message);
+    if (!scope) return null;
+
+    const officialContext = buildOfficialBusinessContext({
+      companyName: input.assistant.company.name,
+      assistantName: input.assistant.name,
+      companyTimezone: input.assistant.company.timezone,
+      assistantTimezone: input.assistant.timezone,
+      description: input.assistant.description,
+      businessAddress: input.assistant.businessAddress,
+      businessCity: input.assistant.businessCity,
+      businessState: input.assistant.businessState,
+      businessCityRegion: input.assistant.businessCityRegion,
+      businessPostalCode: input.assistant.businessPostalCode,
+      googleMapsUrl: input.assistant.googleMapsUrl,
+      latitude: input.assistant.latitude,
+      longitude: input.assistant.longitude,
+      businessPhone: input.assistant.businessPhone,
+      businessWhatsapp: input.assistant.businessWhatsapp,
+      businessWhatsappSupport: input.assistant.businessWhatsappSupport,
+      websiteUrl: input.assistant.websiteUrl,
+      weeklySchedule: input.assistant.weeklySchedule,
+      aiAlwaysAvailable: input.assistant.aiAlwaysAvailable,
+    });
+    const rendered = buildDeterministicBusinessHoursResponse(input.message, officialContext);
+    const answer = rendered.missingScheduleConfiguration
+      ? "Não consegui consultar o horário oficial neste momento. Por favor, tente novamente em alguns minutos."
+      : rendered.answer;
+    const metadata = {
+      route: "BUSINESS_HOURS_DIRECT_DETERMINISTIC",
+      strategy: "BUSINESS_HOURS_DIRECT_DETERMINISTIC",
+      assistantId: input.assistant.id,
+      companyId: input.tenant.companyId,
+      accountId: input.dto.externalAccountId ?? null,
+      inboxId: input.dto.externalInboxId ?? null,
+      inboundMessageId: input.userMessage.id,
+      businessHoursIntent: true,
+      businessHoursScope: scope,
+      scheduleSource: "OFFICIAL_STRUCTURED_SCHEDULE",
+      timezone: rendered.timezone,
+      providerCount: 0,
+      deterministicResponderCount: 1,
+      historyUsed: false,
+      flowRouterUsed: false,
+      responseExecutionUsed: false,
+      approvalCreated: false,
+      outboundCount: 1,
+      fallbackReason: rendered.missingScheduleConfiguration ? "MISSING_OR_INVALID_SCHEDULE" : null,
+    };
+    const { assistantMessage } = await this.prisma.$transaction(async (tx) => {
+      const assistantMessage = await tx.assistantConversationMessage.create({
+        data: {
+          companyId: input.tenant.companyId,
+          assistantId: input.assistant.id,
+          conversationId: input.conversation.id,
+          role: "assistant",
+          content: answer,
+          source: "chatwoot",
+          mode: "business-hours-direct-deterministic",
+          contextVersion: input.conversation.currentContextVersion ?? 1,
+        },
+        select: assistantConversationMessageSafeSelect,
+      });
+      await tx.assistantRuntimeLog.create({
+        data: {
+          companyId: input.tenant.companyId,
+          assistantId: input.assistant.id,
+          conversationId: input.conversation.id,
+          userMessageId: input.userMessage.id,
+          assistantMessageId: assistantMessage.id,
+          mode: "business-hours-direct-deterministic",
+          status: "COMPLETED",
+          provider: null,
+          model: null,
+          configurationSource: "business-hours-direct-binding",
+          fallback: rendered.missingScheduleConfiguration,
+          fallbackReason: metadata.fallbackReason,
+          outcome: "success",
+          durationMs: Date.now() - input.runtimeStartedAt,
+          knowledgeCount: 0,
+          historyMessagesUsed: 0,
+          historyLimit: 0,
+          metadata: this.toSerializableJsonValue(metadata),
+        },
+      });
+      return { assistantMessage };
+    });
+    await this.sendChatwootOutboundText({
+      conversation: {
+        ...input.conversation,
+        sourceProvider: "chatwoot",
+        externalAccountId: input.dto.externalAccountId ?? input.conversation.externalAccountId,
+        externalInboxId: input.dto.externalInboxId ?? input.conversation.externalInboxId,
+        externalConversationId:
+          input.dto.externalConversationId ?? input.conversation.externalConversationId,
+      },
+      assistantMessageId: assistantMessage.id,
+      assistantId: input.assistant.id,
+      content: answer,
+    });
+    this.logger.log(JSON.stringify({ ...metadata, idempotencyResult: "CREATED" }));
+    return {
+      conversationId: input.conversation.id,
+      userMessage: toConversationMessageItem(input.userMessage),
+      assistantMessage: toConversationMessageItem(assistantMessage),
+      runtime: {
+        mode: "business-hours-direct-deterministic",
+        assistant: { id: input.assistant.id, name: input.assistant.name },
+        temperature: 0,
+        temperatureSource: "none",
+        configurationSource: "business-hours-direct-binding",
+        fallback: rendered.missingScheduleConfiguration,
+        outcome: "success",
+        reason: "BUSINESS_HOURS_DIRECT_DETERMINISTIC",
+        summary: "",
+        context: metadata as any,
+      } as any,
     };
   }
 
@@ -2513,6 +2660,17 @@ export class AssistantConversationsService {
         id: true,
       },
     });
+
+    const directBusinessHours = await this.tryDirectBusinessHoursResponse({
+      assistant,
+      conversation,
+      dto: input.dto,
+      tenant: input.tenant,
+      userMessage,
+      message: customerIntentText,
+      runtimeStartedAt,
+    });
+    if (directBusinessHours) return directBusinessHours;
 
     let memoryContextBlock: string | null = null;
     let contactMemoryProfileId: string | null = null;
