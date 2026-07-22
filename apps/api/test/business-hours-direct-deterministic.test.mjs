@@ -9,6 +9,7 @@ import {
   isDirectBusinessHoursBindingAllowed,
 } from "../dist/assistant-conversations/business-hours-direct-deterministic.js";
 import { AssistantConversationsService } from "../dist/assistant-conversations/assistant-conversations.service.js";
+import { deriveHumanHandoffSignal } from "../dist/runtime-v2/turn-understanding.js";
 
 const positives = [
   ["Qual o horário de atendimento?", "WEEKLY_SUMMARY"],
@@ -286,6 +287,27 @@ test("binding é default-deny e humano tem prioridade", () => {
     false,
   );
   assert.equal(hasExplicitHumanRequest("Quero falar com humano, vocês estão abertos?"), true);
+});
+
+test("reconhece pedidos explícitos de humano sem confundir simples menções", () => {
+  for (const message of [
+    "Quero falar com humano.",
+    "Quero falar com um atendente.",
+    "Preciso falar com uma pessoa.",
+    "Me transfere para um atendente.",
+    "Quero atendimento humano.",
+    "Quero falar com humano, vocês estão abertos?",
+  ]) {
+    assert.equal(deriveHumanHandoffSignal(message).requested, true, message);
+  }
+  for (const message of [
+    "O atendimento humano é bom?",
+    "Vocês possuem atendentes?",
+    "Qual o horário dos atendentes?",
+    "O técnico é uma pessoa?",
+  ]) {
+    assert.equal(deriveHumanHandoffSignal(message).requested, false, message);
+  }
 });
 
 const directSchedule = {
@@ -719,18 +741,39 @@ test(
   "PostgreSQL: pedido explícito de humano mantém prioridade sobre a rota direta",
   { concurrency: false },
   async () =>
-    withDirectFixture({}, async ({ prisma, fixture, service, providerCalls }) => {
-      await service.sendMessage(
-        directInbound(
-          fixture,
-          "Quero falar com humano, vocês estão abertos agora?",
-          "direct-handoff-priority",
-        ),
+    withDirectFixture({}, async ({ prisma, fixture, service, providerCalls, outboundCalls }) => {
+      for (const [index, message] of [
+        "Quero falar com humano, vocês estão abertos agora?",
+        "Quero falar com humano, o técnico volta às 13?",
+      ].entries()) {
+        const response = await service.sendMessage(
+          directInbound(fixture, message, `direct-handoff-priority-${index}`),
+        );
+        assert.equal(response.runtime.reason, "EXPLICIT_HUMAN_HANDOFF");
+        assert.equal(response.assistantMessage.content, "Transferindo para um atendente...");
+      }
+      assert.equal(providerCalls.length, 0);
+      assert.equal(outboundCalls.length, 2);
+      assert.equal(
+        outboundCalls.every((call) => call.handoff === true),
+        true,
       );
-      assert.equal(providerCalls.length, 1);
       assert.equal(
         await prisma.assistantRuntimeLog.count({
           where: { companyId: fixture.companyId, mode: "business-hours-direct-deterministic" },
+        }),
+        0,
+      );
+      const log = await prisma.assistantRuntimeLog.findFirstOrThrow({
+        where: { companyId: fixture.companyId, mode: "explicit-human-handoff" },
+      });
+      assert.equal(log.metadata.handoffTriggered, true);
+      assert.equal(log.metadata.providerCount, 0);
+      assert.equal(log.metadata.flowRouterUsed, false);
+      assert.equal(log.metadata.businessHoursRendererUsed, false);
+      assert.equal(
+        await prisma.assistantConversationStateV2.count({
+          where: { companyId: fixture.companyId },
         }),
         0,
       );

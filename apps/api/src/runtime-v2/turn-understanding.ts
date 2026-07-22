@@ -175,7 +175,7 @@ export function deriveHumanHandoffSignal(message: string): HumanHandoffSignal {
     /\b(?:quero|gostaria|preciso|necessito)\s+(?:de\s+)?atendimento\s+humano\b/.test(
       categoryText,
     ) ||
-    /\b(?:transfira|transferir|chame|chamar)\s+(?:para\s+)?(?:um[a]?\s+)?(?:atendente|humano|pessoa|alguem)\b/.test(
+    /\b(?:transfira|transfere|transferir|chame|chamar)\s+(?:para\s+)?(?:um[a]?\s+)?(?:atendente|humano|pessoa|alguem)\b/.test(
       categoryText,
     ) ||
     /\b(?:pode|podem)\s+(?:me\s+)?(?:chamar|transferir)\s+(?:para\s+)?(?:um[a]?\s+)?(?:atendente|humano|pessoa|alguem)\b/.test(

@@ -45,7 +45,6 @@ import {
 } from "../assistants/official-business-context";
 import {
   detectDirectBusinessHoursDecision,
-  hasExplicitHumanRequest,
   isDirectBusinessHoursBindingAllowed,
   type DirectBusinessHoursBlockedCategory,
   type DirectBusinessHoursDetection,
@@ -922,8 +921,7 @@ export class AssistantConversationsService {
         assistantId: input.assistant.id,
         accountId: input.dto.externalAccountId,
         inboxId: input.dto.externalInboxId,
-      }) ||
-      hasExplicitHumanRequest(input.message)
+      })
     ) {
       return { handled: false };
     }
@@ -1098,6 +1096,131 @@ export class AssistantConversationsService {
           ? "SAFE_FALLBACK"
           : "BUSINESS_HOURS",
       response,
+    };
+  }
+
+  private async tryExplicitHumanHandoffResponse(input: {
+    assistant: AssistantConversationRuntimeAssistantRecord;
+    conversation: AssistantConversationSafeRecord;
+    dto: SendAssistantConversationMessageDto;
+    tenant: RequestTenant;
+    userMessage: AssistantConversationMessageSafeRecord;
+    message: string;
+    runtimeStartedAt: number;
+  }): Promise<
+    { handled: false } | { handled: true; response: SendAssistantConversationMessageResponse }
+  > {
+    if (
+      input.dto.source !== "chatwoot" ||
+      !isDirectBusinessHoursBindingAllowed({
+        assistantId: input.assistant.id,
+        accountId: input.dto.externalAccountId,
+        inboxId: input.dto.externalInboxId,
+      })
+    ) {
+      return { handled: false };
+    }
+
+    const handoff = deriveHumanHandoffSignal(input.message);
+    if (!handoff.requested) return { handled: false };
+
+    // This uses the existing handoff signal and outbound contract. It is terminal
+    // here so a request for a human cannot reach the direct-hours or V1 paths.
+    const answer = "Transferindo para um atendente...";
+    const metadata = {
+      route: "EXPLICIT_HUMAN_HANDOFF",
+      strategy: "FLOW_BYPASS",
+      assistantId: input.assistant.id,
+      companyId: input.tenant.companyId,
+      accountId: input.dto.externalAccountId ?? null,
+      inboxId: input.dto.externalInboxId ?? null,
+      inboundMessageId: input.userMessage.id,
+      handoffTriggered: true,
+      handoffReason: handoff.reasonCode,
+      requestedTargetType: handoff.requestedTargetType,
+      providerCount: 0,
+      deterministicResponderCount: 0,
+      historyUsed: false,
+      flowRouterUsed: false,
+      responseExecutionUsed: false,
+      businessHoursRendererUsed: false,
+      blockedTemporalFallbackUsed: false,
+      officialScheduleUsed: false,
+      approvalCreated: false,
+      outboundCount: 1,
+    };
+    const { assistantMessage } = await this.prisma.$transaction(async (tx) => {
+      const assistantMessage = await tx.assistantConversationMessage.create({
+        data: {
+          companyId: input.tenant.companyId,
+          assistantId: input.assistant.id,
+          conversationId: input.conversation.id,
+          role: "assistant",
+          content: answer,
+          source: "chatwoot",
+          mode: "explicit-human-handoff",
+          contextVersion: input.conversation.currentContextVersion ?? 1,
+        },
+        select: assistantConversationMessageSafeSelect,
+      });
+      await tx.assistantRuntimeLog.create({
+        data: {
+          companyId: input.tenant.companyId,
+          assistantId: input.assistant.id,
+          conversationId: input.conversation.id,
+          userMessageId: input.userMessage.id,
+          assistantMessageId: assistantMessage.id,
+          mode: "explicit-human-handoff",
+          status: "COMPLETED",
+          provider: null,
+          model: null,
+          configurationSource: "business-hours-direct-binding",
+          fallback: false,
+          fallbackReason: null,
+          outcome: "handoff",
+          durationMs: Date.now() - input.runtimeStartedAt,
+          knowledgeCount: 0,
+          historyMessagesUsed: 0,
+          historyLimit: 0,
+          metadata: this.toSerializableJsonValue(metadata),
+        },
+      });
+      return { assistantMessage };
+    });
+    await this.sendChatwootOutboundText({
+      conversation: {
+        ...input.conversation,
+        sourceProvider: "chatwoot",
+        externalAccountId: input.dto.externalAccountId ?? input.conversation.externalAccountId,
+        externalInboxId: input.dto.externalInboxId ?? input.conversation.externalInboxId,
+        externalConversationId:
+          input.dto.externalConversationId ?? input.conversation.externalConversationId,
+      },
+      assistantMessageId: assistantMessage.id,
+      assistantId: input.assistant.id,
+      content: answer,
+      handoff: true,
+    });
+    this.logger.log(JSON.stringify({ ...metadata, idempotencyResult: "CREATED" }));
+    return {
+      handled: true,
+      response: {
+        conversationId: input.conversation.id,
+        userMessage: toConversationMessageItem(input.userMessage),
+        assistantMessage: toConversationMessageItem(assistantMessage),
+        runtime: {
+          mode: "explicit-human-handoff",
+          assistant: { id: input.assistant.id, name: input.assistant.name },
+          temperature: 0,
+          temperatureSource: "none",
+          configurationSource: "business-hours-direct-binding",
+          fallback: false,
+          outcome: "handoff",
+          reason: "EXPLICIT_HUMAN_HANDOFF",
+          summary: "",
+          context: metadata,
+        } as unknown as SendAssistantConversationMessageResponse["runtime"],
+      },
     };
   }
 
@@ -2772,6 +2895,17 @@ export class AssistantConversationsService {
       directBusinessHoursBindingActive
         ? detectDirectBusinessHoursDecision(customerIntentText)
         : { kind: "NO_MATCH" };
+    const explicitHumanHandoff = await this.tryExplicitHumanHandoffResponse({
+      assistant,
+      conversation,
+      dto: input.dto,
+      tenant: input.tenant,
+      userMessage,
+      message: customerIntentText,
+      runtimeStartedAt,
+    });
+    if (explicitHumanHandoff.handled) return explicitHumanHandoff.response;
+
     const directBusinessHours = await this.tryDirectBusinessHoursResponse({
       assistant,
       conversation,
