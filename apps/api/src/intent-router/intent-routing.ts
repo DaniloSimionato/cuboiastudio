@@ -14,7 +14,7 @@ export type CustomerStructuredFields = {
  * turn.
  */
 export type ExplicitCustomerRequestKey =
-  | "technical_support" | "pickup_delivery" | "business_hours" | "pricing" | "warranty";
+  "technical_support" | "pickup_delivery" | "business_hours" | "pricing" | "warranty";
 
 export type MultiIntentTurn = {
   primaryIntent: ExplicitCustomerRequestKey | null;
@@ -31,6 +31,15 @@ export type FlowKeywordEvidence = {
   matchedAliases: string[];
   priority: number;
 };
+
+export type TriagePreemptionReason =
+  | "PRICE_OR_QUOTE"
+  | "WARRANTY_OR_PREVIOUS_SERVICE"
+  | "BUSINESS_HOURS"
+  | "HUMAN_HANDOFF"
+  | "OFFICIAL_CONTACT"
+  | "PICKUP_DELIVERY"
+  | "EQUIPMENT_OR_TOPIC_CHANGE";
 
 const TRIAGE_UNABLE_TO_ANSWER_ALIASES = [
   "não sei",
@@ -63,6 +72,60 @@ export function normalizeIntentText(value: string): string {
     .trim();
 }
 
+/**
+ * Identifies a self-contained, current-turn request that must take priority
+ * over a stale technical-triage question. This is intentionally narrow: a
+ * mere acknowledgement or a direct answer to the pending field remains in
+ * triage, while an explicit new operational request may select its own flow.
+ */
+export function getTriagePreemptionReason(message: string): TriagePreemptionReason | null {
+  const text = normalizeIntentText(message);
+  if (!text) return null;
+
+  if (
+    /\b(?:quanto sai|quanto custa|quanto fica|qual(?: o)? valor|qual(?: o)? preco|preco|valor|orcamento|custos?|tabela de precos?)\b/.test(
+      text,
+    )
+  ) {
+    return "PRICE_OR_QUOTE";
+  }
+  if (
+    /\b(?:garantia|servico anterior|servico ja realizado|voltou a dar problema|voltou o defeito|deu problema de novo|apos o conserto|depois do conserto|voces arrumaram)\b/.test(
+      text,
+    )
+  ) {
+    return "WARRANTY_OR_PREVIOUS_SERVICE";
+  }
+  if (
+    /\b(?:horario|funcionamento|que horas|abrem|abre|fecham|fecha|atendem|atendimento|segunda|terca|quarta|quinta|sexta|sabado|domingo)\b/.test(
+      text,
+    )
+  ) {
+    return "BUSINESS_HOURS";
+  }
+  if (
+    /\b(?:quero falar com|falar com|atendente|atendimento humano|humano|humana|transfer[ei]|pessoa)\b/.test(
+      text,
+    )
+  ) {
+    return "HUMAN_HANDOFF";
+  }
+  if (/\b(?:endereco|onde fica|localizacao|telefone|whatsapp|contato|site)\b/.test(text)) {
+    return "OFFICIAL_CONTACT";
+  }
+  if (/\b(?:coleta|retirada|retirar|buscar|buscam|entrega|entregam)\b/.test(text)) {
+    return "PICKUP_DELIVERY";
+  }
+  if (
+    /\b(?:outro equipamento|outro computador|outro notebook|computador de mesa|desktop|outro assunto)\b/.test(
+      text,
+    )
+  ) {
+    return "EQUIPMENT_OR_TOPIC_CHANGE";
+  }
+  return null;
+}
+
 function containsAlias(text: string, alias: string): boolean {
   const normalizedAlias = normalizeIntentText(alias);
   if (!normalizedAlias) return false;
@@ -71,7 +134,11 @@ function containsAlias(text: string, alias: string): boolean {
 
 function flowFamily(flowName: string): string {
   const name = normalizeIntentText(flowName);
-  if (name.includes("visita") || name.includes("deslocamento") || name.includes("atendimento externo")) {
+  if (
+    name.includes("visita") ||
+    name.includes("deslocamento") ||
+    name.includes("atendimento externo")
+  ) {
     return "external_visit";
   }
   if (name.includes("assistencia") || name.includes("tecnica")) return "technical_support";
@@ -199,8 +266,9 @@ export function isContactPreferenceRequest(text: string): boolean {
 }
 
 function isOfficialContactRequest(text: string): boolean {
-  return !isContactPreferenceRequest(text) && /(?:telefone|numero|whatsapp|contato|como falar com voces|como falar com a empresa)/.test(
-    text,
+  return (
+    !isContactPreferenceRequest(text) &&
+    /(?:telefone|numero|whatsapp|contato|como falar com voces|como falar com a empresa)/.test(text)
   );
 }
 
@@ -371,10 +439,15 @@ export function extractCustomerStructuredFields(message: string): CustomerStruct
   const hasRam = /\b(ram|memoria ram|memoria)\b/.test(text);
   const hasAccessories = /\b(mouse|teclado|fone|headset|kit gamer|acessorios)\b/.test(text);
   const deviceModel = Boolean(extractGenericDeviceModel(text));
+  const deviceBrand =
+    /\b(?:a marca (?:e )?|e)\s+(?:(?:um|uma)\s+)?(?:acer|dell|positivo|lenovo|asus|hp|samsung|apple)\b/.test(
+      text,
+    );
 
   if (isContactPreferenceRequest(text)) known.add("contact_preference_channel");
 
   if (deviceModel) known.add("device_model");
+  if (deviceBrand) known.add("device_brand");
   if (hasSsd) {
     known.add("requested_service_ssd");
     const capacity = text.match(/\b(\d{2,4})\s*(gb|tb)\b/);
@@ -411,7 +484,9 @@ export function extractCustomerStructuredFields(message: string): CustomerStruct
 export function detectCustomerUnableToAnswer(message: string): boolean {
   const normalized = normalizeIntentText(message);
   return TRIAGE_UNABLE_TO_ANSWER_ALIASES.some(
-    (alias) => normalized === normalizeIntentText(alias) || normalized.startsWith(`${normalizeIntentText(alias)} `),
+    (alias) =>
+      normalized === normalizeIntentText(alias) ||
+      normalized.startsWith(`${normalizeIntentText(alias)} `),
   );
 }
 

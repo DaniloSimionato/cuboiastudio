@@ -7,6 +7,7 @@ import {
   buildMultiIntentTurn,
   extractExplicitCustomerRequestKeys,
   detectCustomerUnableToAnswer,
+  getTriagePreemptionReason,
   normalizeIntentText,
 } from "../dist/intent-router/intent-routing.js";
 import { ensureMultiIntentResponseCoverage } from "../dist/assistant-conversations/multi-intent-response-coverage.js";
@@ -55,10 +56,52 @@ test("seleciona preço, formatação e coleta por evidência normalizada", async
     flow("pickup", "Coleta e Entrega", 80, ["vocês buscam"]),
     flow("company", "Informações da Empresa", 50, ["endereco"]),
   ];
-  assert.equal((await router().route({ companyId: "c", assistantId: "a", message: "quanto custa formatar um Mac", flows })).flowId, "price");
-  assert.equal((await router().route({ companyId: "c", assistantId: "a", message: "quero formatação", flows })).flowId, "technical");
-  assert.equal((await router().route({ companyId: "c", assistantId: "a", message: "vocês conseguem vir buscar?", flows })).flowId, "pickup");
-  assert.equal((await router().route({ companyId: "c", assistantId: "a", message: "qual o endereço?", flows })).flowId, "company");
+  assert.equal(
+    (
+      await router().route({
+        companyId: "c",
+        assistantId: "a",
+        message: "quanto custa formatar um Mac",
+        flows,
+      })
+    ).flowId,
+    "price",
+  );
+  assert.equal(
+    (await router().route({ companyId: "c", assistantId: "a", message: "quero formatação", flows }))
+      .flowId,
+    "technical",
+  );
+  assert.equal(
+    (
+      await router().route({
+        companyId: "c",
+        assistantId: "a",
+        message: "vocês conseguem vir buscar?",
+        flows,
+      })
+    ).flowId,
+    "pickup",
+  );
+  assert.equal(
+    (await router().route({ companyId: "c", assistantId: "a", message: "qual o endereço?", flows }))
+      .flowId,
+    "company",
+  );
+});
+
+test("intenção explícita atual preempte somente a pergunta pendente de triagem", () => {
+  assert.equal(getTriagePreemptionReason("Quanto sai para formatar?"), "PRICE_OR_QUOTE");
+  assert.equal(
+    getTriagePreemptionReason("Vocês formataram meu computador e voltou a dar problema."),
+    "WARRANTY_OR_PREVIOUS_SERVICE",
+  );
+  assert.equal(getTriagePreemptionReason("Qual horário vocês abrem na segunda?"), "BUSINESS_HOURS");
+  assert.equal(getTriagePreemptionReason("Quero falar com uma pessoa."), "HUMAN_HANDOFF");
+  assert.equal(getTriagePreemptionReason("Qual é o telefone?"), "OFFICIAL_CONTACT");
+  assert.equal(getTriagePreemptionReason("Vocês fazem coleta?"), "PICKUP_DELIVERY");
+  assert.equal(getTriagePreemptionReason("É Dell."), null);
+  assert.equal(getTriagePreemptionReason("Não sei a marca."), null);
 });
 
 test("contato é uma categoria genérica e vence assistência apenas quando há evidência de contato", async () => {
@@ -122,6 +165,16 @@ test("extração preserva capacidades, acessórios e pendências técnicas", () 
   assert.equal(result.knownFieldKeys.includes("ssd_model"), false);
   assert.deepEqual(result.secondaryIntentKeys, ["accessories"]);
   assert.equal(normalizeIntentText("formatação e memória"), "formatacao e memoria");
+});
+
+test("resposta curta de marca é preservada como fato de triagem", () => {
+  assert.ok(extractCustomerStructuredFields("É Dell.").knownFieldKeys.includes("device_brand"));
+  assert.ok(
+    extractCustomerStructuredFields("A marca é Acer.").knownFieldKeys.includes("device_brand"),
+  );
+  assert.ok(
+    extractCustomerStructuredFields("É um Positivo.").knownFieldKeys.includes("device_brand"),
+  );
 });
 
 test("turno multi-intent preserva solicitação técnica e coleta sem criar outro flow", () => {
@@ -289,9 +342,19 @@ test("visita externa exige evidência configurada de deslocamento", async () => 
     },
     flow("technical", "Suporte de componentes", 1, ["ssd", "ram", "upgrade"]),
   ];
-  assert.equal((await router().route({ companyId: "c", assistantId: "a", message: "SSD", flows })).flowId, "technical");
   assert.equal(
-    (await router().route({ companyId: "c", assistantId: "a", message: "preciso de uma visita", flows })).flowId,
+    (await router().route({ companyId: "c", assistantId: "a", message: "SSD", flows })).flowId,
+    "technical",
+  );
+  assert.equal(
+    (
+      await router().route({
+        companyId: "c",
+        assistantId: "a",
+        message: "preciso de uma visita",
+        flows,
+      })
+    ).flowId,
     "external",
   );
 });
@@ -301,7 +364,10 @@ test("incapacidade durante triagem é reconhecida somente por aliases explícito
   assert.equal(detectCustomerUnableToAnswer("Vocês podem verificar aí"), true);
   assert.equal(detectCustomerUnableToAnswer("Não sei o preço"), true);
   assert.equal(detectCustomerUnableToAnswer("não sei"), true);
-  assert.equal(detectCustomerUnableToAnswer("Depois vocês verificam e me passam o orçamento"), true);
+  assert.equal(
+    detectCustomerUnableToAnswer("Depois vocês verificam e me passam o orçamento"),
+    true,
+  );
   assert.equal(detectCustomerUnableToAnswer("o sistema não sei como funciona"), false);
 });
 

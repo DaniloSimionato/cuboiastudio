@@ -1,4 +1,5 @@
 import { normalizeIntentText } from "../intent-router/intent-routing";
+import { findRequestedBusinessDays } from "../assistants/official-business-context";
 
 export type DirectBusinessHoursScope =
   "WEEKLY_SUMMARY" | "SPECIFIC_DAY" | "TODAY" | "OPEN_NOW" | "LUNCH_BREAK";
@@ -155,4 +156,19 @@ export function detectDirectBusinessHoursDecision(message: string): DirectBusine
   const text = normalizeIntentText(message);
   const category = detectNonBusinessTemporalCategory(text);
   return category ? { kind: "BLOCKED_NON_BUSINESS_TEMPORAL", category } : { kind: "NO_MATCH" };
+}
+
+/**
+ * A day-only follow-up is deliberately default-deny in the direct detector.
+ * It becomes safe only when the immediately preceding turn was already a
+ * deterministic business-hours response, which is checked by the caller
+ * against its structured runtime log rather than conversational prose.
+ */
+export function isDirectBusinessHoursShortContinuation(message: string): boolean {
+  const text = normalizeIntentText(message);
+  const requestedDays = findRequestedBusinessDays(text);
+  if (requestedDays.length !== 1) return false;
+  return /^(?:e\s+)?(?:na|no|aos?|as?)?\s*(?:segunda|terca|quarta|quinta|sexta|sabado|domingo)(?: feira)?\??$/.test(
+    text,
+  );
 }

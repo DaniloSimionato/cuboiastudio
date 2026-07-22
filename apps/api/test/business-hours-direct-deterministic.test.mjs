@@ -7,9 +7,12 @@ import {
   detectDirectBusinessHoursDecision,
   hasExplicitHumanRequest,
   isDirectBusinessHoursBindingAllowed,
+  isDirectBusinessHoursShortContinuation,
 } from "../dist/assistant-conversations/business-hours-direct-deterministic.js";
 import { AssistantConversationsService } from "../dist/assistant-conversations/assistant-conversations.service.js";
 import { deriveHumanHandoffSignal } from "../dist/runtime-v2/turn-understanding.js";
+import { IntentRouterService } from "../dist/intent-router/intent-router.service.js";
+import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
 
 const positives = [
   ["Qual o horário de atendimento?", "WEEKLY_SUMMARY"],
@@ -289,6 +292,15 @@ test("binding é default-deny e humano tem prioridade", () => {
   assert.equal(hasExplicitHumanRequest("Quero falar com humano, vocês estão abertos?"), true);
 });
 
+test("continuação curta de dia é reconhecida apenas como candidata estruturada", () => {
+  assert.equal(isDirectBusinessHoursShortContinuation("E na terça?"), true);
+  assert.equal(isDirectBusinessHoursShortContinuation("Na quarta-feira?"), true);
+  assert.equal(isDirectBusinessHoursShortContinuation("terça"), true);
+  assert.equal(isDirectBusinessHoursShortContinuation("E na terça depois da entrega?"), false);
+  assert.equal(isDirectBusinessHoursShortContinuation("E na terça funciona?"), false);
+  assert.equal(isDirectBusinessHoursShortContinuation("E amanhã?"), false);
+});
+
 test("reconhece pedidos explícitos de humano sem confundir simples menções", () => {
   for (const message of [
     "Quero falar com humano.",
@@ -380,6 +392,120 @@ function createDirectService(prisma, options = {}) {
   return { service, providerCalls, providerInputs, outboundCalls };
 }
 
+function createTriagePreemptionService(prisma, cache) {
+  const providerCalls = [];
+  const providerInputs = [];
+  const outboundCalls = [];
+  const ragCalls = [];
+  const ai = {
+    resolveRuntimeConfig: async () => ({
+      runtimeEnabled: true,
+      provider: "test-provider",
+      baseUrl: "",
+      model: "test-model",
+      apiKey: "test-key",
+      requestTimeoutMs: 1000,
+      source: "test",
+      tenantSettingsConfigured: false,
+      envFallbackConfigured: false,
+      apiKeyConfigured: true,
+    }),
+    isProviderConfigured: async () => true,
+    generateChatCompletion: async (input) => {
+      providerCalls.push(true);
+      providerInputs.push(input);
+      if (input.response_format) {
+        return {
+          answer: JSON.stringify({
+            message: "Marca registrada. Qual problema está acontecendo?",
+            action: "ASK_NEXT_DETAIL",
+            requestedDetail: "problema do equipamento",
+            suggestScheduling: false,
+            triageResolved: false,
+          }),
+          provider: "test-provider",
+          model: "test-model",
+        };
+      }
+      const prompt = input.messages.map((message) => String(message.content)).join("\n");
+      const currentUserMessage = [...input.messages]
+        .reverse()
+        .find((message) => message.role === "user");
+      if (/voltou a dar problema/i.test(String(currentUserMessage?.content ?? ""))) {
+        return {
+          answer: "Vou orientar a análise do serviço anterior conforme as condições de garantia.",
+          provider: "test-provider",
+          model: "test-model",
+        };
+      }
+      if (/a partir de R\$ 195,00/.test(prompt)) {
+        return {
+          answer: "A formatação básica padrão tem valor a partir de R$ 195,00.",
+          provider: "test-provider",
+          model: "test-model",
+        };
+      }
+      return { answer: "Resposta padrão segura.", provider: "test-provider", model: "test-model" };
+    },
+  };
+  const retrieval = {
+    searchRelevantKnowledge: async ({ query }) => {
+      ragCalls.push(query);
+      return {
+        totalChunksScanned: 2,
+        scoreThreshold: 0.2,
+        scoreThresholdSource: "explicit",
+        filteredOutCount: 1,
+        filteredOutScoreRange: { min: 0.1, max: 0.1 },
+        warning: null,
+        results: /quanto|preco|preço|format/i.test(query)
+          ? [
+              {
+                knowledgeId: "formatting-knowledge",
+                knowledgeTitle: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
+                chunkId: "formatting-price-chunk",
+                score: 0.92,
+                contentPreview: "Formatação básica padrão: a partir de R$ 195,00.",
+              },
+            ]
+          : [],
+      };
+    },
+  };
+  const service = new AssistantConversationsService(
+    prisma,
+    ai,
+    { buildRuntimeInputText: ({ rawText }) => rawText ?? "" },
+    {},
+    undefined,
+    retrieval,
+    new PromptCompilerService(),
+    new IntentRouterService(ai),
+    undefined,
+    undefined,
+    undefined,
+    cache,
+  );
+  service.sendChatwootOutboundText = async (payload) => {
+    outboundCalls.push(payload);
+    return {
+      status: "sent",
+      performed: true,
+      externalMessageId: `outbound-${payload.assistantMessageId}`,
+    };
+  };
+  return { service, providerCalls, providerInputs, outboundCalls, ragCalls };
+}
+
+function createTriageCache() {
+  const values = new Map();
+  return {
+    get: async (key) => values.get(key) ?? null,
+    set: async (key, value) => values.set(key, value),
+    values,
+  };
+}
+
 async function createDirectFixture(prisma, overrides = {}) {
   const prefix = `direct-business-hours-${randomUUID()}`;
   const fixture = {
@@ -404,7 +530,7 @@ async function createDirectFixture(prisma, overrides = {}) {
       timezone: overrides.assistantTimezone ?? "America/Campo_Grande",
       weeklySchedule:
         overrides.weeklySchedule === undefined ? directSchedule : overrides.weeklySchedule,
-      ragEnabled: false,
+      ragEnabled: overrides.ragEnabled ?? false,
       memoryEnabled: false,
       semanticMemoryEnabled: false,
     },
@@ -423,6 +549,44 @@ async function createDirectFixture(prisma, overrides = {}) {
     },
   });
   return fixture;
+}
+
+async function createPricingAndWarrantyFlows(prisma, fixture) {
+  await prisma.assistantFlow.createMany({
+    data: [
+      {
+        id: `${fixture.assistantId}-pricing`,
+        assistantId: fixture.assistantId,
+        name: "Orçamento e Preços",
+        priority: 90,
+        triggerDescription:
+          "Use quando o cliente perguntar preço, valor, orçamento ou custo de serviços.",
+        triggerKeywords: JSON.stringify([
+          "quanto sai",
+          "quanto custa",
+          "preço",
+          "valor",
+          "formatar",
+        ]),
+      },
+      {
+        id: `${fixture.assistantId}-warranty`,
+        assistantId: fixture.assistantId,
+        name: "Garantia e Pós-Serviço",
+        priority: 59,
+        triggerDescription: "Use para garantia e serviço anterior.",
+        triggerKeywords: JSON.stringify(["garantia", "voltou a dar problema", "serviço anterior"]),
+      },
+      {
+        id: `${fixture.assistantId}-technical`,
+        assistantId: fixture.assistantId,
+        name: "Assistência Técnica Geral",
+        priority: 60,
+        triggerDescription: "Use para suporte técnico e formatação.",
+        triggerKeywords: JSON.stringify(["formatar", "formatação", "conserto"]),
+      },
+    ],
+  });
 }
 
 async function cleanupDirectFixture(prisma, fixture) {
@@ -504,6 +668,136 @@ test(
         0,
       );
     }),
+);
+
+test(
+  "PostgreSQL: continuação curta usa apenas o runtime log direto imediatamente anterior",
+  { concurrency: false },
+  async () =>
+    withDirectFixture({}, async ({ prisma, fixture, service, providerCalls, outboundCalls }) => {
+      const monday = await service.sendMessage(
+        directInbound(fixture, "Qual horário vocês abrem na segunda?", "direct-continuation-1"),
+      );
+      assert.equal(monday.runtime.reason, "BUSINESS_HOURS_DIRECT_DETERMINISTIC");
+
+      const tuesday = await service.sendMessage(
+        directInbound(fixture, "E na terça?", "direct-continuation-2"),
+      );
+      assert.equal(tuesday.runtime.reason, "BUSINESS_HOURS_DIRECT_DETERMINISTIC");
+      assert.match(tuesday.assistantMessage.content, /terças-feiras.*08h às 23h/i);
+      assert.equal(providerCalls.length, 0);
+      assert.equal(outboundCalls.length, 2);
+      const log = await prisma.assistantRuntimeLog.findFirstOrThrow({
+        where: { companyId: fixture.companyId, userMessageId: tuesday.userMessage.id },
+      });
+      assert.equal(log.metadata.businessHoursScope, "SPECIFIC_DAY");
+      assert.equal(log.metadata.providerCount, 0);
+
+      await service.sendMessage(
+        directInbound(fixture, "Qual o preço da formatação?", "direct-continuation-normal"),
+      );
+      const noCarry = await service.sendMessage(
+        directInbound(fixture, "E na terça?", "direct-continuation-default-deny"),
+      );
+      assert.notEqual(noCarry.runtime.reason, "BUSINESS_HOURS_DIRECT_DETERMINISTIC");
+      assert.equal(providerCalls.length, 2);
+    }),
+);
+
+test(
+  "PostgreSQL: intenção explícita preempte triagem antiga sem perder fatos já coletados",
+  { concurrency: false },
+  async () => {
+    const prisma = new PrismaClient();
+    const oldEnabled = process.env.BUSINESS_HOURS_DIRECT_DETERMINISTIC_ENABLED;
+    const oldBindings = process.env.BUSINESS_HOURS_DIRECT_DETERMINISTIC_BINDINGS;
+    const fixture = await createDirectFixture(prisma, { ragEnabled: true });
+    const cache = createTriageCache();
+    process.env.BUSINESS_HOURS_DIRECT_DETERMINISTIC_ENABLED = "true";
+    process.env.BUSINESS_HOURS_DIRECT_DETERMINISTIC_BINDINGS = `${fixture.assistantId}:106:533`;
+    try {
+      await createPricingAndWarrantyFlows(prisma, fixture);
+      const { service, providerCalls, providerInputs, outboundCalls, ragCalls } =
+        createTriagePreemptionService(prisma, cache);
+      const cacheKey = `triage:${fixture.companyId}:${fixture.conversationId}`;
+      const pendingBrandState = {
+        active: true,
+        startedAt: new Date().toISOString(),
+        sourceMessageId: "old-triage-inbound",
+        requestedDetail: "marca do computador",
+        requestedDetailKey: "device_brand",
+        lastQuestion: "Qual é a marca do computador?",
+        attemptCount: 1,
+        resolved: false,
+        expiresAt: Date.now() + 3_600_000,
+        knownFieldKeys: ["device_type"],
+        pendingFieldKeys: ["device_brand"],
+      };
+
+      await cache.set(cacheKey, pendingBrandState);
+      const price = await service.sendMessage(
+        directInbound(fixture, "Quanto sai para formatar?", "triage-preempt-price"),
+      );
+      assert.match(price.assistantMessage.content, /a partir de R\$ 195,00/i);
+      assert.equal(price.runtime.context.triageMode, false);
+      assert.equal(price.runtime.context.ragItemCount, 1);
+      assert.equal(ragCalls.at(-1), "Quanto sai para formatar?");
+      assert.equal(cache.values.get(cacheKey).active, false);
+      assert.ok(cache.values.get(cacheKey).knownFieldKeys.includes("device_type"));
+      assert.doesNotMatch(
+        providerInputs
+          .at(-1)
+          .messages.map((message) => String(message.content))
+          .join("\n"),
+        /HISTÓRICO E ESTADO DE TRIAGEM ANTERIOR/i,
+      );
+      assert.equal(price.runtime.context.selectedFlowId, `${fixture.assistantId}-pricing`);
+
+      await cache.set(cacheKey, pendingBrandState);
+      const warranty = await service.sendMessage(
+        directInbound(
+          fixture,
+          "Vocês formataram meu computador e voltou a dar problema.",
+          "triage-preempt-warranty",
+        ),
+      );
+      assert.match(warranty.assistantMessage.content, /garantia|serviço anterior/i);
+      assert.doesNotMatch(warranty.assistantMessage.content, /qual é a marca/i);
+      assert.equal(warranty.runtime.context.selectedFlowId, `${fixture.assistantId}-warranty`);
+      assert.equal(warranty.runtime.context.triageMode, false);
+
+      await cache.set(cacheKey, pendingBrandState);
+      const brand = await service.sendMessage(
+        directInbound(fixture, "É Dell.", "triage-pending-brand"),
+      );
+      assert.equal(brand.runtime.context.triageMode, true);
+      assert.equal(cache.values.get(cacheKey).active, true);
+      assert.ok(cache.values.get(cacheKey).knownFieldKeys.includes("device_brand"));
+
+      await cache.set(cacheKey, pendingBrandState);
+      await service.sendMessage(directInbound(fixture, "Não sei a marca.", "triage-unknown-brand"));
+      const unknownState = cache.values.get(cacheKey);
+      assert.equal(unknownState.active, false);
+      assert.equal(unknownState.requestedDetailKey, null);
+      assert.ok(unknownState.knownFieldKeys.includes("unknown_device_brand"));
+      assert.equal(providerCalls.length >= 4, true);
+      assert.equal(outboundCalls.length, 4);
+      assert.equal(
+        await prisma.assistantConversationStateV2.count({
+          where: { companyId: fixture.companyId },
+        }),
+        0,
+      );
+    } finally {
+      if (oldEnabled === undefined) delete process.env.BUSINESS_HOURS_DIRECT_DETERMINISTIC_ENABLED;
+      else process.env.BUSINESS_HOURS_DIRECT_DETERMINISTIC_ENABLED = oldEnabled;
+      if (oldBindings === undefined)
+        delete process.env.BUSINESS_HOURS_DIRECT_DETERMINISTIC_BINDINGS;
+      else process.env.BUSINESS_HOURS_DIRECT_DETERMINISTIC_BINDINGS = oldBindings;
+      await cleanupDirectFixture(prisma, fixture);
+      await prisma.$disconnect();
+    }
+  },
 );
 
 test(

@@ -46,6 +46,7 @@ import {
 import {
   detectDirectBusinessHoursDecision,
   isDirectBusinessHoursBindingAllowed,
+  isDirectBusinessHoursShortContinuation,
   type DirectBusinessHoursBlockedCategory,
   type DirectBusinessHoursDetection,
   type DirectBusinessHoursScope,
@@ -123,6 +124,7 @@ import {
   extractCustomerStructuredFields,
   buildMultiIntentTurn,
   getCustomerUnableToAnswerReason,
+  getTriagePreemptionReason,
   flowIntentKeyForFlow,
   flowObjectiveForFlow,
 } from "../intent-router/intent-routing";
@@ -788,6 +790,62 @@ export class AssistantConversationsService {
     @Optional() private readonly runtimeV2ShadowIntegration?: RuntimeV2ShadowIntegrationService,
     @Optional() private readonly responseGenerationRouter?: ResponseGenerationRouter,
   ) {}
+
+  private async resolveDirectBusinessHoursContinuation(input: {
+    assistant: AssistantConversationRuntimeAssistantRecord;
+    conversation: AssistantConversationSafeRecord;
+    dto: SendAssistantConversationMessageDto;
+    userMessage: AssistantConversationMessageSafeRecord;
+    message: string;
+    detection: DirectBusinessHoursDetection;
+  }): Promise<DirectBusinessHoursDetection> {
+    if (
+      input.detection.kind !== "NO_MATCH" ||
+      input.dto.source !== "chatwoot" ||
+      !isDirectBusinessHoursBindingAllowed({
+        assistantId: input.assistant.id,
+        accountId: input.dto.externalAccountId,
+        inboxId: input.dto.externalInboxId,
+      }) ||
+      !isDirectBusinessHoursShortContinuation(input.message)
+    ) {
+      return input.detection;
+    }
+
+    // The current inbound was persisted before this method runs. Only accept a
+    // short day-only continuation when its immediately preceding message is an
+    // assistant response recorded by the direct deterministic route.
+    const recentMessages = await this.prisma.assistantConversationMessage.findMany({
+      where: {
+        companyId: input.conversation.companyId,
+        assistantId: input.assistant.id,
+        conversationId: input.conversation.id,
+        contextVersion: input.conversation.currentContextVersion ?? 1,
+      },
+      select: { id: true, role: true },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 2,
+    });
+    const [currentMessage, previousMessage] = recentMessages;
+    if (currentMessage?.id !== input.userMessage.id || previousMessage?.role !== "assistant") {
+      return input.detection;
+    }
+
+    const previousDirectRuntime = await this.prisma.assistantRuntimeLog.findFirst({
+      where: {
+        companyId: input.conversation.companyId,
+        assistantId: input.assistant.id,
+        conversationId: input.conversation.id,
+        assistantMessageId: previousMessage.id,
+        mode: "business-hours-direct-deterministic",
+        status: "COMPLETED",
+      },
+      select: { id: true },
+    });
+    return previousDirectRuntime
+      ? { kind: "BUSINESS_HOURS", scope: "SPECIFIC_DAY" }
+      : input.detection;
+  }
 
   private scheduleRuntimeV2Shadow(input: RuntimeV2ShadowSnapshot): void {
     if (!this.runtimeV2ShadowIntegration) return;
@@ -2906,6 +2964,14 @@ export class AssistantConversationsService {
     });
     if (explicitHumanHandoff.handled) return explicitHumanHandoff.response;
 
+    const resolvedDirectBusinessHoursDetection = await this.resolveDirectBusinessHoursContinuation({
+      assistant,
+      conversation,
+      dto: input.dto,
+      userMessage,
+      message: customerIntentText,
+      detection: directBusinessHoursDetection,
+    });
     const directBusinessHours = await this.tryDirectBusinessHoursResponse({
       assistant,
       conversation,
@@ -2914,7 +2980,7 @@ export class AssistantConversationsService {
       userMessage,
       message: customerIntentText,
       runtimeStartedAt,
-      detection: directBusinessHoursDetection,
+      detection: resolvedDirectBusinessHoursDetection,
     });
     if (directBusinessHours.handled) return directBusinessHours.response;
 
@@ -3109,10 +3175,8 @@ export class AssistantConversationsService {
     let triageMode = isMultiNeedTriageMessage(customerIntentText);
     const humanHandoffSignal = deriveHumanHandoffSignal(customerIntentText);
     const customerRequestedHuman = humanHandoffSignal.requested;
-    const isExplicitPriceQuery =
-      /(quanto\s+fica|quanto\s+custa|valores?|preços?|custos?|precos?|tabela|orçamento|orcamento)/i.test(
-        customerIntentText,
-      );
+    const triagePreemptionReason = getTriagePreemptionReason(customerIntentText);
+    const isExplicitPriceQuery = triagePreemptionReason === "PRICE_OR_QUOTE";
     const triageCacheKey = `triage:${input.tenant.companyId}:${conversation.id}`;
     let loadedTriageState: TriageState | null = null;
 
@@ -3142,20 +3206,21 @@ export class AssistantConversationsService {
           loadedTriageState.requestedDetailKey ?? loadedTriageState.requestedDetail;
         requestedDetailChangeReason = "CUSTOMER_UNABLE_TO_PROVIDE_DETAIL";
       }
-      const isScheduleQuery = /(agendar|agendamento|marcar|horário|horario|reserva|agenda)/i.test(
-        customerIntentText,
-      );
       const isListQuery =
         /\b(me\s+)?(envie|mande|passa|quero|lista|quais|tabela)\b.*\b(lista|serviços|opções|opcoes|catalogo|catálogo)\b/i.test(
           customerIntentText,
         );
       const isHandoffQuery = customerRequestedHuman;
 
-      if (
-        !customerUnableToAnswer &&
-        (isExplicitPriceQuery || isScheduleQuery || isListQuery || isHandoffQuery)
-      ) {
+      if (!customerUnableToAnswer && triagePreemptionReason) {
         shouldClearTriage = true;
+        triageMode = false;
+        requestedDetailBefore =
+          loadedTriageState.requestedDetailKey ?? loadedTriageState.requestedDetail;
+        requestedDetailChangeReason = `STALE_TRIAGE_PREEMPTED_${triagePreemptionReason}`;
+      } else if (!customerUnableToAnswer && (isListQuery || isHandoffQuery)) {
+        shouldClearTriage = true;
+        triageMode = false;
       } else {
         if (!customerUnableToAnswer) {
           triageMode = true;
@@ -3166,8 +3231,26 @@ export class AssistantConversationsService {
 
     if (shouldClearTriage && this.cacheService) {
       try {
-        await this.cacheService.set(triageCacheKey, null, 1);
-        if (!customerUnableToAnswer) loadedTriageState = null;
+        const knownFieldKeys = new Set(loadedTriageState?.knownFieldKeys ?? []);
+        if (customerUnableToAnswer && loadedTriageState?.requestedDetailKey) {
+          knownFieldKeys.add(`unknown_${loadedTriageState.requestedDetailKey}`);
+        }
+        // Preserve collected facts, but make the obsolete pending question
+        // inert. A future triage can still reuse known fields without making
+        // the old detail mandatory in the next prompt.
+        loadedTriageState = loadedTriageState
+          ? {
+              ...loadedTriageState,
+              active: false,
+              resolved: true,
+              requestedDetail: "",
+              requestedDetailKey: null,
+              lastQuestion: "",
+              pendingFieldKeys: [],
+              knownFieldKeys: [...knownFieldKeys],
+            }
+          : null;
+        await this.cacheService.set(triageCacheKey, loadedTriageState, 3_600);
       } catch (err: any) {
         this.logger.warn(`Failed to clear triage state: ${err.message}`);
       }
