@@ -105,14 +105,15 @@ export function buildDeterministicAssistantResponse(input: {
   instructions?: string | null;
   knowledgeItems: AssistantKnowledgeInput[];
   officialBusinessContext?: OfficialBusinessContext | null;
+  allowBusinessHours?: boolean;
 }): {
   answer: string;
   sources: AssistantRuntimeSource[];
 } {
-  const structuredAnswer = buildStructuredBusinessAnswer(
-    input.question,
-    input.officialBusinessContext ?? null,
-  );
+  const structuredAnswer =
+    input.allowBusinessHours === false
+      ? null
+      : buildStructuredBusinessAnswer(input.question, input.officialBusinessContext ?? null);
 
   if (structuredAnswer) {
     return {

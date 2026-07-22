@@ -3,13 +3,46 @@ import { normalizeIntentText } from "../intent-router/intent-routing";
 export type DirectBusinessHoursScope =
   "WEEKLY_SUMMARY" | "SPECIFIC_DAY" | "TODAY" | "OPEN_NOW" | "LUNCH_BREAK";
 
+export type DirectBusinessHoursDetection =
+  | {
+      kind: "BUSINESS_HOURS";
+      scope: DirectBusinessHoursScope;
+    }
+  | {
+      kind: "BLOCKED_NON_BUSINESS_TEMPORAL";
+      category: "TECHNICIAN" | "ORDER" | "DELIVERY" | "APPOINTMENT" | "SYSTEM" | "OTHER";
+    }
+  | { kind: "NO_MATCH" };
+
+export type DirectBusinessHoursBlockedCategory =
+  "TECHNICIAN" | "ORDER" | "DELIVERY" | "APPOINTMENT" | "SYSTEM" | "OTHER";
+
 const DAYS = "segunda|terca|terça|quarta|quinta|sexta|sabado|sábado|domingo";
 const BUSINESS_SUBJECT =
   "voc(?:e|ê)s|vcs|a loja|loja|a empresa|empresa|o estabelecimento|estabelecimento|o atendimento|atendimento";
 const OPERATION_VERB =
   "funciona(?:m|mento)?|atend(?:em|imento|endo)|abre(?:m)?|fecha(?:m|ram)?|(?:est|t)(?:a|á|ao|ão)\\s+abert[oa]s?|(?:est|t)(?:a|á|ao|ão)\\s+fechad[oa]s?";
 const NON_BUSINESS_CONTEXT =
-  "pedido|entrega|encomenda|tecnico|técnico|visita|instalacao|instalação|manutencao|manutenção|coleta|agendamento|consulta|reuniao|reunião|chamada|chamado|suporte|orcamento|orçamento|pagamento|vencimento|transporte|motorista|carga|servico|serviço|ordem|sistema|caixa|cliente";
+  "pedido|entrega|encomenda|tecnico|técnico|visita|instalacao|instalação|manutencao|manutenção|coleta|agendamento|consulta|reuniao|reunião|compromisso|chamada|chamado|suporte|orcamento|orçamento|pagamento|vencimento|transporte|motorista|carga|servico|serviço|ordem|sistema|caixa|cliente";
+const NON_BUSINESS_TEMPORAL_ANCHOR =
+  "que horas|qual(?: o)? horario|quando|que dia|hoje|amanha|ontem|segunda|terca|quarta|quinta|sexta|sabado|domingo|fim de semana|final de semana|finais de semana|manha|tarde|noite|depois do almoco|previsao|prazo|acontece|comeca|sera|ficou|as\\s*\\d{1,2}(?::\\d{2})?|\\d{1,2}:\\d{2}|\\d{1,2}[/-]\\d{1,2}(?:[/-]\\d{2,4})?";
+
+function detectNonBusinessTemporalCategory(
+  text: string,
+): DirectBusinessHoursBlockedCategory | null {
+  const hasTemporalAnchor = new RegExp(`\\b(?:${NON_BUSINESS_TEMPORAL_ANCHOR})\\b`).test(text);
+  const hasLegacyTemporalStatus = /\b(?:aberto|fechado)\b/.test(text);
+  if (!hasTemporalAnchor && !hasLegacyTemporalStatus) {
+    return null;
+  }
+  if (/\b(?:tecnico|instalador|instalacao|manutencao|visita)\b/.test(text)) return "TECHNICIAN";
+  if (/\b(?:pedido|encomenda)\b/.test(text)) return "ORDER";
+  if (/\b(?:entrega|coleta|motorista|carga|transporte)\b/.test(text)) return "DELIVERY";
+  if (/\b(?:agendamento|consulta|reuniao|chamada)\b/.test(text)) return "APPOINTMENT";
+  if (/\b(?:sistema|caixa|suporte|chamado)\b/.test(text)) return "SYSTEM";
+  if (new RegExp("\\b(?:" + NON_BUSINESS_CONTEXT + ")\\b").test(text)) return "OTHER";
+  return null;
+}
 
 export function isDirectBusinessHoursEnabled(env = process.env): boolean {
   return env.BUSINESS_HOURS_DIRECT_DETERMINISTIC_ENABLED === "true";
@@ -113,4 +146,13 @@ export function detectDirectBusinessHours(message: string): DirectBusinessHoursS
   if (explicitSchedule || questionWithBusinessSubject || subjectAndOperation)
     return "WEEKLY_SUMMARY";
   return null;
+}
+
+export function detectDirectBusinessHoursDecision(message: string): DirectBusinessHoursDetection {
+  const scope = detectDirectBusinessHours(message);
+  if (scope) return { kind: "BUSINESS_HOURS", scope };
+
+  const text = normalizeIntentText(message);
+  const category = detectNonBusinessTemporalCategory(text);
+  return category ? { kind: "BLOCKED_NON_BUSINESS_TEMPORAL", category } : { kind: "NO_MATCH" };
 }

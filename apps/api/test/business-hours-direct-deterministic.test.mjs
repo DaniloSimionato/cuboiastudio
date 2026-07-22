@@ -4,6 +4,7 @@ import test from "node:test";
 import { PrismaClient } from "@prisma/client";
 import {
   detectDirectBusinessHours,
+  detectDirectBusinessHoursDecision,
   hasExplicitHumanRequest,
   isDirectBusinessHoursBindingAllowed,
 } from "../dist/assistant-conversations/business-hours-direct-deterministic.js";
@@ -165,6 +166,93 @@ test("não captura intenções negativas", () => {
   for (const message of negatives) assert.equal(detectDirectBusinessHours(message), null, message);
 });
 
+test("expõe bloqueio temporal não comercial sem tratar técnico como horário", () => {
+  assert.deepEqual(detectDirectBusinessHoursDecision("O técnico volta às 13?"), {
+    kind: "BLOCKED_NON_BUSINESS_TEMPORAL",
+    category: "TECHNICIAN",
+  });
+  assert.deepEqual(detectDirectBusinessHoursDecision("Que horas meu pedido chega?"), {
+    kind: "BLOCKED_NON_BUSINESS_TEMPORAL",
+    category: "ORDER",
+  });
+  assert.deepEqual(detectDirectBusinessHoursDecision("Quarta volta às 13?"), {
+    kind: "BUSINESS_HOURS",
+    scope: "SPECIFIC_DAY",
+  });
+});
+
+test("bloqueia previsões temporais não comerciais sem depender de 'que horas'", () => {
+  const blocked = [
+    ["Minha entrega chega sábado?", "DELIVERY"],
+    ["Meu pedido chega amanhã?", "ORDER"],
+    ["Quando minha encomenda será entregue?", "ORDER"],
+    ["O pedido sai hoje?", "ORDER"],
+    ["A entrega vem de manhã?", "DELIVERY"],
+    ["Que dia o pedido chega?", "ORDER"],
+    ["O motorista chega sábado?", "DELIVERY"],
+    ["A coleta acontece amanhã?", "DELIVERY"],
+    ["Minha carga chega na terça?", "DELIVERY"],
+    ["O pedido volta para entrega hoje?", "ORDER"],
+    ["O técnico vem sábado?", "TECHNICIAN"],
+    ["O instalador chega amanhã?", "TECHNICIAN"],
+    ["Quando o técnico retorna?", "TECHNICIAN"],
+    ["A manutenção acontece hoje?", "TECHNICIAN"],
+    ["A visita ficou para terça?", "TECHNICIAN"],
+    ["O técnico volta depois do almoço?", "TECHNICIAN"],
+    ["Minha consulta é amanhã?", "APPOINTMENT"],
+    ["A reunião começa terça?", "APPOINTMENT"],
+    ["Qual dia ficou o agendamento?", "APPOINTMENT"],
+    ["A visita será de manhã?", "TECHNICIAN"],
+    ["O compromisso ficou para sexta?", "OTHER"],
+    ["O sistema volta hoje?", "SYSTEM"],
+    ["O suporte retorna amanhã?", "SYSTEM"],
+    ["O chamado fecha na sexta?", "SYSTEM"],
+    ["Quando o sistema volta?", "SYSTEM"],
+  ];
+  for (const [message, category] of blocked) {
+    assert.deepEqual(detectDirectBusinessHoursDecision(message), {
+      kind: "BLOCKED_NON_BUSINESS_TEMPORAL",
+      category,
+    });
+  }
+});
+
+test("não bloqueia categorias não comerciais sem uma previsão temporal", () => {
+  const noMatch = [
+    "Minha entrega chegou danificada.",
+    "Quero reclamar da entrega.",
+    "Meu pedido está errado.",
+    "Preciso alterar o endereço da entrega.",
+    "O técnico fez um serviço ruim.",
+    "Quero cancelar o agendamento.",
+    "O sistema está com erro.",
+    "Preciso de suporte.",
+    "Minha consulta foi cancelada.",
+    "Quero falar sobre o motorista.",
+    "Chega sábado?",
+    "Vem amanhã?",
+    "Volta hoje?",
+    "É na terça?",
+  ];
+  for (const message of noMatch) {
+    assert.deepEqual(detectDirectBusinessHoursDecision(message), { kind: "NO_MATCH" });
+  }
+});
+
+test("preserva BusinessHours apesar de âncoras temporais", () => {
+  const businessHours = [
+    "Vocês abrem sábado?",
+    "Qual o horário de sábado e domingo?",
+    "A loja funciona amanhã?",
+    "O atendimento volta às 13?",
+    "Depois do almoço vocês voltam que horas?",
+    "Que horas vocês fecham hoje?",
+  ];
+  for (const message of businessHours) {
+    assert.equal(detectDirectBusinessHoursDecision(message).kind, "BUSINESS_HOURS", message);
+  }
+});
+
 test("binding é default-deny e humano tem prioridade", () => {
   const env = {
     BUSINESS_HOURS_DIRECT_DETERMINISTIC_ENABLED: "true",
@@ -230,14 +318,15 @@ function directAuth(companyId) {
   };
 }
 
-function createDirectService(prisma) {
+function createDirectService(prisma, options = {}) {
   const providerCalls = [];
+  const providerInputs = [];
   const outboundCalls = [];
   const service = new AssistantConversationsService(
     prisma,
     {
       resolveRuntimeConfig: async () => ({
-        runtimeEnabled: true,
+        runtimeEnabled: options.runtimeEnabled ?? true,
         provider: "test-provider",
         baseUrl: "",
         model: "test-model",
@@ -249,8 +338,9 @@ function createDirectService(prisma) {
         apiKeyConfigured: true,
       }),
       isProviderConfigured: async () => true,
-      generateChatCompletion: async () => {
+      generateChatCompletion: async (input) => {
         providerCalls.push(true);
+        providerInputs.push(input);
         return { answer: "V1 test response", provider: "test-provider", model: "test-model" };
       },
     },
@@ -265,7 +355,7 @@ function createDirectService(prisma) {
       externalMessageId: `outbound-${payload.assistantMessageId}`,
     };
   };
-  return { service, providerCalls, outboundCalls };
+  return { service, providerCalls, providerInputs, outboundCalls };
 }
 
 async function createDirectFixture(prisma, overrides = {}) {
@@ -333,7 +423,11 @@ async function withDirectFixture(overrides, run) {
   process.env.BUSINESS_HOURS_DIRECT_DETERMINISTIC_ENABLED = "true";
   process.env.BUSINESS_HOURS_DIRECT_DETERMINISTIC_BINDINGS = `${fixture.assistantId}:106:533`;
   try {
-    return await run({ prisma, fixture, ...createDirectService(prisma) });
+    return await run({
+      prisma,
+      fixture,
+      ...createDirectService(prisma, { runtimeEnabled: overrides.runtimeEnabled }),
+    });
   } finally {
     if (oldEnabled === undefined) delete process.env.BUSINESS_HOURS_DIRECT_DETERMINISTIC_ENABLED;
     else process.env.BUSINESS_HOURS_DIRECT_DETERMINISTIC_ENABLED = oldEnabled;
@@ -644,6 +738,200 @@ test(
 );
 
 test(
+  "PostgreSQL: contexto temporal bloqueado encerra com fallback seguro sem V1",
+  { concurrency: false },
+  async () =>
+    withDirectFixture(
+      { runtimeEnabled: false },
+      async ({ prisma, fixture, service, providerCalls, outboundCalls }) => {
+        const directMessages = [
+          "Qual o horário de atendimento?",
+          "Qual o horário na quarta-feira?",
+          "Vocês fecham para almoço na quarta?",
+          "Abrem sábado?",
+          "Domingo vocês funcionam?",
+          "Qual o horário de sábado e domingo?",
+          "Quarta volta às 13?",
+        ];
+        for (const [index, message] of directMessages.entries()) {
+          const response = await service.sendMessage(
+            directInbound(fixture, message, "direct-history-" + index),
+          );
+          assert.equal(response.runtime.reason, "BUSINESS_HOURS_DIRECT_DETERMINISTIC");
+        }
+
+        const response = await service.sendMessage(
+          directInbound(fixture, "O técnico volta às 13?", "direct-blocked-technician"),
+        );
+        assert.equal(response.runtime.reason, "BUSINESS_HOURS_DIRECT_NON_BUSINESS_SAFE_FALLBACK");
+        assert.equal(
+          response.assistantMessage.content,
+          "Não tenho a confirmação do horário do técnico neste momento.",
+        );
+        assert.equal(providerCalls.length, 0);
+        assert.equal(outboundCalls.length, directMessages.length + 1);
+
+        const directLogs = await prisma.assistantRuntimeLog.findMany({
+          where: { companyId: fixture.companyId, mode: "business-hours-direct-deterministic" },
+        });
+        assert.equal(directLogs.length, directMessages.length);
+        const nonBusinessLog = await prisma.assistantRuntimeLog.findFirstOrThrow({
+          where: {
+            companyId: fixture.companyId,
+            userMessageId: response.userMessage.id,
+          },
+        });
+        assert.equal(nonBusinessLog.mode, "business-hours-direct-non-business-safe-fallback");
+        assert.equal(
+          nonBusinessLog.metadata.directBusinessHoursDetectionKind,
+          "BLOCKED_NON_BUSINESS_TEMPORAL",
+        );
+        assert.equal(nonBusinessLog.metadata.blockedNonBusinessTemporalCategory, "TECHNICIAN");
+        assert.equal(nonBusinessLog.metadata.agendaInjected, false);
+        assert.equal(nonBusinessLog.metadata.businessHoursRendererUsed, false);
+        assert.equal(nonBusinessLog.metadata.providerCount, 0);
+      },
+    ),
+);
+
+test(
+  "PostgreSQL: contexto temporal bloqueado não monta prompt nem chama provider",
+  { concurrency: false },
+  async () =>
+    withDirectFixture(
+      {},
+      async ({ fixture, service, providerCalls, providerInputs, outboundCalls }) => {
+        await service.sendMessage(
+          directInbound(fixture, "Vocês fecham para almoço na quarta?", "direct-prompt-lunch"),
+        );
+        await service.sendMessage(
+          directInbound(fixture, "Quarta volta às 13?", "direct-prompt-resumption"),
+        );
+
+        const response = await service.sendMessage(
+          directInbound(fixture, "O técnico volta às 13?", "direct-prompt-technician"),
+        );
+        assert.equal(response.runtime.reason, "BUSINESS_HOURS_DIRECT_NON_BUSINESS_SAFE_FALLBACK");
+        assert.equal(providerCalls.length, 0);
+        assert.equal(providerInputs.length, 0);
+        assert.equal(outboundCalls.length, 3);
+      },
+    ),
+);
+
+test(
+  "PostgreSQL: pedido, entrega e sistema bloqueados recebem fallback seguro sem agenda comercial",
+  { concurrency: false },
+  async () =>
+    withDirectFixture({}, async ({ fixture, service, providerCalls, outboundCalls }) => {
+      const cases = [
+        [
+          "Que horas meu pedido chega?",
+          "Não tenho a previsão do pedido ou da entrega confirmada neste momento.",
+        ],
+        [
+          "Que horas a entrega chega?",
+          "Não tenho a previsão do pedido ou da entrega confirmada neste momento.",
+        ],
+        ["Meu sistema está fechado.", "Não tenho essa informação confirmada no momento."],
+      ];
+      for (const [index, [message, answer]] of cases.entries()) {
+        const response = await service.sendMessage(
+          directInbound(fixture, message, `direct-blocked-safe-${index}`),
+        );
+        assert.equal(response.runtime.reason, "BUSINESS_HOURS_DIRECT_NON_BUSINESS_SAFE_FALLBACK");
+        assert.equal(response.assistantMessage.content, answer);
+        assert.doesNotMatch(response.assistantMessage.content, /atendimento|07h30|08h|13h|21h/i);
+      }
+      assert.equal(providerCalls.length, 0);
+      assert.equal(outboundCalls.length, cases.length);
+    }),
+);
+
+test(
+  "PostgreSQL: previsões temporais bloqueadas encerram antes do pipeline V1",
+  { concurrency: false },
+  async () =>
+    withDirectFixture({}, async ({ prisma, fixture, service, providerCalls, outboundCalls }) => {
+      const businessHoursMessages = [
+        "Qual o horário de atendimento?",
+        "Qual o horário na quarta-feira?",
+        "Vocês fecham para almoço na quarta?",
+        "Abrem sábado?",
+        "Domingo vocês funcionam?",
+        "Qual o horário de sábado e domingo?",
+        "Quarta volta às 13?",
+      ];
+      for (const [index, message] of businessHoursMessages.entries()) {
+        await service.sendMessage(
+          directInbound(fixture, message, `direct-prior-business-${index}`),
+        );
+      }
+
+      const blockedMessages = [
+        "Minha entrega chega sábado?",
+        "Meu pedido chega amanhã?",
+        "O técnico vem sábado?",
+        "O sistema volta hoje?",
+        "Minha consulta é amanhã?",
+      ];
+      for (const [index, message] of blockedMessages.entries()) {
+        const response = await service.sendMessage(
+          directInbound(fixture, message, `direct-temporal-blocked-${index}`),
+        );
+        assert.equal(response.runtime.reason, "BUSINESS_HOURS_DIRECT_NON_BUSINESS_SAFE_FALLBACK");
+        assert.equal(response.runtime.context.providerCount, 0);
+        assert.equal(response.runtime.context.historyUsed, false);
+        assert.equal(response.runtime.context.flowRouterUsed, false);
+        assert.equal(response.runtime.context.responseExecutionUsed, false);
+        assert.equal(response.runtime.context.agendaInjected, false);
+      }
+      assert.equal(providerCalls.length, 0);
+      assert.equal(outboundCalls.length, businessHoursMessages.length + blockedMessages.length);
+      assert.equal(
+        await prisma.assistantConversationStateV2.count({
+          where: { companyId: fixture.companyId },
+        }),
+        0,
+      );
+    }),
+);
+
+test(
+  "PostgreSQL: fallback temporal bloqueado não atua fora do binding autorizado",
+  { concurrency: false },
+  async () =>
+    withDirectFixture({}, async ({ fixture, service, providerCalls }) => {
+      const response = await service.sendMessage(
+        directInbound(fixture, "O técnico volta às 13?", "direct-blocked-other-inbox", {
+          inboxId: "534",
+        }),
+      );
+      assert.notEqual(response.runtime.reason, "BUSINESS_HOURS_DIRECT_NON_BUSINESS_SAFE_FALLBACK");
+      assert.equal(providerCalls.length, 1);
+    }),
+);
+
+test(
+  "PostgreSQL: replay de contexto temporal bloqueado não duplica o fallback seguro",
+  { concurrency: false },
+  async () =>
+    withDirectFixture({}, async ({ fixture, service, providerCalls, outboundCalls }) => {
+      const inbound = directInbound(
+        fixture,
+        "O técnico volta às 13?",
+        "direct-blocked-safe-replay",
+      );
+      const first = await service.sendMessage(inbound);
+      const replay = await service.sendMessage(inbound);
+      assert.equal(first.runtime.reason, "BUSINESS_HOURS_DIRECT_NON_BUSINESS_SAFE_FALLBACK");
+      assert.equal(replay.runtime.reason, "duplicate-external-message-id");
+      assert.equal(providerCalls.length, 0);
+      assert.equal(outboundCalls.length, 1);
+    }),
+);
+
+test(
   "PostgreSQL: falha após persistência não duplica outbound no replay",
   { concurrency: false },
   async () =>
@@ -723,14 +1011,29 @@ test(
         const response = await service.sendMessage(
           directInbound(fixture, message, `direct-sequence-negative-${index}`),
         );
-        assert.notEqual(response.runtime.reason, "BUSINESS_HOURS_DIRECT_DETERMINISTIC", message);
+        const detection = detectDirectBusinessHoursDecision(message);
+        if (detection.kind === "BLOCKED_NON_BUSINESS_TEMPORAL") {
+          assert.equal(
+            response.runtime.reason,
+            "BUSINESS_HOURS_DIRECT_NON_BUSINESS_SAFE_FALLBACK",
+            message,
+          );
+          assert.doesNotMatch(response.assistantMessage.content, /atendimento|horário comercial/i);
+        } else {
+          assert.notEqual(response.runtime.reason, "BUSINESS_HOURS_DIRECT_DETERMINISTIC", message);
+        }
       }
 
       const directLogs = await prisma.assistantRuntimeLog.findMany({
         where: { companyId: fixture.companyId, mode: "business-hours-direct-deterministic" },
       });
       assert.equal(directLogs.length, 30);
-      assert.equal(providerCalls.length, 10);
+      assert.equal(
+        providerCalls.length,
+        negatives.filter(
+          (message) => detectDirectBusinessHoursDecision(message).kind === "NO_MATCH",
+        ).length,
+      );
       assert.equal(outboundCalls.length, 40);
       assert.equal(
         outboundCalls.filter(

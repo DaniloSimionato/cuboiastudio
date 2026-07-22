@@ -44,9 +44,11 @@ import {
   type OfficialBusinessContext,
 } from "../assistants/official-business-context";
 import {
-  detectDirectBusinessHours,
+  detectDirectBusinessHoursDecision,
   hasExplicitHumanRequest,
   isDirectBusinessHoursBindingAllowed,
+  type DirectBusinessHoursBlockedCategory,
+  type DirectBusinessHoursDetection,
   type DirectBusinessHoursScope,
 } from "./business-hours-direct-deterministic";
 import { type CreateAssistantConversationDto } from "./dto/create-assistant-conversation.dto";
@@ -257,6 +259,10 @@ export type AssistantConversationRuntime = {
     historyMessagesSelected?: number;
     historyMessagesDropped?: number;
     historyDuplicateResponsesRemoved?: number;
+    directBusinessHoursBindingActive?: boolean;
+    directBusinessHoursDetectionKind?: DirectBusinessHoursDetection["kind"];
+    directBusinessHoursBlockedCategory?: DirectBusinessHoursBlockedCategory | null;
+    directBusinessHoursHistoryPairsExcluded?: number;
     audioMessage?: boolean;
     transcriptionAvailable?: boolean;
     transcriptionPersisted?: boolean;
@@ -901,7 +907,15 @@ export class AssistantConversationsService {
     userMessage: AssistantConversationMessageSafeRecord;
     message: string;
     runtimeStartedAt: number;
-  }): Promise<SendAssistantConversationMessageResponse | null> {
+    detection?: DirectBusinessHoursDetection;
+  }): Promise<
+    | { handled: false }
+    | {
+        handled: true;
+        kind: "BUSINESS_HOURS" | "BLOCKED_NON_BUSINESS_TEMPORAL" | "SAFE_FALLBACK";
+        response: SendAssistantConversationMessageResponse;
+      }
+  > {
     if (
       input.dto.source !== "chatwoot" ||
       !isDirectBusinessHoursBindingAllowed({
@@ -911,72 +925,92 @@ export class AssistantConversationsService {
       }) ||
       hasExplicitHumanRequest(input.message)
     ) {
-      return null;
+      return { handled: false };
     }
-    const scope: DirectBusinessHoursScope | null = detectDirectBusinessHours(input.message);
-    if (!scope) return null;
+    const detection = input.detection ?? detectDirectBusinessHoursDecision(input.message);
+    if (detection.kind === "NO_MATCH") return { handled: false };
+    const blockedCategory =
+      detection.kind === "BLOCKED_NON_BUSINESS_TEMPORAL" ? detection.category : null;
+    const scope: DirectBusinessHoursScope | null =
+      detection.kind === "BUSINESS_HOURS" ? detection.scope : null;
 
-    const timezoneResolution = resolveOfficialTimezoneResolution({
-      companyTimezone: input.assistant.company.timezone,
-      assistantTimezone: input.assistant.timezone,
-    });
-    const officialContext = timezoneResolution.isValid
-      ? buildOfficialBusinessContext({
-          companyName: input.assistant.company.name,
-          assistantName: input.assistant.name,
+    const timezoneResolution = scope
+      ? resolveOfficialTimezoneResolution({
           companyTimezone: input.assistant.company.timezone,
           assistantTimezone: input.assistant.timezone,
-          description: input.assistant.description,
-          businessAddress: input.assistant.businessAddress,
-          businessCity: input.assistant.businessCity,
-          businessState: input.assistant.businessState,
-          businessCityRegion: input.assistant.businessCityRegion,
-          businessPostalCode: input.assistant.businessPostalCode,
-          googleMapsUrl: input.assistant.googleMapsUrl,
-          latitude: input.assistant.latitude,
-          longitude: input.assistant.longitude,
-          businessPhone: input.assistant.businessPhone,
-          businessWhatsapp: input.assistant.businessWhatsapp,
-          businessWhatsappSupport: input.assistant.businessWhatsappSupport,
-          websiteUrl: input.assistant.websiteUrl,
-          weeklySchedule: input.assistant.weeklySchedule,
-          aiAlwaysAvailable: input.assistant.aiAlwaysAvailable,
         })
       : null;
+    const officialContext =
+      scope && timezoneResolution?.isValid
+        ? buildOfficialBusinessContext({
+            companyName: input.assistant.company.name,
+            assistantName: input.assistant.name,
+            companyTimezone: input.assistant.company.timezone,
+            assistantTimezone: input.assistant.timezone,
+            description: input.assistant.description,
+            businessAddress: input.assistant.businessAddress,
+            businessCity: input.assistant.businessCity,
+            businessState: input.assistant.businessState,
+            businessCityRegion: input.assistant.businessCityRegion,
+            businessPostalCode: input.assistant.businessPostalCode,
+            googleMapsUrl: input.assistant.googleMapsUrl,
+            latitude: input.assistant.latitude,
+            longitude: input.assistant.longitude,
+            businessPhone: input.assistant.businessPhone,
+            businessWhatsapp: input.assistant.businessWhatsapp,
+            businessWhatsappSupport: input.assistant.businessWhatsappSupport,
+            websiteUrl: input.assistant.websiteUrl,
+            weeklySchedule: input.assistant.weeklySchedule,
+            aiAlwaysAvailable: input.assistant.aiAlwaysAvailable,
+          })
+        : null;
     const rendered = officialContext
       ? buildDeterministicBusinessHoursResponse(input.message, officialContext)
       : null;
-    const fallbackReason = !timezoneResolution.isValid
-      ? "INVALID_OFFICIAL_TIMEZONE"
-      : rendered?.missingScheduleConfiguration
-        ? "MISSING_OR_INVALID_SCHEDULE"
-        : null;
-    const answer = fallbackReason
-      ? "Não consegui consultar o horário oficial neste momento. Por favor, tente novamente em alguns minutos."
-      : rendered!.answer;
+    const fallbackReason = blockedCategory
+      ? `BLOCKED_NON_BUSINESS_TEMPORAL_${blockedCategory}`
+      : !timezoneResolution?.isValid
+        ? "INVALID_OFFICIAL_TIMEZONE"
+        : rendered?.missingScheduleConfiguration
+          ? "MISSING_OR_INVALID_SCHEDULE"
+          : null;
+    const answer = blockedCategory
+      ? this.buildBlockedNonBusinessTemporalReply(blockedCategory)
+      : fallbackReason
+        ? "Não consegui consultar o horário oficial neste momento. Por favor, tente novamente em alguns minutos."
+        : rendered!.answer;
     const metadata = {
-      route: "BUSINESS_HOURS_DIRECT_DETERMINISTIC",
-      strategy: "BUSINESS_HOURS_DIRECT_DETERMINISTIC",
+      route: blockedCategory
+        ? "BUSINESS_HOURS_DIRECT_NON_BUSINESS_SAFE_FALLBACK"
+        : "BUSINESS_HOURS_DIRECT_DETERMINISTIC",
+      strategy: blockedCategory
+        ? "BUSINESS_HOURS_DIRECT_NON_BUSINESS_SAFE_FALLBACK"
+        : "BUSINESS_HOURS_DIRECT_DETERMINISTIC",
       assistantId: input.assistant.id,
       companyId: input.tenant.companyId,
       accountId: input.dto.externalAccountId ?? null,
       inboxId: input.dto.externalInboxId ?? null,
       inboundMessageId: input.userMessage.id,
-      businessHoursIntent: true,
+      businessHoursIntent: Boolean(scope),
       businessHoursScope: scope,
+      directBusinessHoursDetectionKind: detection.kind,
+      blockedNonBusinessTemporalCategory: blockedCategory,
       requestedBusinessDays: rendered?.requestedDays ?? [],
-      scheduleSource: "OFFICIAL_STRUCTURED_SCHEDULE",
-      timezone: timezoneResolution.timezone ?? "UNAVAILABLE",
-      timezoneValid: timezoneResolution.isValid,
-      timezoneSource: timezoneResolution.source,
-      timezoneFallbackApplied: timezoneResolution.fallbackApplied,
+      scheduleSource: scope ? "OFFICIAL_STRUCTURED_SCHEDULE" : "NOT_USED",
+      timezone: scope ? (timezoneResolution?.timezone ?? "UNAVAILABLE") : "NOT_USED",
+      timezoneValid: scope ? (timezoneResolution?.isValid ?? false) : null,
+      timezoneSource: scope ? (timezoneResolution?.source ?? "NONE") : "NONE",
+      timezoneFallbackApplied: scope ? (timezoneResolution?.fallbackApplied ?? false) : false,
       providerCount: 0,
       deterministicResponderCount: 1,
       historyUsed: false,
+      directBusinessHoursHistoryExcluded: Boolean(blockedCategory),
       flowRouterUsed: false,
       responseExecutionUsed: false,
       approvalCreated: false,
       outboundCount: 1,
+      agendaInjected: false,
+      businessHoursRendererUsed: Boolean(scope && !fallbackReason),
       fallbackReason,
     };
     const { assistantMessage } = await this.prisma.$transaction(async (tx) => {
@@ -988,7 +1022,9 @@ export class AssistantConversationsService {
           role: "assistant",
           content: answer,
           source: "chatwoot",
-          mode: "business-hours-direct-deterministic",
+          mode: blockedCategory
+            ? "business-hours-direct-non-business-safe-fallback"
+            : "business-hours-direct-deterministic",
           contextVersion: input.conversation.currentContextVersion ?? 1,
         },
         select: assistantConversationMessageSafeSelect,
@@ -1000,7 +1036,9 @@ export class AssistantConversationsService {
           conversationId: input.conversation.id,
           userMessageId: input.userMessage.id,
           assistantMessageId: assistantMessage.id,
-          mode: "business-hours-direct-deterministic",
+          mode: blockedCategory
+            ? "business-hours-direct-non-business-safe-fallback"
+            : "business-hours-direct-deterministic",
           status: "COMPLETED",
           provider: null,
           model: null,
@@ -1031,23 +1069,48 @@ export class AssistantConversationsService {
       content: answer,
     });
     this.logger.log(JSON.stringify({ ...metadata, idempotencyResult: "CREATED" }));
-    return {
+    const response = {
       conversationId: input.conversation.id,
       userMessage: toConversationMessageItem(input.userMessage),
       assistantMessage: toConversationMessageItem(assistantMessage),
       runtime: {
-        mode: "business-hours-direct-deterministic",
+        mode: blockedCategory
+          ? "business-hours-direct-non-business-safe-fallback"
+          : "business-hours-direct-deterministic",
         assistant: { id: input.assistant.id, name: input.assistant.name },
         temperature: 0,
         temperatureSource: "none",
         configurationSource: "business-hours-direct-binding",
         fallback: fallbackReason !== null,
         outcome: "success",
-        reason: "BUSINESS_HOURS_DIRECT_DETERMINISTIC",
+        reason: blockedCategory
+          ? "BUSINESS_HOURS_DIRECT_NON_BUSINESS_SAFE_FALLBACK"
+          : "BUSINESS_HOURS_DIRECT_DETERMINISTIC",
         summary: "",
         context: metadata as any,
       } as any,
     };
+    return {
+      handled: true,
+      kind: blockedCategory
+        ? "BLOCKED_NON_BUSINESS_TEMPORAL"
+        : fallbackReason
+          ? "SAFE_FALLBACK"
+          : "BUSINESS_HOURS",
+      response,
+    };
+  }
+
+  private buildBlockedNonBusinessTemporalReply(
+    category: DirectBusinessHoursBlockedCategory,
+  ): string {
+    if (category === "TECHNICIAN") {
+      return "Não tenho a confirmação do horário do técnico neste momento.";
+    }
+    if (category === "ORDER" || category === "DELIVERY") {
+      return "Não tenho a previsão do pedido ou da entrega confirmada neste momento.";
+    }
+    return "Não tenho essa informação confirmada no momento.";
   }
 
   private isResetCommand(input: {
@@ -1094,6 +1157,25 @@ export class AssistantConversationsService {
         "businessHoursSource=structured-assistant-company",
       ].join(" "),
     );
+  }
+
+  private buildNonBusinessOfficialPromptBlock(context: OfficialBusinessContext): string {
+    return [
+      "[CONTEXTO OFICIAL DA EMPRESA]",
+      "Empresa: " + context.companyName,
+      "Assistente: " + (context.assistantName ?? "não informado"),
+      "Endereço oficial: " + (context.address ?? "não informado"),
+      "Cidade/estado oficial: " + (context.localityLabel ?? "não informado"),
+      "CEP oficial: " + (context.postalCode ?? "não informado"),
+      "Telefone oficial: " + (context.phone ?? "não informado"),
+      "WhatsApp principal oficial: " + (context.whatsapp ?? "não informado"),
+      "WhatsApp assistência oficial: " + (context.whatsappSupport ?? "não informado"),
+      "Site oficial: " + (context.websiteUrl ?? "não informado"),
+      "Google Maps oficial: " + (context.googleMapsUrl ?? "não informado"),
+      "",
+      "Use estas informações como fonte oficial para endereço, localização, contato, WhatsApp e site.",
+      "Não infira nem responda horários comerciais a partir deste contexto.",
+    ].join("\n");
   }
 
   private normalizeConversationSource(
@@ -2679,6 +2761,17 @@ export class AssistantConversationsService {
       },
     });
 
+    const directBusinessHoursBindingActive =
+      input.dto.source === "chatwoot" &&
+      isDirectBusinessHoursBindingAllowed({
+        assistantId: assistant.id,
+        accountId: input.dto.externalAccountId,
+        inboxId: input.dto.externalInboxId,
+      });
+    const directBusinessHoursDetection: DirectBusinessHoursDetection =
+      directBusinessHoursBindingActive
+        ? detectDirectBusinessHoursDecision(customerIntentText)
+        : { kind: "NO_MATCH" };
     const directBusinessHours = await this.tryDirectBusinessHoursResponse({
       assistant,
       conversation,
@@ -2687,8 +2780,9 @@ export class AssistantConversationsService {
       userMessage,
       message: customerIntentText,
       runtimeStartedAt,
+      detection: directBusinessHoursDetection,
     });
-    if (directBusinessHours) return directBusinessHours;
+    if (directBusinessHours.handled) return directBusinessHours.response;
 
     let memoryContextBlock: string | null = null;
     let contactMemoryProfileId: string | null = null;
@@ -3081,6 +3175,12 @@ export class AssistantConversationsService {
       companyId: input.tenant.companyId,
       context: officialBusinessContext,
     });
+    const v1OfficialBusinessContext = directBusinessHoursBindingActive
+      ? {
+          ...officialBusinessContext,
+          promptBlock: this.buildNonBusinessOfficialPromptBlock(officialBusinessContext),
+        }
+      : officialBusinessContext;
 
     const promptInstructions = assistant.instructions || "";
     const safetyInstructionBlock = [
@@ -3115,23 +3215,42 @@ export class AssistantConversationsService {
     });
 
     const conversationHistory = [...recentMessages].reverse();
-    const rawPriorHistory = conversationHistory.slice(0, -1).map((message) => {
-      const payload =
-        message.externalPayload && typeof message.externalPayload === "object"
-          ? (message.externalPayload as any)
-          : {};
-      const isImportedHuman = message.messageType === "resume-human" || payload.speaker === "human";
-      return {
-        id: message.id,
-        role: isImportedHuman ? "assistant" : (message.role as "user" | "assistant" | "tool"),
-        content: isImportedHuman
-          ? formatImportedHumanHistoryMessage(message.content)
-          : message.content,
-        ...(payload.tool_calls ? { tool_calls: payload.tool_calls } : {}),
-        ...(payload.tool_call_id ? { tool_call_id: payload.tool_call_id } : {}),
-        ...(payload.name ? { name: payload.name } : {}),
-      };
-    });
+    const directRuntimeMessageIds = directBusinessHoursBindingActive
+      ? new Set(
+          (
+            await this.prisma.assistantRuntimeLog.findMany({
+              where: {
+                companyId: input.tenant.companyId,
+                assistantId: input.assistantId,
+                conversationId: conversation.id,
+                mode: "business-hours-direct-deterministic",
+              },
+              select: { userMessageId: true, assistantMessageId: true },
+            })
+          ).flatMap((runtimeLog) => [runtimeLog.userMessageId, runtimeLog.assistantMessageId]),
+        )
+      : new Set<string>();
+    const rawPriorHistory = conversationHistory
+      .slice(0, -1)
+      .filter((message) => !directRuntimeMessageIds.has(message.id))
+      .map((message) => {
+        const payload =
+          message.externalPayload && typeof message.externalPayload === "object"
+            ? (message.externalPayload as any)
+            : {};
+        const isImportedHuman =
+          message.messageType === "resume-human" || payload.speaker === "human";
+        return {
+          id: message.id,
+          role: isImportedHuman ? "assistant" : (message.role as "user" | "assistant" | "tool"),
+          content: isImportedHuman
+            ? formatImportedHumanHistoryMessage(message.content)
+            : message.content,
+          ...(payload.tool_calls ? { tool_calls: payload.tool_calls } : {}),
+          ...(payload.tool_call_id ? { tool_call_id: payload.tool_call_id } : {}),
+          ...(payload.name ? { name: payload.name } : {}),
+        };
+      });
     const compactedHistory = compactRepeatedAssistantHistoryMessages(rawPriorHistory);
     const priorHistory = compactedHistory.messages;
     const historyDuplicateResponsesRemoved = compactedHistory.removedCount;
@@ -3186,6 +3305,13 @@ export class AssistantConversationsService {
       historyMessagesSelected: priorHistory.length,
       historyMessagesDropped,
       historyDuplicateResponsesRemoved,
+      directBusinessHoursBindingActive,
+      directBusinessHoursDetectionKind: directBusinessHoursDetection.kind,
+      directBusinessHoursBlockedCategory:
+        directBusinessHoursDetection.kind === "BLOCKED_NON_BUSINESS_TEMPORAL"
+          ? directBusinessHoursDetection.category
+          : null,
+      directBusinessHoursHistoryPairsExcluded: directRuntimeMessageIds.size / 2,
       audioMessage,
       transcriptionAvailable,
       transcriptionPersisted: transcriptionAvailable,
@@ -3460,7 +3586,8 @@ export class AssistantConversationsService {
       assistantName: assistant.name,
       instructions: effectiveInstructions,
       knowledgeItems,
-      officialBusinessContext,
+      officialBusinessContext: v1OfficialBusinessContext,
+      allowBusinessHours: !directBusinessHoursBindingActive,
     });
     const deterministicFallbackCategory =
       deterministicRuntime.sources.length > 0 ? "deterministic_response" : "no_information";
@@ -3824,7 +3951,7 @@ export class AssistantConversationsService {
             normalizedIntent: routeResult.flowName,
             selectedFlowKey: selectedFlow ? flowIntentKeyForFlow(selectedFlow) : null,
             conversationalOutcome,
-            officialBusinessContext,
+            officialBusinessContext: v1OfficialBusinessContext,
           });
           Object.assign(contextMetadata, {
             expectedAuthorityCategory: expectedAuthority.category,
@@ -3866,7 +3993,7 @@ export class AssistantConversationsService {
               knowledgeItems,
               historyMessages: priorHistory,
               currentMessage: customerIntentText,
-              officialBusinessContext,
+              officialBusinessContext: v1OfficialBusinessContext,
               calendarContext: calendarToolsActive
                 ? {
                     conversationId: conversation.id,
@@ -4002,7 +4129,7 @@ export class AssistantConversationsService {
               securityRules: activeSecurityRules,
               priorHistory,
               customerIntentText,
-              officialBusinessContext,
+              officialBusinessContext: v1OfficialBusinessContext,
               memoryContextBlock,
               loadedTriageState,
               triageFlowContext,
@@ -4619,7 +4746,7 @@ export class AssistantConversationsService {
         ? flowIntentKeyForFlow(selectedFlowForAuthority)
         : null,
       conversationalOutcome,
-      officialBusinessContext,
+      officialBusinessContext: v1OfficialBusinessContext,
     });
     const isDeterministicV2BusinessHoursPrimary =
       responseExecutionEnvelope.executionOwner === "V2_PRIMARY" &&
@@ -4637,7 +4764,7 @@ export class AssistantConversationsService {
           answer,
           currentMessage: customerIntentText,
           sources,
-          officialBusinessContext,
+          officialBusinessContext: v1OfficialBusinessContext,
           flowText: selectedFlowForAuthority
             ? `${selectedFlowForAuthority.flowInstructions ?? ""} ${selectedFlowForAuthority.fixedMessage ?? ""}`
             : null,
@@ -4680,7 +4807,7 @@ export class AssistantConversationsService {
         answer,
         turn: multiIntentTurn,
         currentMessage: customerIntentText,
-        officialBusinessContext,
+        officialBusinessContext: v1OfficialBusinessContext,
       });
       answer = coverage.answer;
       if (coverage.coverage.addedAcknowledgements.includes("business_hours")) {
@@ -4975,6 +5102,11 @@ export class AssistantConversationsService {
             lastRelevantQuestionUpdated: runtime.context.lastRelevantQuestionUpdated,
             lastRelevantQuestionUpdateReason: runtime.context.lastRelevantQuestionUpdateReason,
             historyDuplicateResponsesRemoved: runtime.context.historyDuplicateResponsesRemoved,
+            directBusinessHoursBindingActive: runtime.context.directBusinessHoursBindingActive,
+            directBusinessHoursDetectionKind: runtime.context.directBusinessHoursDetectionKind,
+            directBusinessHoursBlockedCategory: runtime.context.directBusinessHoursBlockedCategory,
+            directBusinessHoursHistoryPairsExcluded:
+              runtime.context.directBusinessHoursHistoryPairsExcluded,
             inboundFragmentCount: runtime.context.inboundFragmentCount,
             explicitRequestCount: runtime.context.explicitRequestCount,
             primaryIntent: runtime.context.primaryIntent,
