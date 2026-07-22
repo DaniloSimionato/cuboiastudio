@@ -5,6 +5,9 @@ import {
   buildOfficialBusinessContext,
   buildDeterministicBusinessHoursResponse,
   buildStructuredBusinessAnswer,
+  findRequestedBusinessDays,
+  resolveOfficialTimezone,
+  resolveOfficialTimezoneResolution,
 } from "../dist/assistants/official-business-context.js";
 
 const fgSchedule = {
@@ -86,6 +89,132 @@ test("formatter determinístico responde sábado, domingo, hoje e aberto agora n
   assert.equal(openNow.requestedScheduleScope, "open_now");
   assert.equal(openNow.timezone, "America/Campo_Grande");
   assert.match(openNow.answer, /abertos agora/i);
+});
+
+test("renderer determinístico preserva todos os dias explícitos, intervalos e ordem", () => {
+  const context = buildOfficialBusinessContext(
+    {
+      companyName: "Empresa com agenda distinta",
+      assistantTimezone: "America/Campo_Grande",
+      weeklySchedule: {
+        monday: [{ start: "08:00", end: "22:00" }],
+        tuesday: [{ start: "08:00", end: "23:00" }],
+        wednesday: [
+          { start: "08:00", end: "11:00" },
+          { start: "13:00", end: "21:00" },
+        ],
+        thursday: [{ start: "08:00", end: "18:00" }],
+        friday: [{ start: "09:00", end: "17:00" }],
+        saturday: [{ start: "07:30", end: "12:00" }],
+        sunday: [],
+      },
+    },
+    new Date("2026-07-20T17:00:00.000Z"),
+  );
+  const cases = [
+    [
+      "Qual o horário de sábado e domingo?",
+      ["saturday", "sunday"],
+      /07h30 às 12h/i,
+      /domingos não abrimos/i,
+    ],
+    ["Como funciona na sexta e no sábado?", ["friday", "saturday"], /09h às 17h/i, /07h30 às 12h/i],
+    ["Qual o expediente de segunda e terça?", ["monday", "tuesday"], /08h às 22h/i, /08h às 23h/i],
+    [
+      "Terça, quarta e quinta quais os horários?",
+      ["tuesday", "wednesday", "thursday"],
+      /08h às 23h/i,
+      /13h às 21h/i,
+    ],
+    [
+      "Funcionam de segunda a sexta?",
+      ["monday", "tuesday", "wednesday", "thursday", "friday"],
+      /08h às 22h/i,
+      /09h às 17h/i,
+    ],
+    [
+      "Qual o horário no fim de semana?",
+      ["saturday", "sunday"],
+      /07h30 às 12h/i,
+      /domingos não abrimos/i,
+    ],
+  ];
+
+  for (const [question, days, firstExpected, secondExpected] of cases) {
+    assert.deepEqual(findRequestedBusinessDays(question), days, question);
+    const answer = buildDeterministicBusinessHoursResponse(question, context);
+    assert.equal(answer.requestedScheduleScope, "specific_day", question);
+    assert.deepEqual(answer.requestedDays, days, question);
+    assert.match(answer.answer, firstExpected, question);
+    assert.match(answer.answer, secondExpected, question);
+  }
+});
+
+test("extração de dias normaliza texto bruto, preserva enumeração e expande intervalos", () => {
+  for (const question of [
+    "sábado e domingo",
+    "Sábado e Domingo",
+    "SABADO E DOMINGO",
+    "sábado, e domingo?",
+    "Qual o horário de sábado e domingo?",
+  ]) {
+    assert.deepEqual(findRequestedBusinessDays(question), ["saturday", "sunday"], question);
+  }
+
+  const cases = [
+    ["domingo e sábado", ["sunday", "saturday"]],
+    ["terça, quarta e quinta", ["tuesday", "wednesday", "thursday"]],
+    ["sexta e segunda", ["friday", "monday"]],
+    ["segunda a sexta", ["monday", "tuesday", "wednesday", "thursday", "friday"]],
+    ["terça até quinta", ["tuesday", "wednesday", "thursday"]],
+    ["sexta a segunda", ["friday", "saturday", "sunday", "monday"]],
+    ["de sábado a domingo", ["saturday", "sunday"]],
+    ["Qual o horário no fim de semana?", ["saturday", "sunday"]],
+    ["Como é o atendimento aos finais de semana?", ["saturday", "sunday"]],
+  ];
+
+  for (const [question, expected] of cases)
+    assert.deepEqual(findRequestedBusinessDays(question), expected, question);
+});
+
+test("resolução estrita expõe validade sem alterar fallback legado", () => {
+  const invalid = resolveOfficialTimezoneResolution({
+    assistantTimezone: "GMT-4",
+    companyTimezone: "America/Campo_Grand",
+  });
+  assert.deepEqual(invalid, {
+    timezone: null,
+    source: "NONE",
+    isConfigured: true,
+    isValid: false,
+    fallbackApplied: false,
+    invalidConfiguredValues: true,
+    assistantTimezoneConfigured: true,
+    assistantTimezoneValid: false,
+    companyTimezoneConfigured: true,
+    companyTimezoneValid: false,
+  });
+  assert.equal(
+    resolveOfficialTimezone({ assistantTimezone: "GMT-4", companyTimezone: "America/Campo_Grand" }),
+    "America/Sao_Paulo",
+  );
+
+  const company = resolveOfficialTimezoneResolution({
+    assistantTimezone: "America/Campo_Grand",
+    companyTimezone: "America/Campo_Grande",
+  });
+  assert.equal(company.timezone, "America/Campo_Grande");
+  assert.equal(company.source, "COMPANY");
+  assert.equal(company.isValid, true);
+  assert.equal(company.invalidConfiguredValues, true);
+
+  const assistant = resolveOfficialTimezoneResolution({
+    assistantTimezone: "America/Sao_Paulo",
+    companyTimezone: "America/Campo_Grande",
+  });
+  assert.equal(assistant.timezone, "America/Sao_Paulo");
+  assert.equal(assistant.source, "ASSISTANT");
+  assert.equal(assistant.fallbackApplied, false);
 });
 
 test("formatter estruturado V1 reconhece domingo fechado e OPEN_NOW como horários oficiais", () => {

@@ -46,8 +46,10 @@ export function detectDirectBusinessHours(message: string): DirectBusinessHoursS
   if (new RegExp(`\\b(?:${NON_BUSINESS_CONTEXT})\\b`).test(text)) return null;
 
   const lunch = /(?:almoco|meio dia|intervalo)/.test(text);
-  const hasDay = new RegExp(`\\b(?:${DAYS})\\b`).test(text);
-  const weekend = /(?:fim de semana|finais de semana|sabado e domingo)/.test(text);
+  const dayMatches = text.match(new RegExp(`\\b(?:${DAYS})\\b`, "g")) ?? [];
+  const hasDay = dayMatches.length > 0;
+  const hasMultipleDays = dayMatches.length > 1;
+  const weekend = /(?:fim|final|finais) de semana|sabado e domingo/.test(text);
   const subjectAndOperation = new RegExp(
     `\\b(?:${BUSINESS_SUBJECT})\\b[^?.!]{0,36}\\b(?:${OPERATION_VERB})\\b`,
   ).test(text);
@@ -57,6 +59,10 @@ export function detectDirectBusinessHours(message: string): DirectBusinessHoursS
   const explicitSchedule = new RegExp(
     `\\bexpediente\\b|\\b(?:horario|horário|hrs?)\\s+(?:de|da|do|na|no|para)\\s+(?:${BUSINESS_SUBJECT}|${DAYS})\\b|\\bhorario\\s+de\\s+(?:atendimento|funcionamento|almoco|almoço)\\b`,
   ).test(text);
+  const multiDayScheduleQuestion =
+    hasMultipleDays && /\b(?:qual(?:is)?\s+(?:o|os)\s+)?horarios?\b/.test(text);
+  const weekendScheduleQuestion =
+    weekend && /\b(?:qual(?: o)?\s+horario|horarios?|expediente|atendimento)\b/.test(text);
   const questionWithBusinessSubject = new RegExp(
     `\\b(?:que horas|qual(?: o)? horario|quando|ate que horas|até que horas)\\b[^?.!]{0,20}\\b(?:${BUSINESS_SUBJECT})\\b`,
   ).test(text);
@@ -99,6 +105,8 @@ export function detectDirectBusinessHours(message: string): DirectBusinessHoursS
     (explicitSchedule ||
       operationForDay ||
       subjectAndOperation ||
+      multiDayScheduleQuestion ||
+      weekendScheduleQuestion ||
       (weekend && /\b(?:funciona|funcionam|atendem|abre|abrem|fecha|fecham)/.test(text)))
   )
     return "SPECIFIC_DAY";

@@ -1,3 +1,5 @@
+import { normalizeIntentText } from "../intent-router/intent-routing";
+
 const DEFAULT_TIMEZONE = "America/Sao_Paulo";
 
 export const BUSINESS_DAY_KEYS = [
@@ -132,8 +134,69 @@ const WEEKDAY_ALIASES: Array<[string, BusinessDayKey]> = [
   ["sabado", "saturday"],
 ];
 
+const WEEKDAY_ALIAS_PATTERN =
+  "segunda(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado|domingo";
+
+function businessDayFromAlias(alias: string): BusinessDayKey | null {
+  return WEEKDAY_ALIASES.find(([value]) => alias.startsWith(value))?.[1] ?? null;
+}
+
+/**
+ * Extracts the business days explicitly requested in the inbound text. Day
+ * order follows the customer wording; a stated weekday range is expanded in
+ * its natural weekly order. This stays purely factual and never infers days
+ * from conversation history.
+ */
+export function findRequestedBusinessDays(question: string): BusinessDayKey[] {
+  const normalizedQuestion = normalizeIntentText(question);
+  const mentions = new Map<BusinessDayKey, number>();
+  const add = (day: BusinessDayKey, position: number) => {
+    const current = mentions.get(day);
+    if (current === undefined || position < current) mentions.set(day, position);
+  };
+  const rangePattern = new RegExp(
+    `\\b(?:de\\s+)?(${WEEKDAY_ALIAS_PATTERN})s?\\s+(?:a|ate)\\s+(${WEEKDAY_ALIAS_PATTERN})s?\\b`,
+    "g",
+  );
+
+  for (const match of normalizedQuestion.matchAll(rangePattern)) {
+    const start = businessDayFromAlias(match[1] ?? "");
+    const end = businessDayFromAlias(match[2] ?? "");
+    if (!start || !end) continue;
+
+    const startIndex = BUSINESS_DAY_KEYS.indexOf(start);
+    const endIndex = BUSINESS_DAY_KEYS.indexOf(end);
+    const rangeLength =
+      endIndex >= startIndex
+        ? endIndex - startIndex + 1
+        : BUSINESS_DAY_KEYS.length - startIndex + endIndex + 1;
+    for (let offset = 0; offset < rangeLength; offset += 1) {
+      const index = (startIndex + offset) % BUSINESS_DAY_KEYS.length;
+      add(BUSINESS_DAY_KEYS[index]!, (match.index ?? 0) + offset / 100);
+    }
+  }
+
+  for (const match of normalizedQuestion.matchAll(
+    new RegExp(`\\b(${WEEKDAY_ALIAS_PATTERN})s?\\b`, "g"),
+  )) {
+    const day = businessDayFromAlias(match[1] ?? "");
+    if (day) add(day, match.index ?? 0);
+  }
+
+  for (const match of normalizedQuestion.matchAll(/\b(?:fim|final|finais) de semana\b/g)) {
+    add("saturday", match.index ?? 0);
+    add("sunday", (match.index ?? 0) + 0.01);
+  }
+
+  return [...mentions.entries()].sort((left, right) => left[1] - right[1]).map(([day]) => day);
+}
+
+/**
+ * Backwards-compatible singular view for legacy metadata. For a multi-day
+ * request it returns the first day stated by the customer, never alias order.
+ */
 function findRequestedBusinessDay(question: string): BusinessDayKey | undefined {
-  return WEEKDAY_ALIASES.find(([alias]) => new RegExp(`\\b${alias}(?:s)?\\b`).test(question))?.[1];
+  return findRequestedBusinessDays(question)[0];
 }
 
 const TIME_PATTERN = /^\d{2}:\d{2}$/;
@@ -170,19 +233,88 @@ export function isValidIanaTimezone(value: string | null | undefined): boolean {
   }
 }
 
+export type OfficialTimezoneResolution = {
+  timezone: string | null;
+  source: "ASSISTANT" | "COMPANY" | "DEFAULT_COMPATIBILITY" | "NONE";
+  isConfigured: boolean;
+  isValid: boolean;
+  fallbackApplied: boolean;
+  invalidConfiguredValues: boolean;
+  assistantTimezoneConfigured: boolean;
+  assistantTimezoneValid: boolean;
+  companyTimezoneConfigured: boolean;
+  companyTimezoneValid: boolean;
+};
+
+/**
+ * Strictly resolves the configured official timezone without applying the
+ * legacy default. This is used by factual runtime paths that cannot safely
+ * infer an operating timezone.
+ */
+export function resolveOfficialTimezoneResolution(input: {
+  assistantTimezone?: string | null;
+  companyTimezone?: string | null;
+}): OfficialTimezoneResolution {
+  const assistantTimezone = input.assistantTimezone?.trim() || null;
+  const companyTimezone = input.companyTimezone?.trim() || null;
+  const assistantTimezoneConfigured = assistantTimezone !== null;
+  const companyTimezoneConfigured = companyTimezone !== null;
+  const assistantTimezoneValid = isValidIanaTimezone(assistantTimezone);
+  const companyTimezoneValid = isValidIanaTimezone(companyTimezone);
+  const isConfigured = assistantTimezoneConfigured || companyTimezoneConfigured;
+  const invalidConfiguredValues =
+    (assistantTimezoneConfigured && !assistantTimezoneValid) ||
+    (companyTimezoneConfigured && !companyTimezoneValid);
+
+  if (assistantTimezoneValid) {
+    return {
+      timezone: assistantTimezone,
+      source: "ASSISTANT",
+      isConfigured,
+      isValid: true,
+      fallbackApplied: false,
+      invalidConfiguredValues,
+      assistantTimezoneConfigured,
+      assistantTimezoneValid,
+      companyTimezoneConfigured,
+      companyTimezoneValid,
+    };
+  }
+
+  if (companyTimezoneValid) {
+    return {
+      timezone: companyTimezone,
+      source: "COMPANY",
+      isConfigured,
+      isValid: true,
+      fallbackApplied: false,
+      invalidConfiguredValues,
+      assistantTimezoneConfigured,
+      assistantTimezoneValid,
+      companyTimezoneConfigured,
+      companyTimezoneValid,
+    };
+  }
+
+  return {
+    timezone: null,
+    source: "NONE",
+    isConfigured,
+    isValid: false,
+    fallbackApplied: false,
+    invalidConfiguredValues,
+    assistantTimezoneConfigured,
+    assistantTimezoneValid,
+    companyTimezoneConfigured,
+    companyTimezoneValid,
+  };
+}
+
 export function resolveOfficialTimezone(input: {
   assistantTimezone?: string | null;
   companyTimezone?: string | null;
 }): string {
-  if (isValidIanaTimezone(input.assistantTimezone ?? null)) {
-    return input.assistantTimezone!.trim();
-  }
-
-  if (isValidIanaTimezone(input.companyTimezone ?? null)) {
-    return input.companyTimezone!.trim();
-  }
-
-  return DEFAULT_TIMEZONE;
+  return resolveOfficialTimezoneResolution(input).timezone ?? DEFAULT_TIMEZONE;
 }
 
 function sortIntervals(intervals: BusinessHoursInterval[]): BusinessHoursInterval[] {
@@ -808,7 +940,7 @@ function buildHoursAnswer(question: string, context: OfficialBusinessContext): s
     intervals
       .map((interval) => `das ${formatTime(interval.start)} às ${formatTime(interval.end)}`)
       .join(" e ");
-  const requestedDay = findRequestedBusinessDay(normalized);
+  const requestedDays = findRequestedBusinessDays(normalized);
 
   if (
     normalized.includes("aberto agora") ||
@@ -830,8 +962,7 @@ function buildHoursAnswer(question: string, context: OfficialBusinessContext): s
   // A day explicitly named by the customer is authoritative over generic
   // "abre"/"fecha" wording. This prevents asking about Saturday from being
   // evaluated against the current day.
-  if (requestedDay) {
-    const intervals = context.businessHours[requestedDay];
+  if (requestedDays.length > 0) {
     const dayLabel: Record<BusinessDayKey, string> = {
       monday: "segundas-feiras",
       tuesday: "terças-feiras",
@@ -841,9 +972,22 @@ function buildHoursAnswer(question: string, context: OfficialBusinessContext): s
       saturday: "sábados",
       sunday: "domingos",
     };
-    return intervals.length > 0
-      ? `Sim. Aos ${dayLabel[requestedDay]} atendemos ${formatIntervals(intervals)}.`
-      : `Não, aos ${dayLabel[requestedDay]} estamos fechados.`;
+    if (requestedDays.length === 1) {
+      const requestedDay = requestedDays[0]!;
+      const intervals = context.businessHours[requestedDay];
+      return intervals.length > 0
+        ? `Sim. Aos ${dayLabel[requestedDay]} atendemos ${formatIntervals(intervals)}.`
+        : `Não, aos ${dayLabel[requestedDay]} estamos fechados.`;
+    }
+
+    return requestedDays
+      .map((requestedDay) => {
+        const intervals = context.businessHours[requestedDay];
+        return intervals.length > 0
+          ? `Aos ${dayLabel[requestedDay]} atendemos ${formatIntervals(intervals)}.`
+          : `Aos ${dayLabel[requestedDay]} não abrimos.`;
+      })
+      .join(" ");
   }
 
   if (normalized.includes("almoco") || normalized.includes("intervalo")) {
@@ -911,6 +1055,7 @@ export type DeterministicBusinessHoursResponse = {
   deterministicBranch:
     "MISSING_SCHEDULE" | "WEEKLY_SUMMARY" | "SPECIFIC_DAY" | "TODAY" | "OPEN_NOW" | "CLOSED_NOW";
   requestedDay: BusinessDayKey | null;
+  requestedDays: BusinessDayKey[];
   timezone: string;
   scheduleSource: "OFFICIAL_STRUCTURED_SCHEDULE";
   missingScheduleConfiguration: boolean;
@@ -929,6 +1074,7 @@ export function buildDeterministicBusinessHoursResponse(
   context: OfficialBusinessContext | null | undefined,
 ): DeterministicBusinessHoursResponse {
   const normalized = normalizeQuestion(question);
+  const requestedDays = findRequestedBusinessDays(normalized);
   const requestedDay = findRequestedBusinessDay(normalized) ?? null;
   const requestedScheduleScope =
     /(?:aberto|aberta|funcionando).*(?:agora)|(?:agora).*(?:aberto|aberta|funcionando)/.test(
@@ -970,6 +1116,7 @@ export function buildDeterministicBusinessHoursResponse(
     requestedScheduleScope,
     deterministicBranch,
     requestedDay,
+    requestedDays,
     timezone: context?.timezone ?? "UNAVAILABLE",
     scheduleSource: "OFFICIAL_STRUCTURED_SCHEDULE",
     missingScheduleConfiguration,

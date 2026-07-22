@@ -29,6 +29,17 @@ const positives = [
   ["Abrem sábado?", "SPECIFIC_DAY"],
   ["Domingo vocês funcionam?", "SPECIFIC_DAY"],
   ["Qual o horário de sábado e domingo?", "SPECIFIC_DAY"],
+  ["Vocês abrem sábado e domingo?", "SPECIFIC_DAY"],
+  ["Como funciona na sexta e no sábado?", "SPECIFIC_DAY"],
+  ["Qual o expediente de segunda e terça?", "SPECIFIC_DAY"],
+  ["Quarta e quinta vocês fecham que horas?", "SPECIFIC_DAY"],
+  ["Funcionam de segunda a sexta?", "SPECIFIC_DAY"],
+  ["Qual o horário no fim de semana?", "SPECIFIC_DAY"],
+  ["Qual o horário de fim de semana?", "SPECIFIC_DAY"],
+  ["Como é o atendimento aos finais de semana?", "SPECIFIC_DAY"],
+  ["Abrem no final de semana?", "SPECIFIC_DAY"],
+  ["Sábado abre e domingo também?", "SPECIFIC_DAY"],
+  ["Terça, quarta e quinta quais os horários?", "SPECIFIC_DAY"],
   ["Vocês funcionam no sábado?", "SPECIFIC_DAY"],
   ["Abrem domingo?", "SPECIFIC_DAY"],
   ["Que horas fecham hoje?", "TODAY"],
@@ -123,6 +134,24 @@ const negatives = [
   "E depois do almoço?",
   "Quarta às 13?",
   "Retorna hoje?",
+  "Minha entrega chega sábado ou domingo?",
+  "O técnico vem terça e quarta?",
+  "Meu pedido sai sexta e chega sábado?",
+  "A reunião será segunda ou terça?",
+  "O sistema ficou fechado sábado e domingo.",
+  "Quero agendar para quarta ou quinta.",
+  "O motorista trabalha sábado?",
+  "Fim de semana?",
+  "E no fim de semana?",
+  "Sábado e domingo?",
+  "Segunda e terça?",
+  "Minha entrega chega no fim de semana?",
+  "O técnico trabalha sábado e domingo?",
+  "Meu pedido chega sábado?",
+  "Quero agendar para o fim de semana.",
+  "O motorista vem sábado e domingo?",
+  "A reunião será no fim de semana?",
+  "O cliente volta no fim de semana?",
 ];
 
 test("detecta perguntas diretas de horários sem provider", () => {
@@ -252,7 +281,7 @@ async function createDirectFixture(prisma, overrides = {}) {
     data: {
       id: fixture.companyId,
       name: "Direct Business Hours Test",
-      timezone: "America/Campo_Grande",
+      timezone: overrides.companyTimezone ?? "America/Campo_Grande",
     },
   });
   await prisma.assistant.create({
@@ -260,7 +289,7 @@ async function createDirectFixture(prisma, overrides = {}) {
       id: fixture.assistantId,
       companyId: fixture.companyId,
       name: "Direct Business Hours Assistant",
-      timezone: "America/Campo_Grande",
+      timezone: overrides.assistantTimezone ?? "America/Campo_Grande",
       weeklySchedule:
         overrides.weeklySchedule === undefined ? directSchedule : overrides.weeklySchedule,
       ragEnabled: false,
@@ -424,6 +453,80 @@ test(
 );
 
 test(
+  "PostgreSQL: timezone inválido usa fallback seguro sem provider",
+  { concurrency: false },
+  async () =>
+    withDirectFixture(
+      {
+        companyTimezone: "America/Campo_Grand",
+        assistantTimezone: "GMT-4",
+      },
+      async ({ prisma, fixture, service, providerCalls, outboundCalls }) => {
+        const response = await service.sendMessage(
+          directInbound(fixture, "Qual o horário de atendimento?", "direct-invalid-timezone"),
+        );
+        assert.equal(
+          response.assistantMessage.content,
+          "Não consegui consultar o horário oficial neste momento. Por favor, tente novamente em alguns minutos.",
+        );
+        assert.equal(providerCalls.length, 0);
+        assert.equal(outboundCalls.length, 1);
+        const log = await prisma.assistantRuntimeLog.findFirstOrThrow({
+          where: { companyId: fixture.companyId, mode: "business-hours-direct-deterministic" },
+        });
+        assert.equal(log.metadata.fallbackReason, "INVALID_OFFICIAL_TIMEZONE");
+        assert.equal(log.metadata.timezoneValid, false);
+        assert.equal(log.metadata.timezoneSource, "NONE");
+        assert.equal(log.metadata.timezoneFallbackApplied, false);
+        assert.equal(log.metadata.providerCount, 0);
+        assert.equal(log.metadata.historyUsed, false);
+        assert.equal(log.metadata.flowRouterUsed, false);
+        assert.equal(log.metadata.responseExecutionUsed, false);
+        assert.equal(log.metadata.approvalCreated, false);
+        assert.equal(log.metadata.outboundCount, 1);
+        assert.equal(
+          await prisma.assistantConversationStateV2.count({
+            where: { companyId: fixture.companyId },
+          }),
+          0,
+        );
+      },
+    ),
+);
+
+test(
+  "PostgreSQL: timezone oficial ausente usa fallback seguro sem provider",
+  { concurrency: false },
+  async () =>
+    withDirectFixture(
+      { companyTimezone: "", assistantTimezone: "" },
+      async ({ prisma, fixture, service, providerCalls, outboundCalls }) => {
+        const response = await service.sendMessage(
+          directInbound(fixture, "Vocês estão abertos agora?", "direct-missing-timezone"),
+        );
+        assert.equal(
+          response.assistantMessage.content,
+          "Não consegui consultar o horário oficial neste momento. Por favor, tente novamente em alguns minutos.",
+        );
+        assert.equal(providerCalls.length, 0);
+        assert.equal(outboundCalls.length, 1);
+        const log = await prisma.assistantRuntimeLog.findFirstOrThrow({
+          where: { companyId: fixture.companyId, mode: "business-hours-direct-deterministic" },
+        });
+        assert.equal(log.metadata.fallbackReason, "INVALID_OFFICIAL_TIMEZONE");
+        assert.equal(log.metadata.timezoneValid, false);
+        assert.equal(log.metadata.timezoneSource, "NONE");
+        assert.equal(
+          await prisma.assistantConversationStateV2.count({
+            where: { companyId: fixture.companyId },
+          }),
+          0,
+        );
+      },
+    ),
+);
+
+test(
   "PostgreSQL: conversa com estado V2 legado volumoso não lê, arma ou altera esse estado",
   { concurrency: false },
   async () =>
@@ -462,7 +565,7 @@ test(
         .update(JSON.stringify(before.stateJson))
         .digest("hex");
       await service.sendMessage(
-        directInbound(fixture, "Qual o horário na quarta-feira?", "direct-legacy-1"),
+        directInbound(fixture, "Qual o horário de sábado e domingo?", "direct-legacy-1"),
       );
       const after = await prisma.assistantConversationStateV2.findFirst({
         where: { companyId: fixture.companyId },
@@ -474,6 +577,10 @@ test(
       );
       assert.equal(providerCalls.length, 0);
       assert.equal(outboundCalls.length, 1);
+      assert.match(outboundCalls[0].content, /sábados/i);
+      assert.match(outboundCalls[0].content, /07h30 às 12h/i);
+      assert.match(outboundCalls[0].content, /domingos/i);
+      assert.match(outboundCalls[0].content, /não abrimos/i);
       assert.equal(
         await prisma.assistantConversationStateV2Event.count({
           where: { companyId: fixture.companyId },
@@ -555,49 +662,82 @@ test(
 );
 
 test(
-  "PostgreSQL: trinta perguntas consecutivas de horário permanecem stateless e sem provider",
+  "PostgreSQL: quarenta mensagens preservam rota direta multi-dia, default deny e estado V2",
   { concurrency: false },
   async () =>
     withDirectFixture({}, async ({ prisma, fixture, service, providerCalls, outboundCalls }) => {
-      const sequence = [
+      const positives = [
         "Qual o horário de atendimento?",
+        "Qual o horário na quarta-feira?",
+        "Vocês fecham para almoço na quarta?",
         "Que horas vocês fecham hoje?",
         "Vocês estão abertos agora?",
+        "Abrem sábado?",
+        "Domingo vocês funcionam?",
+        "Qual o horário de sábado e domingo?",
+        "Qual o horário no fim de semana?",
+        "Quarta volta às 13?",
+        "Depois do almoço volta que horas?",
+        "Como funciona na sexta e no sábado?",
+        "Qual o expediente de segunda e terça?",
+        "Funcionam de segunda a sexta?",
+        "Terça, quarta e quinta quais os horários?",
+        "Sexta a segunda vocês funcionam como?",
+        "Vocês abrem sábado e domingo?",
+        "Quarta e quinta vocês fecham que horas?",
         "Qual o horário na segunda?",
         "Qual o horário na terça?",
         "Qual o horário na quarta?",
-        "Quarta fecha para almoço?",
-        "Quarta volta às 13?",
-        "Depois do almoço volta que horas?",
         "Quinta funciona até as 18?",
-        "Sábado abre?",
-        "Domingo funciona?",
-        "Qual o horário na quarta-feira?",
+        "Qual o expediente de sexta?",
+        "Vocês funcionam no sábado?",
+        "Abrem domingo?",
         "Que horas vocês abrem?",
         "A loja está fechada hoje?",
         "Quando vocês atendem?",
+        "Qual o horário de funcionamento?",
+        "O estabelecimento abre na sexta?",
       ];
-      for (let index = 0; index < 30; index += 1) {
+      assert.equal(positives.length, 30);
+      for (const [index, message] of positives.entries()) {
         const response = await service.sendMessage(
-          directInbound(fixture, sequence[index % sequence.length], `direct-sequence-${index}`),
+          directInbound(fixture, message, `direct-sequence-positive-${index}`),
         );
-        assert.equal(response.runtime.reason, "BUSINESS_HOURS_DIRECT_DETERMINISTIC");
+        assert.equal(response.runtime.reason, "BUSINESS_HOURS_DIRECT_DETERMINISTIC", message);
       }
-      const directLogs = await prisma.assistantRuntimeLog.findMany({
-        where: { companyId: fixture.companyId, mode: "business-hours-direct-deterministic" },
-      });
-      for (const [index, message] of [
+
+      const negatives = [
+        "Que horas meu pedido chega?",
+        "Minha entrega chega sábado ou domingo?",
         "O técnico volta às 13?",
-        "O sistema volta às 13?",
-      ].entries()) {
+        "O técnico vem terça e quarta?",
+        "Quero agendar para o fim de semana.",
+        "Meu sistema está fechado.",
+        "O motorista vem sábado e domingo?",
+        "Minha reunião será segunda ou terça?",
+        "O cliente volta no fim de semana?",
+        "Qual o horário da consulta?",
+      ];
+      assert.equal(negatives.length, 10);
+      for (const [index, message] of negatives.entries()) {
         const response = await service.sendMessage(
           directInbound(fixture, message, `direct-sequence-negative-${index}`),
         );
-        assert.notEqual(response.runtime.reason, "BUSINESS_HOURS_DIRECT_DETERMINISTIC");
+        assert.notEqual(response.runtime.reason, "BUSINESS_HOURS_DIRECT_DETERMINISTIC", message);
       }
+
+      const directLogs = await prisma.assistantRuntimeLog.findMany({
+        where: { companyId: fixture.companyId, mode: "business-hours-direct-deterministic" },
+      });
       assert.equal(directLogs.length, 30);
-      assert.equal(providerCalls.length, 2);
-      assert.equal(outboundCalls.length, 32);
+      assert.equal(providerCalls.length, 10);
+      assert.equal(outboundCalls.length, 40);
+      assert.equal(
+        outboundCalls.filter(
+          (outbound) => /sábados/i.test(outbound.content) && /domingos/i.test(outbound.content),
+        ).length >= 3,
+        true,
+      );
       assert.equal(
         await prisma.assistantConversationStateV2.count({
           where: { companyId: fixture.companyId },
@@ -606,7 +746,11 @@ test(
       );
       assert.equal(
         directLogs.every(
-          (log) => log.metadata.providerCount === 0 && log.metadata.approvalCreated === false,
+          (log) =>
+            log.metadata.providerCount === 0 &&
+            log.metadata.approvalCreated === false &&
+            log.metadata.historyUsed === false &&
+            log.metadata.responseExecutionUsed === false,
         ),
         true,
       );

@@ -40,6 +40,7 @@ import {
   buildOfficialBusinessContext,
   buildDeterministicBusinessHoursResponse,
   buildOutsideBusinessHoursReply,
+  resolveOfficialTimezoneResolution,
   type OfficialBusinessContext,
 } from "../assistants/official-business-context";
 import {
@@ -915,31 +916,44 @@ export class AssistantConversationsService {
     const scope: DirectBusinessHoursScope | null = detectDirectBusinessHours(input.message);
     if (!scope) return null;
 
-    const officialContext = buildOfficialBusinessContext({
-      companyName: input.assistant.company.name,
-      assistantName: input.assistant.name,
+    const timezoneResolution = resolveOfficialTimezoneResolution({
       companyTimezone: input.assistant.company.timezone,
       assistantTimezone: input.assistant.timezone,
-      description: input.assistant.description,
-      businessAddress: input.assistant.businessAddress,
-      businessCity: input.assistant.businessCity,
-      businessState: input.assistant.businessState,
-      businessCityRegion: input.assistant.businessCityRegion,
-      businessPostalCode: input.assistant.businessPostalCode,
-      googleMapsUrl: input.assistant.googleMapsUrl,
-      latitude: input.assistant.latitude,
-      longitude: input.assistant.longitude,
-      businessPhone: input.assistant.businessPhone,
-      businessWhatsapp: input.assistant.businessWhatsapp,
-      businessWhatsappSupport: input.assistant.businessWhatsappSupport,
-      websiteUrl: input.assistant.websiteUrl,
-      weeklySchedule: input.assistant.weeklySchedule,
-      aiAlwaysAvailable: input.assistant.aiAlwaysAvailable,
     });
-    const rendered = buildDeterministicBusinessHoursResponse(input.message, officialContext);
-    const answer = rendered.missingScheduleConfiguration
+    const officialContext = timezoneResolution.isValid
+      ? buildOfficialBusinessContext({
+          companyName: input.assistant.company.name,
+          assistantName: input.assistant.name,
+          companyTimezone: input.assistant.company.timezone,
+          assistantTimezone: input.assistant.timezone,
+          description: input.assistant.description,
+          businessAddress: input.assistant.businessAddress,
+          businessCity: input.assistant.businessCity,
+          businessState: input.assistant.businessState,
+          businessCityRegion: input.assistant.businessCityRegion,
+          businessPostalCode: input.assistant.businessPostalCode,
+          googleMapsUrl: input.assistant.googleMapsUrl,
+          latitude: input.assistant.latitude,
+          longitude: input.assistant.longitude,
+          businessPhone: input.assistant.businessPhone,
+          businessWhatsapp: input.assistant.businessWhatsapp,
+          businessWhatsappSupport: input.assistant.businessWhatsappSupport,
+          websiteUrl: input.assistant.websiteUrl,
+          weeklySchedule: input.assistant.weeklySchedule,
+          aiAlwaysAvailable: input.assistant.aiAlwaysAvailable,
+        })
+      : null;
+    const rendered = officialContext
+      ? buildDeterministicBusinessHoursResponse(input.message, officialContext)
+      : null;
+    const fallbackReason = !timezoneResolution.isValid
+      ? "INVALID_OFFICIAL_TIMEZONE"
+      : rendered?.missingScheduleConfiguration
+        ? "MISSING_OR_INVALID_SCHEDULE"
+        : null;
+    const answer = fallbackReason
       ? "Não consegui consultar o horário oficial neste momento. Por favor, tente novamente em alguns minutos."
-      : rendered.answer;
+      : rendered!.answer;
     const metadata = {
       route: "BUSINESS_HOURS_DIRECT_DETERMINISTIC",
       strategy: "BUSINESS_HOURS_DIRECT_DETERMINISTIC",
@@ -950,8 +964,12 @@ export class AssistantConversationsService {
       inboundMessageId: input.userMessage.id,
       businessHoursIntent: true,
       businessHoursScope: scope,
+      requestedBusinessDays: rendered?.requestedDays ?? [],
       scheduleSource: "OFFICIAL_STRUCTURED_SCHEDULE",
-      timezone: rendered.timezone,
+      timezone: timezoneResolution.timezone ?? "UNAVAILABLE",
+      timezoneValid: timezoneResolution.isValid,
+      timezoneSource: timezoneResolution.source,
+      timezoneFallbackApplied: timezoneResolution.fallbackApplied,
       providerCount: 0,
       deterministicResponderCount: 1,
       historyUsed: false,
@@ -959,7 +977,7 @@ export class AssistantConversationsService {
       responseExecutionUsed: false,
       approvalCreated: false,
       outboundCount: 1,
-      fallbackReason: rendered.missingScheduleConfiguration ? "MISSING_OR_INVALID_SCHEDULE" : null,
+      fallbackReason,
     };
     const { assistantMessage } = await this.prisma.$transaction(async (tx) => {
       const assistantMessage = await tx.assistantConversationMessage.create({
@@ -987,7 +1005,7 @@ export class AssistantConversationsService {
           provider: null,
           model: null,
           configurationSource: "business-hours-direct-binding",
-          fallback: rendered.missingScheduleConfiguration,
+          fallback: fallbackReason !== null,
           fallbackReason: metadata.fallbackReason,
           outcome: "success",
           durationMs: Date.now() - input.runtimeStartedAt,
@@ -1023,7 +1041,7 @@ export class AssistantConversationsService {
         temperature: 0,
         temperatureSource: "none",
         configurationSource: "business-hours-direct-binding",
-        fallback: rendered.missingScheduleConfiguration,
+        fallback: fallbackReason !== null,
         outcome: "success",
         reason: "BUSINESS_HOURS_DIRECT_DETERMINISTIC",
         summary: "",
