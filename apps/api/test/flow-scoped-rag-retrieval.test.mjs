@@ -20,6 +20,8 @@ import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.s
 import {
   buildMultiIntentTurn,
   flowIntentKeyForFlow,
+  normalizeIntentText,
+  resolveStructuralRoutingCategory,
   scoreFlowCandidates,
 } from "../dist/intent-router/intent-routing.js";
 
@@ -222,6 +224,116 @@ test("domínio explícito vence PRICE e preserva PRICE como intenção secundár
     });
     assert.equal(turn.primaryIntent, primaryIntent, message);
     assert.deepEqual(turn.secondaryIntents, secondaryIntents, message);
+  }
+});
+
+test("flow de equipamento específico vence referências colaterais de visita, vendas e triagem", () => {
+  const flows = [
+    {
+      id: "visit",
+      name: "Visita Técnica Externa",
+      active: true,
+      priority: 85,
+      triggerKeywords: '["visita técnica","wifi","rede","roteador","empresa","impressora"]',
+      triggerDescription: "Visita no local para redes, Wi-Fi e impressoras no local.",
+    },
+    {
+      id: "sales",
+      name: "Vendas e Comercial",
+      active: true,
+      priority: 75,
+      triggerKeywords: '["comprar","impressora nova"]',
+      triggerDescription: "Vendas de impressoras e equipamentos.",
+    },
+    {
+      id: "technical",
+      name: "Assistência Técnica Geral",
+      active: true,
+      priority: 60,
+      triggerKeywords: '["conserto","impressora não imprime"]',
+      triggerDescription: "Assistência técnica para impressoras e equipamentos.",
+    },
+    {
+      id: "company",
+      name: "Informações da Empresa",
+      active: true,
+      priority: 50,
+      triggerKeywords: '["endereço","localização","telefone","whatsapp","contato"]',
+      triggerDescription: "Endereço, localização, telefone e contato da empresa.",
+    },
+    {
+      id: "printer",
+      name: "Impressoras e Etiquetas",
+      active: true,
+      priority: 64,
+      triggerKeywords: '["impressora","impressora térmica","impressora fiscal","não imprime"]',
+      triggerDescription: "Manutenção de impressoras, cupom e etiquetas.",
+    },
+    {
+      id: "notebook",
+      name: "Notebooks e Upgrades",
+      active: true,
+      priority: 63,
+      triggerKeywords: '["notebook","tela de notebook","upgrade notebook"]',
+      triggerDescription: "Serviços de notebook, tela e upgrade.",
+    },
+    {
+      id: "apple",
+      name: "Apple, Videogames, Monitores e TVs",
+      active: true,
+      priority: 62,
+      triggerKeywords: '["macbook","imac","videogame","monitor","tv"]',
+      triggerDescription: "Serviços para MacBook, iMac, videogames, monitores e TVs.",
+    },
+    {
+      id: "nobreak",
+      name: "Nobreaks, Projetores e Eletrônicos",
+      active: true,
+      priority: 61,
+      triggerKeywords: '["nobreak","projetor","eletrônico"]',
+      triggerDescription: "Serviços para nobreaks, projetores e eletrônicos.",
+    },
+  ];
+
+  const cases = [
+    ["Podem ir até minha empresa configurar o Wi-Fi?", "visit", "external_visit"],
+    ["Podem ir até minha empresa configurar o Wi‑Fi?", "visit", "external_visit"],
+    ["Podem ir ate minha empresa configurar o wifi?", "visit", "external_visit"],
+    ["Preciso de atendimento no local para configurar a rede.", "visit", "external_visit"],
+    ["Vocês fazem visita técnica?", "visit", "external_visit"],
+    ["Um técnico pode ir ao meu endereço?", "visit", "external_visit"],
+    ["Vocês podem mandar um técnico aqui?", "visit", "external_visit"],
+    ["Alguém pode vir até minha empresa?", "visit", "external_visit"],
+    ["Preciso de atendimento no local.", "visit", "external_visit"],
+    ["Um profissional pode comparecer na minha loja?", "visit", "external_visit"],
+    ["Fazem instalação de rede na empresa?", "visit", "external_visit"],
+    ["Podem configurar meu roteador no local?", "visit", "external_visit"],
+    ["Vocês consertam impressoras?", "printer"],
+    ["Minha impressora térmica não imprime.", "printer"],
+    ["Vocês arrumam impressora fiscal?", "printer"],
+    ["Meu notebook precisa de tela.", "notebook"],
+    ["Vocês arrumam MacBook?", "apple"],
+    ["Fazem manutenção em nobreak?", "nobreak"],
+    ["Consertam impressora no local?", "printer"],
+    ["Um técnico pode vir consertar minha impressora?", "printer"],
+    ["Consertam notebook no local?", "notebook"],
+    ["Meu computador está travando.", "technical"],
+    ["Qual o endereço da empresa?", "company", "institutional_information"],
+    ["Onde vocês ficam?", "company", "institutional_information"],
+    ["Me passa a localização da loja.", "company", "institutional_information"],
+    ["Qual o telefone para contato?", "company", "institutional_information"],
+    ["Vocês têm WhatsApp?", "company", "institutional_information"],
+    ["Como faço para chegar até vocês?", "company", "institutional_information"],
+    ["Quero falar com um técnico.", undefined],
+  ];
+
+  assert.equal(normalizeIntentText("Wi-Fi"), "wifi");
+  assert.equal(normalizeIntentText("Wi‑Fi"), "wifi");
+  assert.equal(normalizeIntentText("wi fi"), "wifi");
+
+  for (const [message, flowId, category] of cases) {
+    if (category) assert.equal(resolveStructuralRoutingCategory(message), category, message);
+    assert.equal(scoreFlowCandidates(message, flows)[0]?.flowId, flowId, message);
   }
 });
 
