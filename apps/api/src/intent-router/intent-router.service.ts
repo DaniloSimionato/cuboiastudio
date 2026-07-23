@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { AssistantFlow } from "@prisma/client";
 import { AiService } from "../ai/ai.service";
 import {
+  DETERMINISTIC_ROUTER_MIN_SCORE,
   flowIntentKeyForFlow,
   hasExternalVisitEvidence,
   normalizeIntentText,
@@ -51,7 +52,7 @@ export class IntentRouterService {
     }
 
     const activeFlows = input.flows.filter((f) => f.active);
-    
+
     if (activeFlows.length === 0) {
       return { flowId: null, flowName: null, confidence: 0, reason: "No active flows" };
     }
@@ -59,10 +60,10 @@ export class IntentRouterService {
     // Evaluate every active flow. Priority is only a deterministic tie-breaker.
     const candidates = scoreFlowCandidates(input.message, activeFlows);
     const best = candidates[0];
-    if (best && best.score >= 2) {
+    if (best && best.score >= DETERMINISTIC_ROUTER_MIN_SCORE) {
       const secondaryIntentKeys = candidates
         .slice(1)
-        .filter((candidate) => candidate.score >= 2)
+        .filter((candidate) => candidate.score >= DETERMINISTIC_ROUTER_MIN_SCORE)
         .map((candidate) => candidate.intentKey);
       const confidence = Math.min(0.99, 0.55 + best.score / 12);
       this.logger.debug(
@@ -95,8 +96,11 @@ export class IntentRouterService {
     }
 
     try {
-      const prompt = `Classifique a intenção da mensagem do cliente em um dos fluxos disponíveis. Responda APENAS com o ID do fluxo selecionado, ou "fallback" se nenhum fluxo se adequar.\n\nFluxos disponíveis:\n` +
-        flowsWithDescriptions.map((f) => `- ID: ${f.id} | Nome: ${f.name} | Intenção: ${f.triggerDescription}`).join("\n") +
+      const prompt =
+        `Classifique a intenção da mensagem do cliente em um dos fluxos disponíveis. Responda APENAS com o ID do fluxo selecionado, ou "fallback" se nenhum fluxo se adequar.\n\nFluxos disponíveis:\n` +
+        flowsWithDescriptions
+          .map((f) => `- ID: ${f.id} | Nome: ${f.name} | Intenção: ${f.triggerDescription}`)
+          .join("\n") +
         `\n\nMensagem do cliente: "${input.message}"`;
 
       const completion = await this.aiService.generateChatCompletion({
@@ -106,17 +110,18 @@ export class IntentRouterService {
         messages: [
           {
             role: "system",
-            content: "Você é um roteador de intenção. Responda APENAS com o ID do fluxo correspondente, ou com a palavra 'fallback'."
+            content:
+              "Você é um roteador de intenção. Responda APENAS com o ID do fluxo correspondente, ou com a palavra 'fallback'.",
           },
           {
             role: "user",
             content: prompt,
-          }
-        ]
+          },
+        ],
       });
 
       const responseText = (completion.answer || "").trim();
-      
+
       if (responseText.toLowerCase() === "fallback") {
         return {
           flowId: null,
@@ -128,10 +133,13 @@ export class IntentRouterService {
         };
       }
 
-      const matchedFlow = flowsWithDescriptions.find(f => responseText.includes(f.id));
+      const matchedFlow = flowsWithDescriptions.find((f) => responseText.includes(f.id));
       if (matchedFlow) {
         const normalizedMessage = normalizeIntentText(input.message);
-        if (flowIntentKeyForFlow(matchedFlow) === "external_visit" && !hasExternalVisitEvidence(normalizedMessage)) {
+        if (
+          flowIntentKeyForFlow(matchedFlow) === "external_visit" &&
+          !hasExternalVisitEvidence(normalizedMessage)
+        ) {
           return {
             flowId: null,
             flowName: null,

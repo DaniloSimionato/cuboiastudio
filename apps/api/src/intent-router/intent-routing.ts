@@ -38,6 +38,13 @@ export type FlowKeywordEvidence = {
   priority: number;
 };
 
+/**
+ * The IntentRouterService only accepts candidates at or above this score.
+ * Strong structural categories must use the same floor so they never fall
+ * through to semantic routing after their canonical flow was identified.
+ */
+export const DETERMINISTIC_ROUTER_MIN_SCORE = 2;
+
 export type StructuralRoutingCategory =
   | "printer"
   | "notebook"
@@ -677,7 +684,7 @@ export function scoreFlowCandidates(
       return [
         {
           ...candidate,
-          score: Math.max(candidate.score, 1),
+          score: Math.max(candidate.score, DETERMINISTIC_ROUTER_MIN_SCORE),
           matchedAliases: Array.from(
             new Set([...candidate.matchedAliases, `structural_${structuralCategory}`]),
           ),

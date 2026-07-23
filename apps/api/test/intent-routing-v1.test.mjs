@@ -9,6 +9,7 @@ import {
   detectCustomerUnableToAnswer,
   getTriagePreemptionReason,
   normalizeIntentText,
+  resolveStructuralRoutingCategory,
 } from "../dist/intent-router/intent-routing.js";
 import { ensureMultiIntentResponseCoverage } from "../dist/assistant-conversations/multi-intent-response-coverage.js";
 import { compactRepeatedAssistantHistoryMessages } from "../dist/assistant-conversations/conversation-history-format.js";
@@ -88,6 +89,59 @@ test("seleciona preço, formatação e coleta por evidência normalizada", async
       .flowId,
     "company",
   );
+});
+
+test("categorias estruturais fortes usam a entrada pública sem provider", async () => {
+  let providerCalls = 0;
+  const deterministicRouter = new IntentRouterService({
+    generateChatCompletion: async () => {
+      providerCalls += 1;
+      return { answer: "fallback" };
+    },
+  });
+  const flows = [
+    flow("printer", "Impressoras e Etiquetas", 64, ["impressora", "etiqueta"]),
+    flow("company", "Informações da Empresa", 50, ["endereço", "localização"]),
+    flow("visit", "Visita Técnica Externa", 85, ["visita técnica", "wifi", "rede"]),
+    flow("technical", "Assistência Técnica Geral", 60, ["computador", "travando"]),
+    flow("notebook", "Notebooks e Upgrades", 63, ["notebook", "tela de notebook"]),
+    flow("apple", "Apple, Videogames, Monitores e TVs", 62, ["macbook", "monitor"]),
+    flow("nobreak", "Nobreaks, Projetores e Eletrônicos", 61, ["nobreak", "projetor"]),
+  ];
+  const cases = [
+    ["Vocês consertam impressoras?", "Impressoras e Etiquetas", "printer"],
+    ["Onde vocês ficam?", "Informações da Empresa", "institutional_information"],
+    ["Qual o endereço da empresa?", "Informações da Empresa", "institutional_information"],
+    ["Me passa a localização da loja.", "Informações da Empresa", "institutional_information"],
+    ["Um técnico pode ir ao meu endereço?", "Visita Técnica Externa", "external_visit"],
+    ["Podem ir até minha empresa configurar o Wi-Fi?", "Visita Técnica Externa", "external_visit"],
+    ["Meu computador está travando.", "Assistência Técnica Geral", "general_technical_support"],
+    ["Meu notebook precisa de uma tela nova.", "Notebooks e Upgrades", "notebook"],
+    ["Meu MacBook não liga.", "Apple, Videogames, Monitores e TVs", "apple_media"],
+    ["Meu nobreak está apitando.", "Nobreaks, Projetores e Eletrônicos", "nobreak_electronics"],
+    ["Um técnico pode ir consertar minha impressora?", "Impressoras e Etiquetas", "printer"],
+  ];
+
+  for (const [message, expectedFlowName, category] of cases) {
+    assert.equal(resolveStructuralRoutingCategory(message), category, message);
+    const result = await deterministicRouter.route({
+      companyId: "company-test",
+      assistantId: "assistant-test",
+      message,
+      flows,
+    });
+    assert.equal(result.flowName, expectedFlowName, message);
+    assert.equal(result.flowSelectionMethod, "keyword_scored", message);
+  }
+  assert.equal(providerCalls, 0);
+
+  const noVisit = await deterministicRouter.route({
+    companyId: "company-test",
+    assistantId: "assistant-test",
+    message: "Quero falar com um técnico.",
+    flows,
+  });
+  assert.notEqual(noVisit.flowName, "Visita Técnica Externa");
 });
 
 test("intenção explícita atual preempte somente a pergunta pendente de triagem", () => {

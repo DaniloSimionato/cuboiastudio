@@ -334,6 +334,12 @@ test("flow de equipamento específico vence referências colaterais de visita, v
   for (const [message, flowId, category] of cases) {
     if (category) assert.equal(resolveStructuralRoutingCategory(message), category, message);
     assert.equal(scoreFlowCandidates(message, flows)[0]?.flowId, flowId, message);
+    const selected = scoreFlowCandidates(message, flows)[0];
+    if (selected) {
+      assert.equal(typeof selected.flowId, "string", message);
+      assert.equal(typeof selected.flowName, "string", message);
+      assert.equal(Object.hasOwn(selected, "flow"), false, message);
+    }
   }
 });
 
