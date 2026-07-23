@@ -163,6 +163,44 @@ function matchesService(message: string, authority: RagPriceAuthority): boolean 
   });
 }
 
+/**
+ * A title can legitimately cover several services (for example, formatting,
+ * motherboard repair and virus removal). Authorities must consequently be
+ * matched against the sentence that supplied the amount, not only title terms.
+ */
+export function isRagPriceAuthorityCompatibleWithMessage(input: {
+  authority: RagPriceAuthority;
+  currentMessage: string;
+}): boolean {
+  const source = normalize(input.authority.sourceText);
+  const message = normalize(input.currentMessage);
+  const serviceSignals: Array<{ source: RegExp; message: RegExp }> = [
+    { source: /\bplaca[ -]?mae\b/u, message: /\bplaca[ -]?mae\b/u },
+    { source: /\b(?:montagem|configuracao)\b/u, message: /\b(?:montagem|configura[cr][aã]o)\b/u },
+    { source: /\b(?:virus|malware)\b/u, message: /\b(?:virus|malware)\b/u },
+    {
+      source: /\b(?:format|windows|sistema(?:s)?|instalacao)\w*/u,
+      message: /\b(?:format|windows|sistema(?:s)?|instala[cr][aã]o)\w*/u,
+    },
+    {
+      source: /\b(?:recupera[cr][aã]o|dados|arquivos?)\b/u,
+      message: /\b(?:recuper|dados|arquivos?)\b/u,
+    },
+  ];
+
+  const sourceSpecificSignals = serviceSignals.filter(({ source: pattern }) =>
+    pattern.test(source),
+  );
+  if (
+    sourceSpecificSignals.length > 0 &&
+    !sourceSpecificSignals.some(({ message: pattern }) => pattern.test(message))
+  ) {
+    return false;
+  }
+
+  return matchesService(input.currentMessage, input.authority);
+}
+
 export function hasPriceAuthorityForMessage(input: {
   authorities: RagPriceAuthority[];
   currentMessage: string;

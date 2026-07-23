@@ -22,6 +22,12 @@ function coversRequest(answer: string, request: ExplicitCustomerRequestKey): boo
       return /\b(?:notebook|computador|equipamento|nao esta ligando|nao liga|problema tecnico|avaliacao tecnica)\b/.test(
         text,
       );
+    case "formatting":
+      return /\b(?:format|windows|linux|dual boot|sistema(?:s)?|instala[cr][aã]o)\b/.test(text);
+    case "data_recovery":
+      return /\b(?:recupera[cr][aã]o|recuperar|dados|arquivos?|hd|ssd|pendrive|cartao)\b/.test(
+        text,
+      );
     case "pickup_delivery":
       return /\b(?:coleta|retirada|retirar|buscar|busca|entrega)\b/.test(text);
     case "business_hours":
@@ -40,6 +46,10 @@ function acknowledgementFor(
   switch (request) {
     case "technical_support":
       return "Entendi que seu notebook não está ligando.";
+    case "formatting":
+      return "Entendi que você precisa de formatação ou instalação de sistema.";
+    case "data_recovery":
+      return "Entendi que você precisa recuperar dados; vou considerar esse serviço com cuidado.";
     case "pickup_delivery":
       return "Sobre a coleta, preciso confirmar se a retirada está disponível para esse atendimento.";
     case "business_hours":

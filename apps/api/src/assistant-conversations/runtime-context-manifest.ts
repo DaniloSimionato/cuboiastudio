@@ -1,4 +1,5 @@
 import { hashCanonicalInboundMessageContent } from "../inbound/canonical-inbound-message";
+import type { RagPriceAuthority } from "./rag-price-authority";
 
 export const RUNTIME_CONTEXT_MANIFEST_VERSION = "runtime-context-v1";
 
@@ -81,6 +82,7 @@ export function selectRuntimeKnowledgeItems(input: {
         title: string;
         content: string;
         ragAuthorityEligible: true;
+        priceAuthorities?: RagPriceAuthority[];
       }>,
       manifest: {
         ragEnabled: false,

@@ -18,7 +18,9 @@ function truncateText(text: string, maxLength: number): string {
 }
 
 function firstNonEmpty(...values: Array<string | null | undefined>): string | null {
-  return values.find((value) => typeof value === "string" && value.trim().length > 0)?.trim() ?? null;
+  return (
+    values.find((value) => typeof value === "string" && value.trim().length > 0)?.trim() ?? null
+  );
 }
 
 export function isMultiNeedTriageMessage(message: string): boolean {
@@ -27,7 +29,11 @@ export function isMultiNeedTriageMessage(message: string): boolean {
   const text = message.toLowerCase().trim();
 
   // If the message contains explicit request for list, let's NOT treat it as multi-need triage
-  if (/\b(me\s+)?(envie|mande|passa|quero|lista|quais|tabela)\b.*\b(lista|serviços|opções|opcoes|catalogo|catálogo)\b/i.test(text)) {
+  if (
+    /\b(me\s+)?(envie|mande|passa|quero|lista|quais|tabela)\b.*\b(lista|serviços|opções|opcoes|catalogo|catálogo)\b/i.test(
+      text,
+    )
+  ) {
     return false;
   }
 
@@ -37,7 +43,7 @@ export function isMultiNeedTriageMessage(message: string): boolean {
     /\b(tudo\s+bem|tudo\s+bom|como\s+vai|tudo\s+certinho|tudo\s+certo)\b/g,
     /\b(por\s+favor|por\s+gentileza)\b/g,
     /\b(gostaria\s+de\s+saber|gostaria\s+de\s+tirar\s+uma\s+d[uú]vida|gostaria\s+de\s+uma\s+informa[cç][aã]o)\b/g,
-    /\b(voc[eê]\s+pode\s+me\s+ajudar|pode\s+me\s+ajudar|como\s+podemos\s+fazer|o\s+que\s+podemos\s+fazer)\b/g
+    /\b(voc[eê]\s+pode\s+me\s+ajudar|pode\s+me\s+ajudar|como\s+podemos\s+fazer|o\s+que\s+podemos\s+fazer)\b/g,
   ];
 
   const cleanText = (clause: string): string => {
@@ -45,44 +51,88 @@ export function isMultiNeedTriageMessage(message: string): boolean {
     for (const pattern of greetings) {
       temp = temp.replace(pattern, "");
     }
-    return temp.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").replace(/\s+/g, " ").trim();
+    return temp
+      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
   };
 
   const serviceKeywords = [
-    "formatar", "formatação", "formatacao",
-    "ssd", "disco", "hd",
-    "memória", "memoria", "ram",
-    "tela", "display", "visor", "touch",
-    "bateria", "carga", "carregador", "conector",
-    "teclado", "mouse", "trackpad",
-    "limpar", "limpeza",
-    "pasta térmica", "pasta termica",
-    "upgrade", "melhorar", "lento", "lentidão", "lentidao",
-    "consertar", "conserto", "arrumar", "reparo", "reparar",
-    "placa", "placa-mãe", "placa-mae", "fonte",
-    "sistema", "windows", "macos", "mac", "computador", "notebook", "pc",
-    "trocar", "troca", "substituir", "substituição", "substituicao"
+    "formatar",
+    "formatação",
+    "formatacao",
+    "ssd",
+    "disco",
+    "hd",
+    "memória",
+    "memoria",
+    "ram",
+    "tela",
+    "display",
+    "visor",
+    "touch",
+    "bateria",
+    "carga",
+    "carregador",
+    "conector",
+    "teclado",
+    "mouse",
+    "trackpad",
+    "limpar",
+    "limpeza",
+    "pasta térmica",
+    "pasta termica",
+    "upgrade",
+    "melhorar",
+    "lento",
+    "lentidão",
+    "lentidao",
+    "consertar",
+    "conserto",
+    "arrumar",
+    "reparo",
+    "reparar",
+    "placa",
+    "placa-mãe",
+    "placa-mae",
+    "fonte",
+    "sistema",
+    "windows",
+    "macos",
+    "mac",
+    "computador",
+    "notebook",
+    "pc",
+    "trocar",
+    "troca",
+    "substituir",
+    "substituição",
+    "substituicao",
   ];
 
   const hasServiceKeyword = (clause: string): boolean => {
     const cleaned = cleanText(clause);
-    return serviceKeywords.some(keyword => cleaned.includes(keyword));
+    return serviceKeywords.some((keyword) => cleaned.includes(keyword));
   };
 
-  const lines = text.split(/\n+/).map(l => l.trim()).filter(l => l.length > 0);
+  const lines = text
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
 
-  const explicitListItems = lines.filter(line => /^[-*•]|^\d+[.)]/.test(line));
+  const explicitListItems = lines.filter((line) => /^[-*•]|^\d+[.)]/.test(line));
   if (explicitListItems.length >= 2) {
-    return explicitListItems.some(item => hasServiceKeyword(item));
+    return explicitListItems.some((item) => hasServiceKeyword(item));
   }
 
   let totalSubstantiveParts = 0;
   const substantiveLines: string[] = [];
 
   for (const line of lines) {
-    const parts = line.split(/[,;\n]|\b(?:e|ou)\b/i)
-      .map(p => p ? p.trim() : "")
-      .filter(p => p.length > 0);
+    const parts = line
+      .split(/[,;\n]|\b(?:e|ou)\b/i)
+      .map((p) => (p ? p.trim() : ""))
+      .filter((p) => p.length > 0);
 
     let lineSubstantiveParts = 0;
     for (const part of parts) {
@@ -115,7 +165,10 @@ export function isTriageResponseValid(response: string): boolean {
 
   let parsed: any = null;
   try {
-    const cleanJson = text.replace(/^```json\s*/i, "").replace(/\s*```$/, "").trim();
+    const cleanJson = text
+      .replace(/^```json\s*/i, "")
+      .replace(/\s*```$/, "")
+      .trim();
     parsed = JSON.parse(cleanJson);
   } catch (e) {
     return false;
@@ -163,11 +216,15 @@ export function isTriageResponseValid(response: string): boolean {
   if (/^#+/m.test(message) || /\*\*.+?\*\*:/i.test(message)) return false;
 
   // 6. três ou mais blocos (parágrafos)
-  const blocks = message.split(/\n+/).map((b: string) => b.trim()).filter((b: string) => b.length > 0);
+  const blocks = message
+    .split(/\n+/)
+    .map((b: string) => b.trim())
+    .filter((b: string) => b.length > 0);
   if (blocks.length >= 3) return false;
 
   // 7. preço antecipado ou moeda (R$, reais, valor, preço, custo)
-  if (/(r\$\s*\d+|\d+\s*reais|\b(valor(es)?|preço(s)?|custo(s)?|precos?)\b)/i.test(message)) return false;
+  if (/(r\$\s*\d+|\d+\s*reais|\b(valor(es)?|preço(s)?|custo(s)?|precos?)\b)/i.test(message))
+    return false;
 
   // 8. explicação separada de cada solicitação (e.g. contendo múltiplos colons em linhas diferentes)
   const colonsCount = (message.match(/:/g) || []).length;
@@ -236,6 +293,10 @@ function requestLabel(request: MultiIntentTurn["explicitRequests"][number]): str
   switch (request) {
     case "technical_support":
       return "problema técnico informado";
+    case "formatting":
+      return "solicitação de formatação ou sistemas";
+    case "data_recovery":
+      return "solicitação de recuperação de dados";
     case "pickup_delivery":
       return "pergunta sobre coleta ou retirada";
     case "business_hours":
@@ -244,6 +305,33 @@ function requestLabel(request: MultiIntentTurn["explicitRequests"][number]): str
       return "pergunta sobre preço";
     case "warranty":
       return "pergunta sobre garantia";
+  }
+}
+
+function buildDomainKnowledgeUseBlock(turn: MultiIntentTurn | null): string | null {
+  switch (turn?.primaryIntent) {
+    case "formatting":
+      return [
+        "DOMÍNIO ATUAL: FORMATAÇÃO E SISTEMAS.",
+        "Use somente o conhecimento recuperado e autorizado para este domínio.",
+        "Informe preço apenas quando houver autoridade compatível; preserve qualificadores como 'a partir de'.",
+        "Não misture serviços de recuperação, placa-mãe ou outros domínios na resposta.",
+      ].join("\n");
+    case "data_recovery":
+      return [
+        "DOMÍNIO ATUAL: RECUPERAÇÃO DE DADOS.",
+        "Use somente o conhecimento recuperado e autorizado para este domínio.",
+        "Não prometa recuperação nem garanta resultado. Informe preço somente com autoridade específica deste domínio.",
+        "Não reutilize preços ou condições de formatação, montagem ou outros serviços.",
+      ].join("\n");
+    case null:
+    case undefined:
+    case "technical_support":
+    case "pickup_delivery":
+    case "business_hours":
+    case "pricing":
+    case "warranty":
+      return null;
   }
 }
 
@@ -275,7 +363,8 @@ function buildSecurityBlock(
     "REGRAS DE SEGURANÇA DO ASSISTENTE E LIMITES OBRIGATÓRIOS:",
     safetyInstruction ? `- Regra legada: ${safetyInstruction}` : null,
     ...activeSecurityRules.map(
-      (rule, index) => `- ${index + 1}. ${rule.name} (${rule.ruleType}): ${rule.instruction.trim()}`,
+      (rule, index) =>
+        `- ${index + 1}. ${rule.name} (${rule.ruleType}): ${rule.instruction.trim()}`,
     ),
   ]
     .filter((line): line is string => Boolean(line))
@@ -331,7 +420,7 @@ function buildBehaviorBlock(
       ? "- Quando não houver informação suficiente, sinalize que o atendimento será encaminhado a uma pessoa, sem inventar resposta."
       : unknownBehavior === "search_base"
         ? "- Quando não souber, consulte a base disponível antes de responder; se ainda não houver informação, diga isso com clareza."
-      : "- Quando não souber, admita a limitação e deixe o runtime decidir se um fallback explícito é necessário.",
+        : "- Quando não souber, admita a limitação e deixe o runtime decidir se um fallback explícito é necessário.",
     "EXEMPLOS DE TOM (não copie nomes ou conteúdo; use apenas o padrão):",
     'Ruim: "Entendi! Vamos lá: • serviço 1 • serviço 2 • serviço 3. Se puder fornecer essas informações..."',
     'Adequado: "Sim, conseguimos fazer isso 😊 Me passa o modelo primeiro? Aí já confiro o que é compatível."',
@@ -464,7 +553,8 @@ export class PromptCompilerService {
       // 2. identidade básica do assistente e empresa
       const attendantName = firstNonEmpty(behavior?.attendantName, assistant.name);
       const showAttendantName = behavior?.showAttendantName ?? true;
-      let identity = "IDENTIDADE E ESCOPO DO ASSISTENTE:\nVocê é um assistente virtual configurado no Cubo AI Studio.";
+      let identity =
+        "IDENTIDADE E ESCOPO DO ASSISTENTE:\nVocê é um assistente virtual configurado no Cubo AI Studio.";
       if (showAttendantName && attendantName) identity += `\nSeu nome é: ${attendantName}`;
       if (officialBusinessContext?.companyName) {
         identity += `\nVocê atende em nome da empresa: ${officialBusinessContext.companyName}`;
@@ -477,11 +567,11 @@ export class PromptCompilerService {
         "FORMATO DE SAÍDA OBRIGATÓRIO (JSON):",
         "Você DEVE retornar EXCLUSIVAMENTE um objeto JSON válido (sem tags ```json) no seguinte formato:",
         "{",
-        "  \"message\": \"<sua resposta amigável de WhatsApp, com no máximo duas frases e exatamente uma pergunta principal>\",",
-        "  \"action\": \"ASK_NEXT_DETAIL\",",
-        "  \"requestedDetail\": \"<descrição curta do detalhe/dado único solicitado, ex: 'modelo do equipamento'>\",",
-        "  \"suggestScheduling\": false,",
-        "  \"triageResolved\": <true se o cliente respondeu ao detalhe solicitado anteriormente ou se as informações já bastam para o fluxo normal; false caso contrário>",
+        '  "message": "<sua resposta amigável de WhatsApp, com no máximo duas frases e exatamente uma pergunta principal>",',
+        '  "action": "ASK_NEXT_DETAIL",',
+        '  "requestedDetail": "<descrição curta do detalhe/dado único solicitado, ex: \'modelo do equipamento\'>",',
+        '  "suggestScheduling": false,',
+        '  "triageResolved": <true se o cliente respondeu ao detalhe solicitado anteriormente ou se as informações já bastam para o fluxo normal; false caso contrário>',
         "}",
       ].join("\n");
       messages.push({ role: "system", content: jsonFormatBlock });
@@ -541,7 +631,7 @@ export class PromptCompilerService {
           "- Sem listas de qualquer tipo (sem bullets, sem numeração).",
           "- Sem cabeçalhos ou títulos.",
           "- Sem checklist.",
-          "- Sem usar a expressão \"Vamos por partes\".",
+          '- Sem usar a expressão "Vamos por partes".',
           "- Não separe a resposta em explicações por solicitação; reconheça todos os pedidos de forma curta e natural.",
           "- Sem antecipar preço, prazo, orçamento ou compatibilidade de vários itens sem a informação principal.",
           "- Utilize linguagem natural e amigável típica de WhatsApp.",
@@ -560,13 +650,13 @@ export class PromptCompilerService {
           "",
           "INSTRUÇÕES DE ANÁLISE:",
           "1. Avalie se a nova mensagem do usuário responde à pergunta anterior ou fornece o detalhe solicitado.",
-          "   - Se o usuário forneceu a informação desejada (ou se você já tem dados suficientes das necessidades dele), defina \"triageResolved\": true.",
-          "   - Se o usuário NÃO respondeu (ex: questionou por que agendar, mudou de assunto sem dar o detalhe, etc.), defina \"triageResolved\": false.",
+          '   - Se o usuário forneceu a informação desejada (ou se você já tem dados suficientes das necessidades dele), defina "triageResolved": true.',
+          '   - Se o usuário NÃO respondeu (ex: questionou por que agendar, mudou de assunto sem dar o detalhe, etc.), defina "triageResolved": false.',
           "2. Se o cliente estiver questionando a resposta anterior (ex: reclamando de sugestão de agendamento prematuro ou reset de catálogo):",
-          "   - Reconheça amigavelmente a correção dele na sua \"message\" (ex: \"Você tem razão, podemos falar por aqui mesmo!\").",
+          '   - Reconheça amigavelmente a correção dele na sua "message" (ex: "Você tem razão, podemos falar por aqui mesmo!").',
           "   - NÃO sugira agendamento nem envie listas.",
           "   - Continue solicitando apenas o detalhe anterior.",
-          "3. Em NENHUMA circunstância sugira agendamento, pergunte sobre agendar, ofereça links de agendamento ou encaminhe para equipe. Mantenha \"suggestScheduling\": false.",
+          '3. Em NENHUMA circunstância sugira agendamento, pergunte sobre agendar, ofereça links de agendamento ou encaminhe para equipe. Mantenha "suggestScheduling": false.',
           "4. Nunca pergunte novamente uma capacidade ou acessório já identificado. Para SSD, diferencie capacidade de interface: 500 GB não informa SATA/NVMe. Para RAM, diferencie capacidade de quantidade de módulos.",
         ].join("\n");
         messages.push({ role: "system", content: historyBlock });
@@ -599,7 +689,8 @@ export class PromptCompilerService {
     const showAttendantName = behavior?.showAttendantName ?? true;
     const role = firstNonEmpty(behavior?.role);
     const howItActs = firstNonEmpty(behavior?.howItActs, assistant.description);
-    let identity = "IDENTIDADE E ESCOPO DO ASSISTENTE:\nVocê é um assistente virtual configurado no Cubo AI Studio.";
+    let identity =
+      "IDENTIDADE E ESCOPO DO ASSISTENTE:\nVocê é um assistente virtual configurado no Cubo AI Studio.";
     if (showAttendantName && attendantName) identity += `\nSeu nome é: ${attendantName}`;
     if (role) identity += `\nSua função: ${role}`;
     identity += "\nResponda em português do Brasil, salvo se o cliente pedir outro idioma.";
@@ -620,8 +711,7 @@ export class PromptCompilerService {
     if (howItActs) {
       messages.push({
         role: "system",
-        content:
-          `ESCOPO OPERACIONAL (contexto de responsabilidade; não é um roteiro de resposta):\n${truncateText(howItActs, 4000)}\nUse este texto apenas para entender capacidades e limites. Ignore qualquer ordem implícita de listar opções, explicar tudo, coletar vários dados, responder item a item ou concluir todo o atendimento na mesma mensagem. A DECISÃO DE TRIAGEM prevalece sobre este escopo.`,
+        content: `ESCOPO OPERACIONAL (contexto de responsabilidade; não é um roteiro de resposta):\n${truncateText(howItActs, 4000)}\nUse este texto apenas para entender capacidades e limites. Ignore qualquer ordem implícita de listar opções, explicar tudo, coletar vários dados, responder item a item ou concluir todo o atendimento na mesma mensagem. A DECISÃO DE TRIAGEM prevalece sobre este escopo.`,
       });
     }
 
@@ -673,6 +763,11 @@ export class PromptCompilerService {
         role: "system",
         content: `INSTRUÇÕES DECLARATIVAS DO FLUXO VALIDADO:\n${input.controlledFlowInstruction.trim()}\nSiga estas instruções somente quando forem compatíveis com as regras de segurança e com os fatos oficiais estruturados.`,
       });
+    }
+
+    const domainKnowledgeUseBlock = buildDomainKnowledgeUseBlock(multiIntentTurn);
+    if (domainKnowledgeUseBlock) {
+      messages.push({ role: "system", content: domainKnowledgeUseBlock });
     }
 
     // 7. Knowledge supplies facts, never the response format or tone.

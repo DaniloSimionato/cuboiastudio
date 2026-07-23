@@ -19,6 +19,8 @@ export interface AssistantKnowledgeSearchInput {
   query: string;
   topK?: number;
   scoreThreshold?: number;
+  /** Concrete AssistantKnowledge IDs authorized by the selected flow. */
+  knowledgeIds?: string[];
   user?: AuthenticatedUser;
   tenant: RequestTenant;
 }
@@ -39,6 +41,9 @@ export interface AssistantKnowledgeSearchResult {
   scoredScoreRange: { min: number; max: number } | null;
   selectedScoreRange: { min: number; max: number } | null;
   topK: number;
+  knowledgeScopeApplied: boolean;
+  allowedKnowledgeIds: string[];
+  rejectedOutOfScopeChunkCount: number;
   results: Array<{
     knowledgeId: string;
     knowledgeTitle: string;
@@ -103,6 +108,15 @@ export class AssistantKnowledgeRetrievalService {
     }
 
     const topK = input.topK && input.topK > 0 ? Math.min(input.topK, 20) : 5;
+    const allowedKnowledgeIds = Array.from(
+      new Set(
+        (input.knowledgeIds ?? []).filter(
+          (knowledgeId): knowledgeId is string =>
+            typeof knowledgeId === "string" && knowledgeId.trim().length > 0,
+        ),
+      ),
+    );
+    const knowledgeScopeApplied = input.knowledgeIds !== undefined;
     const normalizedThreshold = resolveAssistantKnowledgeScoreThreshold({
       assistantId: input.assistantId,
       explicitValue: input.scoreThreshold,
@@ -122,54 +136,74 @@ export class AssistantKnowledgeRetrievalService {
     };
     const countDocuments = prismaForDiagnostics.assistantKnowledge?.count;
     const countChunks = prismaForDiagnostics.assistantKnowledgeChunk?.count;
-    const [candidateDocumentCount, eligibleDocumentCount, candidateChunkCount, chunks] =
-      await Promise.all([
-        countDocuments
-          ? countDocuments({
-              where: { companyId: input.tenant.companyId, assistantId: input.assistantId },
-            })
-          : Promise.resolve(0),
-        countDocuments
-          ? countDocuments({
-              where: {
-                companyId: input.tenant.companyId,
-                assistantId: input.assistantId,
-                status: Status.ACTIVE,
-                processingStatus: "READY",
-              },
-            })
-          : Promise.resolve(0),
-        countChunks
-          ? countChunks({
-              where: { companyId: input.tenant.companyId, assistantId: input.assistantId },
-            })
-          : Promise.resolve(0),
-        this.prisma.assistantKnowledgeChunk.findMany({
-          where: {
-            companyId: input.tenant.companyId,
-            assistantId: input.assistantId,
-            status: Status.ACTIVE,
-            knowledge: {
+    const [
+      candidateDocumentCount,
+      eligibleDocumentCount,
+      candidateChunkCount,
+      globalCandidateChunkCount,
+      chunks,
+    ] = await Promise.all([
+      countDocuments
+        ? countDocuments({
+            where: {
+              companyId: input.tenant.companyId,
+              assistantId: input.assistantId,
+              ...(knowledgeScopeApplied ? { id: { in: allowedKnowledgeIds } } : {}),
+            },
+          })
+        : Promise.resolve(0),
+      countDocuments
+        ? countDocuments({
+            where: {
+              companyId: input.tenant.companyId,
+              assistantId: input.assistantId,
               status: Status.ACTIVE,
               processingStatus: "READY",
+              ...(knowledgeScopeApplied ? { id: { in: allowedKnowledgeIds } } : {}),
+            },
+          })
+        : Promise.resolve(0),
+      countChunks
+        ? countChunks({
+            where: {
+              companyId: input.tenant.companyId,
+              assistantId: input.assistantId,
+              ...(knowledgeScopeApplied ? { knowledgeId: { in: allowedKnowledgeIds } } : {}),
+            },
+          })
+        : Promise.resolve(0),
+      countChunks
+        ? countChunks({
+            where: { companyId: input.tenant.companyId, assistantId: input.assistantId },
+          })
+        : Promise.resolve(0),
+      this.prisma.assistantKnowledgeChunk.findMany({
+        where: {
+          companyId: input.tenant.companyId,
+          assistantId: input.assistantId,
+          status: Status.ACTIVE,
+          ...(knowledgeScopeApplied ? { knowledgeId: { in: allowedKnowledgeIds } } : {}),
+          knowledge: {
+            status: Status.ACTIVE,
+            processingStatus: "READY",
+          },
+        },
+        select: {
+          id: true,
+          knowledgeId: true,
+          chunkIndex: true,
+          content: true,
+          embedding: true,
+          embeddingDimension: true,
+          knowledge: {
+            select: {
+              title: true,
+              metadata: true,
             },
           },
-          select: {
-            id: true,
-            knowledgeId: true,
-            chunkIndex: true,
-            content: true,
-            embedding: true,
-            embeddingDimension: true,
-            knowledge: {
-              select: {
-                title: true,
-                metadata: true,
-              },
-            },
-          },
-        }),
-      ]);
+        },
+      }),
+    ]);
 
     if (chunks.length === 0) {
       return {
@@ -188,6 +222,11 @@ export class AssistantKnowledgeRetrievalService {
         scoredScoreRange: null,
         selectedScoreRange: null,
         topK,
+        knowledgeScopeApplied,
+        allowedKnowledgeIds,
+        rejectedOutOfScopeChunkCount: knowledgeScopeApplied
+          ? Math.max(0, globalCandidateChunkCount - candidateChunkCount)
+          : 0,
         results: [],
         warning:
           "Nenhum chunk de conhecimento ativo e preparado (READY) foi encontrado para este agente.",
@@ -258,6 +297,11 @@ export class AssistantKnowledgeRetrievalService {
       scoredScoreRange: scoreRange(scoredChunks.map((item) => item.score)),
       selectedScoreRange: scoreRange(topResults.map((item) => item.score)),
       topK,
+      knowledgeScopeApplied,
+      allowedKnowledgeIds,
+      rejectedOutOfScopeChunkCount: knowledgeScopeApplied
+        ? Math.max(0, globalCandidateChunkCount - candidateChunkCount)
+        : 0,
       results: topResults.map((res) => ({
         knowledgeId: res.chunk.knowledgeId,
         knowledgeTitle: res.chunk.knowledge.title,

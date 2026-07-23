@@ -14,7 +14,13 @@ export type CustomerStructuredFields = {
  * turn.
  */
 export type ExplicitCustomerRequestKey =
-  "technical_support" | "pickup_delivery" | "business_hours" | "pricing" | "warranty";
+  | "technical_support"
+  | "formatting"
+  | "data_recovery"
+  | "pickup_delivery"
+  | "business_hours"
+  | "pricing"
+  | "warranty";
 
 export type MultiIntentTurn = {
   primaryIntent: ExplicitCustomerRequestKey | null;
@@ -158,28 +164,46 @@ function configuredFlowText(flow: AssistantFlow): string {
 }
 
 function configuredFlowFamily(flow: AssistantFlow): string {
-  const text = configuredFlowText(flow);
+  const normalizedName = normalizeIntentText(flow.name);
+  const text = `${normalizedName} ${configuredFlowText(flow)}`;
+  // A concrete service domain owns the turn. PRICE is intentionally evaluated
+  // last because it is a secondary intent for questions such as a recovery or
+  // pickup quote.
+  if (/(?:garantia|pos servico|pos atendimento|servico anterior)/.test(text)) {
+    return "warranty";
+  }
+  if (/(?:recupera(?:cao|r)? de dados|recuperar dados|recuperar arquivos|hd externo)/.test(text)) {
+    return "data_recovery";
+  }
+  if (/(?:relogio de ponto|controle de ponto)/.test(text)) return "time_clock";
+  if (/(?:impressora|impressoras)/.test(text)) return "printer_support";
   if (/(?:visita|deslocamento|ir ate o local|atendimento no local|tecnico na empresa)/.test(text)) {
     return "external_visit";
   }
   if (/(?:buscar|busca|coleta|retirada|retirar|entrega|domicilio)/.test(text)) {
     return "pickup_delivery";
   }
-  if (/(?:preco|valor|orcamento|quanto custa|quanto fica|custos?)/.test(text)) {
-    return "pricing";
-  }
-  if (/(?:endereco|localizacao|horario|telefone|contato|empresa)/.test(text)) {
-    return "company_information";
-  }
   if (/(?:acessorios|produto|comprar|vendas|comercial)/.test(text)) {
     return "commercial";
   }
+  const hasFormattingEvidence =
+    /(?:formatar|formatacao|instalar windows|instalacao de windows)/.test(text);
+  const isGenericTechnicalFlow = /(?:assistencia tecnica geral|suporte tecnico geral)/.test(
+    normalizedName,
+  );
+  if (hasFormattingEvidence && !isGenericTechnicalFlow) return "formatting";
   if (
     /(?:formatar|formatacao|upgrade|melhoria|componentes|assistencia|tecnica|suporte|memoria|manutencao|conserto|reparo)/.test(
       text,
     )
   ) {
     return "technical_support";
+  }
+  if (/(?:preco|valor|orcamento|quanto custa|quanto fica|custos?)/.test(text)) {
+    return "pricing";
+  }
+  if (/(?:endereco|localizacao|horario|telefone|contato|empresa)/.test(text)) {
+    return "company_information";
   }
   return "unknown";
 }
@@ -191,6 +215,7 @@ function explicitAliasesForFamily(family: string): Array<{ alias: string; weight
         { alias: "valor", weight: 3 },
         { alias: "preço", weight: 3 },
         { alias: "quanto custa", weight: 4 },
+        { alias: "quanto sai", weight: 4 },
         { alias: "quanto fica", weight: 4 },
         { alias: "orçamento", weight: 3 },
         { alias: "preço", weight: 3 },
@@ -199,10 +224,43 @@ function explicitAliasesForFamily(family: string): Array<{ alias: string; weight
       return [
         { alias: "formatar", weight: 3 },
         { alias: "formatação", weight: 3 },
-        { alias: "upgrade", weight: 4 },
-        { alias: "memória", weight: 3 },
-        { alias: "manutenção", weight: 3 },
-        { alias: "conserto", weight: 3 },
+        { alias: "upgrade", weight: 6 },
+        { alias: "memória", weight: 5 },
+        { alias: "manutenção", weight: 5 },
+        { alias: "conserto", weight: 5 },
+        { alias: "travando", weight: 5 },
+        { alias: "lento", weight: 4 },
+      ];
+    case "formatting":
+      return [
+        { alias: "formatar", weight: 7 },
+        { alias: "formatação", weight: 7 },
+        { alias: "instalar windows", weight: 7 },
+        { alias: "instalação do windows", weight: 7 },
+      ];
+    case "data_recovery":
+      return [
+        { alias: "recuperar dados", weight: 6 },
+        { alias: "recuperação de dados", weight: 6 },
+        { alias: "recuperar arquivos", weight: 6 },
+        { alias: "hd externo", weight: 4 },
+      ];
+    case "warranty":
+      return [
+        { alias: "garantia", weight: 6 },
+        { alias: "voltou a dar problema", weight: 6 },
+        { alias: "serviço anterior", weight: 5 },
+      ];
+    case "time_clock":
+      return [
+        { alias: "relógio de ponto", weight: 6 },
+        { alias: "relogio de ponto", weight: 6 },
+        { alias: "controle de ponto", weight: 5 },
+      ];
+    case "printer_support":
+      return [
+        { alias: "impressora", weight: 6 },
+        { alias: "impressoras", weight: 6 },
       ];
     case "external_visit":
       return [
@@ -349,6 +407,12 @@ export function flowObjectiveForFlow(flow: AssistantFlow): string {
   switch (flowIntentKeyForFlow(flow)) {
     case "pricing":
       return "consultar preço oficial";
+    case "formatting":
+      return "consultar formatação e orçamento";
+    case "data_recovery":
+      return "consultar recuperação de dados";
+    case "warranty":
+      return "orientar garantia e pós-serviço";
     case "technical_support":
       return "triagem técnica e compatibilidade";
     case "pickup_delivery":
@@ -374,16 +438,26 @@ export function extractExplicitCustomerRequestKeys(message: string): ExplicitCus
   add(
     "technical_support",
     /\b(?:notebook|computador|pc|equipamento)\b/.test(text) &&
-      /\b(?:nao liga|nao esta ligando|nao ta ligando|nao inicia|nao funciona|defeito|problema)\b/.test(
+      /\b(?:nao liga|nao esta ligando|nao ta ligando|nao inicia|nao funciona|defeito|problema|travando|lento|lentidao)\b/.test(
         text,
       ),
+  );
+  add(
+    "formatting",
+    /\b(?:formatar|formatacao|instalar windows|instalacao (?:do )?windows)\b/.test(text),
+  );
+  add(
+    "data_recovery",
+    /\b(?:recuperar dados|recuperacao de dados|recuperar arquivos|recuperacao de arquivos)\b/.test(
+      text,
+    ),
   );
   add("pickup_delivery", /\b(?:coleta|retirada|retirar|buscar|busca|entrega)\b/.test(text));
   add(
     "business_hours",
     /\b(?:horario|funcionamento|que horas|abrem|abre|fecham|fecha|sabado|domingo)\b/.test(text),
   );
-  add("pricing", /\b(?:preco|valor|orcamento|quanto custa|quanto fica)\b/.test(text));
+  add("pricing", /\b(?:preco|valor|orcamento|quanto custa|quanto sai|quanto fica)\b/.test(text));
   add("warranty", /\bgarantia\b/.test(text));
 
   return requests;
@@ -394,6 +468,8 @@ function toExplicitRequestKey(
 ): ExplicitCustomerRequestKey | null {
   switch (intentKey) {
     case "technical_support":
+    case "formatting":
+    case "data_recovery":
     case "pickup_delivery":
     case "business_hours":
     case "pricing":
@@ -424,7 +500,11 @@ export function buildMultiIntentTurn(input: {
     // the response can claim they have been fully answered.
     unresolvedRequests: explicitRequests.filter(
       (request) =>
-        request === "pricing" || request === "warranty" || request === "technical_support",
+        request === "pricing" ||
+        request === "warranty" ||
+        request === "technical_support" ||
+        request === "formatting" ||
+        request === "data_recovery",
     ),
   };
 }

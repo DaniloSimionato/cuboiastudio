@@ -136,6 +136,12 @@ import {
   createV1NormalResponseExecutionEnvelope,
   validateResponseExecutionEnvelope,
 } from "./response-execution-envelope";
+import { resolveFlowKnowledgeScope } from "./flow-knowledge-scope";
+import {
+  extractRagPriceAuthorities,
+  isRagPriceAuthorityCompatibleWithMessage,
+  type RagPriceAuthority,
+} from "./rag-price-authority";
 import {
   resolveRuntimeV2ResponseExecutionAssistantIds,
   resolveRuntimeV2ResponseExecutionChatwootInboxBindings,
@@ -3259,6 +3265,32 @@ export class AssistantConversationsService {
     const conversationalOutcome =
       customerUnableToAnswer && !isExplicitPriceQuery ? "technical_evaluation" : null;
 
+    // Routing is intentionally resolved before RAG. Knowledge must be evidence
+    // for the selected domain, never an input that changes domain ownership.
+    const runtimeConfig = await this.aiService.resolveRuntimeConfig(input.tenant.companyId);
+    const resolvedModel = this.resolveRuntimeModel(assistant, runtimeConfig);
+    const temperature = this.resolveRuntimeTemperature(assistant);
+    const temperatureSource = this.resolveRuntimeTemperatureSource(assistant);
+    const preselectedRouteResult = this.intentRouterService
+      ? await this.intentRouterService.route({
+          companyId: input.tenant.companyId,
+          assistantId: input.assistantId,
+          message: customerIntentText,
+          flows: assistant.flows ?? [],
+          model: resolvedModel.model,
+          temperature,
+        })
+      : {
+          flowId: null,
+          flowName: null,
+          confidence: 0,
+          reason: "Intent router unavailable",
+        };
+    const preselectedFlow = preselectedRouteResult.flowId
+      ? ((assistant.flows ?? []).find((flow) => flow.id === preselectedRouteResult.flowId) ?? null)
+      : null;
+    const flowKnowledgeScope = resolveFlowKnowledgeScope(preselectedFlow);
+
     const knowledgeLimit = triageMode ? 2 : 5;
     let knowledgeItems: {
       id: string;
@@ -3266,6 +3298,7 @@ export class AssistantConversationsService {
       title: string;
       content: string;
       ragAuthorityEligible: true;
+      priceAuthorities?: RagPriceAuthority[];
     }[] = [];
     const ragThresholdConfig = resolveAssistantKnowledgeScoreThreshold({
       assistantId: input.assistantId,
@@ -3307,6 +3340,9 @@ export class AssistantConversationsService {
         assistantId: input.assistantId,
         query: interpretedMessage,
         topK: knowledgeLimit,
+        ...(flowKnowledgeScope.knowledgeScopeSource === "flow_knowledge_scope"
+          ? { knowledgeIds: flowKnowledgeScope.allowedKnowledgeIds }
+          : {}),
       });
 
       const knowledgeSelection = selectRuntimeKnowledgeItems({
@@ -3327,6 +3363,7 @@ export class AssistantConversationsService {
         scoreThresholdSource: searchResult.scoreThresholdSource,
         filteredOutCount: searchResult.filteredOutCount,
         filteredOutScoreRange: searchResult.filteredOutScoreRange,
+        rejectedOutOfScopeChunkCount: searchResult.rejectedOutOfScopeChunkCount,
         selectedCount: knowledgeSelection.items.length,
         selectionReason:
           knowledgeSelection.items.length > 0 ? "score_at_or_above_threshold" : "no_valid_results",
@@ -3340,7 +3377,29 @@ export class AssistantConversationsService {
         })),
       };
 
-      knowledgeItems = knowledgeSelection.items;
+      const scopedKnowledgeItems = knowledgeSelection.items.map((item) => ({
+        ...item,
+        priceAuthorities: extractRagPriceAuthorities({
+          chunkId: item.id,
+          knowledgeItemId: item.knowledgeItemId,
+          title: item.title,
+          content: item.content,
+        }).filter((authority) =>
+          isRagPriceAuthorityCompatibleWithMessage({
+            authority,
+            currentMessage: customerIntentText,
+          }),
+        ),
+      }));
+      const scopedPriceAuthorities = scopedKnowledgeItems.flatMap(
+        (item) => item.priceAuthorities ?? [],
+      );
+      const ambiguousAuthorityDetected =
+        new Set(scopedPriceAuthorities.map((authority) => authority.amount)).size > 1;
+      knowledgeItems = ambiguousAuthorityDetected
+        ? scopedKnowledgeItems.map((item) => ({ ...item, priceAuthorities: [] }))
+        : scopedKnowledgeItems;
+      ragLogData.ambiguousAuthorityDetected = ambiguousAuthorityDetected;
 
       ragObservation = createRagRetrievalObservation({
         companyId: input.tenant.companyId,
@@ -3824,10 +3883,6 @@ export class AssistantConversationsService {
     const deterministicFallbackCategory =
       deterministicRuntime.sources.length > 0 ? "deterministic_response" : "no_information";
 
-    const runtimeConfig = await this.aiService.resolveRuntimeConfig(input.tenant.companyId);
-    const resolvedModel = this.resolveRuntimeModel(assistant, runtimeConfig);
-    const temperature = this.resolveRuntimeTemperature(assistant);
-    const temperatureSource = this.resolveRuntimeTemperatureSource(assistant);
     Object.assign(contextMetadata, {
       model: resolvedModel.model ?? null,
       modelSource: resolvedModel.source,
@@ -4015,25 +4070,8 @@ export class AssistantConversationsService {
           );
 
           // 1. Intent Routing
-          const routeResult = this.intentRouterService
-            ? await this.intentRouterService.route({
-                companyId: input.tenant.companyId,
-                assistantId: input.assistantId,
-                message: customerIntentText,
-                flows: assistant.flows ?? [],
-                model: resolvedModel.model,
-                temperature,
-              })
-            : {
-                flowId: null,
-                flowName: null,
-                confidence: 0,
-                reason: "Intent router unavailable",
-              };
-
-          const selectedFlow = routeResult.flowId
-            ? (assistant.flows ?? []).find((f) => f.id === routeResult.flowId)
-            : null;
+          const routeResult = preselectedRouteResult;
+          const selectedFlow = preselectedFlow;
           multiIntentTurn = buildMultiIntentTurn({
             message: customerIntentText,
             selectedIntentKey: selectedFlow ? flowIntentKeyForFlow(selectedFlow) : null,
@@ -4116,6 +4154,7 @@ export class AssistantConversationsService {
             detectedIntent: routeResult.reason || null,
             selectedFlowId: routeResult.flowId,
             selectedFlowName: routeResult.flowName,
+            domainIntent: selectedFlow ? flowIntentKeyForFlow(selectedFlow) : null,
             intentConfidence: routeResult.confidence,
             flowSelectionMethod: routeResult.flowSelectionMethod ?? "none",
             flowScore: routeResult.score ?? 0,
@@ -4153,6 +4192,26 @@ export class AssistantConversationsService {
             resourceScopeApplied: hasCalendarToolScope(calendarScope),
             blockedByToolScope: false,
             blockReason: null,
+            knowledgeScopeSource: flowKnowledgeScope.knowledgeScopeSource,
+            knowledgeScopeMissing: flowKnowledgeScope.knowledgeScopeMissing,
+            allowedKnowledgeBaseIds: flowKnowledgeScope.allowedKnowledgeIds,
+            scopedCandidateCount: ragLogData.totalChunksScanned ?? 0,
+            rejectedOutOfScopeChunkCount: ragLogData.rejectedOutOfScopeChunkCount ?? 0,
+            acceptedChunkIds: knowledgeItems.map((item) => item.id),
+            globalFallbackUsed: false,
+            priceAuthorities: knowledgeItems.flatMap((item) =>
+              (item.priceAuthorities ?? []).map((authority) => ({
+                authorityType: authority.authorityType,
+                source: authority.source,
+                chunkId: authority.chunkId,
+                knowledgeItemId: authority.knowledgeItemId,
+                service: authority.service,
+                amount: authority.amount,
+                currency: authority.currency,
+                qualifier: authority.qualifier,
+              })),
+            ),
+            ambiguousAuthorityDetected: Boolean(ragLogData.ambiguousAuthorityDetected),
           });
           contextMetadata.contextManifest = {
             ...contextMetadata.contextManifest,

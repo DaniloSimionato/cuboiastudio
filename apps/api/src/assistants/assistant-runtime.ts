@@ -13,6 +13,8 @@ type AssistantKnowledgeInput = {
   title: string;
   content: string;
   ragAuthorityEligible?: true;
+  /** Pre-filtered by the selected flow and the current customer domain. */
+  priceAuthorities?: RagPriceAuthority[];
 };
 
 type AssistantConversationHistoryMessage = {
@@ -149,12 +151,13 @@ export function buildDeterministicAssistantResponse(input: {
   const selectedKnowledge = rankedKnowledge.slice(0, 5);
   const sources = selectedKnowledge.map((knowledge) => {
     const priceAuthorities = knowledge.ragAuthorityEligible
-      ? extractRagPriceAuthorities({
+      ? (knowledge.priceAuthorities ??
+        extractRagPriceAuthorities({
           chunkId: knowledge.id,
           knowledgeItemId: knowledge.knowledgeItemId ?? knowledge.id,
           title: knowledge.title,
           content: knowledge.content,
-        })
+        }))
       : [];
     return {
       id: knowledge.id,
