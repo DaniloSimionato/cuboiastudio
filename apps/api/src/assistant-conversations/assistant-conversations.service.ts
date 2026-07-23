@@ -3260,7 +3260,13 @@ export class AssistantConversationsService {
       customerUnableToAnswer && !isExplicitPriceQuery ? "technical_evaluation" : null;
 
     const knowledgeLimit = triageMode ? 2 : 5;
-    let knowledgeItems: { id: string; title: string; content: string }[] = [];
+    let knowledgeItems: {
+      id: string;
+      knowledgeItemId: string;
+      title: string;
+      content: string;
+      ragAuthorityEligible: true;
+    }[] = [];
     const ragThresholdConfig = resolveAssistantKnowledgeScoreThreshold({
       assistantId: input.assistantId,
     });

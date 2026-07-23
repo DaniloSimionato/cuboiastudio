@@ -75,7 +75,13 @@ export function selectRuntimeKnowledgeItems(input: {
 
   if (!input.ragEnabled) {
     return {
-      items: [] as Array<{ id: string; title: string; content: string }>,
+      items: [] as Array<{
+        id: string;
+        knowledgeItemId: string;
+        title: string;
+        content: string;
+        ragAuthorityEligible: true;
+      }>,
       manifest: {
         ragEnabled: false,
         threshold,
@@ -93,8 +99,10 @@ export function selectRuntimeKnowledgeItems(input: {
   return {
     items: results.map((result) => ({
       id: result.chunkId,
+      knowledgeItemId: result.knowledgeId,
       title: result.knowledgeTitle,
       content: result.contentPreview,
+      ragAuthorityEligible: true as const,
     })),
     manifest: {
       ragEnabled: true,

@@ -1,17 +1,24 @@
 import type { AiChatCompletionMessage } from "../ai/ai.types";
+import {
+  extractRagPriceAuthorities,
+  isRagPriceAuthority,
+  type RagPriceAuthority,
+} from "../assistant-conversations/rag-price-authority";
 import type { OfficialBusinessContext } from "./official-business-context";
 import { buildStructuredBusinessAnswer } from "./official-business-context";
 
 type AssistantKnowledgeInput = {
   id: string;
+  knowledgeItemId?: string;
   title: string;
   content: string;
+  ragAuthorityEligible?: true;
 };
 
 type AssistantConversationHistoryMessage = {
   role: "user" | "assistant" | "tool";
   content: string;
-  tool_calls?: any[];
+  tool_calls?: unknown[];
   tool_call_id?: string;
   name?: string;
 };
@@ -19,6 +26,7 @@ type AssistantConversationHistoryMessage = {
 export type AssistantRuntimeSource = {
   id: string;
   title: string;
+  priceAuthorities?: RagPriceAuthority[];
 };
 
 type AssistantConversationPromptInput = {
@@ -139,10 +147,21 @@ export function buildDeterministicAssistantResponse(input: {
   });
 
   const selectedKnowledge = rankedKnowledge.slice(0, 5);
-  const sources = selectedKnowledge.map((knowledge) => ({
-    id: knowledge.id,
-    title: knowledge.title,
-  }));
+  const sources = selectedKnowledge.map((knowledge) => {
+    const priceAuthorities = knowledge.ragAuthorityEligible
+      ? extractRagPriceAuthorities({
+          chunkId: knowledge.id,
+          knowledgeItemId: knowledge.knowledgeItemId ?? knowledge.id,
+          title: knowledge.title,
+          content: knowledge.content,
+        })
+      : [];
+    return {
+      id: knowledge.id,
+      title: knowledge.title,
+      ...(priceAuthorities.length > 0 ? { priceAuthorities } : {}),
+    };
+  });
 
   const assistantName = input.assistantName?.trim() || "este assistente";
   const persona = input.instructions?.trim()
@@ -286,13 +305,14 @@ export function buildConversationPromptMessages(
   }
 
   for (const message of input.historyMessages) {
-    messages.push({
+    const historyMessage: AiChatCompletionMessage = {
       role: message.role,
       content: truncateText(message.content, MAX_HISTORY_MESSAGE_LENGTH),
-      ...(message.tool_calls ? { tool_calls: message.tool_calls } : {}),
-      ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
-      ...(message.name ? { name: message.name } : {}),
-    } as any);
+    };
+    if (message.tool_calls) historyMessage.tool_calls = message.tool_calls;
+    if (message.tool_call_id) historyMessage.tool_call_id = message.tool_call_id;
+    if (message.name) historyMessage.name = message.name;
+    messages.push(historyMessage);
   }
 
   messages.push({
@@ -318,9 +338,15 @@ export function toAssistantRuntimeSources(value: unknown): AssistantRuntimeSourc
         typeof (item as { id: unknown }).id === "string" &&
         typeof (item as { title: unknown }).title === "string"
       ) {
+        const priceAuthorities = Array.isArray(
+          (item as { priceAuthorities?: unknown }).priceAuthorities,
+        )
+          ? (item as { priceAuthorities: unknown[] }).priceAuthorities.filter(isRagPriceAuthority)
+          : [];
         return {
           id: (item as { id: string }).id,
           title: (item as { title: string }).title,
+          ...(priceAuthorities.length > 0 ? { priceAuthorities } : {}),
         };
       }
 

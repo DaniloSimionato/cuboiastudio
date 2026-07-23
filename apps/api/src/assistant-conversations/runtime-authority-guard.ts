@@ -1,5 +1,10 @@
 import type { AssistantRuntimeSource } from "../assistants/assistant-runtime";
 import {
+  findMatchingRagPriceAuthority,
+  hasPriceAuthorityForMessage,
+  type RagPriceAuthority,
+} from "./rag-price-authority";
+import {
   buildStructuredBusinessAnswer,
   type OfficialBusinessContext,
 } from "../assistants/official-business-context";
@@ -59,6 +64,12 @@ function hasOfficialSchedule(context: OfficialBusinessContext): boolean {
 }
 
 function hasSourceForCategory(sources: AssistantRuntimeSource[], category: string): boolean {
+  if (category === "price") {
+    return sources.some((source) => {
+      const sourceText = normalize(`${source.id} ${source.title}`);
+      return sourceText.includes("price") || (source.priceAuthorities?.length ?? 0) > 0;
+    });
+  }
   const normalizedCategory = normalize(category);
   return sources.some((source) => {
     const sourceText = normalize(`${source.id} ${source.title}`);
@@ -70,6 +81,10 @@ function hasSourceForCategory(sources: AssistantRuntimeSource[], category: strin
         ))
     );
   });
+}
+
+function ragPriceAuthorities(sources: AssistantRuntimeSource[]): RagPriceAuthority[] {
+  return sources.flatMap((source) => source.priceAuthorities ?? []);
 }
 
 function safeUnavailable(category: string): string {
@@ -119,9 +134,7 @@ function claimsBusinessHoursOpen(text: string): boolean {
     /(?:fechad|fora do horario|nao (?:abre|abrimos|atende|atendemos)|sem atendimento)/.test(
       normalizedText,
     );
-  return (
-    !saysClosed && /(?:abert|funcionando|atende|atendemos|abre|abrimos)/.test(normalizedText)
-  );
+  return !saysClosed && /(?:abert|funcionando|atende|atendemos|abre|abrimos)/.test(normalizedText);
 }
 
 function parseRequestedTime(message: string): string | null {
@@ -150,9 +163,10 @@ export function evaluateRequestedBusinessHours(input: {
     };
   }
 
-  const intervals = input.officialBusinessContext.businessHours[
-    requestedDay as keyof OfficialBusinessContext["businessHours"]
-  ] ?? [];
+  const intervals =
+    input.officialBusinessContext.businessHours[
+      requestedDay as keyof OfficialBusinessContext["businessHours"]
+    ] ?? [];
   const requestedDayOpen = intervals.length > 0;
   if (!requestedTime) {
     return {
@@ -199,7 +213,11 @@ export function deriveExpectedAuthorityCategory(input: {
   }
 
   const message = normalize(input.currentMessage);
-  if (/(?:telefone|numero|whatsapp|contato|como falar com voces|como falar com a empresa)/.test(message)) {
+  if (
+    /(?:telefone|numero|whatsapp|contato|como falar com voces|como falar com a empresa)/.test(
+      message,
+    )
+  ) {
     return { category: "official_contact", source: "explicit_intent", officialHours };
   }
   if (/(?:preco|valor|quanto custa|quanto fica|orcamento|custa)/.test(message)) {
@@ -212,7 +230,9 @@ export function deriveExpectedAuthorityCategory(input: {
     return { category: "business_hours", source: "official_context", officialHours };
   }
   if (
-    /(?:agendar|agendamento|marcar|reserva|domingo|segunda|terca|quarta|quinta|sexta|sabado)\b/.test(message) &&
+    /(?:agendar|agendamento|marcar|reserva|domingo|segunda|terca|quarta|quinta|sexta|sabado)\b/.test(
+      message,
+    ) &&
     /(?:\b(?:as|a)\s*\d{1,2}|agendar|agendamento|marcar|reserva|horario)/.test(message)
   ) {
     return { category: "booking", source: "explicit_intent", officialHours };
@@ -438,8 +458,7 @@ export function validateV1AnswerAuthority(input: {
   const officialHours = input.officialHoursEvaluation ?? derivedExpected.officialHours;
 
   const flowText = input.flowText ?? "";
-  const requestedDayIsClosed =
-    officialHours.evaluated && officialHours.requestedDayOpen === false;
+  const requestedDayIsClosed = officialHours.evaluated && officialHours.requestedDayOpen === false;
   const flowClaimsClosedRequestedDayOpen =
     requestedDayIsClosed &&
     mentionsBusinessDay(flowText, officialHours.requestedDay) &&
@@ -565,12 +584,23 @@ export function validateV1AnswerAuthority(input: {
     /(?:nao tenho|nao possuo|preciso confirmar|posso verificar).{0,48}(?:preco|valor|orcamento)/.test(
       normalizedAnswer,
     );
+  const priceAuthorities = ragPriceAuthorities(input.sources);
+  const legacyPriceAuthority = input.sources.some((source) =>
+    normalize(`${source.id} ${source.title}`).includes("price"),
+  );
+  const priceAuthorityForMessage =
+    hasPriceAuthorityForMessage({
+      authorities: priceAuthorities,
+      currentMessage: input.currentMessage,
+    }) || legacyPriceAuthority;
+  const matchingPriceAuthority =
+    findMatchingRagPriceAuthority({
+      authorities: priceAuthorities,
+      currentMessage: input.currentMessage,
+      answer,
+    }) || legacyPriceAuthority;
 
-  if (
-    expectedCategory === "price" &&
-    !hasSourceForCategory(input.sources, "price") &&
-    !priceResponseAlreadySafe
-  ) {
+  if (expectedCategory === "price" && !priceAuthorityForMessage && !priceResponseAlreadySafe) {
     if (generatedClaimCategory && generatedClaimCategory !== "price") {
       blockedCategories.push(generatedClaimCategory);
     } else {
@@ -578,7 +608,7 @@ export function validateV1AnswerAuthority(input: {
     }
     replacementCategory = "price";
     replacementReason = "expected_category_without_authority";
-  } else if (priceClaim && !hasSourceForCategory(input.sources, "price")) {
+  } else if (priceClaim && !matchingPriceAuthority) {
     blockedCategories.push("price");
     replacementCategory = expectedCategory ?? "price";
   } else if (pickupClaim && !hasSourceForCategory(input.sources, "pickup")) {
@@ -627,7 +657,11 @@ export function validateV1AnswerAuthority(input: {
     generatedClaimCategory,
     finalSafeResponseCategory: replacementCategory,
     authorityCategorySource:
-      expectedCategory !== null ? authorityCategorySource : generatedClaimCategory ? "claim" : "none",
+      expectedCategory !== null
+        ? authorityCategorySource
+        : generatedClaimCategory
+          ? "claim"
+          : "none",
     replacementReason,
     triageResponseProtected: false,
     authorityConflictDetected,
