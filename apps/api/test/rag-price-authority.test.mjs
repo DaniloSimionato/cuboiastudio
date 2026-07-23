@@ -7,6 +7,7 @@ import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.s
 import {
   extractRagPriceAuthorities,
   filterEligibleRagPriceAuthorities,
+  deduplicateEligibleRagPriceAuthorities,
   hasConflictingEligibleRagPriceAuthorities,
   requestedPriceServiceKeys,
 } from "../dist/assistant-conversations/rag-price-authority.js";
@@ -204,5 +205,60 @@ test("autoridades de preço elegíveis são filtradas pelo serviço solicitado",
       { ...authorities[0], amount: 1800 },
     ]),
     true,
+  );
+});
+
+test("autoridades elegíveis idênticas agregam proveniência sem esconder conflitos reais", () => {
+  const formatting = extractRagPriceAuthorities({
+    chunkId: "format-a",
+    knowledgeItemId: "knowledge-format",
+    title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
+    content: "Formatação de computador tem valor inicial de R$ 1.950,00.",
+  })[0];
+  const formattingDuplicateA = { ...formatting, chunkId: "format-b", sourceChunkIds: ["format-b"] };
+  const formattingDuplicateB = { ...formatting, chunkId: "format-c", sourceChunkIds: ["format-c"] };
+  const motherboard = extractRagPriceAuthorities({
+    chunkId: "motherboard-a",
+    knowledgeItemId: "knowledge-format",
+    title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
+    content: "Reparo de placa-mãe tem valor inicial de R$ 395,00.",
+  })[0];
+
+  const formattingOnly = deduplicateEligibleRagPriceAuthorities(
+    filterEligibleRagPriceAuthorities({
+      authorities: [formatting, formattingDuplicateA, formattingDuplicateB, motherboard],
+      currentMessage: "Qual o valor para formatar um PC?",
+    }),
+  );
+  assert.equal(formattingOnly.length, 1);
+  assert.equal(formattingOnly[0].amount, 1950);
+  assert.equal(formattingOnly[0].evidenceCount, 3);
+  assert.deepEqual(formattingOnly[0].sourceChunkIds, ["format-a", "format-b", "format-c"]);
+  assert.deepEqual(formattingOnly[0].sourceKnowledgeIds, ["knowledge-format"]);
+
+  assert.equal(
+    deduplicateEligibleRagPriceAuthorities([formatting, { ...formatting, amount: 2100 }]).length,
+    2,
+  );
+  assert.equal(
+    deduplicateEligibleRagPriceAuthorities([{ ...formatting, amount: 395 }, motherboard]).length,
+    2,
+  );
+  assert.equal(
+    deduplicateEligibleRagPriceAuthorities([formatting, { ...formatting, qualifier: "fixed" }])
+      .length,
+    2,
+  );
+  assert.equal(
+    deduplicateEligibleRagPriceAuthorities(
+      filterEligibleRagPriceAuthorities({
+        authorities: [
+          motherboard,
+          { ...motherboard, chunkId: "motherboard-b", sourceChunkIds: ["motherboard-b"] },
+        ],
+        currentMessage: "Quanto custa o reparo de placa-mãe?",
+      }),
+    )[0].evidenceCount,
+    2,
   );
 });

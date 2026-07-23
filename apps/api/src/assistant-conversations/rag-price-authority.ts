@@ -29,6 +29,9 @@ export type RagPriceAuthority = {
   currency: "BRL";
   qualifier: "starting_at";
   sourceText: string;
+  sourceChunkIds: string[];
+  sourceKnowledgeIds: string[];
+  evidenceCount: number;
 };
 
 type RagPriceAuthorityInput = {
@@ -155,6 +158,9 @@ export function extractRagPriceAuthorities(input: RagPriceAuthorityInput): RagPr
         currency: "BRL" as const,
         qualifier: "starting_at" as const,
         sourceText,
+        sourceChunkIds: [input.chunkId],
+        sourceKnowledgeIds: [input.knowledgeItemId],
+        evidenceCount: 1,
       },
     ];
   });
@@ -185,7 +191,14 @@ export function isRagPriceAuthority(value: unknown): value is RagPriceAuthority 
     item.amount > 0 &&
     item.currency === "BRL" &&
     item.qualifier === "starting_at" &&
-    typeof item.sourceText === "string"
+    typeof item.sourceText === "string" &&
+    Array.isArray(item.sourceChunkIds) &&
+    item.sourceChunkIds.every((chunkId) => typeof chunkId === "string") &&
+    Array.isArray(item.sourceKnowledgeIds) &&
+    item.sourceKnowledgeIds.every((knowledgeId) => typeof knowledgeId === "string") &&
+    typeof item.evidenceCount === "number" &&
+    Number.isSafeInteger(item.evidenceCount) &&
+    item.evidenceCount > 0
   );
 }
 
@@ -261,6 +274,51 @@ export function filterEligibleRagPriceAuthorities(input: {
     (authority) =>
       authority.serviceKey !== "unknown" && requestedServiceKeys.includes(authority.serviceKey),
   );
+}
+
+function normalizedQualifier(qualifier: string): string {
+  return normalize(qualifier).replace(/\s+/g, "_");
+}
+
+function authorityDeduplicationKey(authority: RagPriceAuthority): string {
+  const amountInMinorUnits = Math.round(authority.amount * 100);
+  return [
+    authority.serviceKey,
+    authority.currency,
+    amountInMinorUnits,
+    normalizedQualifier(authority.qualifier),
+  ].join(":");
+}
+
+/**
+ * Multiple RAG chunks can repeat one commercial fact. The guard receives one
+ * logical authority while retaining every chunk and knowledge reference that
+ * corroborated it. Different services, values and qualifiers remain distinct.
+ */
+export function deduplicateEligibleRagPriceAuthorities(
+  authorities: RagPriceAuthority[],
+): RagPriceAuthority[] {
+  const grouped = new Map<string, RagPriceAuthority>();
+  for (const authority of authorities) {
+    const key = authorityDeduplicationKey(authority);
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, {
+        ...authority,
+        sourceChunkIds: Array.from(new Set(authority.sourceChunkIds)),
+        sourceKnowledgeIds: Array.from(new Set(authority.sourceKnowledgeIds)),
+      });
+      continue;
+    }
+    existing.sourceChunkIds = Array.from(
+      new Set([...existing.sourceChunkIds, ...authority.sourceChunkIds]),
+    );
+    existing.sourceKnowledgeIds = Array.from(
+      new Set([...existing.sourceKnowledgeIds, ...authority.sourceKnowledgeIds]),
+    );
+    existing.evidenceCount += authority.evidenceCount;
+  }
+  return Array.from(grouped.values());
 }
 
 export function hasConflictingEligibleRagPriceAuthorities(

@@ -141,6 +141,7 @@ import {
   resolveFlowKnowledgeScope,
 } from "./flow-knowledge-scope";
 import {
+  deduplicateEligibleRagPriceAuthorities,
   extractRagPriceAuthorities,
   filterEligibleRagPriceAuthorities,
   hasConflictingEligibleRagPriceAuthorities,
@@ -3395,10 +3396,12 @@ export class AssistantConversationsService {
           content: item.content,
         }),
       );
-      const eligiblePriceAuthorities = filterEligibleRagPriceAuthorities({
+      const filteredPriceAuthorities = filterEligibleRagPriceAuthorities({
         authorities: rawPriceAuthorities,
         currentMessage: customerIntentText,
       });
+      const eligiblePriceAuthorities =
+        deduplicateEligibleRagPriceAuthorities(filteredPriceAuthorities);
       const eligibleAuthorityIds = new Set(
         eligiblePriceAuthorities.map((authority) => `${authority.chunkId}:${authority.amount}`),
       );
@@ -3423,6 +3426,7 @@ export class AssistantConversationsService {
         : scopedKnowledgeItems;
       ragLogData.ambiguousAuthorityDetected = ambiguousAuthorityDetected;
       ragLogData.rawPriceAuthorityCount = rawPriceAuthorities.length;
+      ragLogData.filteredPriceAuthorityCount = filteredPriceAuthorities.length;
       ragLogData.eligiblePriceAuthorityCount = eligiblePriceAuthorities.length;
 
       ragObservation = createRagRetrievalObservation({
@@ -4238,6 +4242,9 @@ export class AssistantConversationsService {
                 amount: authority.amount,
                 currency: authority.currency,
                 qualifier: authority.qualifier,
+                evidenceCount: authority.evidenceCount,
+                sourceChunkIds: authority.sourceChunkIds,
+                sourceKnowledgeIds: authority.sourceKnowledgeIds,
               })),
             ),
             ambiguousAuthorityDetected: Boolean(ragLogData.ambiguousAuthorityDetected),
