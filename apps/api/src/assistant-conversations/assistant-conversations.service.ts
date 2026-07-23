@@ -142,6 +142,8 @@ import {
 } from "./flow-knowledge-scope";
 import {
   extractRagPriceAuthorities,
+  filterEligibleRagPriceAuthorities,
+  hasConflictingEligibleRagPriceAuthorities,
   isRagPriceAuthorityCompatibleWithMessage,
   type RagPriceAuthority,
 } from "./rag-price-authority";
@@ -3385,6 +3387,21 @@ export class AssistantConversationsService {
         })),
       };
 
+      const rawPriceAuthorities = knowledgeSelection.items.flatMap((item) =>
+        extractRagPriceAuthorities({
+          chunkId: item.id,
+          knowledgeItemId: item.knowledgeItemId,
+          title: item.title,
+          content: item.content,
+        }),
+      );
+      const eligiblePriceAuthorities = filterEligibleRagPriceAuthorities({
+        authorities: rawPriceAuthorities,
+        currentMessage: customerIntentText,
+      });
+      const eligibleAuthorityIds = new Set(
+        eligiblePriceAuthorities.map((authority) => `${authority.chunkId}:${authority.amount}`),
+      );
       const scopedKnowledgeItems = knowledgeSelection.items.map((item) => ({
         ...item,
         priceAuthorities: extractRagPriceAuthorities({
@@ -3393,21 +3410,20 @@ export class AssistantConversationsService {
           title: item.title,
           content: item.content,
         }).filter((authority) =>
-          isRagPriceAuthorityCompatibleWithMessage({
-            authority,
-            currentMessage: customerIntentText,
-          }),
+          eligibleAuthorityIds.has(`${authority.chunkId}:${authority.amount}`),
         ),
       }));
       const scopedPriceAuthorities = scopedKnowledgeItems.flatMap(
         (item) => item.priceAuthorities ?? [],
       );
       const ambiguousAuthorityDetected =
-        new Set(scopedPriceAuthorities.map((authority) => authority.amount)).size > 1;
+        hasConflictingEligibleRagPriceAuthorities(scopedPriceAuthorities);
       knowledgeItems = ambiguousAuthorityDetected
         ? scopedKnowledgeItems.map((item) => ({ ...item, priceAuthorities: [] }))
         : scopedKnowledgeItems;
       ragLogData.ambiguousAuthorityDetected = ambiguousAuthorityDetected;
+      ragLogData.rawPriceAuthorityCount = rawPriceAuthorities.length;
+      ragLogData.eligiblePriceAuthorityCount = eligiblePriceAuthorities.length;
 
       ragObservation = createRagRetrievalObservation({
         companyId: input.tenant.companyId,
@@ -4218,6 +4234,7 @@ export class AssistantConversationsService {
                 chunkId: authority.chunkId,
                 knowledgeItemId: authority.knowledgeItemId,
                 service: authority.service,
+                serviceKey: authority.serviceKey,
                 amount: authority.amount,
                 currency: authority.currency,
                 qualifier: authority.qualifier,

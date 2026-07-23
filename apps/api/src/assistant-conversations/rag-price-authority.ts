@@ -1,9 +1,29 @@
+export type RagPriceServiceKey =
+  | "formatacao"
+  | "placa_mae"
+  | "remocao_virus"
+  | "recuperacao_dados"
+  | "montagem_computadores"
+  | "unknown";
+
+type ServicePattern = readonly [serviceKey: RagPriceServiceKey, pattern: RegExp];
+
+const RAG_PRICE_SERVICE_ORDER: readonly RagPriceServiceKey[] = [
+  "formatacao",
+  "placa_mae",
+  "remocao_virus",
+  "recuperacao_dados",
+  "montagem_computadores",
+  "unknown",
+];
+
 export type RagPriceAuthority = {
   authorityType: "price";
   source: "rag";
   chunkId: string;
   knowledgeItemId: string;
   service: string;
+  serviceKey: RagPriceServiceKey;
   serviceTerms: string[];
   amount: number;
   currency: "BRL";
@@ -56,11 +76,29 @@ function parseBrlAmount(value: string): number | null {
   return Number.isFinite(amount) && amount > 0 ? amount : null;
 }
 
-function sentenceAt(text: string, position: number): string {
-  const start = Math.max(text.lastIndexOf(".", position) + 1, text.lastIndexOf("\n", position) + 1);
-  const nextPeriod = text.indexOf(".", position);
-  const end = nextPeriod === -1 ? text.length : nextPeriod + 1;
+function priceContextAt(text: string, position: number): string {
+  const separators = [".", ";", "\n", "•"];
+  const start = Math.max(
+    ...separators.map((separator) => text.lastIndexOf(separator, position) + 1),
+  );
+  const ends = separators
+    .map((separator) => text.indexOf(separator, position))
+    .filter((index) => index !== -1);
+  const end = ends.length > 0 ? Math.min(...ends) + 1 : text.length;
   return text.slice(start, end).replace(/\s+/g, " ").trim().slice(0, 320);
+}
+
+function priceServiceKey(sourceText: string): RagPriceServiceKey {
+  const source = normalize(sourceText);
+  const servicePatterns: readonly ServicePattern[] = [
+    ["placa_mae", /\bplaca[ -]?mae\b/u],
+    ["remocao_virus", /\b(?:remocao|remover)\s+(?:de\s+)?(?:virus|malware)\b/u],
+    ["recuperacao_dados", /\b(?:recupera[cr][aã]o|recuperar)\s+(?:de\s+)?(?:dados|arquivos?)\b/u],
+    ["montagem_computadores", /\b(?:montagem|configuracao)\s+(?:de\s+)?computador(?:es)?\b/u],
+    ["formatacao", /\b(?:format|windows|sistema(?:s)?|instala[cr][aã]o)\w*/u],
+  ];
+  const matches = servicePatterns.filter(([, pattern]) => pattern.test(source));
+  return matches.length === 1 ? matches[0][0] : "unknown";
 }
 
 function serviceTerms(title: string, sourceText: string): string[] {
@@ -98,10 +136,11 @@ export function extractRagPriceAuthorities(input: RagPriceAuthorityInput): RagPr
     const amount = parseBrlAmount(match[1]);
     if (amount === null || match.index === undefined) return [];
 
-    const sourceText = sentenceAt(input.content, match.index);
+    const sourceText = priceContextAt(input.content, match.index);
     const service = serviceLabel(input.title, sourceText);
     const terms = serviceTerms(input.title, sourceText);
-    if (terms.length === 0) return [];
+    const serviceKey = priceServiceKey(sourceText);
+    if (terms.length === 0 || serviceKey === "unknown") return [];
 
     return [
       {
@@ -110,6 +149,7 @@ export function extractRagPriceAuthorities(input: RagPriceAuthorityInput): RagPr
         chunkId: input.chunkId,
         knowledgeItemId: input.knowledgeItemId,
         service,
+        serviceKey,
         serviceTerms: terms,
         amount,
         currency: "BRL" as const,
@@ -129,6 +169,15 @@ export function isRagPriceAuthority(value: unknown): value is RagPriceAuthority 
     typeof item.chunkId === "string" &&
     typeof item.knowledgeItemId === "string" &&
     typeof item.service === "string" &&
+    typeof item.serviceKey === "string" &&
+    [
+      "formatacao",
+      "placa_mae",
+      "remocao_virus",
+      "recuperacao_dados",
+      "montagem_computadores",
+      "unknown",
+    ].includes(item.serviceKey) &&
     Array.isArray(item.serviceTerms) &&
     item.serviceTerms.every((term) => typeof term === "string") &&
     typeof item.amount === "number" &&
@@ -169,6 +218,64 @@ function matchesService(message: string, authority: RagPriceAuthority): boolean 
  * matched against the sentence that supplied the amount, not only title terms.
  */
 export function isRagPriceAuthorityCompatibleWithMessage(input: {
+  authority: RagPriceAuthority;
+  currentMessage: string;
+}): boolean {
+  return (
+    filterEligibleRagPriceAuthorities({
+      authorities: [input.authority],
+      currentMessage: input.currentMessage,
+    }).length === 1
+  );
+}
+
+export function requestedPriceServiceKeys(message: string): RagPriceServiceKey[] {
+  const normalizedMessage = normalize(message);
+  const servicePatterns: readonly ServicePattern[] = [
+    ["placa_mae", /\bplaca[ -]?mae\b/u],
+    ["remocao_virus", /\b(?:remover|remocao)\s+(?:de\s+)?(?:virus|malware)\b/u],
+    ["recuperacao_dados", /\b(?:recupera[cr][aã]o|recuperar)\s+(?:de\s+)?(?:dados|arquivos?)\b/u],
+    ["montagem_computadores", /\b(?:montagem|configura[cr][aã]o)\s+(?:de\s+)?computador(?:es)?\b/u],
+    ["formatacao", /\b(?:format|windows|sistema(?:s)?|instala[cr][aã]o)\w*/u],
+  ];
+  return servicePatterns
+    .map(([serviceKey, pattern]) => ({
+      serviceKey,
+      position: normalizedMessage.search(pattern),
+      canonicalOrder: RAG_PRICE_SERVICE_ORDER.indexOf(serviceKey),
+    }))
+    .filter((item) => item.position >= 0)
+    .sort(
+      (left, right) => left.position - right.position || left.canonicalOrder - right.canonicalOrder,
+    )
+    .map((item) => item.serviceKey);
+}
+
+export function filterEligibleRagPriceAuthorities(input: {
+  authorities: RagPriceAuthority[];
+  currentMessage: string;
+}): RagPriceAuthority[] {
+  const requestedServiceKeys = requestedPriceServiceKeys(input.currentMessage);
+  if (requestedServiceKeys.length === 0) return [];
+  return input.authorities.filter(
+    (authority) =>
+      authority.serviceKey !== "unknown" && requestedServiceKeys.includes(authority.serviceKey),
+  );
+}
+
+export function hasConflictingEligibleRagPriceAuthorities(
+  authorities: RagPriceAuthority[],
+): boolean {
+  const amountsByService = new Map<RagPriceServiceKey, Set<number>>();
+  for (const authority of authorities) {
+    const amounts = amountsByService.get(authority.serviceKey) ?? new Set<number>();
+    amounts.add(authority.amount);
+    amountsByService.set(authority.serviceKey, amounts);
+  }
+  return Array.from(amountsByService.values()).some((amounts) => amounts.size > 1);
+}
+
+function legacyAuthorityMatchesService(input: {
   authority: RagPriceAuthority;
   currentMessage: string;
 }): boolean {

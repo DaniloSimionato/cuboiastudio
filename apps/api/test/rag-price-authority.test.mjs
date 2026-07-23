@@ -4,6 +4,12 @@ import { buildDeterministicAssistantResponse } from "../dist/assistants/assistan
 import { validateV1AnswerAuthority } from "../dist/assistant-conversations/runtime-authority-guard.js";
 import { selectRuntimeKnowledgeItems } from "../dist/assistant-conversations/runtime-context-manifest.js";
 import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
+import {
+  extractRagPriceAuthorities,
+  filterEligibleRagPriceAuthorities,
+  hasConflictingEligibleRagPriceAuthorities,
+  requestedPriceServiceKeys,
+} from "../dist/assistant-conversations/rag-price-authority.js";
 
 const priceChunk = {
   knowledgeId: "cmre9yg2f000do701wvxe30lq",
@@ -146,6 +152,57 @@ test("texto do cliente e histórico não criam autoridade de preço", () => {
     guard("Quanto sai para formatar?", providerAnswer, [
       { id: "history-message", title: "Histórico da conversa" },
     ]).unsupportedClaimDetected,
+    true,
+  );
+});
+
+test("autoridades de preço elegíveis são filtradas pelo serviço solicitado", () => {
+  const authorities = extractRagPriceAuthorities({
+    chunkId: "mixed-prices",
+    knowledgeItemId: "knowledge-format",
+    title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
+    content:
+      "Formatação de computador tem valor inicial de R$ 1.950,00. Reparo de placa-mãe tem valor inicial de R$ 395,00. Remoção de vírus exige avaliação técnica.",
+  });
+  assert.deepEqual(
+    authorities.map((authority) => [authority.serviceKey, authority.amount]),
+    [
+      ["formatacao", 1950],
+      ["placa_mae", 395],
+    ],
+  );
+
+  const cases = [
+    ["Qual o valor para formatar um PC?", ["formatacao"], [1950]],
+    ["Quanto custa o reparo de placa-mãe?", ["placa_mae"], [395]],
+    ["Quanto custa remover vírus?", ["remocao_virus"], []],
+    ["Quanto custa recuperar dados de um HD?", ["recuperacao_dados"], []],
+    ["Quanto custa a assistência técnica?", [], []],
+    ["Quero formatar e também verificar a placa-mãe.", ["formatacao", "placa_mae"], [1950, 395]],
+    ["Preciso verificar a placa-mãe e depois formatar.", ["placa_mae", "formatacao"], [1950, 395]],
+    ["Quero remover vírus e formatar o computador.", ["remocao_virus", "formatacao"], [1950]],
+    [
+      "Quero formatar, verificar a placa-mãe e remover vírus.",
+      ["formatacao", "placa_mae", "remocao_virus"],
+      [1950, 395],
+    ],
+  ];
+  for (const [message, serviceKeys, amounts] of cases) {
+    assert.deepEqual(requestedPriceServiceKeys(message), serviceKeys, message);
+    assert.deepEqual(
+      filterEligibleRagPriceAuthorities({ authorities, currentMessage: message }).map(
+        (authority) => authority.amount,
+      ),
+      amounts,
+      message,
+    );
+  }
+  assert.equal(hasConflictingEligibleRagPriceAuthorities(authorities), false);
+  assert.equal(
+    hasConflictingEligibleRagPriceAuthorities([
+      authorities[0],
+      { ...authorities[0], amount: 1800 },
+    ]),
     true,
   );
 });
