@@ -136,7 +136,10 @@ import {
   createV1NormalResponseExecutionEnvelope,
   validateResponseExecutionEnvelope,
 } from "./response-execution-envelope";
-import { resolveFlowKnowledgeScope } from "./flow-knowledge-scope";
+import {
+  isKnowledgeScopeTagFilterEnabled,
+  resolveFlowKnowledgeScope,
+} from "./flow-knowledge-scope";
 import {
   extractRagPriceAuthorities,
   isRagPriceAuthorityCompatibleWithMessage,
@@ -3290,6 +3293,9 @@ export class AssistantConversationsService {
       ? ((assistant.flows ?? []).find((flow) => flow.id === preselectedRouteResult.flowId) ?? null)
       : null;
     const flowKnowledgeScope = resolveFlowKnowledgeScope(preselectedFlow);
+    const knowledgeScopeTagFilterEnabled = isKnowledgeScopeTagFilterEnabled({
+      assistantId: input.assistantId,
+    });
 
     const knowledgeLimit = triageMode ? 2 : 5;
     let knowledgeItems: {
@@ -3340,8 +3346,8 @@ export class AssistantConversationsService {
         assistantId: input.assistantId,
         query: interpretedMessage,
         topK: knowledgeLimit,
-        ...(flowKnowledgeScope.knowledgeScopeSource === "flow_knowledge_scope"
-          ? { knowledgeIds: flowKnowledgeScope.allowedKnowledgeIds }
+        ...(knowledgeScopeTagFilterEnabled && !flowKnowledgeScope.knowledgeScopeMissing
+          ? { knowledgeScopeTags: flowKnowledgeScope.scopeTags }
           : {}),
       });
 
@@ -3363,6 +3369,8 @@ export class AssistantConversationsService {
         scoreThresholdSource: searchResult.scoreThresholdSource,
         filteredOutCount: searchResult.filteredOutCount,
         filteredOutScoreRange: searchResult.filteredOutScoreRange,
+        scopedCandidateCount: searchResult.scopedCandidateCount,
+        knowledgeScopeNoMatch: searchResult.knowledgeScopeNoMatch,
         rejectedOutOfScopeChunkCount: searchResult.rejectedOutOfScopeChunkCount,
         selectedCount: knowledgeSelection.items.length,
         selectionReason:
@@ -4193,12 +4201,16 @@ export class AssistantConversationsService {
             blockedByToolScope: false,
             blockReason: null,
             knowledgeScopeSource: flowKnowledgeScope.knowledgeScopeSource,
-            knowledgeScopeMissing: flowKnowledgeScope.knowledgeScopeMissing,
-            allowedKnowledgeBaseIds: flowKnowledgeScope.allowedKnowledgeIds,
-            scopedCandidateCount: ragLogData.totalChunksScanned ?? 0,
+            knowledgeScopeFilterEnabled: knowledgeScopeTagFilterEnabled,
+            knowledgeScopeMissing:
+              knowledgeScopeTagFilterEnabled && flowKnowledgeScope.knowledgeScopeMissing,
+            knowledgeScopeNoMatch: Boolean(ragLogData.knowledgeScopeNoMatch),
+            allowedKnowledgeTags: flowKnowledgeScope.scopeTags,
+            scopedCandidateCount: ragLogData.scopedCandidateCount ?? 0,
             rejectedOutOfScopeChunkCount: ragLogData.rejectedOutOfScopeChunkCount ?? 0,
             acceptedChunkIds: knowledgeItems.map((item) => item.id),
-            globalFallbackUsed: false,
+            globalFallbackUsed:
+              knowledgeScopeTagFilterEnabled && flowKnowledgeScope.knowledgeScopeMissing,
             priceAuthorities: knowledgeItems.flatMap((item) =>
               (item.priceAuthorities ?? []).map((authority) => ({
                 authorityType: authority.authorityType,

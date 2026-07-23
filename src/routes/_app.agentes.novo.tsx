@@ -12,14 +12,13 @@ import {
   Loader2,
   Trash2,
   RefreshCw,
+  X,
 } from "lucide-react";
 
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import {
-  AssistantBehaviorTab,
-} from "../components/assistant/AssistantBehaviorTab";
+import { AssistantBehaviorTab } from "../components/assistant/AssistantBehaviorTab";
 import { AssistantFlowsTab } from "../components/assistant/AssistantFlowsTab";
 import { AssistantToolsTab } from "../components/assistant/AssistantToolsTab";
 import { Button } from "@/components/ui/button";
@@ -54,7 +53,10 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, ErrorState, LoadingState } from "@/components/feedback/States";
-import { backendAssistantsService } from "@/services/backendAssistantsService";
+import {
+  backendAssistantsService,
+  type AssistantKnowledgeSearchResult,
+} from "@/services/backendAssistantsService";
 import { chatwootSettingsService } from "@/services/chatwootSettingsService";
 import type {
   BackendAssistantKnowledgeItem,
@@ -205,9 +207,12 @@ function NovoAgente() {
   const [memoryEnabled, setMemoryEnabled] = useState(false);
   const [memoryPrePromptEnabled, setMemoryPrePromptEnabled] = useState(true);
   const [memoryExtractionEnabled, setMemoryExtractionEnabled] = useState(true);
-  const [memoryAllowedCategories, setMemoryAllowedCategories] = useState<ContactMemoryCategory[]>(
-    ["IDENTITY", "PREFERENCE", "BUSINESS_CONTEXT", "TEMPORARY_CONTEXT"],
-  );
+  const [memoryAllowedCategories, setMemoryAllowedCategories] = useState<ContactMemoryCategory[]>([
+    "IDENTITY",
+    "PREFERENCE",
+    "BUSINESS_CONTEXT",
+    "TEMPORARY_CONTEXT",
+  ]);
   const [memoryConfidenceThreshold, setMemoryConfidenceThreshold] = useState(0.7);
   const [memoryTempDefaultDays, setMemoryTempDefaultDays] = useState(7);
   const [memorySharedAcrossAssistants, setMemorySharedAcrossAssistants] = useState(true);
@@ -221,7 +226,8 @@ function NovoAgente() {
     "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
   );
   const [conversationResetPreserveMemories, setConversationResetPreserveMemories] = useState(true);
-  const [conversationResetSendInitialMessage, setConversationResetSendInitialMessage] = useState(true);
+  const [conversationResetSendInitialMessage, setConversationResetSendInitialMessage] =
+    useState(true);
   const [status, setStatus] = useState<"ACTIVE" | "INACTIVE">("ACTIVE");
   const [instructions, setInstructions] = useState(
     "Você é um assistente virtual prestativo e educado.\n\nEvite repetir frases de encerramento em sequência. Não finalize todas as respostas com 'é só me avisar' ou termos similares. Use encerramentos naturais e variados, e só ofereça nova ação quando isso ajudar o cliente.",
@@ -232,8 +238,9 @@ function NovoAgente() {
   const [messageBufferEnabled, setMessageBufferEnabled] = useState(true);
   const [messageBufferSeconds, setMessageBufferSeconds] = useState(6);
   const [splitResponseEnabled, setSplitResponseEnabled] = useState(false);
-  const [splitResponseStyle, setSplitResponseStyle] =
-    useState<SplitResponseStyle>(DEFAULT_SPLIT_RESPONSE_STYLE);
+  const [splitResponseStyle, setSplitResponseStyle] = useState<SplitResponseStyle>(
+    DEFAULT_SPLIT_RESPONSE_STYLE,
+  );
   const [model, setModel] = useState("");
   const [temperature, setTemperature] = useState<number | null>(null);
   const [knowledge, setKnowledge] = useState<BackendAssistantKnowledgeItem[]>([]);
@@ -267,13 +274,18 @@ function NovoAgente() {
   const [knowledgeFormTitle, setKnowledgeFormTitle] = useState("");
   const [knowledgeFormContent, setKnowledgeFormContent] = useState("");
   const [knowledgeFormUrl, setKnowledgeFormUrl] = useState("");
+  const [knowledgeFormMetadata, setKnowledgeFormMetadata] = useState<Record<string, unknown>>({});
+  const [knowledgeFormTags, setKnowledgeFormTags] = useState<string[]>([]);
+  const [knowledgeTagInput, setKnowledgeTagInput] = useState("");
   const [knowledgeFormStatus, setKnowledgeFormStatus] = useState<"ACTIVE" | "INACTIVE">("ACTIVE");
   const [knowledgeSaving, setKnowledgeSaving] = useState(false);
   const [preparingKnowledgeId, setPreparingKnowledgeId] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
-  const [searchResults, setSearchResults] = useState<any[] | null>(null);
+  const [searchResults, setSearchResults] = useState<
+    AssistantKnowledgeSearchResult["results"] | null
+  >(null);
   const [searchError, setSearchError] = useState<string | null>(null);
 
   const selectableAssistants = useMemo(
@@ -612,7 +624,12 @@ function NovoAgente() {
             memoryEnabled: false,
             memoryPrePromptEnabled: true,
             memoryExtractionEnabled: true,
-            memoryAllowedCategories: ["IDENTITY", "PREFERENCE", "BUSINESS_CONTEXT", "TEMPORARY_CONTEXT"],
+            memoryAllowedCategories: [
+              "IDENTITY",
+              "PREFERENCE",
+              "BUSINESS_CONTEXT",
+              "TEMPORARY_CONTEXT",
+            ],
             memoryConfidenceThreshold: 0.7,
             memoryTempDefaultDays: 7,
             memorySharedAcrossAssistants: true,
@@ -791,7 +808,9 @@ function NovoAgente() {
             "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
         );
         setConversationResetPreserveMemories(assistant.conversationResetPreserveMemories ?? true);
-        setConversationResetSendInitialMessage(assistant.conversationResetSendInitialMessage ?? true);
+        setConversationResetSendInitialMessage(
+          assistant.conversationResetSendInitialMessage ?? true,
+        );
         setMessageBufferEnabled(assistant.messageBufferEnabled ?? true);
         setMessageBufferSeconds(assistant.messageBufferSeconds ?? 6);
         setSplitResponseEnabled(assistant.splitResponseEnabled ?? false);
@@ -840,13 +859,12 @@ function NovoAgente() {
           memoryEnabled: assistant.memoryEnabled ?? false,
           memoryPrePromptEnabled: assistant.memoryPrePromptEnabled ?? true,
           memoryExtractionEnabled: assistant.memoryExtractionEnabled ?? true,
-          memoryAllowedCategories:
-            assistant.memoryAllowedCategories ?? [
-              "IDENTITY",
-              "PREFERENCE",
-              "BUSINESS_CONTEXT",
-              "TEMPORARY_CONTEXT",
-            ],
+          memoryAllowedCategories: assistant.memoryAllowedCategories ?? [
+            "IDENTITY",
+            "PREFERENCE",
+            "BUSINESS_CONTEXT",
+            "TEMPORARY_CONTEXT",
+          ],
           memoryConfidenceThreshold: assistant.memoryConfidenceThreshold ?? 0.7,
           memoryTempDefaultDays: assistant.memoryTempDefaultDays ?? 7,
           memorySharedAcrossAssistants: assistant.memorySharedAcrossAssistants ?? true,
@@ -858,9 +876,12 @@ function NovoAgente() {
           conversationResetKeywordsRaw: Array.isArray(assistant.conversationResetKeywords)
             ? assistant.conversationResetKeywords.join(", ")
             : "reset",
-          conversationResetConfirmationMessage: assistant.conversationResetConfirmationMessage ?? "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
+          conversationResetConfirmationMessage:
+            assistant.conversationResetConfirmationMessage ??
+            "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
           conversationResetPreserveMemories: assistant.conversationResetPreserveMemories ?? true,
-          conversationResetSendInitialMessage: assistant.conversationResetSendInitialMessage ?? true,
+          conversationResetSendInitialMessage:
+            assistant.conversationResetSendInitialMessage ?? true,
           messageBufferEnabled: assistant.messageBufferEnabled ?? true,
           messageBufferSeconds: assistant.messageBufferSeconds ?? 6,
           splitResponseEnabled: assistant.splitResponseEnabled ?? false,
@@ -916,13 +937,13 @@ function NovoAgente() {
     setMemoryPrePromptEnabled(true);
     setMemoryExtractionEnabled(true);
     setMemoryAllowedCategories(["IDENTITY", "PREFERENCE", "BUSINESS_CONTEXT", "TEMPORARY_CONTEXT"]);
-          setMemoryConfidenceThreshold(0.7);
-          setMemoryTempDefaultDays(7);
-          setMemorySharedAcrossAssistants(true);
-          setSemanticMemoryEnabled(false);
-          setSemanticMemoryThreshold(0.7);
-          setSemanticMemoryMaxCandidates(20);
-          setSemanticMemoryMaxResults(10);
+    setMemoryConfidenceThreshold(0.7);
+    setMemoryTempDefaultDays(7);
+    setMemorySharedAcrossAssistants(true);
+    setSemanticMemoryEnabled(false);
+    setSemanticMemoryThreshold(0.7);
+    setSemanticMemoryMaxCandidates(20);
+    setSemanticMemoryMaxResults(10);
     setSemanticMemoryEnabled(false);
     setSemanticMemoryThreshold(0.7);
     setSemanticMemoryMaxCandidates(20);
@@ -979,16 +1000,17 @@ function NovoAgente() {
       memoryPrePromptEnabled: true,
       memoryExtractionEnabled: true,
       memoryAllowedCategories: ["IDENTITY", "PREFERENCE", "BUSINESS_CONTEXT", "TEMPORARY_CONTEXT"],
-          memoryConfidenceThreshold: 0.7,
-          memoryTempDefaultDays: 7,
-          memorySharedAcrossAssistants: true,
-          semanticMemoryEnabled: false,
-          semanticMemoryThreshold: 0.7,
-          semanticMemoryMaxCandidates: 20,
-          semanticMemoryMaxResults: 10,
+      memoryConfidenceThreshold: 0.7,
+      memoryTempDefaultDays: 7,
+      memorySharedAcrossAssistants: true,
+      semanticMemoryEnabled: false,
+      semanticMemoryThreshold: 0.7,
+      semanticMemoryMaxCandidates: 20,
+      semanticMemoryMaxResults: 10,
       conversationResetEnabled: false,
       conversationResetKeywordsRaw: "reset",
-      conversationResetConfirmationMessage: "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
+      conversationResetConfirmationMessage:
+        "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
       conversationResetPreserveMemories: true,
       conversationResetSendInitialMessage: true,
       status: "ACTIVE",
@@ -1345,13 +1367,12 @@ function NovoAgente() {
           memoryEnabled: updated.memoryEnabled ?? false,
           memoryPrePromptEnabled: updated.memoryPrePromptEnabled ?? true,
           memoryExtractionEnabled: updated.memoryExtractionEnabled ?? true,
-          memoryAllowedCategories:
-            updated.memoryAllowedCategories ?? [
-              "IDENTITY",
-              "PREFERENCE",
-              "BUSINESS_CONTEXT",
-              "TEMPORARY_CONTEXT",
-            ],
+          memoryAllowedCategories: updated.memoryAllowedCategories ?? [
+            "IDENTITY",
+            "PREFERENCE",
+            "BUSINESS_CONTEXT",
+            "TEMPORARY_CONTEXT",
+          ],
           memoryConfidenceThreshold: updated.memoryConfidenceThreshold ?? 0.7,
           memoryTempDefaultDays: updated.memoryTempDefaultDays ?? 7,
           memorySharedAcrossAssistants: updated.memorySharedAcrossAssistants ?? true,
@@ -1367,8 +1388,7 @@ function NovoAgente() {
             updated.conversationResetConfirmationMessage ??
             "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
           conversationResetPreserveMemories: updated.conversationResetPreserveMemories ?? true,
-          conversationResetSendInitialMessage:
-            updated.conversationResetSendInitialMessage ?? true,
+          conversationResetSendInitialMessage: updated.conversationResetSendInitialMessage ?? true,
           messageBufferEnabled: updated.messageBufferEnabled ?? true,
           messageBufferSeconds: updated.messageBufferSeconds ?? 6,
           splitResponseEnabled: updated.splitResponseEnabled ?? false,
@@ -1550,13 +1570,12 @@ function NovoAgente() {
           memoryEnabled: created.memoryEnabled ?? false,
           memoryPrePromptEnabled: created.memoryPrePromptEnabled ?? true,
           memoryExtractionEnabled: created.memoryExtractionEnabled ?? true,
-          memoryAllowedCategories:
-            created.memoryAllowedCategories ?? [
-              "IDENTITY",
-              "PREFERENCE",
-              "BUSINESS_CONTEXT",
-              "TEMPORARY_CONTEXT",
-            ],
+          memoryAllowedCategories: created.memoryAllowedCategories ?? [
+            "IDENTITY",
+            "PREFERENCE",
+            "BUSINESS_CONTEXT",
+            "TEMPORARY_CONTEXT",
+          ],
           memoryConfidenceThreshold: created.memoryConfidenceThreshold ?? 0.7,
           memoryTempDefaultDays: created.memoryTempDefaultDays ?? 7,
           memorySharedAcrossAssistants: created.memorySharedAcrossAssistants ?? true,
@@ -1568,7 +1587,9 @@ function NovoAgente() {
           conversationResetKeywordsRaw: Array.isArray(created.conversationResetKeywords)
             ? created.conversationResetKeywords.join(", ")
             : "reset",
-          conversationResetConfirmationMessage: created.conversationResetConfirmationMessage ?? "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
+          conversationResetConfirmationMessage:
+            created.conversationResetConfirmationMessage ??
+            "🔄 Atendimento reiniciado. Mantive as informações importantes já registradas e comecei uma nova sessão. Como posso ajudar?",
           conversationResetPreserveMemories: created.conversationResetPreserveMemories ?? true,
           conversationResetSendInitialMessage: created.conversationResetSendInitialMessage ?? true,
           messageBufferEnabled: created.messageBufferEnabled ?? true,
@@ -1601,9 +1622,7 @@ function NovoAgente() {
     setStatus(updated.status);
     setAssistants((items) => items.map((item) => (item.id === updated.id ? updated : item)));
     setRawInitialFormData((current) =>
-      current
-        ? canonicalizeAssistantFormSnapshot({ ...current, status: updated.status })
-        : current,
+      current ? canonicalizeAssistantFormSnapshot({ ...current, status: updated.status }) : current,
     );
   };
 
@@ -1636,6 +1655,9 @@ function NovoAgente() {
     setKnowledgeFormTitle("");
     setKnowledgeFormContent("");
     setKnowledgeFormUrl("");
+    setKnowledgeFormMetadata({});
+    setKnowledgeFormTags([]);
+    setKnowledgeTagInput("");
     setKnowledgeFormStatus("ACTIVE");
     setIsAddingKnowledge(true);
   };
@@ -1646,8 +1668,25 @@ function NovoAgente() {
     setKnowledgeFormTitle(item.title);
     setKnowledgeFormContent(item.content);
     setKnowledgeFormUrl(item.metadata?.sourceUrl || "");
+    setKnowledgeFormMetadata(toKnowledgeMetadataRecord(item.metadata));
+    setKnowledgeFormTags(getKnowledgeMetadataTags(item.metadata));
+    setKnowledgeTagInput("");
     setKnowledgeFormStatus(item.status === "ACTIVE" ? "ACTIVE" : "INACTIVE");
     setIsAddingKnowledge(true);
+  };
+
+  const addKnowledgeFormTags = (value: string) => {
+    const tags = value
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+
+    if (tags.length === 0) {
+      return;
+    }
+
+    setKnowledgeFormTags((current) => Array.from(new Set([...current, ...tags])));
+    setKnowledgeTagInput("");
   };
 
   const handleSaveKnowledge = async () => {
@@ -1663,8 +1702,10 @@ function NovoAgente() {
           content: knowledgeFormContent.trim(),
           status: knowledgeFormStatus,
           metadata: {
+            ...knowledgeFormMetadata,
             type: knowledgeFormType,
             ...(knowledgeFormType === "URL" ? { sourceUrl: knowledgeFormUrl.trim() } : {}),
+            tags: knowledgeFormTags,
           },
         });
       } else {
@@ -1672,8 +1713,10 @@ function NovoAgente() {
           title: knowledgeFormTitle.trim(),
           content: knowledgeFormContent.trim(),
           metadata: {
+            ...knowledgeFormMetadata,
             type: knowledgeFormType,
             ...(knowledgeFormType === "URL" ? { sourceUrl: knowledgeFormUrl.trim() } : {}),
+            tags: knowledgeFormTags,
           },
         });
       }
@@ -1757,7 +1800,10 @@ function NovoAgente() {
               <Link
                 to="/agentes"
                 onClick={(event) => {
-                  if (isDirty && !window.confirm("Existem alterações não salvas. Deseja descartá-las?")) {
+                  if (
+                    isDirty &&
+                    !window.confirm("Existem alterações não salvas. Deseja descartá-las?")
+                  ) {
                     event.preventDefault();
                   }
                 }}
@@ -1850,7 +1896,10 @@ function NovoAgente() {
           <Tabs
             value={activeTab}
             onValueChange={(nextTab) => {
-              if (!isDirty || window.confirm("Existem alterações não salvas. Deseja descartá-las?")) {
+              if (
+                !isDirty ||
+                window.confirm("Existem alterações não salvas. Deseja descartá-las?")
+              ) {
                 setActiveTab(nextTab);
               }
             }}
@@ -2046,7 +2095,9 @@ function NovoAgente() {
                         const isOpen = intervals.length > 0;
                         const isExpanded = expandedBusinessDay === day.id;
                         const intervalSummary = isOpen
-                          ? intervals.map((interval) => `${interval.start}-${interval.end}`).join(" · ")
+                          ? intervals
+                              .map((interval) => `${interval.start}-${interval.end}`)
+                              .join(" · ")
                           : "Sem atendimento";
 
                         return (
@@ -2058,9 +2109,7 @@ function NovoAgente() {
                               <button
                                 type="button"
                                 className="min-w-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                onClick={() =>
-                                  setExpandedBusinessDay(isExpanded ? null : day.id)
-                                }
+                                onClick={() => setExpandedBusinessDay(isExpanded ? null : day.id)}
                               >
                                 <div className="font-medium">{day.label}</div>
                                 <div className="text-xs text-muted-foreground">
@@ -2261,12 +2310,14 @@ function NovoAgente() {
                           </p>
                           {temperatureValue > 1 && (
                             <p className="text-xs font-medium text-amber-700">
-                              Valores acima de 1.0 são aceitos por alguns providers, mas têm maior risco de variação.
+                              Valores acima de 1.0 são aceitos por alguns providers, mas têm maior
+                              risco de variação.
                             </p>
                           )}
                           {!temperatureSupported && (
                             <p className="text-xs font-medium text-amber-700">
-                              O modelo selecionado não aceita temperatura. O parâmetro não será enviado ao provider.
+                              O modelo selecionado não aceita temperatura. O parâmetro não será
+                              enviado ao provider.
                             </p>
                           )}
                         </div>
@@ -2561,7 +2612,11 @@ function NovoAgente() {
                         <Field label="Tipo de conhecimento">
                           <Select
                             value={knowledgeFormType}
-                            onValueChange={(val: any) => setKnowledgeFormType(val)}
+                            onValueChange={(value) => {
+                              if (value === "TEXT" || value === "URL" || value === "CONVERSATION") {
+                                setKnowledgeFormType(value);
+                              }
+                            }}
                           >
                             <SelectTrigger>
                               <SelectValue />
@@ -2588,6 +2643,47 @@ function NovoAgente() {
                             value={knowledgeFormContent}
                             onChange={(e) => setKnowledgeFormContent(e.target.value)}
                           />
+                        </Field>
+                        <Field label="Tags de conhecimento">
+                          <div className="space-y-2">
+                            <Input
+                              value={knowledgeTagInput}
+                              onChange={(event) => setKnowledgeTagInput(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === ",") {
+                                  event.preventDefault();
+                                  addKnowledgeFormTags(knowledgeTagInput);
+                                }
+                              }}
+                              onBlur={() => addKnowledgeFormTags(knowledgeTagInput)}
+                              placeholder="Ex.: formatação, sistemas"
+                            />
+                            {knowledgeFormTags.length > 0 ? (
+                              <div className="flex flex-wrap gap-1.5">
+                                {knowledgeFormTags.map((tag) => (
+                                  <Badge key={tag} variant="secondary" className="gap-1 pr-1">
+                                    {tag}
+                                    <button
+                                      type="button"
+                                      aria-label={`Remover tag ${tag}`}
+                                      className="text-muted-foreground hover:text-foreground"
+                                      onClick={() =>
+                                        setKnowledgeFormTags((current) =>
+                                          current.filter((currentTag) => currentTag !== tag),
+                                        )
+                                      }
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : null}
+                            <p className="text-xs text-muted-foreground">
+                              Use Enter ou vírgula para incluir. As tags não são alteradas
+                              automaticamente.
+                            </p>
+                          </div>
                         </Field>
                         {knowledgeFormId && (
                           <div className="flex items-center gap-2 mt-2">
@@ -2685,6 +2781,15 @@ function NovoAgente() {
                               </span>
                             )}
                           </div>
+                          {getKnowledgeMetadataTags(item.metadata).length > 0 ? (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {getKnowledgeMetadataTags(item.metadata).map((tag) => (
+                                <Badge key={tag} variant="secondary" className="text-[10px]">
+                                  {tag}
+                                </Badge>
+                              ))}
+                            </div>
+                          ) : null}
                         </div>
                         <div className="flex items-center gap-3">
                           <StatusBadge status={item.status === "ACTIVE" ? "ativo" : "pausado"} />
@@ -2915,7 +3020,9 @@ function NovoAgente() {
                           max={100}
                           value={semanticMemoryMaxCandidates}
                           disabled={!memoryEnabled || !semanticMemoryEnabled}
-                          onChange={(event) => setSemanticMemoryMaxCandidates(Number(event.target.value) || 1)}
+                          onChange={(event) =>
+                            setSemanticMemoryMaxCandidates(Number(event.target.value) || 1)
+                          }
                         />
                       </Field>
                       <Field label="Memórias no prompt">
@@ -2925,7 +3032,9 @@ function NovoAgente() {
                           max={100}
                           value={semanticMemoryMaxResults}
                           disabled={!memoryEnabled || !semanticMemoryEnabled}
-                          onChange={(event) => setSemanticMemoryMaxResults(Number(event.target.value) || 1)}
+                          onChange={(event) =>
+                            setSemanticMemoryMaxResults(Number(event.target.value) || 1)
+                          }
                         />
                       </Field>
                     </div>
@@ -3018,7 +3127,8 @@ function NovoAgente() {
                     <span>Reinício de atendimento (Session Reset)</span>
                   </CardTitle>
                   <CardDescription>
-                    Permite que o cliente reinicie o atendimento atual ao enviar uma palavra-chave configurada.
+                    Permite que o cliente reinicie o atendimento atual ao enviar uma palavra-chave
+                    configurada.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
@@ -3033,7 +3143,8 @@ function NovoAgente() {
                         Ativar comando de reinício
                       </Label>
                       <p className="text-xs text-muted-foreground">
-                        Se ativado, o sistema interceptará mensagens contendo exclusivamente uma das palavras configuradas para resetar a sessão de atendimento.
+                        Se ativado, o sistema interceptará mensagens contendo exclusivamente uma das
+                        palavras configuradas para resetar a sessão de atendimento.
                       </p>
                     </div>
                   </div>
@@ -3041,7 +3152,10 @@ function NovoAgente() {
                   {conversationResetEnabled && (
                     <div className="space-y-6">
                       <div className="space-y-2">
-                        <Label htmlFor="conversationResetKeywords" className="font-semibold text-base">
+                        <Label
+                          htmlFor="conversationResetKeywords"
+                          className="font-semibold text-base"
+                        >
                           Palavras-chave de reinício
                         </Label>
                         <Input
@@ -3051,7 +3165,8 @@ function NovoAgente() {
                           onChange={(e) => setConversationResetKeywordsRaw(e.target.value)}
                         />
                         <p className="text-xs text-muted-foreground">
-                          Palavras separadas por vírgula. O reinício só é ativado se o cliente enviar exatamente um desses termos (sem texto adicional).
+                          Palavras separadas por vírgula. O reinício só é ativado se o cliente
+                          enviar exatamente um desses termos (sem texto adicional).
                         </p>
                       </div>
 
@@ -3062,11 +3177,15 @@ function NovoAgente() {
                           onCheckedChange={setConversationResetPreserveMemories}
                         />
                         <div className="space-y-1">
-                          <Label htmlFor="conversationResetPreserveMemories" className="font-semibold text-base">
+                          <Label
+                            htmlFor="conversationResetPreserveMemories"
+                            className="font-semibold text-base"
+                          >
                             Preservar memórias importantes
                           </Label>
                           <p className="text-xs text-muted-foreground">
-                            Extrai memórias estruturadas da conversa encerrada e as preserva para o próximo ciclo de atendimento, limpando apenas o contexto temporário.
+                            Extrai memórias estruturadas da conversa encerrada e as preserva para o
+                            próximo ciclo de atendimento, limpando apenas o contexto temporário.
                           </p>
                         </div>
                       </div>
@@ -3078,17 +3197,24 @@ function NovoAgente() {
                           onCheckedChange={setConversationResetSendInitialMessage}
                         />
                         <div className="space-y-1">
-                          <Label htmlFor="conversationResetSendInitialMessage" className="font-semibold text-base">
+                          <Label
+                            htmlFor="conversationResetSendInitialMessage"
+                            className="font-semibold text-base"
+                          >
                             Enviar saudação inicial
                           </Label>
                           <p className="text-xs text-muted-foreground">
-                            Concatena a mensagem inicial cadastrada do agente logo após a mensagem de confirmação de reset.
+                            Concatena a mensagem inicial cadastrada do agente logo após a mensagem
+                            de confirmação de reset.
                           </p>
                         </div>
                       </div>
 
                       <div className="space-y-2">
-                        <Label htmlFor="conversationResetConfirmationMessage" className="font-semibold text-base">
+                        <Label
+                          htmlFor="conversationResetConfirmationMessage"
+                          className="font-semibold text-base"
+                        >
                           Mensagem de confirmação de reinício
                         </Label>
                         <Textarea
@@ -3099,7 +3225,8 @@ function NovoAgente() {
                           onChange={(e) => setConversationResetConfirmationMessage(e.target.value)}
                         />
                         <p className="text-xs text-muted-foreground">
-                          Resposta que será enviada ao contato informando que a sessão foi reiniciada.
+                          Resposta que será enviada ao contato informando que a sessão foi
+                          reiniciada.
                         </p>
                       </div>
                     </div>
@@ -3598,11 +3725,19 @@ function NovoAgente() {
                       />
                       <Summary
                         label="Busca Semântica"
-                        value={semanticMemoryEnabled ? `Ativada (${semanticMemoryMaxResults} no prompt)` : "Desativada"}
+                        value={
+                          semanticMemoryEnabled
+                            ? `Ativada (${semanticMemoryMaxResults} no prompt)`
+                            : "Desativada"
+                        }
                       />
                       <Summary
                         label="Categorias de Memória"
-                        value={memoryAllowedCategories.length > 0 ? memoryAllowedCategories.join(", ") : "Nenhuma"}
+                        value={
+                          memoryAllowedCategories.length > 0
+                            ? memoryAllowedCategories.join(", ")
+                            : "Nenhuma"
+                        }
                       />
                       <Summary
                         label="Regras de Segurança"
@@ -3825,5 +3960,24 @@ function Summary({ label, value }: { label: string; value: ReactNode }) {
       <span className="text-muted-foreground shrink-0">{label}</span>
       <span className="font-medium text-right">{value}</span>
     </div>
+  );
+}
+
+function toKnowledgeMetadataRecord(metadata: unknown): Record<string, unknown> {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return {};
+  }
+
+  return metadata as Record<string, unknown>;
+}
+
+function getKnowledgeMetadataTags(metadata: unknown): string[] {
+  const tags = toKnowledgeMetadataRecord(metadata).tags;
+  if (!Array.isArray(tags)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(tags.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0)),
   );
 }

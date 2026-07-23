@@ -34,6 +34,7 @@ test("PostgreSQL: retrieval escopado não consulta conhecimento de outra base", 
         content: "Formatação a partir de R$ 1.950,00.",
         status: "ACTIVE",
         processingStatus: "READY",
+        metadata: { type: "TEXT", tags: ["Formatação", "sistemas"] },
       },
     }),
     prisma.assistantKnowledge.create({
@@ -44,6 +45,49 @@ test("PostgreSQL: retrieval escopado não consulta conhecimento de outra base", 
         content: "Montagem a partir de R$ 195,00.",
         status: "ACTIVE",
         processingStatus: "READY",
+        metadata: { type: "TEXT", tags: ["recuperacao_dados"] },
+      },
+    }),
+  ]);
+  const otherCompany = await prisma.company.create({ data: { name: "Other flow scope company" } });
+  const otherAssistant = await prisma.assistant.create({
+    data: { companyId: company.id, name: "Other flow scope assistant", ragEnabled: true },
+  });
+  const otherCompanyAssistant = await prisma.assistant.create({
+    data: { companyId: otherCompany.id, name: "Other company assistant", ragEnabled: true },
+  });
+  const [inactiveKnowledge, otherAssistantKnowledge, otherCompanyKnowledge] = await Promise.all([
+    prisma.assistantKnowledge.create({
+      data: {
+        companyId: company.id,
+        assistantId: assistant.id,
+        title: "Inativo",
+        content: "Não deve ser consultado.",
+        status: "INACTIVE",
+        processingStatus: "READY",
+        metadata: { type: "TEXT", tags: ["formatacao"] },
+      },
+    }),
+    prisma.assistantKnowledge.create({
+      data: {
+        companyId: company.id,
+        assistantId: otherAssistant.id,
+        title: "Outro assistant",
+        content: "Não deve ser consultado.",
+        status: "ACTIVE",
+        processingStatus: "READY",
+        metadata: { type: "TEXT", tags: ["formatacao"] },
+      },
+    }),
+    prisma.assistantKnowledge.create({
+      data: {
+        companyId: otherCompany.id,
+        assistantId: otherCompanyAssistant.id,
+        title: "Outra empresa",
+        content: "Não deve ser consultado.",
+        status: "ACTIVE",
+        processingStatus: "READY",
+        metadata: { type: "TEXT", tags: ["formatacao"] },
       },
     }),
   ]);
@@ -55,6 +99,50 @@ test("PostgreSQL: retrieval escopado não consulta conhecimento de outra base", 
         knowledgeId: formatting.id,
         chunkIndex: 0,
         content: "A formatação custa a partir de R$ 1.950,00.",
+        embedding: [1, 0],
+        embeddingModel: "test-embedding",
+        embeddingDimension: 2,
+        status: "ACTIVE",
+      },
+      {
+        companyId: company.id,
+        assistantId: assistant.id,
+        knowledgeId: formatting.id,
+        chunkIndex: 1,
+        content: "Chunk inativo não pode conceder autoridade.",
+        embedding: [1, 0],
+        embeddingModel: "test-embedding",
+        embeddingDimension: 2,
+        status: "INACTIVE",
+      },
+      {
+        companyId: company.id,
+        assistantId: assistant.id,
+        knowledgeId: inactiveKnowledge.id,
+        chunkIndex: 0,
+        content: "Conhecimento inativo não pode ser recuperado.",
+        embedding: [1, 0],
+        embeddingModel: "test-embedding",
+        embeddingDimension: 2,
+        status: "ACTIVE",
+      },
+      {
+        companyId: company.id,
+        assistantId: otherAssistant.id,
+        knowledgeId: otherAssistantKnowledge.id,
+        chunkIndex: 0,
+        content: "Outro assistant não pode ser recuperado.",
+        embedding: [1, 0],
+        embeddingModel: "test-embedding",
+        embeddingDimension: 2,
+        status: "ACTIVE",
+      },
+      {
+        companyId: otherCompany.id,
+        assistantId: otherCompanyAssistant.id,
+        knowledgeId: otherCompanyKnowledge.id,
+        chunkIndex: 0,
+        content: "Outra empresa não pode ser recuperada.",
         embedding: [1, 0],
         embeddingModel: "test-embedding",
         embeddingDimension: 2,
@@ -81,14 +169,25 @@ test("PostgreSQL: retrieval escopado não consulta conhecimento de outra base", 
     tenant: { companyId: company.id },
     assistantId: assistant.id,
     query: "Qual o valor para formatar um PC?",
-    knowledgeIds: [formatting.id],
+    knowledgeScopeTags: ["formatacao"],
     scoreThreshold: 0.55,
   });
 
   assert.equal(result.knowledgeScopeApplied, true);
-  assert.deepEqual(result.allowedKnowledgeIds, [formatting.id]);
+  assert.deepEqual(result.allowedKnowledgeTags, ["formatacao"]);
   assert.equal(result.rejectedOutOfScopeChunkCount, 1);
   assert.equal(result.results.length, 1);
   assert.equal(result.results[0].knowledgeId, formatting.id);
   assert.doesNotMatch(result.results[0].contentPreview, /R\$ 195,00/);
+
+  const noMatch = await retrieval.searchRelevantKnowledge({
+    tenant: { companyId: company.id },
+    assistantId: assistant.id,
+    query: "Qual o valor para formatar um PC?",
+    knowledgeScopeTags: ["inexistente"],
+    scoreThreshold: 0.55,
+  });
+  assert.equal(noMatch.results.length, 0);
+  assert.equal(noMatch.knowledgeScopeNoMatch, true);
+  assert.equal(noMatch.rejectedOutOfScopeChunkCount, 2);
 });

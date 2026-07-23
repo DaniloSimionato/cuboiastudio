@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AssistantKnowledgeRetrievalService } from "../dist/assistant-knowledge/assistant-knowledge-retrieval.service.js";
-import { resolveFlowKnowledgeScope } from "../dist/assistant-conversations/flow-knowledge-scope.js";
+import {
+  isKnowledgeScopeTagFilterEnabled,
+  resolveFlowKnowledgeScope,
+} from "../dist/assistant-conversations/flow-knowledge-scope.js";
+import {
+  getKnowledgeMetadataTags,
+  normalizeKnowledgeScopeTag,
+} from "../dist/assistant-knowledge/knowledge-scope-tags.js";
 import {
   extractRagPriceAuthorities,
   isRagPriceAuthorityCompatibleWithMessage,
@@ -25,7 +32,10 @@ const formatChunk = {
   content: "A formatação do computador tem valor a partir de R$ 1.950,00.",
   embedding: [1, 0],
   embeddingDimension: 2,
-  knowledge: { title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus", metadata: null },
+  knowledge: {
+    title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
+    metadata: { type: "TEXT", tags: ["Formatação", "sistemas"] },
+  },
 };
 const recoveryChunk = {
   id: "chunk-recovery",
@@ -34,7 +44,10 @@ const recoveryChunk = {
   content: "Montagem e configuração têm valor inicial a partir de R$ 195,00.",
   embedding: [0.9, Math.sqrt(0.19)],
   embeddingDimension: 2,
-  knowledge: { title: "FG - Recuperação de Dados e Montagem de Computadores", metadata: null },
+  knowledge: {
+    title: "FG - Recuperação de Dados e Montagem de Computadores",
+    metadata: { type: "TEXT", tags: ["recuperacao_dados"] },
+  },
 };
 
 function scopedPrisma() {
@@ -65,25 +78,45 @@ function authorityGuard(question, answer, sources) {
   });
 }
 
-test("knowledgeScope reutiliza IDs existentes, e escopo configurado nunca faz fallback global", () => {
-  assert.deepEqual(resolveFlowKnowledgeScope({ knowledgeScope: '["knowledge-format"]' }), {
-    knowledgeScopeSource: "flow_knowledge_scope",
-    allowedKnowledgeIds: [formatKnowledgeId],
+test("knowledgeScope usa tags normalizadas, e escopo configurado nunca faz fallback global", () => {
+  assert.deepEqual(resolveFlowKnowledgeScope({ knowledgeScope: '["Formatação"]' }), {
+    knowledgeScopeSource: "flow_knowledge_scope_tags",
+    scopeTags: ["formatacao"],
     knowledgeScopeMissing: false,
   });
   assert.deepEqual(resolveFlowKnowledgeScope({ knowledgeScope: '["unknown"]' }), {
-    knowledgeScopeSource: "flow_knowledge_scope",
-    allowedKnowledgeIds: ["unknown"],
+    knowledgeScopeSource: "flow_knowledge_scope_tags",
+    scopeTags: ["unknown"],
     knowledgeScopeMissing: false,
   });
   assert.deepEqual(resolveFlowKnowledgeScope({ knowledgeScope: null }), {
     knowledgeScopeSource: "legacy_global",
-    allowedKnowledgeIds: [],
+    scopeTags: [],
     knowledgeScopeMissing: true,
   });
+  assert.deepEqual(resolveFlowKnowledgeScope({ knowledgeScope: "[]" }), {
+    knowledgeScopeSource: "legacy_global",
+    scopeTags: [],
+    knowledgeScopeMissing: true,
+  });
+  assert.equal(normalizeKnowledgeScopeTag(" Assistência-Técnica "), "assistencia_tecnica");
+  assert.deepEqual(getKnowledgeMetadataTags({ type: "TEXT", tags: ["assistencia-tecnica"] }), [
+    "assistencia_tecnica",
+  ]);
+  assert.equal(
+    isKnowledgeScopeTagFilterEnabled({
+      assistantId: "assistant-1",
+      environment: { KNOWLEDGE_SCOPE_TAG_FILTER_ASSISTANT_IDS: "assistant-1, assistant-2" },
+    }),
+    true,
+  );
+  assert.equal(
+    isKnowledgeScopeTagFilterEnabled({ assistantId: "assistant-1", environment: {} }),
+    false,
+  );
 });
 
-test("retrieval PostgreSQL aplica company/assistant/status existentes e limita chunks ao scope", async () => {
+test("retrieval aplica tags de metadata e limita chunks ao scope", async () => {
   const retrieval = new AssistantKnowledgeRetrievalService(scopedPrisma(), {
     generateEmbedding: async () => ({ embedding: [1, 0] }),
   });
@@ -91,12 +124,12 @@ test("retrieval PostgreSQL aplica company/assistant/status existentes e limita c
     tenant: { companyId: "company-1" },
     assistantId: "assistant-1",
     query: "Qual o valor para formatar um PC?",
-    knowledgeIds: [formatKnowledgeId],
+    knowledgeScopeTags: ["formatacao"],
     scoreThreshold: 0.55,
   });
 
   assert.equal(result.knowledgeScopeApplied, true);
-  assert.deepEqual(result.allowedKnowledgeIds, [formatKnowledgeId]);
+  assert.deepEqual(result.allowedKnowledgeTags, ["formatacao"]);
   assert.equal(result.rejectedOutOfScopeChunkCount, 1);
   assert.deepEqual(
     result.results.map((item) => item.chunkId),
@@ -107,11 +140,24 @@ test("retrieval PostgreSQL aplica company/assistant/status existentes e limita c
     tenant: { companyId: "company-1" },
     assistantId: "assistant-1",
     query: "Qual o valor para formatar um PC?",
-    knowledgeIds: ["missing-base"],
+    knowledgeScopeTags: ["nao_existe"],
     scoreThreshold: 0.55,
   });
   assert.equal(emptyScopedResult.results.length, 0);
   assert.equal(emptyScopedResult.knowledgeScopeApplied, true);
+  assert.equal(emptyScopedResult.knowledgeScopeNoMatch, true);
+
+  const legacyResult = await retrieval.searchRelevantKnowledge({
+    tenant: { companyId: "company-1" },
+    assistantId: "assistant-1",
+    query: "Qual o valor para formatar um PC?",
+    scoreThreshold: 0.55,
+  });
+  assert.equal(legacyResult.knowledgeScopeApplied, false);
+  assert.deepEqual(
+    legacyResult.results.map((item) => item.chunkId),
+    ["chunk-format", "chunk-recovery"],
+  );
 });
 
 test("domínio explícito vence PRICE e preserva PRICE como intenção secundária", () => {

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { FileText, Pencil, RefreshCw, Search, Trash2 } from "lucide-react";
+import { FileText, Pencil, RefreshCw, Search, Trash2, X } from "lucide-react";
 
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -50,6 +50,9 @@ function ConhecimentoPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
+  const [metadata, setMetadata] = useState<Record<string, unknown>>({});
+  const [knowledgeTags, setKnowledgeTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
   const selectableAssistants = useMemo(() => filterOperationalAssistants(assistants), [assistants]);
 
   const selectedAssistant = useMemo(
@@ -83,6 +86,9 @@ function ConhecimentoPage() {
       setEditingId(null);
       setTitle("");
       setContent("");
+      setMetadata({});
+      setKnowledgeTags([]);
+      setTagInput("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível carregar a base.");
     } finally {
@@ -149,6 +155,23 @@ function ConhecimentoPage() {
     setEditingId(item.id);
     setTitle(item.title);
     setContent(item.content);
+    setMetadata(toMetadataRecord(item.metadata));
+    setKnowledgeTags(getKnowledgeTags(item.metadata));
+    setTagInput("");
+  };
+
+  const addKnowledgeTags = (value: string) => {
+    const newTags = value
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+
+    if (newTags.length === 0) {
+      return;
+    }
+
+    setKnowledgeTags((current) => Array.from(new Set([...current, ...newTags])));
+    setTagInput("");
   };
 
   const handleSave = async () => {
@@ -159,6 +182,7 @@ function ConhecimentoPage() {
     const payload = {
       title: title.trim(),
       content: content.trim(),
+      metadata: { ...metadata, tags: knowledgeTags },
     };
 
     if (editingId) {
@@ -285,6 +309,18 @@ function ConhecimentoPage() {
                             <div className="text-xs text-muted-foreground truncate">
                               {item.content}
                             </div>
+                            {getKnowledgeTags(item.metadata).length > 0 ? (
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {getKnowledgeTags(item.metadata).map((tag) => (
+                                  <span
+                                    key={tag}
+                                    className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground"
+                                  >
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
                           </div>
                         </TableCell>
                         <TableCell>
@@ -337,6 +373,50 @@ function ConhecimentoPage() {
                   placeholder="Atendemos de segunda a sexta das 08h às 18h."
                 />
               </Field>
+              <Field label="Tags de conhecimento">
+                <div className="space-y-2">
+                  <Input
+                    value={tagInput}
+                    onChange={(event) => setTagInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === ",") {
+                        event.preventDefault();
+                        addKnowledgeTags(tagInput);
+                      }
+                    }}
+                    onBlur={() => addKnowledgeTags(tagInput)}
+                    placeholder="Ex.: formatação, sistemas"
+                  />
+                  {knowledgeTags.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {knowledgeTags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-1 text-xs"
+                        >
+                          {tag}
+                          <button
+                            type="button"
+                            aria-label={`Remover tag ${tag}`}
+                            className="text-muted-foreground hover:text-foreground"
+                            onClick={() =>
+                              setKnowledgeTags((current) =>
+                                current.filter((currentTag) => currentTag !== tag),
+                              )
+                            }
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  <p className="text-xs text-muted-foreground">
+                    Use Enter ou vírgula para incluir. As tags são usadas para limitar o
+                    conhecimento de flows compatíveis.
+                  </p>
+                </div>
+              </Field>
               <div className="flex flex-wrap gap-2">
                 <Button
                   onClick={() => void handleSave()}
@@ -350,6 +430,9 @@ function ConhecimentoPage() {
                     setEditingId(null);
                     setTitle("");
                     setContent("");
+                    setMetadata({});
+                    setKnowledgeTags([]);
+                    setTagInput("");
                   }}
                 >
                   Limpar
@@ -383,4 +466,23 @@ function formatDate(value: string): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(parsed);
+}
+
+function toMetadataRecord(metadata: unknown): Record<string, unknown> {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return {};
+  }
+
+  return metadata as Record<string, unknown>;
+}
+
+function getKnowledgeTags(metadata: unknown): string[] {
+  const tags = toMetadataRecord(metadata).tags;
+  if (!Array.isArray(tags)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(tags.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0)),
+  );
 }

@@ -12,6 +12,7 @@ import {
   resolveAssistantKnowledgeScoreThreshold,
   type RagScoreThresholdSource,
 } from "../assistant-conversations/runtime-context-manifest";
+import { knowledgeScopeTagsMatch, normalizeKnowledgeScopeTags } from "./knowledge-scope-tags";
 
 export interface AssistantKnowledgeSearchInput {
   companyId?: string;
@@ -19,8 +20,8 @@ export interface AssistantKnowledgeSearchInput {
   query: string;
   topK?: number;
   scoreThreshold?: number;
-  /** Concrete AssistantKnowledge IDs authorized by the selected flow. */
-  knowledgeIds?: string[];
+  /** Normalized domain tags authorized by the selected flow. */
+  knowledgeScopeTags?: string[];
   user?: AuthenticatedUser;
   tenant: RequestTenant;
 }
@@ -42,7 +43,9 @@ export interface AssistantKnowledgeSearchResult {
   selectedScoreRange: { min: number; max: number } | null;
   topK: number;
   knowledgeScopeApplied: boolean;
-  allowedKnowledgeIds: string[];
+  allowedKnowledgeTags: string[];
+  knowledgeScopeNoMatch: boolean;
+  scopedCandidateCount: number;
   rejectedOutOfScopeChunkCount: number;
   results: Array<{
     knowledgeId: string;
@@ -108,15 +111,8 @@ export class AssistantKnowledgeRetrievalService {
     }
 
     const topK = input.topK && input.topK > 0 ? Math.min(input.topK, 20) : 5;
-    const allowedKnowledgeIds = Array.from(
-      new Set(
-        (input.knowledgeIds ?? []).filter(
-          (knowledgeId): knowledgeId is string =>
-            typeof knowledgeId === "string" && knowledgeId.trim().length > 0,
-        ),
-      ),
-    );
-    const knowledgeScopeApplied = input.knowledgeIds !== undefined;
+    const allowedKnowledgeTags = normalizeKnowledgeScopeTags(input.knowledgeScopeTags ?? []);
+    const knowledgeScopeApplied = input.knowledgeScopeTags !== undefined;
     const normalizedThreshold = resolveAssistantKnowledgeScoreThreshold({
       assistantId: input.assistantId,
       explicitValue: input.scoreThreshold,
@@ -136,76 +132,75 @@ export class AssistantKnowledgeRetrievalService {
     };
     const countDocuments = prismaForDiagnostics.assistantKnowledge?.count;
     const countChunks = prismaForDiagnostics.assistantKnowledgeChunk?.count;
-    const [
-      candidateDocumentCount,
-      eligibleDocumentCount,
-      candidateChunkCount,
-      globalCandidateChunkCount,
-      chunks,
-    ] = await Promise.all([
-      countDocuments
-        ? countDocuments({
-            where: {
-              companyId: input.tenant.companyId,
-              assistantId: input.assistantId,
-              ...(knowledgeScopeApplied ? { id: { in: allowedKnowledgeIds } } : {}),
-            },
-          })
-        : Promise.resolve(0),
-      countDocuments
-        ? countDocuments({
-            where: {
-              companyId: input.tenant.companyId,
-              assistantId: input.assistantId,
+    const [candidateDocumentCount, eligibleDocumentCount, candidateChunkCount, chunks] =
+      await Promise.all([
+        countDocuments
+          ? countDocuments({
+              where: {
+                companyId: input.tenant.companyId,
+                assistantId: input.assistantId,
+              },
+            })
+          : Promise.resolve(0),
+        countDocuments
+          ? countDocuments({
+              where: {
+                companyId: input.tenant.companyId,
+                assistantId: input.assistantId,
+                status: Status.ACTIVE,
+                processingStatus: "READY",
+              },
+            })
+          : Promise.resolve(0),
+        countChunks
+          ? countChunks({
+              where: {
+                companyId: input.tenant.companyId,
+                assistantId: input.assistantId,
+              },
+            })
+          : Promise.resolve(0),
+        this.prisma.assistantKnowledgeChunk.findMany({
+          where: {
+            companyId: input.tenant.companyId,
+            assistantId: input.assistantId,
+            status: Status.ACTIVE,
+            knowledge: {
               status: Status.ACTIVE,
               processingStatus: "READY",
-              ...(knowledgeScopeApplied ? { id: { in: allowedKnowledgeIds } } : {}),
-            },
-          })
-        : Promise.resolve(0),
-      countChunks
-        ? countChunks({
-            where: {
-              companyId: input.tenant.companyId,
-              assistantId: input.assistantId,
-              ...(knowledgeScopeApplied ? { knowledgeId: { in: allowedKnowledgeIds } } : {}),
-            },
-          })
-        : Promise.resolve(0),
-      countChunks
-        ? countChunks({
-            where: { companyId: input.tenant.companyId, assistantId: input.assistantId },
-          })
-        : Promise.resolve(0),
-      this.prisma.assistantKnowledgeChunk.findMany({
-        where: {
-          companyId: input.tenant.companyId,
-          assistantId: input.assistantId,
-          status: Status.ACTIVE,
-          ...(knowledgeScopeApplied ? { knowledgeId: { in: allowedKnowledgeIds } } : {}),
-          knowledge: {
-            status: Status.ACTIVE,
-            processingStatus: "READY",
-          },
-        },
-        select: {
-          id: true,
-          knowledgeId: true,
-          chunkIndex: true,
-          content: true,
-          embedding: true,
-          embeddingDimension: true,
-          knowledge: {
-            select: {
-              title: true,
-              metadata: true,
             },
           },
-        },
-      }),
-    ]);
+          select: {
+            id: true,
+            knowledgeId: true,
+            chunkIndex: true,
+            content: true,
+            embedding: true,
+            embeddingDimension: true,
+            knowledge: {
+              select: {
+                title: true,
+                metadata: true,
+              },
+            },
+          },
+        }),
+      ]);
 
-    if (chunks.length === 0) {
+    const scopedChunks = knowledgeScopeApplied
+      ? chunks.filter((chunk) =>
+          knowledgeScopeTagsMatch({
+            scopeTags: allowedKnowledgeTags,
+            metadata: chunk.knowledge.metadata,
+          }),
+        )
+      : chunks;
+    const rejectedOutOfScopeChunkCount = knowledgeScopeApplied
+      ? chunks.length - scopedChunks.length
+      : 0;
+    const knowledgeScopeNoMatch = knowledgeScopeApplied && scopedChunks.length === 0;
+
+    if (scopedChunks.length === 0) {
       return {
         query: trimmedQuery,
         candidateDocumentCount,
@@ -223,13 +218,14 @@ export class AssistantKnowledgeRetrievalService {
         selectedScoreRange: null,
         topK,
         knowledgeScopeApplied,
-        allowedKnowledgeIds,
-        rejectedOutOfScopeChunkCount: knowledgeScopeApplied
-          ? Math.max(0, globalCandidateChunkCount - candidateChunkCount)
-          : 0,
+        allowedKnowledgeTags,
+        knowledgeScopeNoMatch,
+        scopedCandidateCount: 0,
+        rejectedOutOfScopeChunkCount,
         results: [],
-        warning:
-          "Nenhum chunk de conhecimento ativo e preparado (READY) foi encontrado para este agente.",
+        warning: knowledgeScopeApplied
+          ? "Nenhum conhecimento ativo e preparado (READY) corresponde às tags do escopo selecionado."
+          : "Nenhum chunk de conhecimento ativo e preparado (READY) foi encontrado para este agente.",
       };
     }
 
@@ -241,7 +237,7 @@ export class AssistantKnowledgeRetrievalService {
     const queryVector = queryEmbeddingResult.embedding;
 
     // 3. Calculate similarities
-    const scoredChunks = chunks
+    const scoredChunks = scopedChunks
       .map((chunk) => {
         // Ensure dimensions match
         const chunkVector = chunk.embedding as number[];
@@ -286,22 +282,22 @@ export class AssistantKnowledgeRetrievalService {
       candidateDocumentCount,
       eligibleDocumentCount,
       candidateChunkCount,
-      eligibleChunkCount: chunks.length,
-      totalChunksScanned: chunks.length,
+      eligibleChunkCount: scopedChunks.length,
+      totalChunksScanned: scopedChunks.length,
       scoreThreshold: threshold,
       scoreThresholdSource: normalizedThreshold.source,
       scoredChunkCount: scoredChunks.length,
-      dimensionMismatchCount: chunks.length - scoredChunks.length,
+      dimensionMismatchCount: scopedChunks.length - scoredChunks.length,
       filteredOutCount,
       filteredOutScoreRange,
       scoredScoreRange: scoreRange(scoredChunks.map((item) => item.score)),
       selectedScoreRange: scoreRange(topResults.map((item) => item.score)),
       topK,
       knowledgeScopeApplied,
-      allowedKnowledgeIds,
-      rejectedOutOfScopeChunkCount: knowledgeScopeApplied
-        ? Math.max(0, globalCandidateChunkCount - candidateChunkCount)
-        : 0,
+      allowedKnowledgeTags,
+      knowledgeScopeNoMatch,
+      scopedCandidateCount: scopedChunks.length,
+      rejectedOutOfScopeChunkCount,
       results: topResults.map((res) => ({
         knowledgeId: res.chunk.knowledgeId,
         knowledgeTitle: res.chunk.knowledge.title,

@@ -51,6 +51,7 @@ IA / provider:
 - `AI_API_KEY`
 - `AI_REQUEST_TIMEOUT_MS`
 - `ASSISTANT_KNOWLEDGE_MIN_SCORE_OVERRIDES` (opcional; formato `assistant-id:0.55`; valor aprovado: `cmrcunljc008rrq01d7urn2t5:0.55`)
+- `KNOWLEDGE_SCOPE_TAG_FILTER_ASSISTANT_IDS` (opcional; allowlist de assistants para ativar o filtro por tags)
 - `OPENAI_API_KEY` se usar OpenAI diretamente
 - `ANTHROPIC_API_KEY` se usar Anthropic diretamente
 

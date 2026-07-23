@@ -1,17 +1,16 @@
 import type { AssistantFlow } from "@prisma/client";
+import { normalizeKnowledgeScopeTags } from "../assistant-knowledge/knowledge-scope-tags";
 
 export type FlowKnowledgeScopeResolution = {
-  knowledgeScopeSource: "flow_knowledge_scope" | "legacy_global";
-  allowedKnowledgeIds: string[];
+  knowledgeScopeSource: "flow_knowledge_scope_tags" | "legacy_global";
+  scopeTags: string[];
   knowledgeScopeMissing: boolean;
 };
 
 /**
  * `AssistantFlow.knowledgeScope` is the pre-existing JSON string edited by the
- * flows UI (one knowledge ID per line). Tags were historically accepted by the
- * field, but retrieval can only safely scope a query with concrete knowledge
- * item IDs. A malformed or empty value therefore deliberately stays on the
- * legacy path rather than broadening a configured scope.
+ * flows UI. Its contract is a list of domain tags. Values are normalized only
+ * for matching; the persisted flow configuration remains untouched.
  */
 export function resolveFlowKnowledgeScope(
   flow: Pick<AssistantFlow, "knowledgeScope"> | null | undefined,
@@ -20,38 +19,50 @@ export function resolveFlowKnowledgeScope(
   if (!rawScope) {
     return {
       knowledgeScopeSource: "legacy_global",
-      allowedKnowledgeIds: [],
+      scopeTags: [],
       knowledgeScopeMissing: true,
     };
   }
 
   try {
     const parsed = JSON.parse(rawScope);
-    const allowedKnowledgeIds = Array.isArray(parsed)
-      ? Array.from(
-          new Set(
-            parsed.filter(
-              (value): value is string => typeof value === "string" && value.trim().length > 0,
-            ),
-          ),
-        )
-      : [];
+    const scopeTags = normalizeKnowledgeScopeTags(parsed);
 
-    if (allowedKnowledgeIds.length > 0) {
+    if (scopeTags.length > 0) {
       return {
-        knowledgeScopeSource: "flow_knowledge_scope",
-        allowedKnowledgeIds,
+        knowledgeScopeSource: "flow_knowledge_scope_tags",
+        scopeTags,
         knowledgeScopeMissing: false,
       };
     }
+
+    return {
+      knowledgeScopeSource: "legacy_global",
+      scopeTags: [],
+      knowledgeScopeMissing: true,
+    };
   } catch {
-    // Preserve the explicitly configured scope as an empty result below. It
-    // must never silently fall back to global retrieval.
+    // A malformed configured scope is not considered missing. When the flag is
+    // enabled it must therefore resolve to no knowledge rather than broaden the
+    // query to every base.
   }
 
   return {
-    knowledgeScopeSource: "flow_knowledge_scope",
-    allowedKnowledgeIds: [],
+    knowledgeScopeSource: "flow_knowledge_scope_tags",
+    scopeTags: [],
     knowledgeScopeMissing: false,
   };
+}
+
+export function isKnowledgeScopeTagFilterEnabled(input: {
+  assistantId: string;
+  environment?: NodeJS.ProcessEnv;
+}): boolean {
+  const configuredAssistantIds = (
+    input.environment ?? process.env
+  ).KNOWLEDGE_SCOPE_TAG_FILTER_ASSISTANT_IDS?.split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  return configuredAssistantIds?.includes(input.assistantId) ?? false;
 }
