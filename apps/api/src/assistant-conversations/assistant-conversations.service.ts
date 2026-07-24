@@ -212,7 +212,11 @@ type ChatwootOutboundResult = {
   status: ChatwootOutboundStatus;
   performed: boolean;
   externalMessageId: string | null;
+  blocked?: boolean;
+  blockReason?: ConversationProcessingSkipReason;
 };
+
+type ConversationProcessingSkipReason = "paused_by_human" | "ai_inactive";
 
 export function normalizeChatwootExternalMessageId(responseBody: string): string | null {
   const trimmed = responseBody.trim();
@@ -262,7 +266,7 @@ export type AssistantConversationRuntime = {
   temperatureSource: "assistant" | "default";
   configurationSource: AiResolvedRuntimeConfig["source"];
   fallback: boolean;
-  outcome: "success" | "fallback" | "needs_human" | "unknown" | "handoff";
+  outcome: "success" | "fallback" | "needs_human" | "unknown" | "handoff" | "skipped";
   summary: string;
   context: {
     requestId?: string | null;
@@ -437,6 +441,14 @@ export type AssistantConversationRuntime = {
     knowledgeLimit?: number;
     knowledgeChunkCount?: number;
     knowledgeChunkIds?: string[];
+    processingSkipped?: boolean;
+    skipReason?: ConversationProcessingSkipReason;
+    currentAiActive?: boolean;
+    currentPausedByHuman?: boolean;
+    providerCalled?: boolean;
+    outboundAttempted?: boolean;
+    outboundBlocked?: boolean;
+    stageWhereBlocked?: "before_processing" | "before_outbound";
   };
   logId?: string;
   reason?:
@@ -448,7 +460,8 @@ export type AssistantConversationRuntime = {
     | "ai-provider-error"
     | "conversation-reset-executed"
     | "conversation-reset-executed-duplicate"
-    | "duplicate-external-message-id";
+    | "duplicate-external-message-id"
+    | ConversationProcessingSkipReason;
   warning?: string;
   ragData?: any;
 };
@@ -1526,6 +1539,187 @@ export class AssistantConversationsService {
     return conversation;
   }
 
+  private async readCurrentConversationProcessingState(input: {
+    assistantId: string;
+    conversationId: string;
+    companyId: string;
+  }): Promise<AssistantConversationSafeRecord> {
+    const conversation = await this.prisma.assistantConversation.findFirst({
+      where: {
+        id: input.conversationId,
+        assistantId: input.assistantId,
+        companyId: input.companyId,
+      },
+      select: assistantConversationSafeSelect,
+    });
+
+    if (!conversation) {
+      throw new NotFoundException("Conversation not found.");
+    }
+
+    return conversation;
+  }
+
+  private resolveConversationProcessingSkipReason(
+    conversation: Pick<AssistantConversationSafeRecord, "aiActive" | "pausedByHuman">,
+  ): ConversationProcessingSkipReason | null {
+    if (conversation.pausedByHuman) return "paused_by_human";
+    if (conversation.aiActive === false) return "ai_inactive";
+    return null;
+  }
+
+  private logConversationProcessingGate(input: {
+    event: "assistant_conversation_processing_skipped" | "outbound_blocked_after_pause";
+    stageWhereBlocked: "before_processing" | "before_outbound";
+    conversation: AssistantConversationSafeRecord;
+    assistantId: string;
+    externalMessageId: string | null;
+    skipReason: ConversationProcessingSkipReason;
+    outboundAttempted: boolean;
+    outboundBlocked: boolean;
+  }): void {
+    this.logger.warn(
+      JSON.stringify({
+        event: input.event,
+        conversationId: input.conversation.id,
+        assistantId: input.assistantId,
+        accountId: input.conversation.externalAccountId ?? null,
+        inboxId: input.conversation.externalInboxId ?? null,
+        externalMessageId: input.externalMessageId,
+        currentAiActive: input.conversation.aiActive,
+        currentPausedByHuman: input.conversation.pausedByHuman,
+        processingSkipped: true,
+        skipReason: input.skipReason,
+        providerCalled: false,
+        outboundAttempted: input.outboundAttempted,
+        outboundBlocked: input.outboundBlocked,
+        stageWhereBlocked: input.stageWhereBlocked,
+      }),
+    );
+  }
+
+  private async buildConversationProcessingSkippedResponse(input: {
+    assistant: AssistantConversationRuntimeAssistantRecord;
+    conversation: AssistantConversationSafeRecord;
+    dto: SendAssistantConversationMessageDto;
+    tenant: RequestTenant;
+    runtimeStartedAt: number;
+    skipReason: ConversationProcessingSkipReason;
+  }): Promise<SendAssistantConversationMessageResponse> {
+    const source = input.dto.source ?? "manual";
+    const content =
+      typeof input.dto.message === "string" && input.dto.message.trim()
+        ? input.dto.message.trim()
+        : "Mensagem recebida.";
+    const stageWhereBlocked = "before_processing" as const;
+    const metadata = {
+      conversationId: input.conversation.id,
+      assistantId: input.assistant.id,
+      accountId: input.conversation.externalAccountId ?? null,
+      inboxId: input.conversation.externalInboxId ?? null,
+      externalMessageId: input.dto.externalMessageId ?? null,
+      currentAiActive: input.conversation.aiActive,
+      currentPausedByHuman: input.conversation.pausedByHuman,
+      processingSkipped: true,
+      skipReason: input.skipReason,
+      providerCalled: false,
+      outboundAttempted: false,
+      outboundBlocked: false,
+      stageWhereBlocked,
+    };
+    const userMessage = await this.prisma.$transaction(async (tx) => {
+      const createdUserMessage = await tx.assistantConversationMessage.create({
+        data: {
+          companyId: input.tenant.companyId,
+          assistantId: input.assistant.id,
+          conversationId: input.conversation.id,
+          role: "user",
+          content,
+          source,
+          messageType: input.dto.messageType ?? null,
+          externalMessageId: input.dto.externalMessageId ?? null,
+          contextVersion: input.conversation.currentContextVersion ?? 1,
+          externalPayload: this.toSerializableJsonValue({
+            source,
+            externalMessageId: input.dto.externalMessageId ?? null,
+            externalAccountId: input.dto.externalAccountId ?? null,
+            externalConversationId: input.dto.externalConversationId ?? null,
+            externalContactId: input.dto.externalContactId ?? null,
+            externalInboxId: input.dto.externalInboxId ?? null,
+            interpretedMessage: content,
+          }),
+          attachments: Prisma.JsonNull,
+          sources: Prisma.JsonNull,
+          mode: "processing-skipped",
+        },
+        select: assistantConversationMessageSafeSelect,
+      });
+
+      await tx.assistantRuntimeLog.create({
+        data: {
+          companyId: input.tenant.companyId,
+          assistantId: input.assistant.id,
+          conversationId: input.conversation.id,
+          userMessageId: createdUserMessage.id,
+          assistantMessageId: null,
+          mode: "conversation-processing-gate",
+          status: "SKIPPED",
+          provider: null,
+          model: null,
+          configurationSource: "tenant-settings",
+          fallback: false,
+          fallbackReason: input.skipReason,
+          outcome: "skipped",
+          durationMs: Date.now() - input.runtimeStartedAt,
+          knowledgeCount: 0,
+          historyMessagesUsed: 0,
+          historyLimit: 0,
+          metadata: this.toSerializableJsonValue(metadata),
+        },
+      });
+
+      return createdUserMessage;
+    });
+
+    this.logConversationProcessingGate({
+      event: "assistant_conversation_processing_skipped",
+      stageWhereBlocked,
+      conversation: input.conversation,
+      assistantId: input.assistant.id,
+      externalMessageId: input.dto.externalMessageId ?? null,
+      skipReason: input.skipReason,
+      outboundAttempted: false,
+      outboundBlocked: false,
+    });
+
+    return {
+      conversationId: input.conversation.id,
+      userMessage: toConversationMessageItem(userMessage),
+      assistantMessage: null,
+      runtime: {
+        mode: "deterministic-runtime",
+        assistant: {
+          id: input.assistant.id,
+          name: input.assistant.name,
+        },
+        temperature: input.assistant.temperature ?? 0.7,
+        temperatureSource: "assistant",
+        configurationSource: "tenant-settings",
+        fallback: false,
+        outcome: "skipped",
+        reason: input.skipReason,
+        summary: "Conversation processing skipped because automation is inactive.",
+        context: {
+          historyMessagesUsed: 0,
+          historyLimit: 0,
+          initialMessageIncluded: false,
+          instructionsIncluded: false,
+          ...metadata,
+        },
+      },
+    };
+  }
+
   async ensureConversationFromInboundMessage(input: {
     assistantId: string;
     user?: AuthenticatedUser | null;
@@ -1992,6 +2186,32 @@ export class AssistantConversationsService {
     const baseUrl = resolvedConfig?.baseUrl?.trim() || "";
     if (!baseUrl) {
       return { status: "skipped", performed: false, externalMessageId: null };
+    }
+
+    const currentConversation = await this.readCurrentConversationProcessingState({
+      assistantId: input.assistantId,
+      conversationId: input.conversation.id,
+      companyId: input.conversation.companyId,
+    });
+    const skipReason = this.resolveConversationProcessingSkipReason(currentConversation);
+    if (skipReason) {
+      this.logConversationProcessingGate({
+        event: "outbound_blocked_after_pause",
+        stageWhereBlocked: "before_outbound",
+        conversation: currentConversation,
+        assistantId: input.assistantId,
+        externalMessageId: null,
+        skipReason,
+        outboundAttempted: false,
+        outboundBlocked: true,
+      });
+      return {
+        status: "skipped",
+        performed: false,
+        externalMessageId: null,
+        blocked: true,
+        blockReason: skipReason,
+      };
     }
 
     const outboundUrl = `${baseUrl.replace(/\/$/, "")}/api/v1/accounts/${encodeURIComponent(
@@ -2661,7 +2881,7 @@ export class AssistantConversationsService {
       tenant: input.tenant,
     });
 
-    const conversation = await this.resolveConversationOrThrow({
+    let conversation = await this.resolveConversationOrThrow({
       assistantId: input.assistantId,
       conversationId: input.conversationId,
       user: input.user,
@@ -2684,6 +2904,23 @@ export class AssistantConversationsService {
         companyId: input.tenant.companyId,
         conversationId: conversation.id,
         existingMessage: existingExternalMessage,
+      });
+    }
+
+    conversation = await this.readCurrentConversationProcessingState({
+      assistantId: input.assistantId,
+      conversationId: conversation.id,
+      companyId: input.tenant.companyId,
+    });
+    const processingSkipReason = this.resolveConversationProcessingSkipReason(conversation);
+    if (processingSkipReason) {
+      return this.buildConversationProcessingSkippedResponse({
+        assistant,
+        conversation,
+        dto: input.dto,
+        tenant: input.tenant,
+        runtimeStartedAt,
+        skipReason: processingSkipReason,
       });
     }
 
@@ -5569,6 +5806,10 @@ export class AssistantConversationsService {
             );
           } else if (outboundResult.status === "skipped") {
             tailOutboundPerformed = "SKIPPED";
+            if (outboundResult.blocked) {
+              contextMetadata.outboundBlocked = true;
+              contextMetadata.outboundBlockReason = outboundResult.blockReason ?? null;
+            }
             if (responseExecutionEnvelope.executionOwner === "V2_PRIMARY") {
               await responseTailLifecycleHooks.afterOutboundUncertain(
                 createResponseTailLifecycleMetadata(assistantMessage.id, true, "UNKNOWN"),
@@ -5588,6 +5829,9 @@ export class AssistantConversationsService {
               : outboundResult.status === "skipped"
                 ? "skipped"
                 : "failed";
+          if (outboundResult.blocked) {
+            break;
+          }
         } catch (err: any) {
           this.logger.error(`Error sending Chatwoot block ${i}: ${err.message}`, err.stack);
           contextMetadata.outboundStatus = "failed";

@@ -3064,3 +3064,315 @@ test("Chatwoot inbox config rejeita assistantId de outro tenant", async () => {
     /Assistente inválido para este tenant/i,
   );
 });
+
+function createTerminalGateInput(externalMessageId = "terminal-gate-message-1") {
+  return {
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    dto: {
+      source: "chatwoot",
+      externalMessageId,
+      externalAccountId: "account-1",
+      externalConversationId: "conversation-1",
+      externalContactId: "contact-1",
+      externalInboxId: "inbox-1",
+      message: "Mensagem de teste",
+    },
+    user: {
+      id: "user-1",
+      companyId: "company-1",
+      email: "user@cubo.local",
+      name: "User",
+      roles: [],
+      permissions: [],
+    },
+    tenant: { companyId: "company-1" },
+    preparedAttachments: [],
+  };
+}
+
+test("conversa pausada antes do inbound é skip terminal sem provider ou outbound", async () => {
+  const { service, calls } = createAssistantServiceDeps({
+    conversation: { aiActive: false, pausedByHuman: true },
+  });
+
+  const result = await service.sendMessage(createTerminalGateInput());
+
+  assert.equal(result.runtime.outcome, "skipped");
+  assert.equal(result.runtime.reason, "paused_by_human");
+  assert.equal(result.assistantMessage, null);
+  assert.equal(calls.providerConfigured.length, 0);
+  assert.equal(calls.providerPayloads.length, 0);
+  assert.equal(calls.chatwootFetches.length, 0);
+  assert.equal(calls.runtimeLogCreates.at(-1).status, "SKIPPED");
+  assert.equal(calls.runtimeLogCreates.at(-1).metadata.skipReason, "paused_by_human");
+});
+
+test("ai inativa sem pausa também é skip terminal", async () => {
+  const { service, calls } = createAssistantServiceDeps({
+    conversation: { aiActive: false, pausedByHuman: false },
+  });
+
+  const result = await service.sendMessage(createTerminalGateInput("terminal-gate-message-2"));
+
+  assert.equal(result.runtime.outcome, "skipped");
+  assert.equal(result.runtime.reason, "ai_inactive");
+  assert.equal(calls.providerPayloads.length, 0);
+  assert.equal(calls.chatwootFetches.length, 0);
+});
+
+test("três inbounds em conversa pausada resultam em três skips e nenhum provider", async () => {
+  const { service, calls } = createAssistantServiceDeps({
+    conversation: { aiActive: false, pausedByHuman: true },
+  });
+
+  const results = await Promise.all(
+    ["terminal-gate-message-3", "terminal-gate-message-4", "terminal-gate-message-5"].map(
+      (externalMessageId) => service.sendMessage(createTerminalGateInput(externalMessageId)),
+    ),
+  );
+
+  assert.deepEqual(
+    results.map((result) => result.runtime.reason),
+    ["paused_by_human", "paused_by_human", "paused_by_human"],
+  );
+  assert.equal(calls.providerPayloads.length, 0);
+  assert.equal(calls.chatwootFetches.length, 0);
+  assert.equal(calls.runtimeLogCreates.filter((entry) => entry.status === "SKIPPED").length, 3);
+});
+
+test("estado atual no banco vence snapshot ativo antes do processamento", async () => {
+  const { service, calls, prisma } = createAssistantServiceDeps({
+    conversation: { aiActive: true, pausedByHuman: false },
+  });
+  let reads = 0;
+  prisma.assistantConversation.findFirst = async () => {
+    reads += 1;
+    return {
+      id: "conversation-1",
+      companyId: "company-1",
+      assistantId: "assistant-1",
+      title: "Conversa WhatsApp",
+      source: "CHATWOOT",
+      channelType: "WHATSAPP",
+      sourceProvider: "chatwoot",
+      externalAccountId: "account-1",
+      externalConversationId: "conversation-1",
+      externalContactId: "contact-1",
+      externalChannelId: "inbox-1",
+      externalInboxId: "inbox-1",
+      aiActive: reads === 1,
+      pausedByHuman: reads !== 1,
+      lastMessageAt: new Date(),
+      status: "ACTIVE",
+      currentContextVersion: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  };
+
+  const result = await service.sendMessage(createTerminalGateInput("terminal-gate-message-6"));
+
+  assert.equal(result.runtime.reason, "paused_by_human");
+  assert.equal(calls.providerPayloads.length, 0);
+  assert.equal(calls.chatwootFetches.length, 0);
+});
+
+test("sender reconsulta o estado e bloqueia outbound após pausa", async () => {
+  const { service, prisma } = createAssistantServiceDeps({
+    conversation: { aiActive: true, pausedByHuman: false },
+  });
+  prisma.assistantConversation.findFirst = async () => ({
+    id: "conversation-1",
+    companyId: "company-1",
+    assistantId: "assistant-1",
+    title: "Conversa WhatsApp",
+    source: "CHATWOOT",
+    channelType: "WHATSAPP",
+    sourceProvider: "chatwoot",
+    externalAccountId: "account-1",
+    externalConversationId: "conversation-1",
+    externalContactId: "contact-1",
+    externalChannelId: "inbox-1",
+    externalInboxId: "inbox-1",
+    aiActive: false,
+    pausedByHuman: true,
+    lastMessageAt: new Date(),
+    status: "ACTIVE",
+    currentContextVersion: 1,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("sender should not call Chatwoot after pause");
+  };
+
+  try {
+    const result = await service.sendChatwootOutboundText({
+      conversation: {
+        id: "conversation-1",
+        companyId: "company-1",
+        assistantId: "assistant-1",
+        title: "Conversa WhatsApp",
+        source: "CHATWOOT",
+        channelType: "WHATSAPP",
+        sourceProvider: "chatwoot",
+        externalAccountId: "account-1",
+        externalConversationId: "conversation-1",
+        externalContactId: "contact-1",
+        externalChannelId: "inbox-1",
+        externalInboxId: "inbox-1",
+        aiActive: true,
+        pausedByHuman: false,
+        lastMessageAt: new Date(),
+        status: "ACTIVE",
+        currentContextVersion: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      assistantMessageId: "assistant-msg",
+      assistantId: "assistant-1",
+      content: "Resposta que não pode ser enviada",
+    });
+
+    assert.equal(result.status, "skipped");
+    assert.equal(result.blocked, true);
+    assert.equal(result.blockReason, "paused_by_human");
+    assert.equal(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("conversa ativa executa provider e outbound normalmente", async () => {
+  const { service, calls } = createAssistantServiceDeps({
+    conversation: { aiActive: true, pausedByHuman: false },
+    outboundConfig: { baseUrl: "https://chatwoot.example.com", apiAccessToken: "token" },
+  });
+  const originalFetch = globalThis.fetch;
+  let outboundAttempts = 0;
+  globalThis.fetch = async () => {
+    outboundAttempts += 1;
+    return { ok: true, status: 201, text: async () => JSON.stringify({ id: 1 }) };
+  };
+
+  try {
+    const result = await service.sendMessage(createTerminalGateInput("terminal-gate-message-7"));
+
+    assert.equal(result.runtime.outcome, "success");
+    assert.equal(result.runtime.context.processingSkipped, undefined);
+    assert.equal(calls.providerPayloads.length, 1);
+    assert.equal(outboundAttempts, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("pausa ocorrida durante o provider bloqueia o outbound", async () => {
+  const { service, calls, prisma } = createAssistantServiceDeps({
+    conversation: { aiActive: true, pausedByHuman: false },
+    outboundConfig: { baseUrl: "https://chatwoot.example.com", apiAccessToken: "token" },
+  });
+  let conversationReads = 0;
+  prisma.assistantConversation.findFirst = async () => {
+    conversationReads += 1;
+    const paused = conversationReads >= 3;
+    return {
+      id: "conversation-1",
+      companyId: "company-1",
+      assistantId: "assistant-1",
+      title: "Conversa WhatsApp",
+      source: "CHATWOOT",
+      channelType: "WHATSAPP",
+      sourceProvider: "chatwoot",
+      externalAccountId: "account-1",
+      externalConversationId: "conversation-1",
+      externalContactId: "contact-1",
+      externalChannelId: "inbox-1",
+      externalInboxId: "inbox-1",
+      aiActive: !paused,
+      pausedByHuman: paused,
+      lastMessageAt: new Date(),
+      status: "ACTIVE",
+      currentContextVersion: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  };
+  const originalFetch = globalThis.fetch;
+  let outboundAttempts = 0;
+  globalThis.fetch = async () => {
+    outboundAttempts += 1;
+    throw new Error("outbound must be blocked after pause");
+  };
+
+  try {
+    const result = await service.sendMessage(createTerminalGateInput("terminal-gate-message-8"));
+
+    assert.equal(calls.providerPayloads.length, 1);
+    assert.equal(outboundAttempts, 0);
+    assert.equal(result.runtime.context.outboundStatus, "skipped");
+    assert.equal(result.runtime.context.outboundBlocked, true);
+    assert.equal(result.runtime.context.outboundBlockReason, "paused_by_human");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("pausa de uma conversa não bloqueia outra conversa ativa", async () => {
+  const { service, calls, prisma } = createAssistantServiceDeps({
+    outboundConfig: { baseUrl: "https://chatwoot.example.com", apiAccessToken: "token" },
+  });
+  prisma.assistantConversation.findFirst = async ({ where }) => {
+    const active = where.id === "conversation-2";
+    return {
+      id: where.id,
+      companyId: "company-1",
+      assistantId: "assistant-1",
+      title: "Conversa WhatsApp",
+      source: "CHATWOOT",
+      channelType: "WHATSAPP",
+      sourceProvider: "chatwoot",
+      externalAccountId: "account-1",
+      externalConversationId: where.id,
+      externalContactId: `contact-${where.id}`,
+      externalChannelId: "inbox-1",
+      externalInboxId: "inbox-1",
+      aiActive: active,
+      pausedByHuman: !active,
+      lastMessageAt: new Date(),
+      status: "ACTIVE",
+      currentContextVersion: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  };
+  const originalFetch = globalThis.fetch;
+  let outboundAttempts = 0;
+  globalThis.fetch = async () => {
+    outboundAttempts += 1;
+    return { ok: true, status: 201, text: async () => JSON.stringify({ id: 1 }) };
+  };
+
+  try {
+    const blocked = await service.sendMessage(createTerminalGateInput("terminal-gate-message-9"));
+    const active = await service.sendMessage({
+      ...createTerminalGateInput("terminal-gate-message-10"),
+      conversationId: "conversation-2",
+      dto: {
+        ...createTerminalGateInput("terminal-gate-message-10").dto,
+        externalConversationId: "conversation-2",
+      },
+    });
+
+    assert.equal(blocked.runtime.reason, "paused_by_human");
+    assert.equal(active.runtime.outcome, "success");
+    assert.equal(calls.providerPayloads.length, 1);
+    assert.equal(outboundAttempts, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
