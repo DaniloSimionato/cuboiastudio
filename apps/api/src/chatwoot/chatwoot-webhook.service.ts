@@ -374,6 +374,11 @@ export class ChatwootWebhookService {
           requestId: input.requestId,
           correlationId: input.correlationId,
           preparedAttachments: combinedAttachments,
+          turnExecutionFragments: {
+            fragmentCount: itemsToProcess.length,
+            fragmentIdentityCoverage:
+              itemsToProcess.length === 1 ? "COMPLETE" : "FIRST_FRAGMENT_ONLY",
+          },
         });
         await this.recordResponseSent(input.config.id);
       } catch (err) {

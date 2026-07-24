@@ -37,6 +37,33 @@ function metadataOf(runtimeLog) {
     : {};
 }
 
+function turnManifestOf(runtimeLog) {
+  const manifest = metadataOf(runtimeLog).turnExecutionManifest;
+  assert.ok(manifest, "runtime log must own a turn execution manifest");
+  return manifest;
+}
+
+function assertSanitizedTurnManifest(manifest, { inboundContent }) {
+  const serialized = JSON.stringify(manifest);
+  assert.doesNotMatch(serialized, new RegExp(inboundContent.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(serialized, /\+00000000000/);
+  assert.doesNotMatch(serialized, /block0-(?:webhook|chatwoot|provider)-token/);
+  assert.doesNotMatch(serialized, /authorization/i);
+  assert.doesNotMatch(serialized, /BASE DE CONHECIMENTO RELEVANTE/i);
+}
+
+function assertV1TurnManifest(manifest, scope) {
+  assert.equal(manifest.schemaVersion, "TURN_EXECUTION_MANIFEST_V1");
+  assert.equal(manifest.policyVersion, "V1_COMPATIBILITY_POLICY");
+  assert.match(manifest.turnExecutionId, /^turn_v1_[a-f0-9]{32}$/);
+  assert.equal(manifest.identity.companyId, scope.companyId);
+  assert.equal(manifest.identity.assistantId, scope.assistantId);
+  assert.equal(manifest.identity.contextVersion, scope.contextVersion);
+  assert.equal(manifest.inbound.fragmentCount, 1);
+  assert.equal(manifest.inbound.fragmentIdentityCoverage, "COMPLETE");
+  assert.equal(manifest.initialState.snapshotSource, "LOCAL_CONVERSATION_PROCESSING_STATE");
+}
+
 async function assertRuntimeV2Absent(scope) {
   const [stateCount, eventCount, runtimeLogs] = await Promise.all([
     prisma.assistantConversationStateV2.count({ where: { companyId: scope.companyId } }),
@@ -222,6 +249,24 @@ test(
       where: { companyId: scope.companyId },
     });
     assert.equal(runtimeLogCount, 1);
+    const runtimeLog = await prisma.assistantRuntimeLog.findFirstOrThrow({
+      where: { companyId: scope.companyId },
+      orderBy: { createdAt: "desc" },
+    });
+    const manifest = turnManifestOf(runtimeLog);
+    assertV1TurnManifest(manifest, scope);
+    assert.equal(manifest.terminal.path, "PROVIDER_STANDARD");
+    assert.equal(manifest.provider.finalGeneration.observation, "OBSERVED");
+    assert.equal(manifest.provider.finalGeneration.count, 1);
+    assert.equal(manifest.outbound.planned, true);
+    assert.equal(manifest.outbound.attempted, true);
+    assert.equal(manifest.outbound.attemptCount, 1);
+    assert.equal(manifest.outbound.sender, "CHATWOOT_V1");
+    assert.equal(manifest.outbound.result, "ACKNOWLEDGED");
+    assert.equal(manifest.outbound.externalMessageId, returnedExternalId);
+    assert.equal(manifest.identity.internalConversationId, conversation.id);
+    assert.equal(manifest.identity.externalMessageId, "block0-a-external-message-1");
+    assertSanitizedTurnManifest(manifest, { inboundContent: "Oi tudo bem?" });
     await assertRuntimeV2Absent(scope);
     t.diagnostic(
       `external calls A: ${JSON.stringify(
@@ -257,6 +302,11 @@ test(
 
     const first = await postWebhook(scope, input);
     assert.equal(first.response.status, 201);
+    const firstRuntimeLog = await prisma.assistantRuntimeLog.findFirstOrThrow({
+      where: { companyId: scope.companyId },
+      orderBy: { createdAt: "desc" },
+    });
+    const originalTurnExecutionId = turnManifestOf(firstRuntimeLog).turnExecutionId;
     const callsAfterFirst = {
       provider: provider.requests.length,
       finalGeneration: provider.calls("final_generation").length,
@@ -300,6 +350,32 @@ test(
       2,
       "webhook delivery diagnostics remain per-attempt even when logical processing is deduplicated",
     );
+    const [runtimeLog, inboundMessage] = await Promise.all([
+      prisma.assistantRuntimeLog.findFirstOrThrow({
+        where: { companyId: scope.companyId },
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.assistantConversationMessage.findFirstOrThrow({
+        where: {
+          companyId: scope.companyId,
+          conversationId: conversation.id,
+          role: "user",
+          externalMessageId: input.messageId,
+        },
+      }),
+    ]);
+    const manifest = turnManifestOf(runtimeLog);
+    assertV1TurnManifest(manifest, scope);
+    assert.equal(manifest.turnExecutionId, originalTurnExecutionId);
+    assert.equal(manifest.identity.externalMessageId, input.messageId);
+    assert.equal(manifest.terminal.path, "PROVIDER_STANDARD");
+    assert.equal(manifest.provider.finalGeneration.count, 1);
+    assert.equal(manifest.outbound.attemptCount, 1);
+    const inboundPayload =
+      inboundMessage.externalPayload && typeof inboundMessage.externalPayload === "object"
+        ? inboundMessage.externalPayload
+        : {};
+    assert.equal(inboundPayload.turnExecutionId, manifest.turnExecutionId);
     await assertRuntimeV2Absent(scope);
     t.diagnostic(
       `external calls B after duplicate delivery: ${JSON.stringify(
@@ -385,6 +461,13 @@ test(
     assert.equal(runtimeLog.historyMessagesUsed, 0);
     assert.deepEqual(metadata.contextManifest?.historyMessageIds ?? [], []);
     assert.equal(metadata.contextManifest?.contextVersion, 2);
+    const manifest = turnManifestOf(runtimeLog);
+    assertV1TurnManifest(manifest, scope);
+    assert.equal(manifest.identity.contextVersion, 2);
+    assert.equal(manifest.initialState.aiActive, true);
+    assert.equal(manifest.initialState.pausedByHuman, false);
+    assert.equal(manifest.terminal.path, "PROVIDER_STANDARD");
+    assert.equal(manifest.provider.finalGeneration.count, 1);
     await assertRuntimeV2Absent(scope);
     t.diagnostic(
       `external calls C: ${JSON.stringify(
@@ -456,6 +539,25 @@ test(
       },
     ]);
     assert.equal(priceTelemetry?.overallDecision, "AUTHORIZED");
+    const manifest = turnManifestOf(runtimeLog);
+    assertV1TurnManifest(manifest, scope);
+    assert.equal(manifest.terminal.path, "DETERMINISTIC_PRICE_AUTHORITY");
+    assert.equal(manifest.provider.finalGeneration.observation, "OBSERVED");
+    assert.equal(manifest.provider.finalGeneration.count, 0);
+    assert.equal(manifest.provider.embedding, "NOT_OBSERVED");
+    assert.deepEqual(manifest.routing.selectedAuthority, {
+      id: `block0-d-chunk-formatacao`,
+      serviceKey: "formatacao",
+      currency: "BRL",
+      amount: 1950,
+      qualifier: "starting_at",
+    });
+    assert.equal(manifest.routing.eligibleAuthorityCount, 1);
+    assert.equal(manifest.outbound.result, "ACKNOWLEDGED");
+    assert.equal(manifest.outbound.attemptCount, 1);
+    assertSanitizedTurnManifest(manifest, {
+      inboundContent: "Qual o valor pra formatar um PC ai?",
+    });
     await assertRuntimeV2Absent(scope);
     t.diagnostic(
       `external calls D: ${JSON.stringify(

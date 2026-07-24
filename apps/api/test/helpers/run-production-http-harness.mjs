@@ -5,7 +5,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertIsolatedServiceUrls } from "./production-app-process.mjs";
 
-const BASELINE_COMMIT = "02f3ccc61f320f87c06ff50d2f7ba809e08cc4ad";
+const BASELINE_COMMIT = "f9f95ebbfc20f61bb8f1e67fdecf17990eb0566e";
+const ALLOWED_BLOCK1_RUNTIME_PATHS = new Set([
+  "apps/api/src/assistant-conversations/assistant-conversations.service.ts",
+  "apps/api/src/assistant-conversations/turn-execution-manifest.ts",
+  "apps/api/src/chatwoot/chatwoot-webhook.service.ts",
+]);
 const helperDirectory = path.dirname(fileURLToPath(import.meta.url));
 const apiDirectory = path.resolve(helperDirectory, "../..");
 const repositoryDirectory = path.resolve(apiDirectory, "../..");
@@ -216,9 +221,12 @@ async function startServices() {
 }
 
 async function assertBaselineAndScope() {
-  const head = await run("git", ["rev-parse", "HEAD"], { cwd: repositoryDirectory });
-  if (head.stdout !== BASELINE_COMMIT) {
-    throw new Error(`Harness must run from baseline ${BASELINE_COMMIT}; found ${head.stdout}`);
+  try {
+    await run("git", ["merge-base", "--is-ancestor", BASELINE_COMMIT, "HEAD"], {
+      cwd: repositoryDirectory,
+    });
+  } catch {
+    throw new Error(`Harness requires ${BASELINE_COMMIT} as an ancestor of HEAD`);
   }
   const protectedPaths = [
     "apps/api/src",
@@ -227,7 +235,7 @@ async function assertBaselineAndScope() {
   ];
   const productionDiff = await run(
     "git",
-    ["diff", "--name-only", "HEAD", "--", ...protectedPaths],
+    ["diff", "--name-only", BASELINE_COMMIT, "--", ...protectedPaths],
     { cwd: repositoryDirectory },
   );
   const untrackedProductionFiles = await run(
@@ -236,11 +244,15 @@ async function assertBaselineAndScope() {
     { cwd: repositoryDirectory },
   );
   const protectedChanges = [productionDiff.stdout, untrackedProductionFiles.stdout]
-    .filter(Boolean)
-    .join("\n");
-  if (protectedChanges) {
+    .flatMap((output) => output.split("\n"))
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const disallowedChanges = protectedChanges.filter(
+    (entry) => !ALLOWED_BLOCK1_RUNTIME_PATHS.has(entry),
+  );
+  if (disallowedChanges.length > 0) {
     throw new Error(
-      `Harness refuses production source, schema or migration changes:\n${protectedChanges}`,
+      `Harness refuses production source, schema or migration changes outside Block 1:\n${disallowedChanges.join("\n")}`,
     );
   }
   const prismaBinary = path.join(apiDirectory, "node_modules/.bin/prisma");
@@ -272,25 +284,29 @@ async function buildFresh(environment) {
     env: environment,
     forwardOutput: true,
   });
-  const mainPath = path.join(apiDirectory, "dist/main.js");
-  const appModulePath = path.join(apiDirectory, "dist/app.module.js");
-  const [mainStat, appModuleStat, mainBytes, appModuleBytes] = await Promise.all([
-    stat(mainPath),
-    stat(appModulePath),
-    readFile(mainPath),
-    readFile(appModulePath),
-  ]);
-  if (mainStat.mtimeMs < buildStartedAt || appModuleStat.mtimeMs < buildStartedAt) {
-    throw new Error("Fresh build verification failed for dist/main.js or dist/app.module.js");
+  const artifactPaths = [
+    path.join(apiDirectory, "dist/main.js"),
+    path.join(apiDirectory, "dist/app.module.js"),
+    path.join(apiDirectory, "dist/assistant-conversations/assistant-conversations.service.js"),
+    path.join(apiDirectory, "dist/assistant-conversations/turn-execution-manifest.js"),
+  ];
+  const artifacts = await Promise.all(
+    artifactPaths.map(async (artifactPath) => ({
+      artifactPath,
+      stat: await stat(artifactPath),
+      bytes: await readFile(artifactPath),
+    })),
+  );
+  if (artifacts.some((artifact) => artifact.stat.mtimeMs < buildStartedAt)) {
+    throw new Error("Fresh build verification failed for required runtime artifacts");
   }
   const sha256 = createHash("sha256")
-    .update(mainBytes)
-    .update(appModuleBytes)
+    .update(Buffer.concat(artifacts.map((artifact) => artifact.bytes)))
     .digest("hex");
   return {
     startedAt: buildStartedAt,
     sha256,
-    timestamp: new Date(Math.max(mainStat.mtimeMs, appModuleStat.mtimeMs)).toISOString(),
+    timestamp: new Date(Math.max(...artifacts.map((artifact) => artifact.stat.mtimeMs))).toISOString(),
   };
 }
 

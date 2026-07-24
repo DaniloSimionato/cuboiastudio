@@ -166,6 +166,15 @@ import {
 import type { StandardResponseGenerationInput } from "./standard-response-generation-strategy";
 import type { TriageResponseGenerationInput } from "./triage-response-generation-strategy";
 import type { V2PrimaryResponseExecutionContext } from "./v2-primary-response-executor";
+import {
+  createTurnExecutionManifest,
+  finalizeLegacyNonProviderTurnExecutionManifest,
+  finalizeTurnExecutionManifest,
+  withTurnExecutionOutbound,
+  type FragmentIdentityCoverage,
+  type TurnExecutionManifest,
+  type TurnExecutionTerminalPath,
+} from "./turn-execution-manifest";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -932,6 +941,14 @@ export class AssistantConversationsService {
     conversationId: string;
     existingMessage: AssistantConversationMessageSafeRecord;
   }): Promise<SendAssistantConversationMessageResponse> {
+    const existingPayload = input.existingMessage.externalPayload;
+    const turnExecutionId =
+      existingPayload &&
+      typeof existingPayload === "object" &&
+      !Array.isArray(existingPayload) &&
+      typeof (existingPayload as Record<string, unknown>).turnExecutionId === "string"
+        ? (existingPayload as Record<string, unknown>).turnExecutionId
+        : null;
     const runtimeLog = await this.prisma.assistantRuntimeLog.findFirst({
       where: {
         companyId: input.companyId,
@@ -968,6 +985,18 @@ export class AssistantConversationsService {
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
           select: assistantConversationMessageSafeSelect,
         });
+
+    this.logger.log(
+      JSON.stringify({
+        event: "assistant_conversation_duplicate_reused",
+        companyId: input.companyId,
+        assistantId: input.assistant.id,
+        conversationId: input.conversationId,
+        userMessageId: input.existingMessage.id,
+        turnExecutionId,
+        terminalPath: "DUPLICATE_REUSED",
+      }),
+    );
 
     return {
       conversationId: input.conversationId,
@@ -1012,6 +1041,7 @@ export class AssistantConversationsService {
     message: string;
     runtimeStartedAt: number;
     detection?: DirectBusinessHoursDetection;
+    turnExecutionManifestBase: TurnExecutionManifest;
   }): Promise<
     | { handled: false }
     | {
@@ -1116,7 +1146,19 @@ export class AssistantConversationsService {
       businessHoursRendererUsed: Boolean(scope && !fallbackReason),
       fallbackReason,
     };
-    const { assistantMessage } = await this.prisma.$transaction(async (tx) => {
+    let turnExecutionManifest = finalizeLegacyNonProviderTurnExecutionManifest({
+      manifest: input.turnExecutionManifestBase,
+      terminal: {
+        path: fallbackReason
+          ? "BUSINESS_HOURS_DIRECT_SAFE_FALLBACK_LEGACY"
+          : "BUSINESS_HOURS_DIRECT",
+        reasonCode: fallbackReason ?? "BUSINESS_HOURS_DIRECT_DETERMINISTIC",
+      },
+      primaryIntent: "business_hours",
+      explicitRequests: ["business_hours"],
+      outbound: { planned: true, sender: "CHATWOOT_V1" },
+    });
+    const { assistantMessage, runtimeLogId } = await this.prisma.$transaction(async (tx) => {
       const assistantMessage = await tx.assistantConversationMessage.create({
         data: {
           companyId: input.tenant.companyId,
@@ -1129,10 +1171,13 @@ export class AssistantConversationsService {
             ? "business-hours-direct-non-business-safe-fallback"
             : "business-hours-direct-deterministic",
           contextVersion: input.conversation.currentContextVersion ?? 1,
+          externalPayload: this.toSerializableJsonValue({
+            turnExecutionId: turnExecutionManifest.turnExecutionId,
+          }),
         },
         select: assistantConversationMessageSafeSelect,
       });
-      await tx.assistantRuntimeLog.create({
+      const runtimeLog = await tx.assistantRuntimeLog.create({
         data: {
           companyId: input.tenant.companyId,
           assistantId: input.assistant.id,
@@ -1153,12 +1198,16 @@ export class AssistantConversationsService {
           knowledgeCount: 0,
           historyMessagesUsed: 0,
           historyLimit: 0,
-          metadata: this.toSerializableJsonValue(metadata),
+          metadata: this.toSerializableJsonValue({
+            ...metadata,
+            turnExecutionManifest,
+          }),
         },
+        select: { id: true },
       });
-      return { assistantMessage };
+      return { assistantMessage, runtimeLogId: runtimeLog.id };
     });
-    await this.sendChatwootOutboundText({
+    const outboundResult = await this.sendChatwootOutboundText({
       conversation: {
         ...input.conversation,
         sourceProvider: "chatwoot",
@@ -1171,6 +1220,20 @@ export class AssistantConversationsService {
       assistantId: input.assistant.id,
       content: answer,
     });
+    turnExecutionManifest = withTurnExecutionOutbound(turnExecutionManifest, {
+      planned: true,
+      attempted: true,
+      attemptCount: 1,
+      sender: "CHATWOOT_V1",
+      externalMessageId: outboundResult.externalMessageId,
+      result:
+        outboundResult.status === "sent"
+          ? "ACKNOWLEDGED"
+          : outboundResult.status === "failed"
+            ? "FAILED"
+            : "NOT_ATTEMPTED",
+    });
+    await this.updateRuntimeLogTurnExecutionManifest(runtimeLogId, turnExecutionManifest);
     this.logger.log(JSON.stringify({ ...metadata, idempotencyResult: "CREATED" }));
     const response = {
       conversationId: input.conversation.id,
@@ -1212,6 +1275,7 @@ export class AssistantConversationsService {
     userMessage: AssistantConversationMessageSafeRecord;
     message: string;
     runtimeStartedAt: number;
+    turnExecutionManifestBase: TurnExecutionManifest;
   }): Promise<
     { handled: false } | { handled: true; response: SendAssistantConversationMessageResponse }
   > {
@@ -1254,7 +1318,17 @@ export class AssistantConversationsService {
       approvalCreated: false,
       outboundCount: 1,
     };
-    const { assistantMessage } = await this.prisma.$transaction(async (tx) => {
+    let turnExecutionManifest = finalizeLegacyNonProviderTurnExecutionManifest({
+      manifest: input.turnExecutionManifestBase,
+      terminal: {
+        path: "EXPLICIT_HUMAN_HANDOFF_LEGACY",
+        reasonCode: handoff.reasonCode ?? "EXPLICIT_HUMAN_HANDOFF",
+      },
+      primaryIntent: "human_handoff",
+      explicitRequests: ["human_handoff"],
+      outbound: { planned: true, sender: "CHATWOOT_V1" },
+    });
+    const { assistantMessage, runtimeLogId } = await this.prisma.$transaction(async (tx) => {
       const assistantMessage = await tx.assistantConversationMessage.create({
         data: {
           companyId: input.tenant.companyId,
@@ -1265,10 +1339,13 @@ export class AssistantConversationsService {
           source: "chatwoot",
           mode: "explicit-human-handoff",
           contextVersion: input.conversation.currentContextVersion ?? 1,
+          externalPayload: this.toSerializableJsonValue({
+            turnExecutionId: turnExecutionManifest.turnExecutionId,
+          }),
         },
         select: assistantConversationMessageSafeSelect,
       });
-      await tx.assistantRuntimeLog.create({
+      const runtimeLog = await tx.assistantRuntimeLog.create({
         data: {
           companyId: input.tenant.companyId,
           assistantId: input.assistant.id,
@@ -1287,12 +1364,16 @@ export class AssistantConversationsService {
           knowledgeCount: 0,
           historyMessagesUsed: 0,
           historyLimit: 0,
-          metadata: this.toSerializableJsonValue(metadata),
+          metadata: this.toSerializableJsonValue({
+            ...metadata,
+            turnExecutionManifest,
+          }),
         },
+        select: { id: true },
       });
-      return { assistantMessage };
+      return { assistantMessage, runtimeLogId: runtimeLog.id };
     });
-    await this.sendChatwootOutboundText({
+    const outboundResult = await this.sendChatwootOutboundText({
       conversation: {
         ...input.conversation,
         sourceProvider: "chatwoot",
@@ -1306,6 +1387,20 @@ export class AssistantConversationsService {
       content: answer,
       handoff: true,
     });
+    turnExecutionManifest = withTurnExecutionOutbound(turnExecutionManifest, {
+      planned: true,
+      attempted: true,
+      attemptCount: 1,
+      sender: "CHATWOOT_V1",
+      externalMessageId: outboundResult.externalMessageId,
+      result:
+        outboundResult.status === "sent"
+          ? "ACKNOWLEDGED"
+          : outboundResult.status === "failed"
+            ? "FAILED"
+            : "NOT_ATTEMPTED",
+    });
+    await this.updateRuntimeLogTurnExecutionManifest(runtimeLogId, turnExecutionManifest);
     this.logger.log(JSON.stringify({ ...metadata, idempotencyResult: "CREATED" }));
     return {
       handled: true,
@@ -1621,6 +1716,99 @@ export class AssistantConversationsService {
     );
   }
 
+  private buildTurnExecutionManifest(input: {
+    companyId: string;
+    assistantId: string;
+    source: string;
+    conversation: AssistantConversationSafeRecord;
+    dto: SendAssistantConversationMessageDto;
+    requestId?: string | null;
+    correlationId?: string | null;
+    internalMessageId?: string | null;
+    normalizedContentHash?: string | null;
+    normalizedContentLength?: number | null;
+    fragmentCount?: number | null;
+    fragmentIdentityCoverage?: FragmentIdentityCoverage;
+    capturedAt?: string;
+  }): TurnExecutionManifest {
+    return createTurnExecutionManifest({
+      identity: {
+        companyId: input.companyId,
+        assistantId: input.assistantId,
+        source: input.source,
+        accountId: input.dto.externalAccountId ?? input.conversation.externalAccountId ?? null,
+        inboxId: input.dto.externalInboxId ?? input.conversation.externalInboxId ?? null,
+        externalConversationId:
+          input.dto.externalConversationId ?? input.conversation.externalConversationId ?? null,
+        externalMessageId: input.dto.externalMessageId ?? null,
+        contextVersion: input.conversation.currentContextVersion ?? 1,
+        internalConversationId: input.conversation.id,
+        internalMessageId: input.internalMessageId ?? null,
+      },
+      requestId: input.requestId ?? null,
+      correlationId: input.correlationId ?? null,
+      aiActive: input.conversation.aiActive,
+      pausedByHuman: input.conversation.pausedByHuman,
+      sessionState: input.conversation.status,
+      capturedAt: input.capturedAt ?? new Date().toISOString(),
+      fragmentCount: input.fragmentCount ?? 1,
+      fragmentIdentityCoverage: input.fragmentIdentityCoverage ?? "COMPLETE",
+      normalizedContentHash: input.normalizedContentHash ?? null,
+      normalizedContentLength: input.normalizedContentLength ?? 0,
+    });
+  }
+
+  private async updateRuntimeLogTurnExecutionManifest(
+    runtimeLogId: string,
+    manifest: TurnExecutionManifest,
+  ): Promise<void> {
+    const runtimeLogs = this.prisma.assistantRuntimeLog as any;
+    if (
+      !runtimeLogs ||
+      typeof runtimeLogs.findUnique !== "function" ||
+      typeof runtimeLogs.update !== "function"
+    ) {
+      return;
+    }
+
+    try {
+      const runtimeLog = await runtimeLogs.findUnique({ where: { id: runtimeLogId } });
+      if (!runtimeLog?.metadata) return;
+      const metadata =
+        typeof runtimeLog.metadata === "string"
+          ? JSON.parse(runtimeLog.metadata)
+          : runtimeLog.metadata;
+      await runtimeLogs.update({
+        where: { id: runtimeLogId },
+        data: {
+          metadata: {
+            ...metadata,
+            turnExecutionManifest: this.toSerializableJsonValue(manifest),
+          },
+        },
+      });
+    } catch (error: any) {
+      this.logger.warn(`Failed to update turn execution manifest: ${error?.message ?? error}`);
+    }
+  }
+
+  private resolveTurnExecutionTerminalPath(input: {
+    deterministicPrice: boolean;
+    runtimeMode: AssistantConversationRuntime["mode"];
+    providerFinalGenerationCount: number;
+    context: Record<string, any>;
+  }): TurnExecutionTerminalPath {
+    if (input.deterministicPrice) return "DETERMINISTIC_PRICE_AUTHORITY";
+    if (input.runtimeMode === "flow-bypass") return "FLOW_BYPASS_LEGACY";
+    if (input.context.outsideBusinessHours) return "OUTSIDE_BUSINESS_HOURS_LEGACY";
+    if (input.context.triageMode) return "PROVIDER_TRIAGE_LEGACY";
+    if (input.providerFinalGenerationCount > 0) return "PROVIDER_STANDARD";
+    if (input.context.fallbackCategory === "runtime_disabled") {
+      return "DETERMINISTIC_FALLBACK_LEGACY";
+    }
+    return "UNCLASSIFIED_LEGACY";
+  }
+
   private async buildConversationProcessingSkippedResponse(input: {
     assistant: AssistantConversationRuntimeAssistantRecord;
     conversation: AssistantConversationSafeRecord;
@@ -1635,6 +1823,23 @@ export class AssistantConversationsService {
         ? input.dto.message.trim()
         : "Mensagem recebida.";
     const stageWhereBlocked = "before_processing" as const;
+    const turnExecutionManifest = finalizeLegacyNonProviderTurnExecutionManifest({
+      manifest: this.buildTurnExecutionManifest({
+        companyId: input.tenant.companyId,
+        assistantId: input.assistant.id,
+        source,
+        conversation: input.conversation,
+        dto: input.dto,
+        normalizedContentHash: createHash("sha256").update(content).digest("hex"),
+        normalizedContentLength: content.length,
+      }),
+      terminal: {
+        path: "BLOCKED_PAUSED",
+        reasonCode: input.skipReason,
+      },
+      primaryIntent: null,
+      outbound: { planned: false, sender: "NOT_APPLICABLE" },
+    });
     const metadata = {
       conversationId: input.conversation.id,
       assistantId: input.assistant.id,
@@ -1649,6 +1854,7 @@ export class AssistantConversationsService {
       outboundAttempted: false,
       outboundBlocked: false,
       stageWhereBlocked,
+      turnExecutionManifest,
     };
     const userMessage = await this.prisma.$transaction(async (tx) => {
       const createdUserMessage = await tx.assistantConversationMessage.create({
@@ -1670,6 +1876,7 @@ export class AssistantConversationsService {
             externalContactId: input.dto.externalContactId ?? null,
             externalInboxId: input.dto.externalInboxId ?? null,
             interpretedMessage: content,
+            turnExecutionId: turnExecutionManifest.turnExecutionId,
           }),
           attachments: Prisma.JsonNull,
           sources: Prisma.JsonNull,
@@ -2964,6 +3171,29 @@ export class AssistantConversationsService {
         mode: "reset-request",
       },
     });
+    let resetTurnExecutionManifest = finalizeLegacyNonProviderTurnExecutionManifest({
+      manifest: this.buildTurnExecutionManifest({
+        companyId: input.tenant.companyId,
+        assistantId: input.assistant.id,
+        source: input.dto.source ?? "manual",
+        conversation: input.conversation,
+        dto: input.dto,
+        internalMessageId: userMessage.id,
+        normalizedContentHash: createHash("sha256").update(rawMessage).digest("hex"),
+        normalizedContentLength: rawMessage.length,
+      }),
+      terminal: {
+        path: "RESET_KEYWORD_LEGACY",
+        reasonCode: "CONVERSATION_RESET_KEYWORD",
+      },
+      primaryIntent: "conversation_reset",
+      explicitRequests: ["conversation_reset"],
+      memoryExtraction: input.assistant.memoryExtractionEnabled ? "UNKNOWN" : "OBSERVED",
+      outbound: {
+        planned: input.dto.source === "chatwoot",
+        sender: input.dto.source === "chatwoot" ? "CHATWOOT_V1" : "NOT_APPLICABLE",
+      },
+    });
 
     // 2. Buscar as mensagens da sessão que está sendo encerrada para extração de memória
     const sessionMessages = await this.prisma.assistantConversationMessage.findMany({
@@ -3142,11 +3372,17 @@ export class AssistantConversationsService {
         source: input.dto.source ?? "manual",
         contextVersion: newContextVersion,
         mode: "reset-reply",
+        externalPayload: this.toSerializableJsonValue({
+          turnExecutionId: resetTurnExecutionManifest.turnExecutionId,
+        }),
       },
     });
 
+    let resetOutboundResult:
+      | { status: "sent" | "skipped" | "failed"; externalMessageId: string | null }
+      | null = null;
     if (input.dto.source === "chatwoot") {
-      await this.sendChatwootOutboundText({
+      resetOutboundResult = await this.sendChatwootOutboundText({
         conversation: {
           ...input.conversation,
           sourceProvider: input.dto.source,
@@ -3160,6 +3396,50 @@ export class AssistantConversationsService {
         assistantId: input.assistant.id,
         content: replyContent,
       });
+    }
+    resetTurnExecutionManifest = withTurnExecutionOutbound(resetTurnExecutionManifest, {
+      planned: input.dto.source === "chatwoot",
+      attempted: Boolean(resetOutboundResult),
+      attemptCount: resetOutboundResult ? 1 : 0,
+      sender: input.dto.source === "chatwoot" ? "CHATWOOT_V1" : "NOT_APPLICABLE",
+      externalMessageId: resetOutboundResult?.externalMessageId ?? null,
+      result:
+        resetOutboundResult?.status === "sent"
+          ? "ACKNOWLEDGED"
+          : resetOutboundResult?.status === "failed"
+            ? "FAILED"
+            : "NOT_ATTEMPTED",
+    });
+    try {
+      await this.prisma.assistantRuntimeLog.create({
+        data: {
+          companyId: input.tenant.companyId,
+          assistantId: input.assistant.id,
+          conversationId: input.conversation.id,
+          userMessageId: userMessage.id,
+          assistantMessageId: replyAssistantMessage.id,
+          mode: "conversation-reset-keyword",
+          status: "COMPLETED",
+          provider: null,
+          model: null,
+          configurationSource: "tenant-settings",
+          fallback: false,
+          fallbackReason: null,
+          outcome: "success",
+          durationMs: Date.now() - input.runtimeStartedAt,
+          knowledgeCount: 0,
+          historyMessagesUsed: 0,
+          historyLimit: 0,
+          metadata: this.toSerializableJsonValue({
+            turnExecutionManifest: resetTurnExecutionManifest,
+            resetExecuted: true,
+            oldContextVersion: currentVersion,
+            newContextVersion,
+          }),
+        },
+      });
+    } catch (error: any) {
+      this.logger.warn(`Failed to persist reset turn execution manifest: ${error?.message ?? error}`);
     }
 
     // 7. Registrar log estruturado
@@ -3216,6 +3496,10 @@ export class AssistantConversationsService {
     correlationId?: string | null;
     preparedAttachments?: InboundAttachmentRecord[];
     expectedContextVersion?: number;
+    turnExecutionFragments?: {
+      fragmentCount: number;
+      fragmentIdentityCoverage: FragmentIdentityCoverage;
+    };
   }): Promise<SendAssistantConversationMessageResponse> {
     const runtimeStartedAt = Date.now();
     const assistant = await this.resolveRuntimeAssistantOrThrow({
@@ -3255,6 +3539,7 @@ export class AssistantConversationsService {
       conversationId: conversation.id,
       companyId: input.tenant.companyId,
     });
+    const processingStateCapturedAt = new Date().toISOString();
     if (
       input.expectedContextVersion !== undefined &&
       conversation.currentContextVersion !== input.expectedContextVersion
@@ -3520,6 +3805,22 @@ export class AssistantConversationsService {
       },
       quotedMessagePresent: false,
     });
+    const turnExecutionManifestBase = this.buildTurnExecutionManifest({
+      companyId: input.tenant.companyId,
+      assistantId: input.assistantId,
+      source,
+      conversation,
+      dto: input.dto,
+      requestId: input.requestId ?? input.dto.externalMessageId ?? null,
+      correlationId: input.correlationId ?? null,
+      internalMessageId: userMessage.id,
+      normalizedContentHash: canonicalInboundMessage.canonicalComparisonHash,
+      normalizedContentLength: interpretedMessage.length,
+      fragmentCount: input.turnExecutionFragments?.fragmentCount ?? 1,
+      fragmentIdentityCoverage:
+        input.turnExecutionFragments?.fragmentIdentityCoverage ?? "COMPLETE",
+      capturedAt: processingStateCapturedAt,
+    });
 
     await this.prisma.assistantConversationMessage.update({
       where: {
@@ -3548,6 +3849,7 @@ export class AssistantConversationsService {
           attachments: processedAttachments,
           interpretedMessage,
           canonicalInbound: toCanonicalInboundMessageTelemetry(canonicalInboundMessage),
+          turnExecutionId: turnExecutionManifestBase.turnExecutionId,
         }),
       },
       select: {
@@ -3574,6 +3876,7 @@ export class AssistantConversationsService {
       userMessage,
       message: customerIntentText,
       runtimeStartedAt,
+      turnExecutionManifestBase,
     });
     if (explicitHumanHandoff.handled) return explicitHumanHandoff.response;
 
@@ -3594,6 +3897,7 @@ export class AssistantConversationsService {
       message: customerIntentText,
       runtimeStartedAt,
       detection: resolvedDirectBusinessHoursDetection,
+      turnExecutionManifestBase,
     });
     if (directBusinessHours.handled) return directBusinessHours.response;
 
@@ -5913,6 +6217,69 @@ export class AssistantConversationsService {
       ...contextMetadata.contextManifest,
       persistenceStatus: "persisted",
     };
+    const selectedAuthority = deterministicPriceResponse?.authority
+      ? {
+          id: deterministicPriceResponse.authority.chunkId,
+          serviceKey: deterministicPriceResponse.authority.serviceKey,
+          currency: deterministicPriceResponse.authority.currency,
+          amount: deterministicPriceResponse.authority.amount,
+          qualifier: deterministicPriceResponse.authority.qualifier,
+        }
+      : null;
+    const terminalPath = this.resolveTurnExecutionTerminalPath({
+      deterministicPrice: Boolean(deterministicPriceResponse),
+      runtimeMode: runtime.mode,
+      providerFinalGenerationCount: responseExecutionEnvelope.providerCallCount,
+      context: contextMetadata,
+    });
+    let turnExecutionManifest = finalizeTurnExecutionManifest(turnExecutionManifestBase, {
+      terminal: {
+        path: terminalPath,
+        reasonCode: runtime.context.responseStrategy ?? runtime.context.responseExecutionReason ?? terminalPath,
+      },
+      routing: {
+        selectedFlow: runtime.context.selectedFlowId
+          ? {
+              id: runtime.context.selectedFlowId,
+              name: runtime.context.selectedFlowName ?? null,
+            }
+          : null,
+        primaryIntent: runtime.context.primaryIntent ?? runtime.context.detectedIntent ?? null,
+        explicitRequests: runtime.context.explicitRequests ?? [],
+        identifiedServices: deterministicPriceResponse ? [deterministicPriceResponse.serviceKey] : null,
+        knowledgeScope: flowKnowledgeScope.scopeTags ?? null,
+        chunksEvaluated: ragLogData.scoredChunkCount ?? null,
+        chunksSelected: ragLogData.selectedCount ?? null,
+        candidateAuthorityCount: ragLogData.rawPriceAuthorityCount ?? null,
+        eligibleAuthorityCount: eligiblePriceAuthorities.length,
+        selectedAuthority,
+      },
+      provider: {
+        finalGeneration: {
+          observation: "OBSERVED",
+          count: responseExecutionEnvelope.providerCallCount,
+        },
+        embedding: "NOT_OBSERVED",
+        intentClassification: "NOT_OBSERVED",
+        memoryExtraction: "NOT_OBSERVED",
+        toolRequest: {
+          observation: "OBSERVED",
+          count: (runtime.context.toolsExposed ?? []).length,
+        },
+        toolCall: {
+          observation: "OBSERVED",
+          count: runtime.context.toolCallCount ?? 0,
+        },
+      },
+      outbound: {
+        planned: source === "chatwoot",
+        attempted: false,
+        attemptCount: 0,
+        sender: source === "chatwoot" ? "CHATWOOT_V1" : "NOT_APPLICABLE",
+        externalMessageId: null,
+        result: "NOT_ATTEMPTED",
+      },
+    });
     await responseTailLifecycleHooks.beforeResponsePersist(
       createResponseTailLifecycleMetadata(null, false, "NOT_ATTEMPTED"),
     );
@@ -5928,6 +6295,9 @@ export class AssistantConversationsService {
           sources,
           mode: runtime.mode,
           contextVersion: conversation.currentContextVersion ?? 1,
+          externalPayload: this.toSerializableJsonValue({
+            turnExecutionId: turnExecutionManifest.turnExecutionId,
+          }),
         },
         select: assistantConversationMessageSafeSelect,
       });
@@ -6005,6 +6375,7 @@ export class AssistantConversationsService {
             promptSectionManifest: runtime.context.promptSectionManifest,
             promptCharCount: runtime.context.promptCharCount,
             contextManifest: runtime.context.contextManifest,
+            turnExecutionManifest,
             behaviorId: runtime.context.behaviorId,
             behaviorUpdatedAt: runtime.context.behaviorUpdatedAt,
             assistantUpdatedAt: runtime.context.assistantUpdatedAt,
@@ -6138,9 +6509,11 @@ export class AssistantConversationsService {
     );
 
     let tailOutboundAttempted = false;
+    let tailOutboundAttemptCount = 0;
     let tailOutboundPerformed: ResponseTailOutboundState = "NOT_ATTEMPTED";
     let externalReferenceStatus: ChatwootExternalReferenceStatus = "NOT_ATTEMPTED";
     let externalMessageReferenceFingerprint: string | null = null;
+    let outboundExternalMessageId: string | null = null;
     let externalReferencePersistenceAttempted = false;
     if (source === "chatwoot") {
       if (process.env.AI_RUNTIME_TRACE === "true") {
@@ -6162,6 +6535,7 @@ export class AssistantConversationsService {
         const block = blocks[i];
         try {
           tailOutboundAttempted = true;
+          tailOutboundAttemptCount += 1;
           await responseTailLifecycleHooks.beforeOutbound(
             createResponseTailLifecycleMetadata(assistantMessage.id, true, "NOT_ATTEMPTED"),
           );
@@ -6182,6 +6556,7 @@ export class AssistantConversationsService {
           if (outboundResult.status === "sent") {
             blocksSent++;
             tailOutboundPerformed = "CONFIRMED";
+            outboundExternalMessageId = outboundResult.externalMessageId;
 
             if (outboundResult.externalMessageId && !externalReferencePersistenceAttempted) {
               externalReferencePersistenceAttempted = true;
@@ -6274,6 +6649,20 @@ export class AssistantConversationsService {
         };
       }
 
+      turnExecutionManifest = withTurnExecutionOutbound(turnExecutionManifest, {
+        planned: true,
+        attempted: tailOutboundAttempted,
+        attemptCount: tailOutboundAttemptCount,
+        sender: "CHATWOOT_V1",
+        externalMessageId: outboundExternalMessageId,
+        result:
+          contextMetadata.outboundStatus === "sent" || contextMetadata.outboundStatus === "partial"
+            ? "ACKNOWLEDGED"
+            : contextMetadata.outboundStatus === "failed"
+              ? "FAILED"
+              : "NOT_ATTEMPTED",
+      });
+
       // Update runtime log metadata with sent blocks count!
       try {
         if (
@@ -6295,6 +6684,7 @@ export class AssistantConversationsService {
               outboundStatus: contextMetadata.outboundStatus,
               externalReferenceStatus,
               externalMessageReferenceFingerprint,
+              turnExecutionManifest: this.toSerializableJsonValue(turnExecutionManifest),
               contextManifest: {
                 ...(currentMeta.contextManifest ?? {}),
                 outboundCount: blocksSent,
