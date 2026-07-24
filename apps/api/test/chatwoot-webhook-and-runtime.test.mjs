@@ -2015,7 +2015,7 @@ test("sendMessage chama outbound somente depois do runtime", async () => {
   }
 });
 
-test("pipeline de conversa encaminha a autoridade elegível canônica ao guard sem reextraí-la", async () => {
+test("pergunta explícita com autoridade única responde deterministicamente sem provider", async () => {
   const { service, calls } = createAssistantServiceDeps({
     assistant: { ragEnabled: true },
     completion: {
@@ -2076,9 +2076,9 @@ test("pipeline de conversa encaminha a autoridade elegível canônica ao guard s
   const runtimeLog = calls.runtimeLogCreates.at(-1);
   const guardTelemetry = runtimeLog.metadata.contextManifest.priceAuthorityGuardTelemetry;
 
-  assert.equal(calls.providerPayloads.length, 1);
+  assert.equal(calls.providerPayloads.length, 0);
   assert.equal(calls.chatwootFetches.length, 0);
-  assert.match(assistantMessage?.content ?? "", /formatação custa a partir de R\$ 1\.950,00/i);
+  assert.match(assistantMessage?.content ?? "", /formatação custa a partir de R\$\s*1\.950,00/i);
   assert.doesNotMatch(assistantMessage?.content ?? "", /não tenho um valor confirmado/i);
   assert.equal(guardTelemetry.eligibleAuthorityCount, 1);
   assert.deepEqual(guardTelemetry.eligibleAuthorities, [
@@ -2095,6 +2095,8 @@ test("pipeline de conversa encaminha a autoridade elegível canônica ao guard s
     [true],
   );
   assert.equal(guardTelemetry.overallDecision, "AUTHORIZED");
+  assert.equal(runtimeLog.metadata.responseStrategy, "DETERMINISTIC_PRICE_AUTHORITY");
+  assert.equal(runtimeLog.metadata.providerCount, 0);
 });
 
 test("tail preserva a resposta determinística V2 de horário sem reescrita do guardião V1", async () => {

@@ -51,6 +51,12 @@ export type RagPriceAuthority = {
  */
 export type EligiblePriceAuthority = RagPriceAuthority;
 
+export type DeterministicPriceResponse = {
+  answer: string;
+  serviceKey: RagPriceServiceKey;
+  authority: EligiblePriceAuthority;
+};
+
 export type ExtractedPriceClaim = {
   serviceKey: RagPriceServiceKey;
   currency: "BRL";
@@ -331,6 +337,59 @@ export function requestedPriceServiceKeys(message: string): RagPriceServiceKey[]
       (left, right) => left.position - right.position || left.canonicalOrder - right.canonicalOrder,
     )
     .map((item) => item.serviceKey);
+}
+
+const PRICE_RESPONSE_LABELS: Readonly<Record<Exclude<RagPriceServiceKey, "unknown">, string>> = {
+  formatacao: "A formatação",
+  placa_mae: "O reparo de placa-mãe",
+  remocao_virus: "A remoção de vírus",
+  recuperacao_dados: "A recuperação de dados",
+  montagem_computadores: "A montagem de computadores",
+};
+
+function formatPriceAuthorityAmount(authority: EligiblePriceAuthority): string {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: authority.currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(authority.amount);
+}
+
+/**
+ * Explicit price requests are safe to render without a provider only when a
+ * single requested service maps to one canonical, already-deduplicated RAG
+ * authority. Any ambiguity deliberately returns null and preserves the
+ * existing guarded path.
+ */
+export function resolveDeterministicPriceResponse(input: {
+  isExplicitPriceQuery: boolean;
+  currentMessage: string;
+  eligiblePriceAuthorities: readonly EligiblePriceAuthority[];
+}): DeterministicPriceResponse | null {
+  if (!input.isExplicitPriceQuery) return null;
+
+  const requestedServices = requestedPriceServiceKeys(input.currentMessage);
+  if (requestedServices.length !== 1 || input.eligiblePriceAuthorities.length !== 1) {
+    return null;
+  }
+
+  const [serviceKey] = requestedServices;
+  const [authority] = input.eligiblePriceAuthorities;
+  if (
+    serviceKey === "unknown" ||
+    authority.serviceKey !== serviceKey ||
+    authority.currency !== "BRL" ||
+    authority.qualifier !== "starting_at"
+  ) {
+    return null;
+  }
+
+  return {
+    answer: `${PRICE_RESPONSE_LABELS[serviceKey]} custa a partir de ${formatPriceAuthorityAmount(authority)}.`,
+    serviceKey,
+    authority,
+  };
 }
 
 export function filterEligibleRagPriceAuthorities(input: {

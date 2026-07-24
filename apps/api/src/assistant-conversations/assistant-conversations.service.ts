@@ -146,6 +146,7 @@ import {
   extractRagPriceAuthorities,
   filterEligibleRagPriceAuthorities,
   hasConflictingEligibleRagPriceAuthorities,
+  resolveDeterministicPriceResponse,
   type EligiblePriceAuthority,
   type RagPriceAuthority,
 } from "./rag-price-authority";
@@ -4130,6 +4131,11 @@ export class AssistantConversationsService {
       allowBusinessHours: !directBusinessHoursBindingActive,
       priceAuthorityContext: { eligiblePriceAuthorities },
     });
+    const deterministicPriceResponse = resolveDeterministicPriceResponse({
+      isExplicitPriceQuery,
+      currentMessage: customerIntentText,
+      eligiblePriceAuthorities,
+    });
     const deterministicFallbackCategory =
       deterministicRuntime.sources.length > 0 ? "deterministic_response" : "no_information";
 
@@ -4223,7 +4229,40 @@ export class AssistantConversationsService {
       console.log("=== END RUNTIME GATE CHECK ===\n");
     }
 
-    if (
+    if (deterministicPriceResponse) {
+      answer = deterministicPriceResponse.answer;
+      selectedFlowForAuthority = preselectedFlow;
+      Object.assign(contextMetadata, {
+        llmSkipped: true,
+        fallbackUsed: false,
+        fallbackCategory: null,
+        fallbackMessageUsed: false,
+        responseMode: "DETERMINISTIC_PRICE_AUTHORITY",
+        responseStrategy: "DETERMINISTIC_PRICE_AUTHORITY",
+        selectedFlowId: preselectedRouteResult.flowId,
+        selectedFlowName: preselectedRouteResult.flowName,
+        providerCalled: false,
+        deterministicPriceServiceKey: deterministicPriceResponse.serviceKey,
+      });
+      contextMetadata.contextManifest = {
+        ...contextMetadata.contextManifest,
+        mode: "deterministic-price-authority",
+        intent: {
+          selected: preselectedRouteResult.flowName ?? null,
+          method: preselectedRouteResult.flowSelectionMethod ?? "none",
+          confidence: preselectedRouteResult.confidence ?? null,
+        },
+        flow: preselectedFlow ? { id: preselectedFlow.id, name: preselectedFlow.name } : null,
+      };
+      runtime = {
+        ...runtime,
+        mode: "deterministic-runtime",
+        fallback: false,
+        outcome: "success",
+        reason: undefined,
+        ragData: ragLogData,
+      };
+    } else if (
       !officialBusinessContext.aiRespondsOutsideBusinessHours &&
       !officialBusinessContext.businessStatus.isOpenNow
     ) {
@@ -5345,7 +5384,7 @@ export class AssistantConversationsService {
     // persisted and sent. It must run after the V1 authority guard because a
     // safe guard replacement can otherwise discard a provider-independent
     // acknowledgement of a secondary explicit request.
-    if (multiIntentTurn.explicitRequests.length > 1) {
+    if (!deterministicPriceResponse && multiIntentTurn.explicitRequests.length > 1) {
       const coverage = ensureMultiIntentResponseCoverage({
         answer,
         turn: multiIntentTurn,

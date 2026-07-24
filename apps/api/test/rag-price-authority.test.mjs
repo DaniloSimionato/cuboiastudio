@@ -10,6 +10,7 @@ import {
   deduplicateEligibleRagPriceAuthorities,
   hasConflictingEligibleRagPriceAuthorities,
   requestedPriceServiceKeys,
+  resolveDeterministicPriceResponse,
 } from "../dist/assistant-conversations/rag-price-authority.js";
 
 const priceChunk = {
@@ -217,6 +218,55 @@ test("autoridades de preço elegíveis são filtradas pelo serviço solicitado",
     ]),
     true,
   );
+});
+
+test("pergunta explícita com um serviço e uma autoridade elegível gera resposta sem provider", () => {
+  const { eligiblePriceAuthorities } = selectedRagContext("Qual o valor para formatar um PC?");
+  const result = resolveDeterministicPriceResponse({
+    isExplicitPriceQuery: true,
+    currentMessage: "Qual o valor para formatar um PC?",
+    eligiblePriceAuthorities,
+  });
+
+  assert.deepEqual(
+    {
+      serviceKey: result?.serviceKey,
+      amount: result?.authority.amount,
+      qualifier: result?.authority.qualifier,
+      answer: result?.answer,
+    },
+    {
+      serviceKey: "formatacao",
+      amount: 195,
+      qualifier: "starting_at",
+      answer: "A formatação custa a partir de R$ 195,00.",
+    },
+  );
+});
+
+test("resposta determinística de preço recusa serviço ausente, múltiplo ou autoridade ambígua", () => {
+  const { eligiblePriceAuthorities } = selectedRagContext("Qual o valor para formatar um PC?");
+  const authority = eligiblePriceAuthorities[0];
+
+  for (const input of [
+    {
+      isExplicitPriceQuery: false,
+      currentMessage: "Quero formatar um PC.",
+      eligiblePriceAuthorities,
+    },
+    {
+      isExplicitPriceQuery: true,
+      currentMessage: "Quero formatar e verificar a placa-mãe.",
+      eligiblePriceAuthorities,
+    },
+    {
+      isExplicitPriceQuery: true,
+      currentMessage: "Qual o valor para formatar um PC?",
+      eligiblePriceAuthorities: [authority, { ...authority, amount: 210 }],
+    },
+  ]) {
+    assert.equal(resolveDeterministicPriceResponse(input), null);
+  }
 });
 
 test("autoridades elegíveis idênticas agregam proveniência sem esconder conflitos reais", () => {
