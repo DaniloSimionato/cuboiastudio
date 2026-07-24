@@ -1,8 +1,12 @@
 import type { AssistantRuntimeSource } from "../assistants/assistant-runtime";
 import {
-  findMatchingRagPriceAuthority,
-  hasPriceAuthorityForMessage,
+  extractPriceClaims,
+  priceAmountInMinorUnits,
+  requestedPriceServiceKeys,
+  type EligiblePriceAuthority,
+  type PriceAuthorityQualifier,
   type RagPriceAuthority,
+  type RagPriceServiceKey,
 } from "./rag-price-authority";
 import {
   buildStructuredBusinessAnswer,
@@ -29,6 +33,30 @@ export type RuntimeAuthorityGuardResult = {
   authorityConflictCategories: string[];
   winningSourceTypes: string[];
   rejectedSourceTypes: string[];
+  priceAuthorityTelemetry?: PriceAuthorityGuardTelemetry;
+};
+
+export type PriceAuthorityClaimDecision = {
+  serviceKey: RagPriceServiceKey;
+  currency: "BRL";
+  amount: number;
+  qualifier: PriceAuthorityQualifier | null;
+  matched: boolean;
+  rejectionReason: "service_unresolved" | "qualifier_missing" | "authority_not_found" | null;
+};
+
+export type PriceAuthorityGuardTelemetry = {
+  eligibleAuthorityCount: number;
+  eligibleAuthorities: Array<{
+    serviceKey: RagPriceServiceKey;
+    currency: "BRL";
+    amount: number;
+    qualifier: PriceAuthorityQualifier;
+    evidenceCount: number;
+  }>;
+  extractedPriceClaimCount: number;
+  claimDecisions: PriceAuthorityClaimDecision[];
+  overallDecision: "NOT_APPLICABLE" | "AUTHORIZED" | "REJECTED";
 };
 
 export type ExpectedAuthorityCategory =
@@ -85,6 +113,71 @@ function hasSourceForCategory(sources: AssistantRuntimeSource[], category: strin
 
 function ragPriceAuthorities(sources: AssistantRuntimeSource[]): RagPriceAuthority[] {
   return sources.flatMap((source) => source.priceAuthorities ?? []);
+}
+
+function authorityTelemetry(input: {
+  authorities: readonly EligiblePriceAuthority[];
+  claimDecisions: PriceAuthorityClaimDecision[];
+  overallDecision: PriceAuthorityGuardTelemetry["overallDecision"];
+}): PriceAuthorityGuardTelemetry {
+  return {
+    eligibleAuthorityCount: input.authorities.length,
+    eligibleAuthorities: input.authorities.map((authority) => ({
+      serviceKey: authority.serviceKey,
+      currency: authority.currency,
+      amount: authority.amount,
+      qualifier: authority.qualifier,
+      evidenceCount: authority.evidenceCount,
+    })),
+    extractedPriceClaimCount: input.claimDecisions.length,
+    claimDecisions: input.claimDecisions,
+    overallDecision: input.overallDecision,
+  };
+}
+
+function matchingEligiblePriceAuthority(input: {
+  claim: PriceAuthorityClaimDecision;
+  authorities: readonly EligiblePriceAuthority[];
+}): EligiblePriceAuthority | null {
+  if (input.claim.serviceKey === "unknown" || input.claim.qualifier === null) return null;
+  const claimMinorUnits = priceAmountInMinorUnits(input.claim.amount);
+  if (claimMinorUnits === null) return null;
+  return (
+    input.authorities.find(
+      (authority) =>
+        authority.serviceKey === input.claim.serviceKey &&
+        authority.currency === input.claim.currency &&
+        authority.qualifier === input.claim.qualifier &&
+        priceAmountInMinorUnits(authority.amount) === claimMinorUnits,
+    ) ?? null
+  );
+}
+
+function priceClaimDecisions(input: {
+  answer: string;
+  currentMessage: string;
+  authorities: readonly EligiblePriceAuthority[];
+}): PriceAuthorityClaimDecision[] {
+  const requestedServices = requestedPriceServiceKeys(input.currentMessage);
+  return extractPriceClaims(input.answer).map((claim) => {
+    const serviceKey =
+      claim.serviceKey === "unknown" && requestedServices.length === 1
+        ? requestedServices[0]
+        : claim.serviceKey;
+    const base: PriceAuthorityClaimDecision = {
+      serviceKey,
+      currency: claim.currency,
+      amount: claim.amount,
+      qualifier: claim.qualifier,
+      matched: false,
+      rejectionReason: null,
+    };
+    if (serviceKey === "unknown") return { ...base, rejectionReason: "service_unresolved" };
+    if (claim.qualifier === null) return { ...base, rejectionReason: "qualifier_missing" };
+    return matchingEligiblePriceAuthority({ claim: base, authorities: input.authorities })
+      ? { ...base, matched: true }
+      : { ...base, rejectionReason: "authority_not_found" };
+  });
 }
 
 function safeUnavailable(category: string): string {
@@ -422,6 +515,7 @@ export function validateV1AnswerAuthority(input: {
   answer: string;
   currentMessage: string;
   sources: AssistantRuntimeSource[];
+  eligiblePriceAuthorities?: readonly EligiblePriceAuthority[];
   officialBusinessContext: OfficialBusinessContext;
   flowText?: string | null;
   normalizedIntent?: string | null;
@@ -584,21 +678,23 @@ export function validateV1AnswerAuthority(input: {
     /(?:nao tenho|nao possuo|preciso confirmar|posso verificar).{0,48}(?:preco|valor|orcamento)/.test(
       normalizedAnswer,
     );
-  const priceAuthorities = ragPriceAuthorities(input.sources);
-  const legacyPriceAuthority = input.sources.some((source) =>
-    normalize(`${source.id} ${source.title}`).includes("price"),
-  );
+  const usesCanonicalPriceAuthorities = input.eligiblePriceAuthorities !== undefined;
+  const priceAuthorities = input.eligiblePriceAuthorities ?? ragPriceAuthorities(input.sources);
+  const requestedPriceServices = requestedPriceServiceKeys(input.currentMessage);
+  const legacyPriceAuthority =
+    !usesCanonicalPriceAuthorities &&
+    input.sources.some((source) => normalize(`${source.id} ${source.title}`).includes("price"));
   const priceAuthorityForMessage =
-    hasPriceAuthorityForMessage({
-      authorities: priceAuthorities,
-      currentMessage: input.currentMessage,
-    }) || legacyPriceAuthority;
-  const matchingPriceAuthority =
-    findMatchingRagPriceAuthority({
-      authorities: priceAuthorities,
-      currentMessage: input.currentMessage,
-      answer,
-    }) || legacyPriceAuthority;
+    priceAuthorities.some((authority) => requestedPriceServices.includes(authority.serviceKey)) ||
+    legacyPriceAuthority;
+  const claimDecisions = usesCanonicalPriceAuthorities
+    ? priceClaimDecisions({
+        answer,
+        currentMessage: input.currentMessage,
+        authorities: priceAuthorities,
+      })
+    : [];
+  const rejectedPriceClaim = claimDecisions.find((claim) => !claim.matched) ?? null;
 
   if (expectedCategory === "price" && !priceAuthorityForMessage && !priceResponseAlreadySafe) {
     if (generatedClaimCategory && generatedClaimCategory !== "price") {
@@ -608,7 +704,11 @@ export function validateV1AnswerAuthority(input: {
     }
     replacementCategory = "price";
     replacementReason = "expected_category_without_authority";
-  } else if (priceClaim && !matchingPriceAuthority) {
+  } else if (
+    usesCanonicalPriceAuthorities &&
+    priceClaim &&
+    (rejectedPriceClaim !== null || claimDecisions.length === 0)
+  ) {
     blockedCategories.push("price");
     replacementCategory = expectedCategory ?? "price";
   } else if (pickupClaim && !hasSourceForCategory(input.sources, "pickup")) {
@@ -650,6 +750,17 @@ export function validateV1AnswerAuthority(input: {
   }
   if (replacementCategory) replacementReason = "unsupported_claim_replaced";
 
+  const priceAuthorityTelemetry = authorityTelemetry({
+    authorities: priceAuthorities,
+    claimDecisions,
+    overallDecision:
+      claimDecisions.length === 0 && expectedCategory !== "price"
+        ? "NOT_APPLICABLE"
+        : replacementCategory || rejectedPriceClaim
+          ? "REJECTED"
+          : "AUTHORIZED",
+  });
+
   return {
     answer: replacementCategory ? safeUnavailable(replacementCategory) : answer,
     blockedCategories: Array.from(new Set(blockedCategories)),
@@ -668,5 +779,6 @@ export function validateV1AnswerAuthority(input: {
     authorityConflictCategories: Array.from(new Set(authorityConflictCategories)),
     winningSourceTypes: Array.from(new Set(winningSourceTypes)),
     rejectedSourceTypes: Array.from(new Set(rejectedSourceTypes)),
+    priceAuthorityTelemetry,
   };
 }

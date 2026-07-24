@@ -6,7 +6,17 @@ export type RagPriceServiceKey =
   | "montagem_computadores"
   | "unknown";
 
+export type PriceAuthorityQualifier = "starting_at";
+
 type ServicePattern = readonly [serviceKey: RagPriceServiceKey, pattern: RegExp];
+
+const PRICE_SERVICE_PATTERNS: readonly ServicePattern[] = [
+  ["placa_mae", /\bplaca[ -]?mae\b/u],
+  ["remocao_virus", /\b(?:remocao|remover)\s+(?:de\s+)?(?:virus|malware)\b/u],
+  ["recuperacao_dados", /\b(?:recupera[cr][aã]o|recuperar)\s+(?:de\s+)?(?:dados|arquivos?)\b/u],
+  ["montagem_computadores", /\b(?:montagem|configuracao)\s+(?:de\s+)?computador(?:es)?\b/u],
+  ["formatacao", /\b(?:format|windows|sistema(?:s)?|instala[cr][aã]o)\w*/u],
+];
 
 const RAG_PRICE_SERVICE_ORDER: readonly RagPriceServiceKey[] = [
   "formatacao",
@@ -27,11 +37,27 @@ export type RagPriceAuthority = {
   serviceTerms: string[];
   amount: number;
   currency: "BRL";
-  qualifier: "starting_at";
+  qualifier: PriceAuthorityQualifier;
   sourceText: string;
   sourceChunkIds: string[];
   sourceKnowledgeIds: string[];
   evidenceCount: number;
+};
+
+/**
+ * Canonical, service-filtered authority contract used by the runtime guard.
+ * It is created once after RAG selection and must not be re-extracted from
+ * prompt chunks during response authorization.
+ */
+export type EligiblePriceAuthority = RagPriceAuthority;
+
+export type ExtractedPriceClaim = {
+  serviceKey: RagPriceServiceKey;
+  currency: "BRL";
+  amount: number;
+  qualifier: PriceAuthorityQualifier | null;
+  index: number;
+  excerpt: string;
 };
 
 type RagPriceAuthorityInput = {
@@ -73,10 +99,15 @@ function normalize(value: string): string {
     .toLowerCase();
 }
 
-function parseBrlAmount(value: string): number | null {
+export function parseBrlAmount(value: string): number | null {
   const normalized = value.replace(/\./g, "").replace(",", ".");
   const amount = Number(normalized);
   return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
+export function priceAmountInMinorUnits(amount: number): number | null {
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return Math.round(amount * 100);
 }
 
 function priceContextAt(text: string, position: number): string {
@@ -93,15 +124,61 @@ function priceContextAt(text: string, position: number): string {
 
 function priceServiceKey(sourceText: string): RagPriceServiceKey {
   const source = normalize(sourceText);
-  const servicePatterns: readonly ServicePattern[] = [
-    ["placa_mae", /\bplaca[ -]?mae\b/u],
-    ["remocao_virus", /\b(?:remocao|remover)\s+(?:de\s+)?(?:virus|malware)\b/u],
-    ["recuperacao_dados", /\b(?:recupera[cr][aã]o|recuperar)\s+(?:de\s+)?(?:dados|arquivos?)\b/u],
-    ["montagem_computadores", /\b(?:montagem|configuracao)\s+(?:de\s+)?computador(?:es)?\b/u],
-    ["formatacao", /\b(?:format|windows|sistema(?:s)?|instala[cr][aã]o)\w*/u],
-  ];
-  const matches = servicePatterns.filter(([, pattern]) => pattern.test(source));
+  const matches = PRICE_SERVICE_PATTERNS.filter(([, pattern]) => pattern.test(source));
   return matches.length === 1 ? matches[0][0] : "unknown";
+}
+
+function priceServiceKeyBeforePosition(text: string, position: number): RagPriceServiceKey {
+  const sentenceStart = Math.max(
+    text.lastIndexOf(".", position),
+    text.lastIndexOf(";", position),
+    text.lastIndexOf("\n", position),
+  );
+  const beforePrice = normalize(text.slice(sentenceStart + 1, position));
+  const matches = PRICE_SERVICE_PATTERNS.flatMap(([serviceKey, pattern]) => {
+    const globalPattern = new RegExp(pattern.source, "gu");
+    return Array.from(beforePrice.matchAll(globalPattern)).map((match) => ({
+      serviceKey,
+      index: match.index ?? -1,
+    }));
+  }).filter((match) => match.index >= 0);
+
+  if (matches.length === 0) return "unknown";
+  matches.sort((left, right) => right.index - left.index);
+  const best = matches[0];
+  return matches.filter((match) => match.index === best.index).length === 1
+    ? best.serviceKey
+    : "unknown";
+}
+
+function claimQualifier(text: string, position: number): PriceAuthorityQualifier | null {
+  const beforePrice = normalize(text.slice(Math.max(0, position - 120), position));
+  return /(?:a\s+partir\s+de|valor\s+(?:inicial|de\s+partida)(?:\s+de)?|(?:valor|preco)\s+parte\s+de)\s*$/u.test(
+    beforePrice,
+  )
+    ? "starting_at"
+    : null;
+}
+
+/** Extracts every explicit BRL price claim from a draft response without persisting prose. */
+export function extractPriceClaims(answer: string): ExtractedPriceClaim[] {
+  return Array.from(
+    answer.matchAll(/(?:R\$\s*([\d.]+(?:,\d{2})?)|([\d.]+(?:,\d{2})?)\s*(?:reais|real)\b)/giu),
+  ).flatMap((match) => {
+    const amount = parseBrlAmount(match[1] ?? match[2]);
+    if (amount === null || match.index === undefined) return [];
+    const excerpt = priceContextAt(answer, match.index);
+    return [
+      {
+        serviceKey: priceServiceKeyBeforePosition(answer, match.index),
+        currency: "BRL" as const,
+        amount,
+        qualifier: claimQualifier(answer, match.index),
+        index: match.index,
+        excerpt,
+      },
+    ];
+  });
 }
 
 function serviceTerms(title: string, sourceText: string): string[] {
@@ -244,19 +321,11 @@ export function isRagPriceAuthorityCompatibleWithMessage(input: {
 
 export function requestedPriceServiceKeys(message: string): RagPriceServiceKey[] {
   const normalizedMessage = normalize(message);
-  const servicePatterns: readonly ServicePattern[] = [
-    ["placa_mae", /\bplaca[ -]?mae\b/u],
-    ["remocao_virus", /\b(?:remover|remocao)\s+(?:de\s+)?(?:virus|malware)\b/u],
-    ["recuperacao_dados", /\b(?:recupera[cr][aã]o|recuperar)\s+(?:de\s+)?(?:dados|arquivos?)\b/u],
-    ["montagem_computadores", /\b(?:montagem|configura[cr][aã]o)\s+(?:de\s+)?computador(?:es)?\b/u],
-    ["formatacao", /\b(?:format|windows|sistema(?:s)?|instala[cr][aã]o)\w*/u],
-  ];
-  return servicePatterns
-    .map(([serviceKey, pattern]) => ({
-      serviceKey,
-      position: normalizedMessage.search(pattern),
-      canonicalOrder: RAG_PRICE_SERVICE_ORDER.indexOf(serviceKey),
-    }))
+  return PRICE_SERVICE_PATTERNS.map(([serviceKey, pattern]) => ({
+    serviceKey,
+    position: normalizedMessage.search(pattern),
+    canonicalOrder: RAG_PRICE_SERVICE_ORDER.indexOf(serviceKey),
+  }))
     .filter((item) => item.position >= 0)
     .sort(
       (left, right) => left.position - right.position || left.canonicalOrder - right.canonicalOrder,
@@ -281,7 +350,7 @@ function normalizedQualifier(qualifier: string): string {
 }
 
 function authorityDeduplicationKey(authority: RagPriceAuthority): string {
-  const amountInMinorUnits = Math.round(authority.amount * 100);
+  const amountInMinorUnits = priceAmountInMinorUnits(authority.amount);
   return [
     authority.serviceKey,
     authority.currency,

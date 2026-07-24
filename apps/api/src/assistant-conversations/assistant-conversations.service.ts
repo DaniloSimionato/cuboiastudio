@@ -119,6 +119,7 @@ import type { RuntimeV2CandidateContext } from "../runtime-v2/candidate-response
 import {
   deriveExpectedAuthorityCategory,
   validateV1AnswerAuthority,
+  type PriceAuthorityGuardTelemetry,
 } from "./runtime-authority-guard";
 import {
   extractCustomerStructuredFields,
@@ -145,7 +146,7 @@ import {
   extractRagPriceAuthorities,
   filterEligibleRagPriceAuthorities,
   hasConflictingEligibleRagPriceAuthorities,
-  isRagPriceAuthorityCompatibleWithMessage,
+  type EligiblePriceAuthority,
   type RagPriceAuthority,
 } from "./rag-price-authority";
 import {
@@ -383,6 +384,7 @@ export type AssistantConversationRuntime = {
     triageResponseProtected?: boolean;
     replacementReason?: string | null;
     v1AuthorityGuardApplied?: boolean;
+    priceAuthorityGuardTelemetry?: PriceAuthorityGuardTelemetry | null;
     officialHoursEvaluated?: boolean;
     requestedDayOpen?: boolean | null;
     requestedTimeWithinHours?: boolean | null;
@@ -3309,6 +3311,7 @@ export class AssistantConversationsService {
       ragAuthorityEligible: true;
       priceAuthorities?: RagPriceAuthority[];
     }[] = [];
+    let eligiblePriceAuthorities: EligiblePriceAuthority[] = [];
     const ragThresholdConfig = resolveAssistantKnowledgeScoreThreshold({
       assistantId: input.assistantId,
     });
@@ -3400,30 +3403,11 @@ export class AssistantConversationsService {
         authorities: rawPriceAuthorities,
         currentMessage: customerIntentText,
       });
-      const eligiblePriceAuthorities =
-        deduplicateEligibleRagPriceAuthorities(filteredPriceAuthorities);
-      const eligibleAuthorityIds = new Set(
-        eligiblePriceAuthorities.map((authority) => `${authority.chunkId}:${authority.amount}`),
-      );
-      const scopedKnowledgeItems = knowledgeSelection.items.map((item) => ({
-        ...item,
-        priceAuthorities: extractRagPriceAuthorities({
-          chunkId: item.id,
-          knowledgeItemId: item.knowledgeItemId,
-          title: item.title,
-          content: item.content,
-        }).filter((authority) =>
-          eligibleAuthorityIds.has(`${authority.chunkId}:${authority.amount}`),
-        ),
-      }));
-      const scopedPriceAuthorities = scopedKnowledgeItems.flatMap(
-        (item) => item.priceAuthorities ?? [],
-      );
+      eligiblePriceAuthorities = deduplicateEligibleRagPriceAuthorities(filteredPriceAuthorities);
       const ambiguousAuthorityDetected =
-        hasConflictingEligibleRagPriceAuthorities(scopedPriceAuthorities);
-      knowledgeItems = ambiguousAuthorityDetected
-        ? scopedKnowledgeItems.map((item) => ({ ...item, priceAuthorities: [] }))
-        : scopedKnowledgeItems;
+        hasConflictingEligibleRagPriceAuthorities(eligiblePriceAuthorities);
+      knowledgeItems = knowledgeSelection.items;
+      if (ambiguousAuthorityDetected) eligiblePriceAuthorities = [];
       ragLogData.ambiguousAuthorityDetected = ambiguousAuthorityDetected;
       ragLogData.rawPriceAuthorityCount = rawPriceAuthorities.length;
       ragLogData.filteredPriceAuthorityCount = filteredPriceAuthorities.length;
@@ -3907,6 +3891,7 @@ export class AssistantConversationsService {
       knowledgeItems,
       officialBusinessContext: v1OfficialBusinessContext,
       allowBusinessHours: !directBusinessHoursBindingActive,
+      priceAuthorityContext: { eligiblePriceAuthorities },
     });
     const deterministicFallbackCategory =
       deterministicRuntime.sources.length > 0 ? "deterministic_response" : "no_information";
@@ -4231,22 +4216,15 @@ export class AssistantConversationsService {
             acceptedChunkIds: knowledgeItems.map((item) => item.id),
             globalFallbackUsed:
               knowledgeScopeTagFilterEnabled && flowKnowledgeScope.knowledgeScopeMissing,
-            priceAuthorities: knowledgeItems.flatMap((item) =>
-              (item.priceAuthorities ?? []).map((authority) => ({
-                authorityType: authority.authorityType,
-                source: authority.source,
-                chunkId: authority.chunkId,
-                knowledgeItemId: authority.knowledgeItemId,
-                service: authority.service,
-                serviceKey: authority.serviceKey,
-                amount: authority.amount,
-                currency: authority.currency,
-                qualifier: authority.qualifier,
-                evidenceCount: authority.evidenceCount,
-                sourceChunkIds: authority.sourceChunkIds,
-                sourceKnowledgeIds: authority.sourceKnowledgeIds,
-              })),
-            ),
+            eligiblePriceAuthorities: eligiblePriceAuthorities.map((authority) => ({
+              serviceKey: authority.serviceKey,
+              amount: authority.amount,
+              currency: authority.currency,
+              qualifier: authority.qualifier,
+              evidenceCount: authority.evidenceCount,
+              sourceChunkIds: authority.sourceChunkIds,
+              sourceKnowledgeIds: authority.sourceKnowledgeIds,
+            })),
             ambiguousAuthorityDetected: Boolean(ragLogData.ambiguousAuthorityDetected),
           });
           contextMetadata.contextManifest = {
@@ -5091,6 +5069,7 @@ export class AssistantConversationsService {
           answer,
           currentMessage: customerIntentText,
           sources,
+          eligiblePriceAuthorities: deterministicRuntime.eligiblePriceAuthorities,
           officialBusinessContext: v1OfficialBusinessContext,
           flowText: selectedFlowForAuthority
             ? `${selectedFlowForAuthority.flowInstructions ?? ""} ${selectedFlowForAuthority.fixedMessage ?? ""}`
@@ -5216,6 +5195,7 @@ export class AssistantConversationsService {
       triageResponseProtected: authorityGuard?.triageResponseProtected ?? false,
       replacementReason: authorityGuard?.replacementReason ?? null,
       v1AuthorityGuardApplied,
+      priceAuthorityGuardTelemetry: authorityGuard?.priceAuthorityTelemetry ?? null,
       officialHoursEvaluated: expectedAuthority.officialHours.evaluated,
       requestedDayOpen: expectedAuthority.officialHours.requestedDayOpen,
       requestedTimeWithinHours: expectedAuthority.officialHours.requestedTimeWithinHours,
@@ -5240,6 +5220,7 @@ export class AssistantConversationsService {
       triageResponseProtected: authorityGuard?.triageResponseProtected ?? false,
       replacementReason: authorityGuard?.replacementReason ?? null,
       v1AuthorityGuardApplied,
+      priceAuthorityGuardTelemetry: authorityGuard?.priceAuthorityTelemetry ?? null,
       officialHoursEvaluated: expectedAuthority.officialHours.evaluated,
       requestedDayOpen: expectedAuthority.officialHours.requestedDayOpen,
       requestedTimeWithinHours: expectedAuthority.officialHours.requestedTimeWithinHours,

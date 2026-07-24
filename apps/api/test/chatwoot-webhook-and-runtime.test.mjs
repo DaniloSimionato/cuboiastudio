@@ -748,11 +748,12 @@ function createAssistantServiceDeps(overrides = {}) {
   };
 
   const knowledgeRetrievalService = {
-    searchRelevantKnowledge: async () => ({
-      totalChunksScanned: 0,
-      warning: null,
-      results: [],
-    }),
+    searchRelevantKnowledge: async () =>
+      overrides.knowledgeRetrievalResult ?? {
+        totalChunksScanned: 0,
+        warning: null,
+        results: [],
+      },
   };
 
   const promptCompilerService = overrides.promptCompilerService ?? {
@@ -2014,6 +2015,88 @@ test("sendMessage chama outbound somente depois do runtime", async () => {
   }
 });
 
+test("pipeline de conversa encaminha a autoridade elegível canônica ao guard sem reextraí-la", async () => {
+  const { service, calls } = createAssistantServiceDeps({
+    assistant: { ragEnabled: true },
+    completion: {
+      provider: "test-provider",
+      model: "test-model",
+      answer: "A formatação custa a partir de R$ 1.950,00.",
+      durationMs: 1,
+    },
+    knowledgeRetrievalResult: {
+      totalChunksScanned: 4,
+      scoredChunkCount: 4,
+      scoreThreshold: 0.7,
+      scoreThresholdSource: "default",
+      filteredOutCount: 0,
+      filteredOutScoreRange: null,
+      scoredScoreRange: { min: 0.7, max: 0.9 },
+      scopedCandidateCount: 4,
+      knowledgeScopeNoMatch: false,
+      rejectedOutOfScopeChunkCount: 0,
+      warning: null,
+      results: [
+        ...["format-a", "format-b", "format-c"].map((chunkId) => ({
+          knowledgeId: "knowledge-format",
+          knowledgeTitle: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
+          chunkId,
+          contentPreview: "A formatação custa a partir de R$ 1.950,00.",
+          score: 0.8,
+        })),
+        {
+          knowledgeId: "knowledge-format",
+          knowledgeTitle: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
+          chunkId: "motherboard",
+          contentPreview: "O reparo de placa-mãe custa a partir de R$ 395,00.",
+          score: 0.75,
+        },
+      ],
+    },
+    outboundConfig: { baseUrl: "" },
+  });
+
+  await service.sendMessage({
+    assistantId: "assistant-1",
+    conversationId: "conversation-1",
+    dto: { source: "manual", message: "Qual o valor para formatar um PC?" },
+    user: {
+      id: "user-1",
+      companyId: "company-1",
+      email: "user@cubo.local",
+      name: "User",
+      roles: [],
+      permissions: [],
+    },
+    tenant: { companyId: "company-1" },
+    preparedAttachments: [],
+  });
+
+  const assistantMessage = calls.messageCreates.find((message) => message.role === "assistant");
+  const runtimeLog = calls.runtimeLogCreates.at(-1);
+  const guardTelemetry = runtimeLog.metadata.contextManifest.priceAuthorityGuardTelemetry;
+
+  assert.equal(calls.providerPayloads.length, 1);
+  assert.equal(calls.chatwootFetches.length, 0);
+  assert.match(assistantMessage?.content ?? "", /formatação custa a partir de R\$ 1\.950,00/i);
+  assert.doesNotMatch(assistantMessage?.content ?? "", /não tenho um valor confirmado/i);
+  assert.equal(guardTelemetry.eligibleAuthorityCount, 1);
+  assert.deepEqual(guardTelemetry.eligibleAuthorities, [
+    {
+      serviceKey: "formatacao",
+      currency: "BRL",
+      amount: 1950,
+      qualifier: "starting_at",
+      evidenceCount: 3,
+    },
+  ]);
+  assert.deepEqual(
+    guardTelemetry.claimDecisions.map((decision) => decision.matched),
+    [true],
+  );
+  assert.equal(guardTelemetry.overallDecision, "AUTHORIZED");
+});
+
 test("tail preserva a resposta determinística V2 de horário sem reescrita do guardião V1", async () => {
   const deterministicAnswer =
     "Atendemos de segunda a sexta, das 08h às 18h; aos sábados, das 07h30 às 12h; aos domingos estamos fechados.";
@@ -2396,7 +2479,10 @@ test("encerra triagem técnica e mantém preço como intenção atual", async ()
   assert.equal(manifest.triageFlowIncluded, false);
   assert.deepEqual(cacheWrites.at(-1), null);
   assert.equal(calls.providerPayloads.length, 1);
-  assert.equal(calls.providerPayloads[0].messages.at(-1).content, "Depois vocês verificam e me passam o orçamento.");
+  assert.equal(
+    calls.providerPayloads[0].messages.at(-1).content,
+    "Depois vocês verificam e me passam o orçamento.",
+  );
   assert.match(
     calls.messageCreates.find((message) => message.role === "assistant")?.content ?? "",
     /Não tenho um valor confirmado/,
@@ -2421,14 +2507,11 @@ test("pipeline Chatwoot completo preserva saída de triagem e drena o Shadow sem
     },
   };
   const shadowStore = new InMemoryConversationStateStore();
-  const shadowOrchestrator = new RuntimeV2ShadowOrchestrator(
-    shadowStore,
-    {
-      RUNTIME_V2_MODE: "SHADOW",
-      RUNTIME_V2_SHADOW_ASSISTANT_IDS: "assistant-1",
-      RUNTIME_V2_SHADOW_CONVERSATION_IDS: "conversation-1",
-    },
-  );
+  const shadowOrchestrator = new RuntimeV2ShadowOrchestrator(shadowStore, {
+    RUNTIME_V2_MODE: "SHADOW",
+    RUNTIME_V2_SHADOW_ASSISTANT_IDS: "assistant-1",
+    RUNTIME_V2_SHADOW_CONVERSATION_IDS: "conversation-1",
+  });
   const shadowIntegration = new RuntimeV2ShadowIntegrationService(
     shadowPrisma,
     shadowOrchestrator,

@@ -1,7 +1,7 @@
 import type { AiChatCompletionMessage } from "../ai/ai.types";
 import {
-  extractRagPriceAuthorities,
   isRagPriceAuthority,
+  type EligiblePriceAuthority,
   type RagPriceAuthority,
 } from "../assistant-conversations/rag-price-authority";
 import type { OfficialBusinessContext } from "./official-business-context";
@@ -13,8 +13,12 @@ type AssistantKnowledgeInput = {
   title: string;
   content: string;
   ragAuthorityEligible?: true;
-  /** Pre-filtered by the selected flow and the current customer domain. */
+  /** Prompt-only metadata. It must not become a new price-authority source. */
   priceAuthorities?: RagPriceAuthority[];
+};
+
+export type PriceAuthorityContext = {
+  eligiblePriceAuthorities: readonly EligiblePriceAuthority[];
 };
 
 type AssistantConversationHistoryMessage = {
@@ -116,10 +120,13 @@ export function buildDeterministicAssistantResponse(input: {
   knowledgeItems: AssistantKnowledgeInput[];
   officialBusinessContext?: OfficialBusinessContext | null;
   allowBusinessHours?: boolean;
+  priceAuthorityContext?: PriceAuthorityContext;
 }): {
   answer: string;
   sources: AssistantRuntimeSource[];
+  eligiblePriceAuthorities: readonly EligiblePriceAuthority[];
 } {
+  const eligiblePriceAuthorities = input.priceAuthorityContext?.eligiblePriceAuthorities ?? [];
   const structuredAnswer =
     input.allowBusinessHours === false
       ? null
@@ -134,6 +141,7 @@ export function buildDeterministicAssistantResponse(input: {
           title: structuredAnswer.sourceTitle,
         },
       ],
+      eligiblePriceAuthorities,
     };
   }
 
@@ -149,22 +157,10 @@ export function buildDeterministicAssistantResponse(input: {
   });
 
   const selectedKnowledge = rankedKnowledge.slice(0, 5);
-  const sources = selectedKnowledge.map((knowledge) => {
-    const priceAuthorities = knowledge.ragAuthorityEligible
-      ? (knowledge.priceAuthorities ??
-        extractRagPriceAuthorities({
-          chunkId: knowledge.id,
-          knowledgeItemId: knowledge.knowledgeItemId ?? knowledge.id,
-          title: knowledge.title,
-          content: knowledge.content,
-        }))
-      : [];
-    return {
-      id: knowledge.id,
-      title: knowledge.title,
-      ...(priceAuthorities.length > 0 ? { priceAuthorities } : {}),
-    };
-  });
+  const sources = selectedKnowledge.map((knowledge) => ({
+    id: knowledge.id,
+    title: knowledge.title,
+  }));
 
   const assistantName = input.assistantName?.trim() || "este assistente";
   const persona = input.instructions?.trim()
@@ -180,6 +176,7 @@ export function buildDeterministicAssistantResponse(input: {
   return {
     answer,
     sources,
+    eligiblePriceAuthorities,
   };
 }
 

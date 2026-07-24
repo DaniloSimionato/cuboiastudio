@@ -31,9 +31,23 @@ function selectedRagContext(question = "Quanto sai para formatar?") {
     threshold: 0.55,
     results: [priceChunk],
   });
+  const eligiblePriceAuthorities = deduplicateEligibleRagPriceAuthorities(
+    filterEligibleRagPriceAuthorities({
+      authorities: selection.items.flatMap((item) =>
+        extractRagPriceAuthorities({
+          chunkId: item.id,
+          knowledgeItemId: item.knowledgeItemId ?? item.id,
+          title: item.title,
+          content: item.content,
+        }),
+      ),
+      currentMessage: question,
+    }),
+  );
   const deterministic = buildDeterministicAssistantResponse({
     question,
     knowledgeItems: selection.items,
+    priceAuthorityContext: { eligiblePriceAuthorities },
   });
   const prompt = new PromptCompilerService().compile({
     assistant: { name: "Assistente" },
@@ -41,22 +55,23 @@ function selectedRagContext(question = "Quanto sai para formatar?") {
     historyMessages: [],
     currentMessage: question,
   });
-  return { selection, deterministic, prompt };
+  return { selection, eligiblePriceAuthorities, deterministic, prompt };
 }
 
-function guard(question, answer, sources) {
+function guard(question, answer, eligiblePriceAuthorities, sources = []) {
   return validateV1AnswerAuthority({
     answer,
     currentMessage: question,
     sources,
+    eligiblePriceAuthorities,
     officialBusinessContext: officialContext(),
     expectedAuthorityCategory: "price",
   });
 }
 
 test("RAG selecionado cria contrato de preço e o mesmo item entra no prompt", () => {
-  const { selection, deterministic, prompt } = selectedRagContext();
-  const authority = deterministic.sources[0].priceAuthorities?.[0];
+  const { selection, eligiblePriceAuthorities, deterministic, prompt } = selectedRagContext();
+  const authority = eligiblePriceAuthorities[0];
 
   assert.equal(selection.items[0].ragAuthorityEligible, true);
   assert.equal(authority?.authorityType, "price");
@@ -68,6 +83,8 @@ test("RAG selecionado cria contrato de preço e o mesmo item entra no prompt", (
   assert.equal(authority?.qualifier, "starting_at");
   assert.match(authority?.service ?? "", /formata/i);
   assert.match(authority?.sourceText ?? "", /a partir de R\$ 195,00/i);
+  assert.equal(deterministic.eligiblePriceAuthorities, eligiblePriceAuthorities);
+  assert.equal(deterministic.sources[0].priceAuthorities, undefined);
   assert.match(
     prompt.map((message) => String(message.content)).join("\n"),
     /a partir de R\$ 195,00/i,
@@ -75,8 +92,7 @@ test("RAG selecionado cria contrato de preço e o mesmo item entra no prompt", (
 });
 
 test("provider mockado preserva somente preços RAG compatíveis e qualificados", () => {
-  const { deterministic } = selectedRagContext();
-  const sources = deterministic.sources;
+  const { eligiblePriceAuthorities } = selectedRagContext();
   const cases = [
     ["Quanto sai para formatar?", "A formatação básica custa a partir de R$ 195,00."],
     ["Qual o preço da formatação?", "O valor parte de R$ 195,00."],
@@ -84,7 +100,7 @@ test("provider mockado preserva somente preços RAG compatíveis e qualificados"
   ];
 
   for (const [question, providerAnswer] of cases) {
-    const result = guard(question, providerAnswer, sources);
+    const result = guard(question, providerAnswer, eligiblePriceAuthorities);
     assert.equal(result.unsupportedClaimDetected, false, providerAnswer);
     assert.equal(result.replacementReason, null, providerAnswer);
     assert.equal(result.answer, providerAnswer);
@@ -92,7 +108,7 @@ test("provider mockado preserva somente preços RAG compatíveis e qualificados"
 });
 
 test("guard bloqueia preço fechado, valor divergente e serviço fora da autoridade RAG", () => {
-  const { deterministic } = selectedRagContext();
+  const { eligiblePriceAuthorities } = selectedRagContext();
   const cases = [
     ["Quanto sai para formatar?", "A formatação custa exatamente R$ 195,00."],
     ["Quanto sai para formatar?", "A formatação custa a partir de R$ 150,00."],
@@ -104,7 +120,7 @@ test("guard bloqueia preço fechado, valor divergente e serviço fora da autorid
   ];
 
   for (const [question, providerAnswer] of cases) {
-    const result = guard(question, providerAnswer, deterministic.sources);
+    const result = guard(question, providerAnswer, eligiblePriceAuthorities);
     assert.equal(result.replacementReason, "unsupported_claim_replaced", providerAnswer);
     assert.equal(result.finalSafeResponseCategory, "price", providerAnswer);
     assert.match(result.answer, /não tenho um valor confirmado/i, providerAnswer);
@@ -112,7 +128,7 @@ test("guard bloqueia preço fechado, valor divergente e serviço fora da autorid
 });
 
 test("somente autoridade RAG selecionada concede preço", () => {
-  const { deterministic } = selectedRagContext();
+  const { eligiblePriceAuthorities } = selectedRagContext();
   const validAnswer = "A formatação básica custa a partir de R$ 195,00.";
   const unselected = buildDeterministicAssistantResponse({
     question: "Quanto sai para formatar?",
@@ -125,21 +141,18 @@ test("somente autoridade RAG selecionada concede preço", () => {
       },
     ],
   });
-  const differentAssistantOrInactive = {
-    ...deterministic.sources[0],
-    priceAuthorities: undefined,
-  };
 
   assert.equal(
-    guard("Quanto sai para formatar?", validAnswer, unselected.sources).unsupportedClaimDetected,
-    true,
-  );
-  assert.equal(
-    guard("Quanto sai para formatar?", validAnswer, [differentAssistantOrInactive])
+    guard("Quanto sai para formatar?", validAnswer, unselected.eligiblePriceAuthorities)
       .unsupportedClaimDetected,
     true,
   );
   assert.equal(guard("Quanto sai para formatar?", validAnswer, []).unsupportedClaimDetected, true);
+  assert.equal(
+    guard("Quanto sai para formatar?", validAnswer, eligiblePriceAuthorities)
+      .unsupportedClaimDetected,
+    false,
+  );
 });
 
 test("texto do cliente e histórico não criam autoridade de preço", () => {
@@ -150,9 +163,7 @@ test("texto do cliente e histórico não criam autoridade de preço", () => {
     true,
   );
   assert.equal(
-    guard("Quanto sai para formatar?", providerAnswer, [
-      { id: "history-message", title: "Histórico da conversa" },
-    ]).unsupportedClaimDetected,
+    guard("Quanto sai para formatar?", providerAnswer, []).unsupportedClaimDetected,
     true,
   );
 });
@@ -261,4 +272,102 @@ test("autoridades elegíveis idênticas agregam proveniência sem esconder confl
     )[0].evidenceCount,
     2,
   );
+});
+
+test("guard valida cada claim contra a autoridade elegível canônica e falha fechado", () => {
+  const authorities = extractRagPriceAuthorities({
+    chunkId: "mixed-price-chunk",
+    knowledgeItemId: "knowledge-format",
+    title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
+    content:
+      "A formatação custa a partir de R$ 1.950,00. O reparo de placa-mãe custa a partir de R$ 395,00.",
+  });
+  const formatting = {
+    ...authorities.find((authority) => authority.serviceKey === "formatacao"),
+    evidenceCount: 3,
+    sourceChunkIds: ["format-a", "format-b", "format-c"],
+  };
+  const motherboard = authorities.find((authority) => authority.serviceKey === "placa_mae");
+  assert.ok(formatting.serviceKey);
+  assert.ok(motherboard);
+
+  const cases = [
+    {
+      question: "Qual o valor para formatar um PC?",
+      answer: "A formatação custa a partir de R$ 1.950,00.",
+      eligible: [formatting],
+      expectedReplacement: null,
+      expectedDecisions: [true],
+    },
+    {
+      question: "Qual o valor para formatar um PC?",
+      answer: "A formatação custa a partir de 1950 reais.",
+      eligible: [formatting],
+      expectedReplacement: null,
+      expectedDecisions: [true],
+    },
+    {
+      question: "Qual o valor para formatar um PC?",
+      answer: "A formatação custa R$ 1.950,00.",
+      eligible: [formatting],
+      expectedReplacement: "unsupported_claim_replaced",
+      expectedDecisions: [false],
+    },
+    {
+      question: "Qual o valor para formatar um PC?",
+      answer: "A formatação custa a partir de R$ 395,00.",
+      eligible: [formatting],
+      expectedReplacement: "unsupported_claim_replaced",
+      expectedDecisions: [false],
+    },
+    {
+      question: "Quanto custa o reparo de placa-mãe?",
+      answer: "O reparo de placa-mãe custa a partir de R$ 395,00.",
+      eligible: [motherboard],
+      expectedReplacement: null,
+      expectedDecisions: [true],
+    },
+    {
+      question: "Quero formatar e também verificar a placa-mãe.",
+      answer:
+        "A formatação custa a partir de R$ 1.950,00 e o reparo de placa-mãe custa a partir de R$ 395,00.",
+      eligible: [formatting, motherboard],
+      expectedReplacement: null,
+      expectedDecisions: [true, true],
+    },
+    {
+      question: "Quero formatar e também verificar a placa-mãe.",
+      answer:
+        "A formatação custa a partir de R$ 1.950,00 e o reparo de placa-mãe custa a partir de R$ 100,00.",
+      eligible: [formatting, motherboard],
+      expectedReplacement: "unsupported_claim_replaced",
+      expectedDecisions: [true, false],
+    },
+    {
+      question: "Qual o valor para formatar um PC?",
+      answer: "A formatação custa a partir de R$ 1.950,00.",
+      eligible: [],
+      expectedReplacement: "unsupported_claim_replaced",
+      expectedDecisions: [false],
+    },
+  ];
+
+  for (const scenario of cases) {
+    const result = guard(scenario.question, scenario.answer, scenario.eligible);
+    assert.equal(result.replacementReason, scenario.expectedReplacement, scenario.answer);
+    assert.deepEqual(
+      result.priceAuthorityTelemetry?.claimDecisions.map((decision) => decision.matched),
+      scenario.expectedDecisions,
+      scenario.answer,
+    );
+  }
+
+  const duplicateResult = guard(
+    "Qual o valor para formatar um PC?",
+    "A formatação custa a partir de R$ 1.950,00.",
+    [formatting],
+  );
+  assert.equal(duplicateResult.replacementReason, null);
+  assert.equal(duplicateResult.priceAuthorityTelemetry?.eligibleAuthorityCount, 1);
+  assert.equal(duplicateResult.priceAuthorityTelemetry?.eligibleAuthorities[0].evidenceCount, 3);
 });

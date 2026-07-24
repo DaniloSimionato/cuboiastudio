@@ -10,7 +10,9 @@ import {
   normalizeKnowledgeScopeTag,
 } from "../dist/assistant-knowledge/knowledge-scope-tags.js";
 import {
+  deduplicateEligibleRagPriceAuthorities,
   extractRagPriceAuthorities,
+  filterEligibleRagPriceAuthorities,
   isRagPriceAuthorityCompatibleWithMessage,
 } from "../dist/assistant-conversations/rag-price-authority.js";
 import { buildDeterministicAssistantResponse } from "../dist/assistants/assistant-runtime.js";
@@ -70,11 +72,12 @@ function scopedPrisma() {
   };
 }
 
-function authorityGuard(question, answer, sources) {
+function authorityGuard(question, answer, eligiblePriceAuthorities, sources = []) {
   return validateV1AnswerAuthority({
     answer,
     currentMessage: question,
     sources,
+    eligiblePriceAuthorities,
     officialBusinessContext: { businessHours: {}, timezone: "America/Campo_Grande" },
     expectedAuthorityCategory: "price",
   });
@@ -363,8 +366,18 @@ test("pipeline retrieval → autoridades → guard só permite o preço do domí
       priceAuthorities,
     };
   });
-  const deterministic = buildDeterministicAssistantResponse({ question, knowledgeItems: selected });
-  const authorities = deterministic.sources.flatMap((source) => source.priceAuthorities ?? []);
+  const eligiblePriceAuthorities = deduplicateEligibleRagPriceAuthorities(
+    filterEligibleRagPriceAuthorities({
+      authorities: selected.flatMap((item) => item.priceAuthorities),
+      currentMessage: question,
+    }),
+  );
+  const deterministic = buildDeterministicAssistantResponse({
+    question,
+    knowledgeItems: selected,
+    priceAuthorityContext: { eligiblePriceAuthorities },
+  });
+  const authorities = deterministic.eligiblePriceAuthorities;
 
   assert.deepEqual(
     authorities.map((authority) => authority.amount),
@@ -372,12 +385,12 @@ test("pipeline retrieval → autoridades → guard só permite o preço do domí
   );
   assert.equal(authorities[0].qualifier, "starting_at");
   assert.equal(
-    authorityGuard(question, "A formatação custa a partir de R$ 1.950,00.", deterministic.sources)
+    authorityGuard(question, "A formatação custa a partir de R$ 1.950,00.", authorities)
       .unsupportedClaimDetected,
     false,
   );
   assert.equal(
-    authorityGuard(question, "A formatação custa a partir de R$ 195,00.", deterministic.sources)
+    authorityGuard(question, "A formatação custa a partir de R$ 195,00.", authorities)
       .replacementReason,
     "unsupported_claim_replaced",
   );
