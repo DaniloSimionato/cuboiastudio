@@ -2395,7 +2395,7 @@ test("triagem recebe fatos anteriores do cliente sem receber respostas antigas, 
 });
 
 test("encerra triagem técnica e mantém preço como intenção atual", async () => {
-  let cachedTriageState = {
+  const initialTriageState = {
     active: true,
     startedAt: new Date(Date.now() - 60_000).toISOString(),
     sourceMessageId: "triage-source",
@@ -2408,6 +2408,7 @@ test("encerra triagem técnica e mantém preço como intenção atual", async ()
     knownFieldKeys: ["device_model", "ssd_capacity_gb", "ram_capacity_gb"],
     pendingFieldKeys: ["component_interface"],
   };
+  let cachedTriageState = initialTriageState;
   const cacheWrites = [];
   const pricingFlow = {
     id: "flow-pricing-configured",
@@ -2479,7 +2480,20 @@ test("encerra triagem técnica e mantém preço como intenção atual", async ()
   assert.equal(manifest.finalSafeResponseCategory, "price");
   assert.equal(manifest.authorityCategorySource, "explicit_intent");
   assert.equal(manifest.triageFlowIncluded, false);
-  assert.deepEqual(cacheWrites.at(-1), null);
+  const resolvedTriageState = cacheWrites.at(-1);
+  assert.deepEqual(resolvedTriageState, {
+    ...initialTriageState,
+    active: false,
+    resolved: true,
+    requestedDetail: "",
+    requestedDetailKey: null,
+    lastQuestion: "",
+    pendingFieldKeys: [],
+    knownFieldKeys: [
+      ...initialTriageState.knownFieldKeys,
+      "unknown_component_interface",
+    ],
+  });
   assert.equal(calls.providerPayloads.length, 1);
   assert.equal(
     calls.providerPayloads[0].messages.at(-1).content,

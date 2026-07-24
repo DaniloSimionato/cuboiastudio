@@ -6,8 +6,18 @@ import {
 } from "../dist/assistant-conversations/assistant-conversations.service.js";
 
 function createSenderService() {
+  const currentConversation = {
+    ...createOutboundInput().conversation,
+    aiActive: true,
+    pausedByHuman: false,
+    currentContextVersion: 1,
+  };
   return new AssistantConversationsService(
-    {},
+    {
+      assistantConversation: {
+        findFirst: async () => currentConversation,
+      },
+    },
     {},
     {},
     {
@@ -27,6 +37,9 @@ function createOutboundInput() {
       externalAccountId: "account-test",
       externalConversationId: "conversation-external",
       externalInboxId: "inbox-test",
+      aiActive: true,
+      pausedByHuman: false,
+      currentContextVersion: 1,
     },
     assistantMessageId: "assistant-message-internal",
     assistantId: "assistant-test",
