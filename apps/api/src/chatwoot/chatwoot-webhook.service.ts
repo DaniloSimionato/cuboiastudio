@@ -220,6 +220,7 @@ export class ChatwootWebhookService {
       if (assistantSettings?.messageBufferEnabled && assistantSettings.messageBufferSeconds > 0) {
         const bufferedResult = await this.handleBufferedMessage({
           conversationId: conversation.id,
+          expectedContextVersion: conversation.currentContextVersion,
           assistantId,
           config,
           normalized,
@@ -240,6 +241,7 @@ export class ChatwootWebhookService {
       const response = await this.assistantConversationsService.sendMessage({
         assistantId,
         conversationId: conversation.id,
+        expectedContextVersion: conversation.currentContextVersion,
         dto: normalized.dto,
         user,
         tenant,
@@ -285,6 +287,7 @@ export class ChatwootWebhookService {
 
   private async handleBufferedMessage(input: {
     conversationId: string;
+    expectedContextVersion: number;
     assistantId: string;
     config: ResolvedChatwootInboxConfig;
     normalized: NormalizedChatwootMessage;
@@ -364,6 +367,7 @@ export class ChatwootWebhookService {
         await this.assistantConversationsService.sendMessage({
           assistantId: input.assistantId,
           conversationId: input.conversationId,
+          expectedContextVersion: input.expectedContextVersion,
           dto: combinedDto,
           user: input.user,
           tenant: input.tenant,

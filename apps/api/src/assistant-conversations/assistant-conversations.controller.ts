@@ -14,6 +14,7 @@ import { AnyFilesInterceptor } from "@nestjs/platform-express";
 import {
   ApiBadRequestResponse,
   ApiBody,
+  ApiConflictResponse,
   ApiCreatedResponse,
   ApiForbiddenResponse,
   ApiHeader,
@@ -32,11 +33,13 @@ import { PermissionsGuard } from "../auth/permissions.guard";
 import { Tenant } from "../auth/tenant.decorator";
 import {
   AssistantConversationsService,
+  type AdminSilentResetConversationResponse,
   type CreateAssistantConversationResponse,
   type FindAllAssistantConversationsResponse,
   type FindConversationMessagesResponse,
   type SendAssistantConversationMessageResponse,
 } from "./assistant-conversations.service";
+import { AdminSilentResetConversationDto } from "./dto/admin-silent-reset-conversation.dto";
 import { CreateAssistantConversationDto } from "./dto/create-assistant-conversation.dto";
 import { SendAssistantConversationMessageDto } from "./dto/send-assistant-conversation-message.dto";
 
@@ -898,6 +901,65 @@ export class AssistantConversationsController {
       conversationId,
       runAi: body.runAi ?? true,
       reason: body.reason,
+      tenant,
+    });
+  }
+
+  @Post(":conversationId/admin-context-reset")
+  @UseGuards(AuthGuard, PermissionsGuard)
+  @RequirePermissions("assistants:write", "settings:write")
+  @ApiOperation({
+    summary: "Silently reset one conversation context without processing or outbound",
+  })
+  @ApiParam({ name: "assistantId", required: true, example: "assistant_demo" })
+  @ApiParam({ name: "conversationId", required: true, example: "conv_demo" })
+  @ApiBody({ type: AdminSilentResetConversationDto })
+  @ApiOkResponse({
+    schema: {
+      type: "object",
+      properties: {
+        conversationId: { type: "string" },
+        previousContextVersion: { type: "integer" },
+        currentContextVersion: { type: "integer" },
+        aiActive: { type: "boolean" },
+        pausedByHuman: { type: "boolean" },
+        resetSource: { type: "string", example: "ADMIN_SILENT_CONTEXT_RESET" },
+        resetAt: { type: "string", format: "date-time" },
+      },
+      required: [
+        "conversationId",
+        "previousContextVersion",
+        "currentContextVersion",
+        "aiActive",
+        "pausedByHuman",
+        "resetSource",
+        "resetAt",
+      ],
+    },
+  })
+  @ApiUnauthorizedResponse({ description: "Authentication is required." })
+  @ApiForbiddenResponse({
+    description: "Administrative assistant and settings write permissions are required.",
+  })
+  @ApiNotFoundResponse({
+    description: "Conversation not found in the current assistant and tenant.",
+  })
+  @ApiConflictResponse({
+    description: "The expected context version no longer matches the conversation.",
+  })
+  adminSilentResetConversation(
+    @Param("assistantId") assistantId: string,
+    @Param("conversationId") conversationId: string,
+    @Body() dto: AdminSilentResetConversationDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Tenant() tenant: RequestTenant,
+  ): Promise<AdminSilentResetConversationResponse> {
+    return this.assistantConversationsService.adminSilentResetConversation({
+      assistantId,
+      conversationId,
+      expectedContextVersion: dto.expectedContextVersion,
+      resumeAfterReset: dto.resumeAfterReset,
+      actor: user,
       tenant,
     });
   }

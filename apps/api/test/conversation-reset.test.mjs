@@ -26,8 +26,12 @@ function createAuth(companyId) {
 
 async function cleanupResetTestData(prisma, companyIds) {
   await prisma.assistantRuntimeLog.deleteMany({ where: { companyId: { in: companyIds } } });
-  await prisma.assistantConversationSession.deleteMany({ where: { companyId: { in: companyIds } } });
-  await prisma.assistantConversationMessage.deleteMany({ where: { companyId: { in: companyIds } } });
+  await prisma.assistantConversationSession.deleteMany({
+    where: { companyId: { in: companyIds } },
+  });
+  await prisma.assistantConversationMessage.deleteMany({
+    where: { companyId: { in: companyIds } },
+  });
   await prisma.assistantConversation.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.contactMemoryItem.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.contactMemoryProfile.deleteMany({ where: { companyId: { in: companyIds } } });
@@ -39,6 +43,8 @@ function createResetService(prisma, input) {
   const outboundCalls = [];
   const aiCalls = [];
   const extractionCalls = [];
+  const cacheValues = input.cacheValues ?? new Map();
+  const cacheCalls = [];
 
   const service = new AssistantConversationsService(
     prisma,
@@ -88,6 +94,17 @@ function createResetService(prisma, input) {
       buildMemoryContextBlock: () => "",
       selectHybridMemoriesForPrompt: () => [],
     },
+    {
+      get: async (key) => cacheValues.get(key) ?? null,
+      set: async (key, value, ttlSeconds) => {
+        cacheCalls.push({ key, value, ttlSeconds });
+        if (value === null) {
+          cacheValues.delete(key);
+        } else {
+          cacheValues.set(key, value);
+        }
+      },
+    },
   );
 
   service.sendChatwootOutboundText = async (payload) => {
@@ -95,7 +112,7 @@ function createResetService(prisma, input) {
     return { status: "sent", performed: true, externalMessageId: null };
   };
 
-  return { service, outboundCalls, aiCalls, extractionCalls };
+  return { service, outboundCalls, aiCalls, extractionCalls, cacheValues, cacheCalls };
 }
 
 async function createResetFixture(prisma, input) {
@@ -231,6 +248,432 @@ async function createResetFixture(prisma, input) {
 
   return { profile };
 }
+
+test("Admin silent reset usa CAS, preserva auditoria e inicia o próximo turno sem histórico", async () => {
+  const prisma = new PrismaClient();
+  const companyId = `company_admin_reset_${randomUUID()}`;
+  const otherCompanyId = `company_admin_reset_other_${randomUUID()}`;
+  const assistantId = `assistant_admin_reset_${randomUUID()}`;
+  const conversationPausedId = `conversation_admin_reset_paused_${randomUUID()}`;
+  const conversationResumedId = `conversation_admin_reset_resumed_${randomUUID()}`;
+  const conversationConcurrentId = `conversation_admin_reset_concurrent_${randomUUID()}`;
+  const profileId = `profile_admin_reset_${randomUUID()}`;
+  const profilePhone = "5567999997777";
+  const auth = createAuth(companyId);
+
+  try {
+    const { profile } = await createResetFixture(prisma, {
+      companyId,
+      otherCompanyId,
+      assistantId,
+      conversationId: conversationPausedId,
+      profileId,
+      profilePhone,
+      preserveMemories: true,
+      sharedAcrossAssistants: true,
+    });
+
+    await prisma.assistantConversation.update({
+      where: { id: conversationPausedId },
+      data: { aiActive: false, pausedByHuman: true },
+    });
+    await prisma.assistantConversation.create({
+      data: {
+        id: conversationResumedId,
+        companyId,
+        assistantId,
+        title: "Admin reset resumed",
+        source: "CHATWOOT",
+        channelType: "WHATSAPP",
+        externalConversationId: `ext-${conversationResumedId}`,
+        externalAccountId: `account-${companyId}`,
+        externalContactId: `contact-${companyId}`,
+        externalInboxId: `inbox-${companyId}`,
+        currentContextVersion: 1,
+        aiActive: false,
+        pausedByHuman: true,
+      },
+    });
+    await prisma.assistantConversationSession.create({
+      data: {
+        companyId,
+        assistantId,
+        conversationId: conversationResumedId,
+        contextVersion: 1,
+        status: "ACTIVE",
+      },
+    });
+    await prisma.assistantConversation.create({
+      data: {
+        id: conversationConcurrentId,
+        companyId,
+        assistantId,
+        title: "Admin reset concurrent",
+        source: "CHATWOOT",
+        channelType: "WHATSAPP",
+        externalConversationId: `ext-${conversationConcurrentId}`,
+        externalAccountId: `account-${companyId}`,
+        externalContactId: `contact-concurrent-${companyId}`,
+        externalInboxId: `inbox-${companyId}`,
+        currentContextVersion: 1,
+        aiActive: false,
+        pausedByHuman: true,
+      },
+    });
+    await prisma.assistantConversationSession.create({
+      data: {
+        companyId,
+        assistantId,
+        conversationId: conversationConcurrentId,
+        contextVersion: 1,
+        status: "ACTIVE",
+      },
+    });
+    await prisma.assistantConversationMessage.createMany({
+      data: [
+        {
+          companyId,
+          assistantId,
+          conversationId: conversationPausedId,
+          role: "user",
+          content: "Histórico pausado preservado",
+          contextVersion: 1,
+          source: "tests",
+        },
+        {
+          companyId,
+          assistantId,
+          conversationId: conversationResumedId,
+          role: "user",
+          content: "Mensagem antiga que não pode entrar no novo prompt",
+          contextVersion: 1,
+          source: "tests",
+        },
+        {
+          companyId,
+          assistantId,
+          conversationId: conversationResumedId,
+          role: "assistant",
+          content: "Resposta antiga que também deve ficar isolada",
+          contextVersion: 1,
+          source: "tests",
+        },
+      ],
+    });
+    await prisma.contactMemoryItem.createMany({
+      data: [
+        {
+          companyId,
+          profileId,
+          category: "TEMPORARY_CONTEXT",
+          key: "admin_reset_temporary",
+          value: "Estado transitório",
+          sourceConversationId: conversationResumedId,
+        },
+        {
+          companyId,
+          profileId,
+          category: "PREFERENCE",
+          key: "admin_reset_permanent",
+          value: "Memória permanente",
+        },
+      ],
+    });
+
+    const cacheValues = new Map([
+      [
+        `triage:${companyId}:${conversationPausedId}:v1`,
+        {
+          active: true,
+          startedAt: new Date().toISOString(),
+          sourceMessageId: "old-paused",
+          requestedDetail: "modelo",
+          attemptCount: 1,
+          resolved: false,
+          expiresAt: Date.now() + 60_000,
+        },
+      ],
+      [
+        `triage:${companyId}:${conversationResumedId}:v1`,
+        {
+          active: true,
+          startedAt: new Date().toISOString(),
+          sourceMessageId: "old-resumed",
+          requestedDetail: "modelo",
+          attemptCount: 1,
+          resolved: false,
+          expiresAt: Date.now() + 60_000,
+        },
+      ],
+    ]);
+    const { service, aiCalls, outboundCalls, cacheCalls } = createResetService(prisma, {
+      profile,
+      cacheValues,
+      answer: "Resposta da nova sessão lógica",
+    });
+    const actor = { id: auth.user.id, email: auth.user.email };
+
+    const pausedMessageCountBefore = await prisma.assistantConversationMessage.count({
+      where: { conversationId: conversationPausedId },
+    });
+    const pausedReset = await service.adminSilentResetConversation({
+      assistantId,
+      conversationId: conversationPausedId,
+      expectedContextVersion: 1,
+      resumeAfterReset: false,
+      actor,
+      tenant: auth.tenant,
+    });
+
+    assert.equal(pausedReset.previousContextVersion, 1);
+    assert.equal(pausedReset.currentContextVersion, 2);
+    assert.equal(pausedReset.aiActive, false);
+    assert.equal(pausedReset.pausedByHuman, true);
+    assert.equal(aiCalls.length, 0);
+    assert.equal(outboundCalls.length, 0);
+    assert.equal(
+      await prisma.assistantConversationMessage.count({
+        where: { conversationId: conversationPausedId },
+      }),
+      pausedMessageCountBefore,
+    );
+    assert.equal(
+      await prisma.assistantConversationMessage.count({
+        where: {
+          conversationId: conversationPausedId,
+          mode: { in: ["reset-request", "reset-reply"] },
+        },
+      }),
+      0,
+    );
+    assert.ok(
+      cacheCalls.some(
+        (call) =>
+          call.key === `triage:${companyId}:${conversationPausedId}:v1` && call.value === null,
+      ),
+    );
+
+    const pausedInbound = await service.sendMessage({
+      assistantId,
+      conversationId: conversationPausedId,
+      expectedContextVersion: 2,
+      dto: { message: "Mensagem normal ainda bloqueada", source: "tests" },
+      ...auth,
+    });
+    assert.equal(pausedInbound.runtime.outcome, "skipped");
+    assert.equal(pausedInbound.runtime.reason, "paused_by_human");
+    assert.equal(aiCalls.length, 0);
+    assert.equal(outboundCalls.length, 0);
+
+    const resumedMessageCountBefore = await prisma.assistantConversationMessage.count({
+      where: { conversationId: conversationResumedId },
+    });
+    const resumedReset = await service.adminSilentResetConversation({
+      assistantId,
+      conversationId: conversationResumedId,
+      expectedContextVersion: 1,
+      resumeAfterReset: true,
+      actor,
+      tenant: auth.tenant,
+    });
+
+    assert.equal(resumedReset.currentContextVersion, 2);
+    assert.equal(resumedReset.aiActive, true);
+    assert.equal(resumedReset.pausedByHuman, false);
+    assert.equal(aiCalls.length, 0);
+    assert.equal(outboundCalls.length, 0);
+    assert.equal(
+      await prisma.assistantConversationMessage.count({
+        where: { conversationId: conversationResumedId },
+      }),
+      resumedMessageCountBefore,
+    );
+    assert.equal(
+      await prisma.assistantConversationMessage.count({
+        where: {
+          conversationId: conversationResumedId,
+          mode: { in: ["reset-request", "reset-reply"] },
+        },
+      }),
+      0,
+    );
+
+    await assert.rejects(
+      service.sendMessage({
+        assistantId,
+        conversationId: conversationResumedId,
+        expectedContextVersion: 1,
+        dto: { message: "Job criado antes do reset", source: "tests" },
+        ...auth,
+      }),
+      /stale conversation context/i,
+    );
+    assert.equal(aiCalls.length, 0);
+    assert.equal(outboundCalls.length, 0);
+
+    const nextTurn = await service.sendMessage({
+      assistantId,
+      conversationId: conversationResumedId,
+      expectedContextVersion: 2,
+      dto: { message: "Primeira mensagem da nova sessão", source: "tests" },
+      ...auth,
+    });
+    assert.equal(nextTurn.runtime.outcome, "success");
+    assert.equal(aiCalls.length, 1);
+    assert.equal(outboundCalls.length, 0);
+    const nextPrompt = aiCalls[0].messages
+      .map((message) => (typeof message.content === "string" ? message.content : ""))
+      .join("\n");
+    assert.match(nextPrompt, /Primeira mensagem da nova sessão/);
+    assert.doesNotMatch(nextPrompt, /Mensagem antiga que não pode entrar/);
+    assert.doesNotMatch(nextPrompt, /Resposta antiga que também deve ficar isolada/);
+    assert.doesNotMatch(nextPrompt, /Atendimento reiniciado/);
+
+    const remainingMemories = await prisma.contactMemoryItem.findMany({
+      where: { companyId, profileId },
+      orderBy: { key: "asc" },
+    });
+    assert.deepEqual(
+      remainingMemories.map((memory) => memory.key),
+      ["admin_reset_permanent"],
+    );
+
+    const auditLogs = await prisma.assistantRuntimeLog.findMany({
+      where: {
+        companyId,
+        assistantId,
+        conversationId: { in: [conversationPausedId, conversationResumedId] },
+        mode: "admin-silent-context-reset",
+      },
+    });
+    assert.equal(auditLogs.length, 2);
+    assert.ok(
+      auditLogs.every(
+        (log) =>
+          log.metadata.event === "ADMIN_SILENT_CONTEXT_RESET" &&
+          log.metadata.providerCalled === false &&
+          log.metadata.outboundAttempted === false &&
+          log.metadata.resetReplyCreated === false,
+      ),
+    );
+
+    const beforeCasFailure = await prisma.assistantConversation.findUnique({
+      where: { id: conversationResumedId },
+    });
+    const sessionsBeforeCasFailure = await prisma.assistantConversationSession.count({
+      where: { conversationId: conversationResumedId },
+    });
+    const logsBeforeCasFailure = await prisma.assistantRuntimeLog.count({
+      where: {
+        conversationId: conversationResumedId,
+        mode: "admin-silent-context-reset",
+      },
+    });
+    await assert.rejects(
+      service.adminSilentResetConversation({
+        assistantId,
+        conversationId: conversationResumedId,
+        expectedContextVersion: 1,
+        resumeAfterReset: false,
+        actor,
+        tenant: auth.tenant,
+      }),
+      /does not match expected version/i,
+    );
+    const afterCasFailure = await prisma.assistantConversation.findUnique({
+      where: { id: conversationResumedId },
+    });
+    assert.equal(afterCasFailure.currentContextVersion, beforeCasFailure.currentContextVersion);
+    assert.equal(afterCasFailure.aiActive, beforeCasFailure.aiActive);
+    assert.equal(afterCasFailure.pausedByHuman, beforeCasFailure.pausedByHuman);
+    assert.equal(
+      await prisma.assistantConversationSession.count({
+        where: { conversationId: conversationResumedId },
+      }),
+      sessionsBeforeCasFailure,
+    );
+    assert.equal(
+      await prisma.assistantRuntimeLog.count({
+        where: {
+          conversationId: conversationResumedId,
+          mode: "admin-silent-context-reset",
+        },
+      }),
+      logsBeforeCasFailure,
+    );
+
+    const foreignTenant = createAuth(otherCompanyId);
+    await assert.rejects(
+      service.adminSilentResetConversation({
+        assistantId,
+        conversationId: conversationResumedId,
+        expectedContextVersion: 2,
+        resumeAfterReset: false,
+        actor: { id: foreignTenant.user.id, email: foreignTenant.user.email },
+        tenant: foreignTenant.tenant,
+      }),
+      /conversation not found/i,
+    );
+    assert.equal(
+      (
+        await prisma.assistantConversation.findUnique({
+          where: { id: conversationResumedId },
+        })
+      ).currentContextVersion,
+      2,
+    );
+
+    const concurrentResults = await Promise.allSettled([
+      service.adminSilentResetConversation({
+        assistantId,
+        conversationId: conversationConcurrentId,
+        expectedContextVersion: 1,
+        resumeAfterReset: false,
+        actor,
+        tenant: auth.tenant,
+      }),
+      service.adminSilentResetConversation({
+        assistantId,
+        conversationId: conversationConcurrentId,
+        expectedContextVersion: 1,
+        resumeAfterReset: false,
+        actor,
+        tenant: auth.tenant,
+      }),
+    ]);
+    assert.equal(concurrentResults.filter((result) => result.status === "fulfilled").length, 1);
+    assert.equal(
+      concurrentResults.filter(
+        (result) =>
+          result.status === "rejected" &&
+          /context version (?:changed before reset|does not match expected version)/i.test(
+            result.reason?.message ?? "",
+          ),
+      ).length,
+      1,
+    );
+    assert.equal(
+      (
+        await prisma.assistantConversation.findUnique({
+          where: { id: conversationConcurrentId },
+        })
+      ).currentContextVersion,
+      2,
+    );
+    assert.equal(
+      await prisma.assistantRuntimeLog.count({
+        where: {
+          conversationId: conversationConcurrentId,
+          mode: "admin-silent-context-reset",
+        },
+      }),
+      1,
+    );
+  } finally {
+    await cleanupResetTestData(prisma, [companyId, otherCompanyId]);
+    await prisma.$disconnect();
+  }
+});
 
 test("Integration: Session Reset preserva memória durável, limpa só contexto temporário da conversa e abre novo contexto", async () => {
   const prisma = new PrismaClient();
@@ -376,7 +819,9 @@ test("Integration: Session Reset preserva memória durável, limpa só contexto 
     assert.equal(resetResult.assistantMessage.contextVersion, 2);
     assert.equal(outboundCalls.length, 1);
     assert.equal(outboundCalls[0].content, resetResult.assistantMessage.content);
-    assert.ok(resetResult.assistantMessage.content.includes("🔄 Atendimento reiniciado com sucesso."));
+    assert.ok(
+      resetResult.assistantMessage.content.includes("🔄 Atendimento reiniciado com sucesso."),
+    );
     assert.ok(resetResult.assistantMessage.content.includes("Olá! Como posso te ajudar hoje?"));
     assert.equal(extractionCalls.length, 1);
 

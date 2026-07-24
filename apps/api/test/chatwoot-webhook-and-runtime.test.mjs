@@ -3249,6 +3249,75 @@ test("sender reconsulta o estado e bloqueia outbound após pausa", async () => {
   }
 });
 
+test("sender bloqueia outbound produzido por contexto anterior ao reset administrativo", async () => {
+  const { service, prisma } = createAssistantServiceDeps({
+    conversation: { aiActive: true, pausedByHuman: false },
+  });
+  prisma.assistantConversation.findFirst = async () => ({
+    id: "conversation-1",
+    companyId: "company-1",
+    assistantId: "assistant-1",
+    title: "Conversa WhatsApp",
+    source: "CHATWOOT",
+    channelType: "WHATSAPP",
+    sourceProvider: "chatwoot",
+    externalAccountId: "account-1",
+    externalConversationId: "conversation-1",
+    externalContactId: "contact-1",
+    externalChannelId: "inbox-1",
+    externalInboxId: "inbox-1",
+    aiActive: true,
+    pausedByHuman: false,
+    lastMessageAt: new Date(),
+    status: "ACTIVE",
+    currentContextVersion: 2,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("sender should not call Chatwoot for a stale context");
+  };
+
+  try {
+    const result = await service.sendChatwootOutboundText({
+      conversation: {
+        id: "conversation-1",
+        companyId: "company-1",
+        assistantId: "assistant-1",
+        title: "Conversa WhatsApp",
+        source: "CHATWOOT",
+        channelType: "WHATSAPP",
+        sourceProvider: "chatwoot",
+        externalAccountId: "account-1",
+        externalConversationId: "conversation-1",
+        externalContactId: "contact-1",
+        externalChannelId: "inbox-1",
+        externalInboxId: "inbox-1",
+        aiActive: true,
+        pausedByHuman: false,
+        lastMessageAt: new Date(),
+        status: "ACTIVE",
+        currentContextVersion: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      assistantMessageId: "assistant-msg-before-reset",
+      assistantId: "assistant-1",
+      content: "Resposta de contexto obsoleto",
+    });
+
+    assert.equal(result.status, "skipped");
+    assert.equal(result.blocked, true);
+    assert.equal(result.blockReason, "stale_context");
+    assert.equal(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("conversa ativa executa provider e outbound normalmente", async () => {
   const { service, calls } = createAssistantServiceDeps({
     conversation: { aiActive: true, pausedByHuman: false },

@@ -191,6 +191,16 @@ export type FindAllAssistantConversationsResponse = {
 
 export type CreateAssistantConversationResponse = AssistantConversationListItem;
 
+export type AdminSilentResetConversationResponse = {
+  conversationId: string;
+  previousContextVersion: number;
+  currentContextVersion: number;
+  aiActive: boolean;
+  pausedByHuman: boolean;
+  resetSource: "ADMIN_SILENT_CONTEXT_RESET";
+  resetAt: Date;
+};
+
 export type AssistantConversationMessageItem = {
   id: string;
   role: "user" | "assistant";
@@ -217,7 +227,7 @@ type ChatwootOutboundResult = {
   blockReason?: ConversationProcessingSkipReason;
 };
 
-type ConversationProcessingSkipReason = "paused_by_human" | "ai_inactive";
+type ConversationProcessingSkipReason = "paused_by_human" | "ai_inactive" | "stale_context";
 
 export function normalizeChatwootExternalMessageId(responseBody: string): string | null {
   const trimmed = responseBody.trim();
@@ -697,6 +707,15 @@ const calendarScopeBookingSelect = {
 const MAX_RUNTIME_HISTORY_MESSAGES = 24;
 const MAX_RUNTIME_LOG_PROVIDER_ERROR_MESSAGE_LENGTH = 500;
 const DEFAULT_MANUAL_TEST_TITLE_PREFIX = "Teste manual";
+const ADMIN_SILENT_CONTEXT_RESET_SOURCE = "ADMIN_SILENT_CONTEXT_RESET" as const;
+
+function conversationTriageCacheKey(input: {
+  companyId: string;
+  conversationId: string;
+  contextVersion: number;
+}): string {
+  return `triage:${input.companyId}:${input.conversationId}:v${input.contextVersion}`;
+}
 
 type RuntimeLogProviderErrorFields = {
   providerStatus?: number;
@@ -1570,7 +1589,10 @@ export class AssistantConversationsService {
   }
 
   private logConversationProcessingGate(input: {
-    event: "assistant_conversation_processing_skipped" | "outbound_blocked_after_pause";
+    event:
+      | "assistant_conversation_processing_skipped"
+      | "outbound_blocked_after_pause"
+      | "outbound_blocked_after_context_reset";
     stageWhereBlocked: "before_processing" | "before_outbound";
     conversation: AssistantConversationSafeRecord;
     assistantId: string;
@@ -2194,10 +2216,16 @@ export class AssistantConversationsService {
       conversationId: input.conversation.id,
       companyId: input.conversation.companyId,
     });
-    const skipReason = this.resolveConversationProcessingSkipReason(currentConversation);
+    const skipReason =
+      currentConversation.currentContextVersion !== input.conversation.currentContextVersion
+        ? "stale_context"
+        : this.resolveConversationProcessingSkipReason(currentConversation);
     if (skipReason) {
       this.logConversationProcessingGate({
-        event: "outbound_blocked_after_pause",
+        event:
+          skipReason === "stale_context"
+            ? "outbound_blocked_after_context_reset"
+            : "outbound_blocked_after_pause",
         stageWhereBlocked: "before_outbound",
         conversation: currentConversation,
         assistantId: input.assistantId,
@@ -2531,6 +2559,308 @@ export class AssistantConversationsService {
     };
   }
 
+  private async applyConversationContextReset(input: {
+    tx: Prisma.TransactionClient;
+    conversation: {
+      id: string;
+      companyId: string;
+      assistantId: string;
+      externalConversationId: string | null;
+      externalAccountId: string | null;
+      externalContactId: string | null;
+      externalInboxId: string | null;
+      currentContextVersion: number;
+    };
+    expectedContextVersion: number;
+    resumeAfterReset: boolean;
+    resetAt: Date;
+    actor: Pick<AuthenticatedUser, "id">;
+  }): Promise<AdminSilentResetConversationResponse> {
+    const nextContextVersion = input.expectedContextVersion + 1;
+    const updated = await input.tx.assistantConversation.updateMany({
+      where: {
+        id: input.conversation.id,
+        companyId: input.conversation.companyId,
+        assistantId: input.conversation.assistantId,
+        currentContextVersion: input.expectedContextVersion,
+      },
+      data: {
+        currentContextVersion: { increment: 1 },
+        ...(input.resumeAfterReset
+          ? {
+              aiActive: true,
+              pausedByHuman: false,
+              lastAiActiveAt: input.resetAt,
+              resumeReason: ADMIN_SILENT_CONTEXT_RESET_SOURCE,
+            }
+          : {}),
+      },
+    });
+
+    if (updated.count !== 1) {
+      throw new ConflictException("Conversation context version changed before reset.");
+    }
+
+    const endedSessions = await input.tx.assistantConversationSession.updateMany({
+      where: {
+        companyId: input.conversation.companyId,
+        assistantId: input.conversation.assistantId,
+        conversationId: input.conversation.id,
+        contextVersion: input.expectedContextVersion,
+        status: "ACTIVE",
+      },
+      data: {
+        status: "RESET",
+        endedAt: input.resetAt,
+        resetReason: ADMIN_SILENT_CONTEXT_RESET_SOURCE,
+        memoryExtractionStatus: "COMPLETED",
+      },
+    });
+
+    if (endedSessions.count === 0) {
+      await input.tx.assistantConversationSession.create({
+        data: {
+          companyId: input.conversation.companyId,
+          assistantId: input.conversation.assistantId,
+          conversationId: input.conversation.id,
+          contextVersion: input.expectedContextVersion,
+          status: "RESET",
+          startedAt: input.resetAt,
+          endedAt: input.resetAt,
+          resetReason: ADMIN_SILENT_CONTEXT_RESET_SOURCE,
+          memoryExtractionStatus: "COMPLETED",
+        },
+      });
+    }
+
+    await input.tx.assistantConversationSession.create({
+      data: {
+        companyId: input.conversation.companyId,
+        assistantId: input.conversation.assistantId,
+        conversationId: input.conversation.id,
+        contextVersion: nextContextVersion,
+        status: "ACTIVE",
+        startedAt: input.resetAt,
+        memoryExtractionStatus: "COMPLETED",
+      },
+    });
+
+    await input.tx.assistantConversationStateV2Event.updateMany({
+      where: {
+        companyId: input.conversation.companyId,
+        assistantId: input.conversation.assistantId,
+        conversationId: input.conversation.id,
+        contextVersion: input.expectedContextVersion,
+        status: "PROCESSING",
+      },
+      data: {
+        status: "STALE_CONTEXT",
+        processedAt: input.resetAt,
+        errorCode: ADMIN_SILENT_CONTEXT_RESET_SOURCE,
+      },
+    });
+
+    const profileSelectors = [
+      input.conversation.externalContactId
+        ? { externalContactId: input.conversation.externalContactId }
+        : null,
+      input.conversation.externalContactId
+        ? { chatwootContactId: input.conversation.externalContactId }
+        : null,
+    ].filter(
+      (selector): selector is { externalContactId: string } | { chatwootContactId: string } =>
+        selector !== null,
+    );
+    const profileIds =
+      profileSelectors.length > 0
+        ? (
+            await input.tx.contactMemoryProfile.findMany({
+              where: {
+                companyId: input.conversation.companyId,
+                OR: profileSelectors,
+              },
+              select: { id: true },
+            })
+          ).map((profile) => profile.id)
+        : [];
+
+    await input.tx.contactMemoryItem.deleteMany({
+      where: {
+        companyId: input.conversation.companyId,
+        category: "TEMPORARY_CONTEXT",
+        OR: [
+          { sourceConversationId: input.conversation.id },
+          ...(profileIds.length > 0
+            ? [{ profileId: { in: profileIds }, sourceConversationId: null }]
+            : []),
+        ],
+      },
+    });
+
+    await input.tx.assistantRuntimeLog.create({
+      data: {
+        companyId: input.conversation.companyId,
+        assistantId: input.conversation.assistantId,
+        conversationId: input.conversation.id,
+        mode: "admin-silent-context-reset",
+        status: "COMPLETED",
+        provider: null,
+        model: null,
+        configurationSource: "admin-api",
+        fallback: false,
+        outcome: "success",
+        historyMessagesUsed: 0,
+        initialMessageIncluded: false,
+        instructionsIncluded: false,
+        metadata: this.toSerializableJsonValue({
+          event: ADMIN_SILENT_CONTEXT_RESET_SOURCE,
+          companyId: input.conversation.companyId,
+          assistantId: input.conversation.assistantId,
+          conversationId: input.conversation.id,
+          externalConversationId: input.conversation.externalConversationId,
+          previousContextVersion: input.expectedContextVersion,
+          currentContextVersion: nextContextVersion,
+          resumeAfterReset: input.resumeAfterReset,
+          actorId: input.actor.id,
+          resetAt: input.resetAt.toISOString(),
+          providerCalled: false,
+          outboundAttempted: false,
+          resetReplyCreated: false,
+        }),
+      },
+    });
+
+    const result = await input.tx.assistantConversation.findFirst({
+      where: {
+        id: input.conversation.id,
+        companyId: input.conversation.companyId,
+        assistantId: input.conversation.assistantId,
+        currentContextVersion: nextContextVersion,
+      },
+      select: {
+        id: true,
+        currentContextVersion: true,
+        aiActive: true,
+        pausedByHuman: true,
+      },
+    });
+    if (!result) {
+      throw new ConflictException("Conversation reset could not be confirmed.");
+    }
+
+    return {
+      conversationId: result.id,
+      previousContextVersion: input.expectedContextVersion,
+      currentContextVersion: result.currentContextVersion,
+      aiActive: result.aiActive,
+      pausedByHuman: result.pausedByHuman,
+      resetSource: ADMIN_SILENT_CONTEXT_RESET_SOURCE,
+      resetAt: input.resetAt,
+    };
+  }
+
+  public async adminSilentResetConversation(input: {
+    assistantId: string;
+    conversationId: string;
+    expectedContextVersion: number;
+    resumeAfterReset: boolean;
+    actor: Pick<AuthenticatedUser, "id">;
+    tenant: RequestTenant;
+  }): Promise<AdminSilentResetConversationResponse> {
+    const conversation = await this.prisma.assistantConversation.findFirst({
+      where: {
+        id: input.conversationId,
+        companyId: input.tenant.companyId,
+        assistantId: input.assistantId,
+      },
+      select: {
+        id: true,
+        companyId: true,
+        assistantId: true,
+        externalConversationId: true,
+        externalAccountId: true,
+        externalContactId: true,
+        externalInboxId: true,
+        currentContextVersion: true,
+      },
+    });
+
+    if (!conversation) {
+      throw new NotFoundException("Conversation not found.");
+    }
+    if (conversation.currentContextVersion !== input.expectedContextVersion) {
+      throw new ConflictException("Conversation context version does not match expected version.");
+    }
+
+    const resetAt = new Date();
+    let response: AdminSilentResetConversationResponse;
+    try {
+      response = await this.prisma.$transaction(
+        (tx) =>
+          this.applyConversationContextReset({
+            tx,
+            conversation,
+            expectedContextVersion: input.expectedContextVersion,
+            resumeAfterReset: input.resumeAfterReset,
+            resetAt,
+            actor: input.actor,
+          }),
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (
+        error instanceof ConflictException ||
+        (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034")
+      ) {
+        throw new ConflictException("Conversation context version changed before reset.");
+      }
+      throw error;
+    }
+
+    if (this.cacheService) {
+      const currentTriageCacheKey = conversationTriageCacheKey({
+        companyId: conversation.companyId,
+        conversationId: conversation.id,
+        contextVersion: input.expectedContextVersion,
+      });
+      try {
+        await this.cacheService.set(currentTriageCacheKey, null, 1);
+        if (input.expectedContextVersion === 1) {
+          await this.cacheService.set(
+            `triage:${conversation.companyId}:${conversation.id}`,
+            null,
+            1,
+          );
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to clear stale triage cache after administrative reset: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    this.logger.log(
+      JSON.stringify({
+        event: ADMIN_SILENT_CONTEXT_RESET_SOURCE,
+        companyId: conversation.companyId,
+        assistantId: conversation.assistantId,
+        conversationId: conversation.id,
+        externalConversationId: conversation.externalConversationId,
+        previousContextVersion: input.expectedContextVersion,
+        currentContextVersion: response.currentContextVersion,
+        resumeAfterReset: input.resumeAfterReset,
+        actorId: input.actor.id,
+        resetAt: resetAt.toISOString(),
+        providerCalled: false,
+        outboundAttempted: false,
+      }),
+    );
+
+    return response;
+  }
+
   private async checkAndExecuteReset(input: {
     assistant: AssistantConversationRuntimeAssistantRecord;
     conversation: AssistantConversationSafeRecord;
@@ -2744,9 +3074,20 @@ export class AssistantConversationsService {
 
     // Limpar triage state do cache no reset de conversa
     if (this.cacheService) {
-      const triageCacheKey = `triage:${input.tenant.companyId}:${input.conversation.id}`;
+      const triageCacheKey = conversationTriageCacheKey({
+        companyId: input.tenant.companyId,
+        conversationId: input.conversation.id,
+        contextVersion: currentVersion,
+      });
       try {
         await this.cacheService.set(triageCacheKey, null, 1);
+        if (currentVersion === 1) {
+          await this.cacheService.set(
+            `triage:${input.tenant.companyId}:${input.conversation.id}`,
+            null,
+            1,
+          );
+        }
       } catch (err: any) {
         this.logger.warn(`Failed to clear triage cache on reset: ${err.message}`);
       }
@@ -2874,6 +3215,7 @@ export class AssistantConversationsService {
     requestId?: string | null;
     correlationId?: string | null;
     preparedAttachments?: InboundAttachmentRecord[];
+    expectedContextVersion?: number;
   }): Promise<SendAssistantConversationMessageResponse> {
     const runtimeStartedAt = Date.now();
     const assistant = await this.resolveRuntimeAssistantOrThrow({
@@ -2913,6 +3255,25 @@ export class AssistantConversationsService {
       conversationId: conversation.id,
       companyId: input.tenant.companyId,
     });
+    if (
+      input.expectedContextVersion !== undefined &&
+      conversation.currentContextVersion !== input.expectedContextVersion
+    ) {
+      this.logger.warn(
+        JSON.stringify({
+          event: "assistant_conversation_stale_buffer_skipped",
+          companyId: input.tenant.companyId,
+          assistantId: input.assistantId,
+          conversationId: conversation.id,
+          expectedContextVersion: input.expectedContextVersion,
+          currentContextVersion: conversation.currentContextVersion,
+          externalMessageId: input.dto.externalMessageId ?? null,
+          providerCalled: false,
+          outboundAttempted: false,
+        }),
+      );
+      throw new ConflictException("Buffered message belongs to a stale conversation context.");
+    }
     const processingSkipReason = this.resolveConversationProcessingSkipReason(conversation);
     if (processingSkipReason) {
       return this.buildConversationProcessingSkippedResponse({
@@ -3429,12 +3790,22 @@ export class AssistantConversationsService {
     const customerRequestedHuman = humanHandoffSignal.requested;
     const triagePreemptionReason = getTriagePreemptionReason(customerIntentText);
     const isExplicitPriceQuery = triagePreemptionReason === "PRICE_OR_QUOTE";
-    const triageCacheKey = `triage:${input.tenant.companyId}:${conversation.id}`;
+    const currentContextVersion = conversation.currentContextVersion ?? 1;
+    const triageCacheKey = conversationTriageCacheKey({
+      companyId: input.tenant.companyId,
+      conversationId: conversation.id,
+      contextVersion: currentContextVersion,
+    });
     let loadedTriageState: TriageState | null = null;
 
     if (this.cacheService) {
       try {
         loadedTriageState = await this.cacheService.get<TriageState>(triageCacheKey);
+        if (!loadedTriageState && currentContextVersion === 1) {
+          loadedTriageState = await this.cacheService.get<TriageState>(
+            `triage:${input.tenant.companyId}:${conversation.id}`,
+          );
+        }
       } catch (err: any) {
         this.logger.warn(`Failed to read triage state cache: ${err.message}`);
       }
