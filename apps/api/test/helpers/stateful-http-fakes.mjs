@@ -184,7 +184,7 @@ export async function createStatefulChatwootFake() {
 
     const configured = consumeBehavior(behaviorQueue, record);
     if (
-      configured?.kind !== "accepted_timeout" &&
+      !["accepted_timeout", "accepted_5xx"].includes(configured?.kind) &&
       applyConfiguredBehavior({ behavior: configured, record, response, timers })
     ) {
       return;
@@ -245,6 +245,13 @@ export async function createStatefulChatwootFake() {
         direction: "outbound",
       };
       conversation.messages.push(outbound);
+      if (configured?.kind === "accepted_5xx") {
+        const status = configured.status ?? 503;
+        const responseBody = configured.body ?? { error: "accepted_then_failed" };
+        record.response = { kind: "accepted_5xx", status, body: responseBody };
+        writeJson(response, status, responseBody);
+        return;
+      }
       if (configured?.kind === "accepted_timeout") {
         const timeoutMs = configured.timeoutMs ?? 100;
         record.response = { kind: "accepted_timeout", timeoutMs };

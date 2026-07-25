@@ -7,7 +7,11 @@ import {
   type ConversationControlSnapshot,
   type ConversationControlTrace,
 } from "./conversation-control-snapshot";
-import type { OutboundDeliveryStatus } from "./outbound-delivery";
+import type {
+  OutboundDeliveryStatus,
+  OutboundRecoveryEligibility,
+  OutboundRetrySafety,
+} from "./outbound-delivery";
 
 export const TURN_EXECUTION_MANIFEST_VERSION = "TURN_EXECUTION_MANIFEST_V1";
 export const V1_COMPATIBILITY_POLICY = "V1_COMPATIBILITY_POLICY";
@@ -156,12 +160,32 @@ export type TurnExecutionOutboundDeliveryReference = {
   expectedContextVersion: number;
   expectedControlRevision: number;
   status: OutboundDeliveryStatus;
+  retrySafety?: OutboundRetrySafety;
   attemptCount: number;
+  maxAttempts?: number;
   attemptedAt: string | null;
+  claimStartedAt?: string | null;
+  claimExpiresAt?: string | null;
+  nextEligibleAt?: string | null;
   acknowledgedAt: string | null;
   externalMessageId: string | null;
   errorClass: string | null;
   errorCode: string | null;
+  recovery?: {
+    schemaVersion: string;
+    attemptSchemaVersion: string;
+    attemptNumber: number;
+    leaseOwner: string | null;
+    leaseStartedAt: string | null;
+    leaseExpiresAt: string | null;
+    retrySafety: OutboundRetrySafety;
+    eligibility: OutboundRecoveryEligibility;
+    nextEligibleAt: string | null;
+    reconciliationStatus: string | null;
+    reconciliationEvidenceType: string | null;
+    result: string;
+    blockingReason: string | null;
+  };
 };
 
 function canonicalString(input: TurnExecutionIdentityInput): string {

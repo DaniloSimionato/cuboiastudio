@@ -169,7 +169,9 @@ function assertAcknowledgedDelivery(delivery, manifest, externalMessageId) {
   assert.match(delivery.payloadHash, /^sha256:[a-f0-9]{64}$/);
   assert.ok(delivery.payloadSize > 0);
   assert.equal(delivery.status, "ACKNOWLEDGED");
+  assert.equal(delivery.retrySafety, "NOT_RETRYABLE");
   assert.equal(delivery.attemptCount, 1);
+  assert.equal(delivery.maxAttempts, 3);
   assert.equal(delivery.attemptOwner, null);
   assert.ok(delivery.attemptedAt);
   assert.ok(delivery.acknowledgedAt);
@@ -187,12 +189,32 @@ function assertAcknowledgedDelivery(delivery, manifest, externalMessageId) {
     expectedContextVersion: delivery.expectedContextVersion,
     expectedControlRevision: delivery.expectedControlRevision,
     status: "ACKNOWLEDGED",
+    retrySafety: "NOT_RETRYABLE",
     attemptCount: 1,
+    maxAttempts: 3,
     attemptedAt: delivery.attemptedAt.toISOString(),
+    claimStartedAt: null,
+    claimExpiresAt: null,
+    nextEligibleAt: null,
     acknowledgedAt: delivery.acknowledgedAt.toISOString(),
     externalMessageId,
     errorClass: null,
     errorCode: null,
+    recovery: {
+      schemaVersion: "ASSISTANT_OUTBOUND_RECOVERY_V1",
+      attemptSchemaVersion: "ASSISTANT_OUTBOUND_ATTEMPT_V1",
+      attemptNumber: 1,
+      leaseOwner: null,
+      leaseStartedAt: null,
+      leaseExpiresAt: null,
+      retrySafety: "NOT_RETRYABLE",
+      eligibility: "TERMINAL",
+      nextEligibleAt: null,
+      reconciliationStatus: null,
+      reconciliationEvidenceType: null,
+      result: "ACKNOWLEDGED",
+      blockingReason: null,
+    },
   });
 }
 
@@ -574,7 +596,7 @@ test(
       )}`,
     );
     t.diagnostic(
-      "Block 3B.1 records pending/failure states durably; duplicate deliberately does not retry or reconcile them",
+      "Block 3B.2 keeps duplicate passive: it neither retries nor reconciles pending/failure states",
     );
   },
 );
@@ -1393,6 +1415,7 @@ test(
         sender: "CHATWOOT_V1",
         payloadHash: "sha256:claim-test",
         payloadSize: 29,
+        payloadContractVersion: "CHATWOOT_TEXT_V1_RECOVERABLE",
       },
     });
     const acceptedSnapshot = createConversationControlSnapshot({
@@ -1420,6 +1443,7 @@ test(
     ]);
     const winners = claims.filter((claim) => claim.claimToken);
     assert.equal(winners.length, 1);
+    assert.ok(winners[0].attemptId);
     assert.equal(claims.filter((claim) => !claim.claimToken).length, 1);
     assert.equal(
       claims.every((claim) => claim.delivery.id === delivery.id),
@@ -1430,9 +1454,12 @@ test(
     senderCalls += 1;
     const acknowledged = await service.transitionClaimedV1OutboundDelivery({
       deliveryId: delivery.id,
+      attemptId: winners[0].attemptId,
       claimToken: winners[0].claimToken,
       status: "ACKNOWLEDGED",
       externalMessageId: "claim-owner-external-id",
+      retrySafety: "NOT_RETRYABLE",
+      httpStatus: 201,
     });
     assert.equal(senderCalls, 1);
     assert.equal(acknowledged.status, "ACKNOWLEDGED");
@@ -1473,6 +1500,7 @@ test(
     assert.equal(chatwoot.calls("chatwoot_outbound").length, 1);
     const [delivery] = await outboundDeliveriesFor(scope);
     assert.equal(delivery.status, "FAILED_TERMINAL");
+    assert.equal(delivery.retrySafety, "NOT_RETRYABLE");
     assert.equal(delivery.attemptCount, 1);
     assert.equal(delivery.externalMessageId, null);
     assert.equal(delivery.errorClass, "CHATWOOT_HTTP");
@@ -1496,7 +1524,7 @@ test(
 );
 
 test(
-  "L — HTTP 5xx registra FAILED_RETRYABLE sem retry automático ou por duplicate",
+  "L — HTTP 5xx exige reconciliação sem retry automático ou por duplicate",
   { concurrency: false },
   async () => {
     const scope = await seedProductionHttpFixture(prisma, {
@@ -1519,9 +1547,10 @@ test(
     assert.equal(chatwoot.calls("chatwoot_outbound").length, 1);
     assert.equal(provider.calls("final_generation").length, 1);
     const [delivery] = await outboundDeliveriesFor(scope);
-    assert.equal(delivery.status, "FAILED_RETRYABLE");
+    assert.equal(delivery.status, "UNCERTAIN");
+    assert.equal(delivery.retrySafety, "RECONCILE_REQUIRED");
     assert.equal(delivery.attemptCount, 1);
-    assert.equal(delivery.errorClass, "CHATWOOT_HTTP");
+    assert.equal(delivery.errorClass, "CHATWOOT_HTTP_AFTER_BOUNDARY");
     assert.equal(delivery.errorCode, "HTTP_503");
 
     const duplicate = await postWebhook(scope, input);
@@ -1563,6 +1592,7 @@ test(
     assert.equal(remoteConversation.messages.filter((message) => message.direction === "outbound").length, 1);
     const [delivery] = await outboundDeliveriesFor(scope);
     assert.equal(delivery.status, "UNCERTAIN");
+    assert.equal(delivery.retrySafety, "RECONCILE_REQUIRED");
     assert.equal(delivery.attemptCount, 1);
     assert.equal(delivery.externalMessageId, null);
     assert.equal(delivery.errorClass, "CHATWOOT_TRANSPORT_AMBIGUOUS");
@@ -1634,6 +1664,7 @@ test(
         sender: pendingPlan.sender,
         payloadHash: pendingPlan.payloadHash,
         payloadSize: pendingPlan.payloadSize,
+        payloadContractVersion: "CHATWOOT_TEXT_V1_RECOVERABLE",
       },
     });
     assert.equal(pendingBeforeRestart.status, "PENDING");

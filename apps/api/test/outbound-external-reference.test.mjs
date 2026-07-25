@@ -95,6 +95,8 @@ test("sender oficial preserva id direto e mantém um único payload", async () =
         status: "sent",
         performed: true,
         externalMessageId: "123",
+        retrySafety: "NOT_RETRYABLE",
+        httpStatus: 200,
       });
       assert.equal(calls.length, 1);
       assert.equal(calls[0][1].method, "POST");
@@ -127,6 +129,8 @@ test("sender oficial normaliza id aninhado e confirma envio sem referência", as
         status: "sent",
         performed: true,
         externalMessageId: "nested-message",
+        retrySafety: "NOT_RETRYABLE",
+        httpStatus: 200,
       });
     },
   );
@@ -143,6 +147,8 @@ test("sender oficial normaliza id aninhado e confirma envio sem referência", as
         status: "sent",
         performed: true,
         externalMessageId: null,
+        retrySafety: "NOT_RETRYABLE",
+        httpStatus: 200,
       });
       assert.equal(calls.length, 1);
     },
@@ -162,9 +168,11 @@ test("sender oficial falha sem gerar uma segunda chamada", async () => {
         status: "failed",
         performed: false,
         externalMessageId: null,
-        deliveryStatus: "FAILED_RETRYABLE",
-        errorClass: "CHATWOOT_HTTP",
+        deliveryStatus: "UNCERTAIN",
+        retrySafety: "RECONCILE_REQUIRED",
+        errorClass: "CHATWOOT_HTTP_AFTER_BOUNDARY",
         errorCode: "HTTP_500",
+        httpStatus: 500,
       });
       assert.equal(calls.length, 1);
     },
@@ -187,8 +195,10 @@ test("sender classifica 4xx permanente sem armazenar o corpo", async () => {
         performed: false,
         externalMessageId: null,
         deliveryStatus: "FAILED_TERMINAL",
+        retrySafety: "NOT_RETRYABLE",
         errorClass: "CHATWOOT_HTTP",
         errorCode: "HTTP_422",
+        httpStatus: 422,
       });
       assert.doesNotMatch(JSON.stringify(result), /sensitive-body/);
       assert.equal(calls.length, 1);
@@ -209,8 +219,10 @@ test("sender classifica fechamento ambíguo como UNCERTAIN", async () => {
       performed: false,
       externalMessageId: null,
       deliveryStatus: "UNCERTAIN",
+      retrySafety: "RECONCILE_REQUIRED",
       errorClass: "CHATWOOT_TRANSPORT_AMBIGUOUS",
       errorCode: "UND_ERR_SOCKET",
+      httpStatus: null,
     });
     assert.equal(calls.length, 1);
   });

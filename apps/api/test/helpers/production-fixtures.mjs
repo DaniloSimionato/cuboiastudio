@@ -20,6 +20,23 @@ export const FIXTURE_LABELS = [
   "l",
   "m",
   "n",
+  "o",
+  "p",
+  "q",
+  "r",
+  "s",
+  "t",
+  "u",
+  "v",
+  "w",
+  "x",
+  "y",
+  "z",
+  "aa",
+  "ab",
+  "ac",
+  "ad",
+  "ae",
 ];
 
 export const OFFICIAL_WEEKLY_SCHEDULE = Object.freeze({

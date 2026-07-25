@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  OUTBOUND_ATTEMPT_SCHEMA_VERSION,
   OUTBOUND_DELIVERY_IDEMPOTENCY_ALGORITHM,
   OUTBOUND_DELIVERY_SCHEMA_VERSION,
   OUTBOUND_DELIVERY_STATUSES,
+  OUTBOUND_RECOVERY_SCHEMA_VERSION,
+  OUTBOUND_RETRY_SAFETIES,
+  calculateOutboundBackoff,
+  classifyOutboundFailure,
   createOutboundDeliveryIdempotencyKey,
   createOutboundDeliveryPlan,
   createOutboundPayloadFingerprint,
+  evaluateOutboundRecoveryEligibility,
   isOutboundDeliveryStatus,
 } from "../dist/assistant-conversations/outbound-delivery.js";
 
@@ -87,4 +93,160 @@ test("vocabulário de status distingue ack, falhas, incerteza e stale", () => {
     assert.equal(isOutboundDeliveryStatus(status), true);
   }
   assert.equal(isOutboundDeliveryStatus("DELIVERED"), false);
+});
+
+test("retry safety é dimensão distinta do status e possui contrato versionado", () => {
+  assert.equal(OUTBOUND_RECOVERY_SCHEMA_VERSION, "ASSISTANT_OUTBOUND_RECOVERY_V1");
+  assert.equal(OUTBOUND_ATTEMPT_SCHEMA_VERSION, "ASSISTANT_OUTBOUND_ATTEMPT_V1");
+  assert.deepEqual(OUTBOUND_RETRY_SAFETIES, [
+    "PROVEN_SAFE",
+    "RECONCILE_REQUIRED",
+    "NOT_RETRYABLE",
+    "UNKNOWN",
+  ]);
+});
+
+test("5xx e timeout ambíguo exigem reconciliação, enquanto falha pré-fronteira é segura", () => {
+  assert.deepEqual(
+    classifyOutboundFailure({ kind: "HTTP", httpStatus: 503 }),
+    {
+      deliveryStatus: "UNCERTAIN",
+      retrySafety: "RECONCILE_REQUIRED",
+      errorClass: "CHATWOOT_HTTP_AFTER_BOUNDARY",
+      errorCode: "HTTP_503",
+      httpStatus: 503,
+    },
+  );
+  assert.deepEqual(
+    classifyOutboundFailure({
+      kind: "TRANSPORT",
+      errorCode: "UND_ERR_SOCKET",
+    }),
+    {
+      deliveryStatus: "UNCERTAIN",
+      retrySafety: "RECONCILE_REQUIRED",
+      errorClass: "CHATWOOT_TRANSPORT_AMBIGUOUS",
+      errorCode: "UND_ERR_SOCKET",
+      httpStatus: null,
+    },
+  );
+  assert.equal(
+    classifyOutboundFailure({
+      kind: "TRANSPORT",
+      errorCode: "ECONNREFUSED",
+    }).retrySafety,
+    "PROVEN_SAFE",
+  );
+  assert.equal(
+    classifyOutboundFailure({
+      kind: "BEFORE_BOUNDARY",
+      errorCode: "SERIALIZATION_FAILED",
+    }).retrySafety,
+    "PROVEN_SAFE",
+  );
+});
+
+test("elegibilidade bloqueia safety desconhecida e nunca repete estado incerto diretamente", () => {
+  const now = new Date("2026-07-25T18:00:00.000Z");
+  const base = {
+    attemptCount: 1,
+    maxAttempts: 3,
+    claimExpiresAt: null,
+    nextEligibleAt: null,
+    now,
+  };
+  assert.equal(
+    evaluateOutboundRecoveryEligibility({
+      ...base,
+      status: "FAILED_RETRYABLE",
+      retrySafety: "PROVEN_SAFE",
+    }),
+    "ELIGIBLE_PROVEN_SAFE_RETRY",
+  );
+  assert.equal(
+    evaluateOutboundRecoveryEligibility({
+      ...base,
+      status: "FAILED_RETRYABLE",
+      retrySafety: "UNKNOWN",
+    }),
+    "RECONCILIATION_REQUIRED",
+  );
+  assert.equal(
+    evaluateOutboundRecoveryEligibility({
+      ...base,
+      status: "UNCERTAIN",
+      retrySafety: "RECONCILE_REQUIRED",
+    }),
+    "RECONCILIATION_REQUIRED",
+  );
+});
+
+test("lease e budget não são autorização implícita de retry", () => {
+  const now = new Date("2026-07-25T18:00:00.000Z");
+  const base = {
+    status: "SENDING",
+    retrySafety: "UNKNOWN",
+    attemptCount: 1,
+    maxAttempts: 3,
+    nextEligibleAt: null,
+    now,
+  };
+  assert.equal(
+    evaluateOutboundRecoveryEligibility({
+      ...base,
+      claimExpiresAt: new Date(now.getTime() + 1_000),
+    }),
+    "LEASE_ACTIVE",
+  );
+  assert.equal(
+    evaluateOutboundRecoveryEligibility({
+      ...base,
+      claimExpiresAt: new Date(now.getTime() - 1),
+    }),
+    "LEASE_EXPIRED",
+  );
+  assert.equal(
+    evaluateOutboundRecoveryEligibility({
+      ...base,
+      status: "FAILED_RETRYABLE",
+      retrySafety: "PROVEN_SAFE",
+      attemptCount: 3,
+      claimExpiresAt: null,
+    }),
+    "BUDGET_EXHAUSTED",
+  );
+  assert.equal(
+    evaluateOutboundRecoveryEligibility({
+      ...base,
+      status: "UNCERTAIN",
+      retrySafety: "RECONCILE_REQUIRED",
+      attemptCount: 3,
+      claimExpiresAt: null,
+    }),
+    "RECONCILIATION_REQUIRED",
+  );
+});
+
+test("backoff é determinístico, cresce e respeita o teto", () => {
+  const now = new Date("2026-07-25T18:00:00.000Z");
+  const first = calculateOutboundBackoff({
+    deliveryId: "delivery-safe",
+    attemptNumber: 1,
+    now,
+    scheduleMs: [1_000, 5_000],
+    capMs: 5_000,
+    jitterRatio: 0,
+  });
+  const second = calculateOutboundBackoff({
+    deliveryId: "delivery-safe",
+    attemptNumber: 2,
+    now,
+    scheduleMs: [1_000, 5_000],
+    capMs: 5_000,
+    jitterRatio: 0,
+  });
+  assert.equal(first.delayMs, 1_000);
+  assert.equal(second.delayMs, 5_000);
+  assert.equal(first.nextEligibleAt.toISOString(), "2026-07-25T18:00:01.000Z");
+  assert.equal(second.nextEligibleAt.toISOString(), "2026-07-25T18:00:05.000Z");
 });

@@ -5,19 +5,20 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertIsolatedServiceUrls } from "./production-app-process.mjs";
 
-const BASELINE_COMMIT = "d22a1dd75dfbbf20c6316f23a9c08ae03eed2361";
-const ALLOWED_BLOCK3B1_RUNTIME_PATHS = new Set([
+const BASELINE_COMMIT = "fcdfb15b1f4763ad4d6b0e0a2fd7690921471bcd";
+const ALLOWED_BLOCK3B2_RUNTIME_PATHS = new Set([
   "apps/api/prisma/schema.prisma",
-  "apps/api/prisma/migrations/20260725140000_add_assistant_outbound_delivery/migration.sql",
+  "apps/api/prisma/migrations/20260725180000_add_outbound_recovery_safety/migration.sql",
   "apps/api/src/assistant-conversations/assistant-conversations.service.ts",
   "apps/api/src/assistant-conversations/outbound-delivery.ts",
+  "apps/api/src/assistant-conversations/outbound-recovery-coordinator.ts",
   "apps/api/src/assistant-conversations/turn-execution-manifest.ts",
 ]);
 const helperDirectory = path.dirname(fileURLToPath(import.meta.url));
 const apiDirectory = path.resolve(helperDirectory, "../..");
 const repositoryDirectory = path.resolve(apiDirectory, "../..");
 const migrationsDirectory = path.join(apiDirectory, "prisma/migrations");
-const outboundDeliveryMigration = "20260725140000_add_assistant_outbound_delivery";
+const outboundRecoveryMigration = "20260725180000_add_outbound_recovery_safety";
 const relatedRegressionTests = [
   "test/chatwoot-webhook-and-runtime.test.mjs",
   "test/canonical-inbound-message.test.mjs",
@@ -28,6 +29,7 @@ const relatedRegressionTests = [
   "test/conversation-control-snapshot.test.mjs",
   "test/outbound-external-reference.test.mjs",
   "test/outbound-delivery.test.mjs",
+  "test/outbound-recovery.test.mjs",
   "test/split-response-style.test.mjs",
   "test/assistant-calendar-tools.test.mjs",
   "test/custom-webhook-tools.test.mjs",
@@ -272,11 +274,11 @@ async function assertBaselineAndScope() {
     .map((entry) => entry.trim())
     .filter(Boolean);
   const disallowedChanges = protectedChanges.filter(
-    (entry) => !ALLOWED_BLOCK3B1_RUNTIME_PATHS.has(entry),
+    (entry) => !ALLOWED_BLOCK3B2_RUNTIME_PATHS.has(entry),
   );
   if (disallowedChanges.length > 0) {
     throw new Error(
-      `Harness refuses production source, schema or migration changes outside Block 3B.1:\n${disallowedChanges.join("\n")}`,
+      `Harness refuses production source, schema or migration changes outside Block 3B.2:\n${disallowedChanges.join("\n")}`,
     );
   }
   const prismaBinary = path.join(apiDirectory, "node_modules/.bin/prisma");
@@ -314,6 +316,7 @@ async function buildFresh(environment) {
     path.join(apiDirectory, "dist/assistant-conversations/assistant-conversations.service.js"),
     path.join(apiDirectory, "dist/assistant-conversations/conversation-control-snapshot.js"),
     path.join(apiDirectory, "dist/assistant-conversations/outbound-delivery.js"),
+    path.join(apiDirectory, "dist/assistant-conversations/outbound-recovery-coordinator.js"),
     path.join(apiDirectory, "dist/assistant-conversations/turn-execution-manifest.js"),
     path.join(apiDirectory, "dist/assistant-conversations/v1-turn-decision.js"),
   ];
@@ -337,7 +340,7 @@ async function buildFresh(environment) {
   };
 }
 
-async function validateOutboundDeliveryUpgradeMigration() {
+async function validateOutboundRecoveryUpgradeMigration() {
   const upgradeDatabase = `${databaseName}_upgrade`;
   const containerMigrations = `/tmp/cubo-policy-migrations-${suffix}`;
   await run("docker", [
@@ -364,7 +367,7 @@ async function validateOutboundDeliveryUpgradeMigration() {
     .map((entry) => entry.name)
     .sort();
   const baselineMigrations = migrationEntries.filter(
-    (entry) => entry !== outboundDeliveryMigration,
+    (entry) => entry !== outboundRecoveryMigration,
   );
   for (const migration of baselineMigrations) {
     await run("docker", [
@@ -382,11 +385,12 @@ async function validateOutboundDeliveryUpgradeMigration() {
     ]);
   }
 
-  const baselineFixtureSql = [
+  const block3b1FixtureSql = [
     `INSERT INTO "companies" ("id", "name", "updatedAt") VALUES ('migration-company', 'Migration fixture', CURRENT_TIMESTAMP)`,
     `INSERT INTO "assistants" ("id", "companyId", "name", "updatedAt") VALUES ('migration-assistant', 'migration-company', 'Migration assistant', CURRENT_TIMESTAMP)`,
     `INSERT INTO "assistant_conversations" ("id", "companyId", "assistantId", "updatedAt") VALUES ('migration-conversation', 'migration-company', 'migration-assistant', CURRENT_TIMESTAMP)`,
     `INSERT INTO "assistant_conversation_messages" ("id", "companyId", "assistantId", "conversationId", "role", "content") VALUES ('migration-message', 'migration-company', 'migration-assistant', 'migration-conversation', 'assistant', 'fixture')`,
+    `INSERT INTO "assistant_outbound_deliveries" ("id", "companyId", "assistantId", "conversationId", "assistantMessageId", "turnExecutionId", "decisionId", "blockOrdinal", "idempotencyKey", "policyVersion", "expectedContextVersion", "expectedControlRevision", "sender", "payloadHash", "payloadSize", "updatedAt") VALUES ('migration-delivery', 'migration-company', 'migration-assistant', 'migration-conversation', 'migration-message', 'migration-turn', 'migration-decision', 1, 'migration-idempotency', 'V1_COMPATIBILITY_POLICY', 1, 0, 'CHATWOOT_V1', 'sha256:migration', 7, CURRENT_TIMESTAMP)`,
   ].join("; ");
   await run("docker", [
     "exec",
@@ -399,7 +403,7 @@ async function validateOutboundDeliveryUpgradeMigration() {
     "-v",
     "ON_ERROR_STOP=1",
     "-c",
-    baselineFixtureSql,
+    block3b1FixtureSql,
   ]);
   await run("docker", [
     "exec",
@@ -412,33 +416,9 @@ async function validateOutboundDeliveryUpgradeMigration() {
     "-v",
     "ON_ERROR_STOP=1",
     "-f",
-    `${containerMigrations}/${outboundDeliveryMigration}/migration.sql`,
+    `${containerMigrations}/${outboundRecoveryMigration}/migration.sql`,
   ]);
 
-  const insertDeliverySql =
-    `INSERT INTO "assistant_outbound_deliveries" (` +
-    `"id", "companyId", "assistantId", "conversationId", "assistantMessageId", ` +
-    `"turnExecutionId", "decisionId", "blockOrdinal", "idempotencyKey", ` +
-    `"policyVersion", "expectedContextVersion", "expectedControlRevision", ` +
-    `"sender", "payloadHash", "payloadSize", "updatedAt") VALUES (` +
-    `'migration-delivery', 'migration-company', 'migration-assistant', ` +
-    `'migration-conversation', 'migration-message', 'migration-turn', ` +
-    `'migration-decision', 1, 'migration-idempotency', ` +
-    `'V1_COMPATIBILITY_POLICY', 1, 0, 'CHATWOOT_V1', 'sha256:migration', 7, ` +
-    `CURRENT_TIMESTAMP)`;
-  await run("docker", [
-    "exec",
-    postgresContainer,
-    "psql",
-    "-U",
-    "postgres",
-    "-d",
-    upgradeDatabase,
-    "-v",
-    "ON_ERROR_STOP=1",
-    "-c",
-    insertDeliverySql,
-  ]);
   const defaults = await run("docker", [
     "exec",
     postgresContainer,
@@ -451,13 +431,18 @@ async function validateOutboundDeliveryUpgradeMigration() {
     "-v",
     "ON_ERROR_STOP=1",
     "-c",
-    `SELECT "status" || '|' || "attemptCount" FROM "assistant_outbound_deliveries" WHERE "id" = 'migration-delivery'`,
+    `SELECT "status" || '|' || "attemptCount" || '|' || "payloadContractVersion" || '|' || "retrySafety" || '|' || "maxAttempts" FROM "assistant_outbound_deliveries" WHERE "id" = 'migration-delivery'`,
   ]);
-  if (defaults.stdout !== "PENDING|0") {
-    throw new Error(`Outbound delivery migration defaults mismatch: ${defaults.stdout}`);
+  if (defaults.stdout !== "PENDING|0|V1_LEGACY_UNVERIFIED|UNKNOWN|3") {
+    throw new Error(`Outbound recovery migration defaults mismatch: ${defaults.stdout}`);
   }
 
-  const duplicateWasAccepted = await commandSucceeds("docker", [
+  const insertAttemptSql =
+    `INSERT INTO "assistant_outbound_attempts" (` +
+    `"id", "deliveryId", "attemptNumber", "owner", "startedAt", "leaseExpiresAt", "updatedAt") VALUES (` +
+    `'migration-attempt', 'migration-delivery', 1, 'migration-owner', ` +
+    `CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '1 minute', CURRENT_TIMESTAMP)`;
+  await run("docker", [
     "exec",
     postgresContainer,
     "psql",
@@ -468,14 +453,27 @@ async function validateOutboundDeliveryUpgradeMigration() {
     "-v",
     "ON_ERROR_STOP=1",
     "-c",
-    insertDeliverySql
-      .replace("'migration-delivery'", "'migration-delivery-duplicate'")
-      .replace("'migration-idempotency'", "'migration-idempotency-duplicate'"),
+    insertAttemptSql,
   ]);
-  if (duplicateWasAccepted) {
-    throw new Error("Outbound delivery decision/block uniqueness was not enforced");
+  const attemptDefaults = await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-At",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    `SELECT "result" || '|' || "retrySafety" FROM "assistant_outbound_attempts" WHERE "id" = 'migration-attempt'`,
+  ]);
+  if (attemptDefaults.stdout !== "SENDING|UNKNOWN") {
+    throw new Error(`Outbound attempt defaults mismatch: ${attemptDefaults.stdout}`);
   }
-  const invalidForeignKeyWasAccepted = await commandSucceeds("docker", [
+
+  const duplicateAttemptWasAccepted = await commandSucceeds("docker", [
     "exec",
     postgresContainer,
     "psql",
@@ -486,14 +484,28 @@ async function validateOutboundDeliveryUpgradeMigration() {
     "-v",
     "ON_ERROR_STOP=1",
     "-c",
-    insertDeliverySql
-      .replace("'migration-delivery'", "'migration-delivery-invalid-fk'")
-      .replace("'migration-message'", "'missing-assistant-message'")
-      .replace("'migration-decision'", "'migration-decision-invalid-fk'")
-      .replace("'migration-idempotency'", "'migration-idempotency-invalid-fk'"),
+    insertAttemptSql.replace("'migration-attempt'", "'migration-attempt-duplicate'"),
   ]);
-  if (invalidForeignKeyWasAccepted) {
-    throw new Error("Outbound delivery assistant message foreign key was not enforced");
+  if (duplicateAttemptWasAccepted) {
+    throw new Error("Outbound attempt delivery/number uniqueness was not enforced");
+  }
+  const invalidAttemptForeignKeyWasAccepted = await commandSucceeds("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    insertAttemptSql
+      .replace("'migration-attempt'", "'migration-attempt-invalid-fk'")
+      .replace("'migration-delivery'", "'missing-delivery'"),
+  ]);
+  if (invalidAttemptForeignKeyWasAccepted) {
+    throw new Error("Outbound attempt delivery foreign key was not enforced");
   }
   await run("docker", [
     "exec",
@@ -508,7 +520,7 @@ async function validateOutboundDeliveryUpgradeMigration() {
     "-c",
     `DELETE FROM "assistant_conversation_messages" WHERE "id" = 'migration-message'`,
   ]);
-  const deliveriesAfterLegacyMessageDelete = await run("docker", [
+  const recoveryRowsAfterLegacyMessageDelete = await run("docker", [
     "exec",
     postgresContainer,
     "psql",
@@ -520,20 +532,22 @@ async function validateOutboundDeliveryUpgradeMigration() {
     "-v",
     "ON_ERROR_STOP=1",
     "-c",
-    `SELECT COUNT(*) FROM "assistant_outbound_deliveries" WHERE "id" = 'migration-delivery'`,
+    `SELECT (SELECT COUNT(*) FROM "assistant_outbound_deliveries" WHERE "id" = 'migration-delivery') || '|' || (SELECT COUNT(*) FROM "assistant_outbound_attempts" WHERE "id" = 'migration-attempt')`,
   ]);
-  if (deliveriesAfterLegacyMessageDelete.stdout !== "0") {
-    throw new Error("Outbound delivery did not preserve legacy message deletion compatibility");
+  if (recoveryRowsAfterLegacyMessageDelete.stdout !== "0|0") {
+    throw new Error(
+      `Outbound recovery cascade compatibility mismatch: ${recoveryRowsAfterLegacyMessageDelete.stdout}`,
+    );
   }
   process.stdout.write(
-    `[http-harness] outbound ledger migration upgrade validated database=${upgradeDatabase}\n`,
+    `[http-harness] outbound recovery migration upgrade validated database=${upgradeDatabase}\n`,
   );
 }
 
 async function main() {
   await assertBaselineAndScope();
   const services = await startServices();
-  await validateOutboundDeliveryUpgradeMigration();
+  await validateOutboundRecoveryUpgradeMigration();
   const baseEnvironment = {
     ...process.env,
     NODE_ENV: "test",

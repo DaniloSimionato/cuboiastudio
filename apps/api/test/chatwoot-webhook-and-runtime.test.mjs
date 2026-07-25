@@ -583,6 +583,30 @@ function createAssistantServiceDeps(overrides = {}) {
   };
 
   const outboundDeliveries = [];
+  const outboundAttempts = [];
+  const hydrateDelivery = (delivery) => ({
+    ...delivery,
+    conversation: {
+      ...conversationRecord,
+      id: delivery.conversationId,
+      currentContextVersion: delivery.expectedContextVersion,
+      controlRevision: delivery.expectedControlRevision,
+      aiActive: true,
+      pausedByHuman: false,
+    },
+    assistantMessage: {
+      id: delivery.assistantMessageId,
+      content:
+        calls.messageCreates.findLast((message) => message.role === "assistant")?.content ??
+        "Resposta do assistente",
+      externalMessageId:
+        calls.messageUpdates.findLast((update) => update.externalMessageId)
+          ?.externalMessageId ?? null,
+    },
+    attempts: outboundAttempts
+      .filter((attempt) => attempt.deliveryId === delivery.id)
+      .sort((left, right) => right.attemptNumber - left.attemptNumber),
+  });
   const assistantOutboundDelivery = {
     create: async ({ data }) => {
       const now = new Date();
@@ -590,14 +614,26 @@ function createAssistantServiceDeps(overrides = {}) {
         id: `delivery-${outboundDeliveries.length + 1}`,
         ...data,
         status: data.status ?? "PENDING",
+        payloadContractVersion:
+          data.payloadContractVersion ?? "V1_LEGACY_UNVERIFIED",
+        handoff: data.handoff ?? false,
+        retrySafety: data.retrySafety ?? "UNKNOWN",
         attemptCount: data.attemptCount ?? 0,
+        maxAttempts: data.maxAttempts ?? 3,
         attemptOwner: data.attemptOwner ?? null,
         attemptedAt: data.attemptedAt ?? null,
+        claimStartedAt: data.claimStartedAt ?? null,
+        claimExpiresAt: data.claimExpiresAt ?? null,
+        nextEligibleAt: data.nextEligibleAt ?? null,
         acknowledgedAt: data.acknowledgedAt ?? null,
         failedAt: data.failedAt ?? null,
         externalMessageId: data.externalMessageId ?? null,
         errorClass: data.errorClass ?? null,
         errorCode: data.errorCode ?? null,
+        reconciliationStatus: data.reconciliationStatus ?? null,
+        reconciliationEvidenceType: data.reconciliationEvidenceType ?? null,
+        reconciledAt: data.reconciledAt ?? null,
+        recoveryBlockedReason: data.recoveryBlockedReason ?? null,
         createdAt: now,
         updatedAt: now,
       };
@@ -630,7 +666,51 @@ function createAssistantServiceDeps(overrides = {}) {
     findUniqueOrThrow: async ({ where }) => {
       const delivery = outboundDeliveries.find((candidate) => candidate.id === where.id);
       if (!delivery) throw new Error("mock outbound delivery not found");
-      return delivery;
+      return hydrateDelivery(delivery);
+    },
+    findUnique: async ({ where }) => {
+      const delivery = outboundDeliveries.find((candidate) => candidate.id === where.id);
+      return delivery ? hydrateDelivery(delivery) : null;
+    },
+  };
+  const assistantOutboundAttempt = {
+    create: async ({ data }) => {
+      const now = new Date();
+      const attempt = {
+        id: `attempt-${outboundAttempts.length + 1}`,
+        ...data,
+        boundaryStartedAt: data.boundaryStartedAt ?? null,
+        finishedAt: data.finishedAt ?? null,
+        result: data.result ?? "SENDING",
+        retrySafety: data.retrySafety ?? "UNKNOWN",
+        httpStatus: data.httpStatus ?? null,
+        externalMessageId: data.externalMessageId ?? null,
+        errorClass: data.errorClass ?? null,
+        errorCode: data.errorCode ?? null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      outboundAttempts.push(attempt);
+      return attempt;
+    },
+    updateMany: async ({ where, data }) => {
+      const attempt = outboundAttempts.find(
+        (candidate) =>
+          (where.id === undefined || candidate.id === where.id) &&
+          (where.deliveryId === undefined || candidate.deliveryId === where.deliveryId) &&
+          (where.owner === undefined || candidate.owner === where.owner) &&
+          (where.result === undefined || candidate.result === where.result) &&
+          (where.boundaryStartedAt === undefined ||
+            candidate.boundaryStartedAt === where.boundaryStartedAt),
+      );
+      if (!attempt) return { count: 0 };
+      Object.assign(attempt, data, { updatedAt: new Date() });
+      return { count: 1 };
+    },
+    findUniqueOrThrow: async ({ where }) => {
+      const attempt = outboundAttempts.find((candidate) => candidate.id === where.id);
+      if (!attempt) throw new Error("mock outbound attempt not found");
+      return attempt;
     },
   };
 
@@ -675,8 +755,40 @@ function createAssistantServiceDeps(overrides = {}) {
         calls.runtimeLogCreates.push(data);
         return { id: "runtime-log-1" };
       },
+      findFirst: async ({ where }) => {
+        const data = calls.runtimeLogCreates.findLast(
+          (candidate) =>
+            !where?.assistantMessageId ||
+            candidate.assistantMessageId === where.assistantMessageId,
+        );
+        return data ? { id: "runtime-log-1", metadata: data.metadata ?? null } : null;
+      },
+      update: async ({ data }) => {
+        const runtimeLog = calls.runtimeLogCreates.at(-1);
+        if (runtimeLog) runtimeLog.metadata = data.metadata;
+        return { id: "runtime-log-1" };
+      },
     },
     assistantOutboundDelivery,
+    assistantOutboundAttempt,
+    $queryRaw: async (query) => {
+      const [id, assistantId, companyId] = query?.values ?? [];
+      const current = await prisma.assistantConversation.findFirst({
+        where: { id, assistantId, companyId },
+      });
+      return current
+        ? [
+            {
+              ...current,
+              currentContextVersion: current.currentContextVersion ?? 1,
+              controlRevision: current.controlRevision ?? 0,
+              aiActive: current.aiActive ?? true,
+              pausedByHuman: current.pausedByHuman ?? false,
+              status: current.status ?? "ACTIVE",
+            },
+          ]
+        : [];
+    },
   };
 
   const prisma = {
@@ -726,8 +838,22 @@ function createAssistantServiceDeps(overrides = {}) {
         calls.runtimeLogCreates.push(data);
         return { id: "runtime-log-1" };
       },
+      findFirst: async ({ where }) => {
+        const data = calls.runtimeLogCreates.findLast(
+          (candidate) =>
+            !where?.assistantMessageId ||
+            candidate.assistantMessageId === where.assistantMessageId,
+        );
+        return data ? { id: "runtime-log-1", metadata: data.metadata ?? null } : null;
+      },
+      update: async ({ data }) => {
+        const runtimeLog = calls.runtimeLogCreates.at(-1);
+        if (runtimeLog) runtimeLog.metadata = data.metadata;
+        return { id: "runtime-log-1" };
+      },
     },
     assistantOutboundDelivery,
+    assistantOutboundAttempt,
     $transaction: async (callback) => {
       calls.transactions += 1;
       return callback(tx);
@@ -1375,7 +1501,10 @@ test("webhook Chatwoot incoming com sender.id externo cria conversa sem usar use
       externalContactId: data.externalContactId ?? null,
       externalChannelId: data.externalChannelId ?? null,
       externalInboxId: data.externalInboxId ?? null,
+      aiActive: data.aiActive ?? true,
       pausedByHuman: data.pausedByHuman ?? false,
+      currentContextVersion: data.currentContextVersion ?? 1,
+      controlRevision: data.controlRevision ?? 0,
       lastMessageAt: data.lastMessageAt ?? new Date(),
       status: data.status,
       createdAt: new Date(),
@@ -1402,7 +1531,10 @@ test("webhook Chatwoot incoming com sender.id externo cria conversa sem usar use
       externalContactId: "contact-1",
       externalChannelId: "524",
       externalInboxId: "524",
+      aiActive: true,
       pausedByHuman: false,
+      currentContextVersion: 1,
+      controlRevision: 0,
       lastMessageAt: new Date(),
       status: "ACTIVE",
       createdAt: new Date(),
@@ -2074,6 +2206,7 @@ test("sendMessage chama outbound somente depois do runtime", async () => {
         source: "cubo_ai_studio",
         assistant_id: "assistant-1",
         internal_conversation_id: "conversation-1",
+        cubo_outbound_delivery_id: "delivery-1",
       },
     });
     assert.equal(fetchCalls[0].init.headers.api_access_token, "user-api-token");
@@ -3250,6 +3383,7 @@ test("estado atual no banco vence snapshot ativo antes do processamento", async 
       lastMessageAt: new Date(),
       status: "ACTIVE",
       currentContextVersion: 1,
+      controlRevision: 0,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -3478,6 +3612,7 @@ test("pausa de uma conversa não bloqueia outra conversa ativa", async () => {
       lastMessageAt: new Date(),
       status: "ACTIVE",
       currentContextVersion: 1,
+      controlRevision: 0,
       createdAt: new Date(),
       updatedAt: new Date(),
     };

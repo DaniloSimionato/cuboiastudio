@@ -666,15 +666,26 @@ model AssistantOutboundDelivery {
   sender                  String
   payloadHash             String
   payloadSize             Int
+  payloadContractVersion  String   @default("V1_LEGACY_UNVERIFIED")
+  handoff                 Boolean  @default(false)
   status                  String   @default("PENDING")
+  retrySafety             String   @default("UNKNOWN")
   attemptCount            Int      @default(0)
+  maxAttempts             Int      @default(3)
   attemptOwner            String?
   attemptedAt             DateTime?
+  claimStartedAt          DateTime?
+  claimExpiresAt          DateTime?
+  nextEligibleAt          DateTime?
   acknowledgedAt          DateTime?
   failedAt                DateTime?
   externalMessageId       String?
   errorClass              String?
   errorCode               String?
+  reconciliationStatus    String?
+  reconciliationEvidenceType String?
+  reconciledAt            DateTime?
+  recoveryBlockedReason   String?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
@@ -682,6 +693,7 @@ model AssistantOutboundDelivery {
   assistant        Assistant                    @relation(fields: [assistantId], references: [id], onDelete: Restrict)
   conversation     AssistantConversation        @relation(fields: [conversationId], references: [id], onDelete: Restrict)
   assistantMessage AssistantConversationMessage @relation(fields: [assistantMessageId], references: [id], onDelete: Cascade)
+  attempts         AssistantOutboundAttempt[]
 
   @@unique([decisionId, blockOrdinal])
   @@index([companyId, createdAt])
@@ -689,6 +701,33 @@ model AssistantOutboundDelivery {
   @@index([conversationId, createdAt])
   @@index([status, updatedAt])
   @@map("assistant_outbound_deliveries")
+}
+
+model AssistantOutboundAttempt {
+  id                String   @id @default(cuid())
+  deliveryId        String
+  attemptNumber     Int
+  owner             String
+  startedAt         DateTime
+  leaseExpiresAt    DateTime
+  boundaryStartedAt DateTime?
+  finishedAt        DateTime?
+  result            String   @default("SENDING")
+  retrySafety       String   @default("UNKNOWN")
+  httpStatus        Int?
+  externalMessageId String?
+  errorClass        String?
+  errorCode         String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  delivery AssistantOutboundDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@unique([deliveryId, attemptNumber])
+  @@index([deliveryId, startedAt])
+  @@index([owner])
+  @@index([result, leaseExpiresAt])
+  @@map("assistant_outbound_attempts")
 }
 
 model AssistantPreviewLog {
