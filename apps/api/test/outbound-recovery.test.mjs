@@ -195,6 +195,123 @@ async function seedRecoveryDelivery(label, input = {}) {
   return createDeliveryForScope(scope, input);
 }
 
+async function seedVerifiedHandoffRecoveryDelivery(label, input = {}) {
+  const scope = await seedProductionHttpFixture(prisma, {
+    label,
+    chatwootBaseUrl: chatwoot.baseUrl,
+    providerBaseUrl: "http://127.0.0.1:9/v1",
+    precreateConversation: true,
+  });
+  runtimeV2CompanyIds.add(scope.companyId);
+  const assigneeId = input.assigneeId ?? `agent_${scope.assistantId}`;
+  chatwoot.setConversation({
+    accountId: scope.accountId,
+    conversationId: scope.externalConversationId,
+    inboxId: scope.inboxId,
+    aiActive: false,
+    status: "open",
+    assignee: { id: assigneeId },
+  });
+  const conversation = await prisma.assistantConversation.update({
+    where: { id: scope.internalConversationId },
+    data: {
+      aiActive: false,
+      pausedByHuman: true,
+      controlRevision: { increment: 1 },
+    },
+  });
+  const fixture = await createDeliveryForScope(scope, {
+    ...input,
+    handoff: true,
+    expectedContextVersion: conversation.currentContextVersion,
+    expectedControlRevision: conversation.controlRevision,
+    content: input.content ?? "Transferindo para um atendente...",
+  });
+  const now = new Date();
+  const operation = await prisma.assistantHandoffOperation.create({
+    data: {
+      id: `handoff_test_${fixture.delivery.id}`,
+      companyId: scope.companyId,
+      assistantId: scope.assistantId,
+      conversationId: scope.internalConversationId,
+      turnExecutionId: fixture.delivery.turnExecutionId,
+      decisionId: fixture.delivery.decisionId,
+      contextVersion: fixture.delivery.expectedContextVersion,
+      idempotencyKey: `handoff_test_key_${fixture.delivery.id}`,
+      policyVersion: fixture.delivery.policyVersion,
+      expectedControlRevision: fixture.delivery.expectedControlRevision - 1,
+      postBlockControlRevision: fixture.delivery.expectedControlRevision,
+      reason: "OPERATIONAL_HUMAN_HANDOFF",
+      destinationType: "EXISTING_ASSIGNEE",
+      destinationResolution: "RESOLVED",
+      destinationAssigneeId: assigneeId,
+      destinationInboxId: scope.inboxId,
+      desiredAiActive: false,
+      desiredStatus: "open",
+      localBlockedAt: now,
+      remoteMutationResult: "ACKNOWLEDGED",
+      observedAiActive: false,
+      observedStatus: "open",
+      observedAssigneeId: input.observedAssigneeId ?? assigneeId,
+      observedAccountId: scope.accountId,
+      observedInboxId: scope.inboxId,
+      observedConversationId: scope.externalConversationId,
+      remoteStateFingerprint: `remote_state_${fixture.delivery.id}`,
+      verifiedAt: now,
+      remoteVerificationResult: "CONFIRMED",
+      confirmationAuthorizedAt: now,
+      confirmationDeliveryCreatedAt: now,
+      status: input.operationStatus ?? "CONFIRMATION_PENDING",
+      attemptCount: 1,
+      lastAttemptAt: now,
+      ...(input.operationData ?? {}),
+    },
+  });
+  const delivery = await prisma.assistantOutboundDelivery.update({
+    where: { id: fixture.delivery.id },
+    data: { handoffOperationId: operation.id },
+  });
+  const runtimeLog = await prisma.assistantRuntimeLog.findFirstOrThrow({
+    where: { assistantMessageId: fixture.assistantMessage.id },
+  });
+  const metadata =
+    runtimeLog.metadata &&
+    typeof runtimeLog.metadata === "object" &&
+    !Array.isArray(runtimeLog.metadata)
+      ? runtimeLog.metadata
+      : {};
+  const manifest =
+    metadata.turnExecutionManifest &&
+    typeof metadata.turnExecutionManifest === "object" &&
+    !Array.isArray(metadata.turnExecutionManifest)
+      ? metadata.turnExecutionManifest
+      : {};
+  await prisma.assistantRuntimeLog.update({
+    where: { id: runtimeLog.id },
+    data: {
+      metadata: {
+        ...metadata,
+        turnExecutionManifest: {
+          ...manifest,
+          handoff: {
+            schemaVersion: "TURN_EXECUTION_HANDOFF_V1",
+            operationId: operation.id,
+            status: operation.status,
+            confirmation: {
+              authorized: true,
+              decisionId: delivery.decisionId,
+              deliveryId: delivery.id,
+              result: "PENDING",
+            },
+            blockingReason: null,
+          },
+        },
+      },
+    },
+  });
+  return { ...fixture, conversation, delivery, operation, assigneeId };
+}
+
 async function deliveryWithAttempts(id) {
   return prisma.assistantOutboundDelivery.findUniqueOrThrow({
     where: { id },
@@ -667,7 +784,7 @@ test("O/P — restart matrix mantém terminais, recupera somente elegíveis e sa
   );
 });
 
-test("Q — handoff legado usa recovery sem adquirir semântica operacional", async () => {
+test("Q — handoff legado sem operação verificada é bloqueado sem outbound", async () => {
   const fixture = await seedRecoveryDelivery("ac", {
     handoff: true,
     content: "Transferindo para um atendente...",
@@ -683,11 +800,178 @@ test("Q — handoff legado usa recovery sem adquirir semântica operacional", as
     fixture.scope.accountId,
     fixture.scope.externalConversationId,
   );
-  assert.equal(persisted.status, "ACKNOWLEDGED");
+  assert.equal(persisted.status, "CANCELLED_STALE");
+  assert.equal(persisted.retrySafety, "NOT_RETRYABLE");
+  assert.equal(persisted.attemptCount, 0);
   assert.equal(conversation.aiActive, true);
   assert.equal(conversation.pausedByHuman, false);
   assert.equal(remote.assignee, null);
   assert.equal(remote.team, null);
   assert.deepEqual(remote.labels, []);
+  assert.equal(chatwoot.calls("chatwoot_outbound").length, 0);
+});
+
+test("R — handoff operacional verificado recupera confirmação e conclui operação", async () => {
+  const fixture = await seedVerifiedHandoffRecoveryDelivery("ad");
+  const [result] = await createRecoveryService().runOutboundRecoveryOnce({
+    deliveryIds: [fixture.delivery.id],
+  });
+  assert.equal(result.status, "ACKNOWLEDGED");
+  const persisted = await deliveryWithAttempts(fixture.delivery.id);
+  const operation = await prisma.assistantHandoffOperation.findUniqueOrThrow({
+    where: { id: fixture.operation.id },
+  });
+  assert.equal(persisted.status, "ACKNOWLEDGED");
+  assert.equal(persisted.attemptCount, 1);
+  assert.equal(operation.status, "COMPLETED");
+  assert.ok(operation.completedAt);
   assert.equal(chatwoot.calls("chatwoot_outbound").length, 1);
+});
+
+test("S — controle stale antes da fronteira cancela e supersede handoff", async () => {
+  const fixture = await seedVerifiedHandoffRecoveryDelivery("ae", {
+    status: "SENDING",
+    attemptCount: 1,
+    boundaryStartedAt: null,
+    claimExpiresAt: new Date(Date.now() + 60_000),
+  });
+  await prisma.assistantConversation.update({
+    where: { id: fixture.scope.internalConversationId },
+    data: { controlRevision: { increment: 1 } },
+  });
+  const [result] = await createRecoveryService().runOutboundRecoveryOnce({
+    deliveryIds: [fixture.delivery.id],
+  });
+  const persisted = await deliveryWithAttempts(fixture.delivery.id);
+  const operation = await prisma.assistantHandoffOperation.findUniqueOrThrow({
+    where: { id: fixture.operation.id },
+  });
+  const runtimeLog = await prisma.assistantRuntimeLog.findFirstOrThrow({
+    where: { assistantMessageId: fixture.assistantMessage.id },
+  });
+  const handoff = runtimeLog.metadata.turnExecutionManifest.handoff;
+  assert.equal(result.action, "CANCELLED_STALE");
+  assert.equal(persisted.status, "CANCELLED_STALE");
+  assert.equal(persisted.retrySafety, "NOT_RETRYABLE");
+  assert.equal(persisted.attempts[0].result, "CANCELLED_STALE");
+  assert.equal(operation.status, "SUPERSEDED");
+  assert.ok(operation.supersededAt);
+  assert.equal(handoff.status, "SUPERSEDED");
+  assert.equal(handoff.confirmation.authorized, false);
+  assert.equal(handoff.confirmation.result, "NOT_AUTHORIZED");
+  assert.equal(chatwoot.calls("chatwoot_outbound").length, 0);
+});
+
+test("T — controle stale após fronteira preserva incerteza e exige reconciliação", async () => {
+  const fixture = await seedVerifiedHandoffRecoveryDelivery("af", {
+    status: "SENDING",
+    attemptCount: 1,
+    boundaryStartedAt: new Date(Date.now() - 1_000),
+    claimExpiresAt: new Date(Date.now() + 60_000),
+  });
+  await prisma.assistantConversation.update({
+    where: { id: fixture.scope.internalConversationId },
+    data: { controlRevision: { increment: 1 } },
+  });
+  const [result] = await createRecoveryService().runOutboundRecoveryOnce({
+    deliveryIds: [fixture.delivery.id],
+  });
+  const persisted = await deliveryWithAttempts(fixture.delivery.id);
+  const operation = await prisma.assistantHandoffOperation.findUniqueOrThrow({
+    where: { id: fixture.operation.id },
+  });
+  assert.equal(result.action, "CANCELLED_STALE");
+  assert.equal(persisted.status, "UNCERTAIN");
+  assert.equal(persisted.retrySafety, "RECONCILE_REQUIRED");
+  assert.equal(persisted.recoveryBlockedReason, "RECONCILIATION_REQUIRED");
+  assert.equal(persisted.attempts[0].result, "UNCERTAIN");
+  assert.equal(operation.status, "SUPERSEDED");
+  assert.ok(operation.supersededAt);
+  assert.equal(operation.errorCode, "CONTROL_CHANGED_AFTER_OUTBOUND_BOUNDARY");
+  assert.equal(chatwoot.calls("chatwoot_outbound").length, 0);
+});
+
+test("U — finalização de delivery e operação é atômica quando CAS da operação falha", async () => {
+  const fixture = await seedVerifiedHandoffRecoveryDelivery("ag");
+  const coordinator = new OutboundRecoveryCoordinator({
+    prisma,
+    send: async () => {
+      throw new Error("UNUSED_SEND");
+    },
+    reconcile: async () => ({
+      status: "INCONCLUSIVE",
+      externalMessageId: null,
+      evidenceType: "REMOTE_LIST_INCONCLUSIVE",
+    }),
+  });
+  const claim = await coordinator.claimDelivery(fixture.delivery.id);
+  assert.ok(claim.attemptId);
+  assert.ok(claim.claimToken);
+  await prisma.assistantHandoffOperation.update({
+    where: { id: fixture.operation.id },
+    data: { status: "RECONCILIATION_REQUIRED" },
+  });
+  await assert.rejects(
+    coordinator.finishClaim({
+      deliveryId: fixture.delivery.id,
+      attemptId: claim.attemptId,
+      claimToken: claim.claimToken,
+      result: {
+        status: "ACKNOWLEDGED",
+        retrySafety: "NOT_RETRYABLE",
+        externalMessageId: "atomic-ack",
+        httpStatus: 201,
+        errorClass: null,
+        errorCode: null,
+      },
+    }),
+    /HANDOFF_OPERATION_FINALIZATION_FAILED/,
+  );
+  const persisted = await deliveryWithAttempts(fixture.delivery.id);
+  const operation = await prisma.assistantHandoffOperation.findUniqueOrThrow({
+    where: { id: fixture.operation.id },
+  });
+  assert.equal(persisted.status, "SENDING");
+  assert.equal(persisted.attempts[0].result, "SENDING");
+  assert.equal(operation.status, "RECONCILIATION_REQUIRED");
+});
+
+test("V — ACK persistido repara operação pendente sem novo outbound", async () => {
+  const fixture = await seedVerifiedHandoffRecoveryDelivery("ah", {
+    status: "ACKNOWLEDGED",
+    retrySafety: "NOT_RETRYABLE",
+    attemptCount: 1,
+    externalMessageId: "persisted-handoff-ack",
+  });
+  const [result] = await createRecoveryService().runOutboundRecoveryOnce({
+    deliveryIds: [fixture.delivery.id],
+  });
+  const operation = await prisma.assistantHandoffOperation.findUniqueOrThrow({
+    where: { id: fixture.operation.id },
+  });
+  assert.equal(result.action, "RECONCILED");
+  assert.equal(result.status, "ACKNOWLEDGED");
+  assert.equal(operation.status, "COMPLETED");
+  assert.equal(chatwoot.calls("chatwoot_outbound").length, 0);
+});
+
+test("W — identidade ou destino inconsistente nunca autoriza recovery de handoff", async () => {
+  const identityMismatch = await seedVerifiedHandoffRecoveryDelivery("ai", {
+    operationData: { policyVersion: "UNVERIFIED_POLICY" },
+  });
+  const destinationMismatch = await seedVerifiedHandoffRecoveryDelivery("aj", {
+    observedAssigneeId: "different_agent",
+  });
+  await createRecoveryService().runOutboundRecoveryOnce({
+    deliveryIds: [identityMismatch.delivery.id, destinationMismatch.delivery.id],
+  });
+  for (const fixture of [identityMismatch, destinationMismatch]) {
+    const persisted = await deliveryWithAttempts(fixture.delivery.id);
+    const operation = await prisma.assistantHandoffOperation.findUniqueOrThrow({
+      where: { id: fixture.operation.id },
+    });
+    assert.equal(persisted.status, "CANCELLED_STALE");
+    assert.equal(operation.status, "SUPERSEDED");
+  }
+  assert.equal(chatwoot.calls("chatwoot_outbound").length, 0);
 });

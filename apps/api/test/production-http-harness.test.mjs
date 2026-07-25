@@ -84,6 +84,7 @@ function assertControlTrace(
     effectiveRevision = acceptedRevision,
     requiredCheckpoints = [],
     blockedCheckpoint = null,
+    authorizedTransition = null,
   } = {},
 ) {
   assert.equal(manifest.control.schemaVersion, "CONVERSATION_CONTROL_SNAPSHOT_V1");
@@ -105,6 +106,29 @@ function assertControlTrace(
     assert.equal(
       manifest.control.checkpoints.every((record) => record.result === "PASSED"),
       true,
+    );
+  }
+  if (authorizedTransition) {
+    assert.equal(manifest.control.authorizedTransitions.length, 1);
+    assert.match(
+      manifest.control.authorizedTransitions[0].reason,
+      authorizedTransition.reasonPattern,
+    );
+    assert.equal(
+      manifest.control.authorizedTransitions[0].previousRevision,
+      authorizedTransition.previousRevision,
+    );
+    assert.equal(
+      manifest.control.authorizedTransitions[0].currentRevision,
+      authorizedTransition.currentRevision,
+    );
+    assert.equal(
+      manifest.control.authorizedTransitions[0].previousContextVersion,
+      authorizedTransition.contextVersion,
+    );
+    assert.equal(
+      manifest.control.authorizedTransitions[0].currentContextVersion,
+      authorizedTransition.contextVersion,
     );
   }
 }
@@ -154,17 +178,23 @@ async function outboundDeliveriesFor(scope) {
   });
 }
 
-function assertAcknowledgedDelivery(delivery, manifest, externalMessageId) {
+function assertAcknowledgedDelivery(
+  delivery,
+  manifest,
+  externalMessageId,
+  {
+    expectedControlRevision = manifest.control.acceptedSnapshot.controlRevision,
+    handoffOperationId = null,
+  } = {},
+) {
   assert.equal(delivery.turnExecutionId, manifest.turnExecutionId);
   assert.equal(delivery.decisionId, manifest.decisionId);
   assert.equal(delivery.blockOrdinal, 1);
   assert.match(delivery.idempotencyKey, /^outbound_v1_[a-f0-9]{32}$/);
   assert.equal(delivery.policyVersion, "V1_COMPATIBILITY_POLICY");
   assert.equal(delivery.expectedContextVersion, manifest.identity.contextVersion);
-  assert.equal(
-    delivery.expectedControlRevision,
-    manifest.control.acceptedSnapshot.controlRevision,
-  );
+  assert.equal(delivery.expectedControlRevision, expectedControlRevision);
+  assert.equal(delivery.handoffOperationId, handoffOperationId);
   assert.equal(delivery.sender, "CHATWOOT_V1");
   assert.match(delivery.payloadHash, /^sha256:[a-f0-9]{64}$/);
   assert.ok(delivery.payloadSize > 0);
@@ -244,7 +274,7 @@ async function assertRuntimeV2Absent(scope) {
   }
 }
 
-async function postWebhook(scope, { content, messageId }) {
+async function postWebhook(scope, { content, messageId, aiActive = true }) {
   const envelope = createSanitizedChatwootEnvelope({
     accountId: scope.accountId,
     inboxId: scope.inboxId,
@@ -252,13 +282,220 @@ async function postWebhook(scope, { content, messageId }) {
     contactId: scope.contactId,
     messageId,
     content,
-    aiActive: true,
+    aiActive,
   });
   chatwoot.noteInbound(envelope);
   return application.postChatwootWebhook(envelope, {
     webhookSecret: TEST_WEBHOOK_SECRET,
     requestId: `request-${messageId}`,
   });
+}
+
+function handoffConversationPath(scope) {
+  return `/api/v1/accounts/${scope.accountId}/conversations/${scope.externalConversationId}`;
+}
+
+function setHandoffRemoteConversation(
+  scope,
+  {
+    aiActive = true,
+    status = "open",
+    assignee = null,
+    team = null,
+    labels = [],
+  } = {},
+) {
+  chatwoot.setConversation({
+    accountId: scope.accountId,
+    conversationId: scope.externalConversationId,
+    inboxId: scope.inboxId,
+    aiActive,
+    status,
+    assignee,
+    team,
+    labels,
+  });
+}
+
+async function loadHandoffEvidence(scope) {
+  const conversation = await prisma.assistantConversation.findFirstOrThrow({
+    where: {
+      companyId: scope.companyId,
+      externalConversationId: scope.externalConversationId,
+    },
+  });
+  const [messages, runtimeLogs, operations, deliveries] = await Promise.all([
+    prisma.assistantConversationMessage.findMany({
+      where: { companyId: scope.companyId, conversationId: conversation.id },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    }),
+    prisma.assistantRuntimeLog.findMany({
+      where: { companyId: scope.companyId, conversationId: conversation.id },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    }),
+    prisma.assistantHandoffOperation.findMany({
+      where: { companyId: scope.companyId, conversationId: conversation.id },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    }),
+    outboundDeliveriesFor(scope),
+  ]);
+  return {
+    conversation,
+    messages,
+    runtimeLogs,
+    operations,
+    deliveries,
+    assistantMessages: messages.filter((message) => message.role === "assistant"),
+    userMessages: messages.filter((message) => message.role === "user"),
+    manifest: runtimeLogs.length > 0
+      ? turnManifestOf(runtimeLogs[runtimeLogs.length - 1])
+      : null,
+  };
+}
+
+function assertNoProviderCallsForHandoff() {
+  assert.equal(provider.calls("embedding").length, 0);
+  assert.equal(provider.calls("intent_classification").length, 0);
+  assert.equal(provider.calls("final_generation").length, 0);
+  assert.equal(provider.calls("memory_extraction").length, 0);
+  assert.equal(provider.toolCallRequestCount(), 0);
+  assert.equal(provider.toolCallReturnCount(), 0);
+}
+
+function assertLocallyBlockedHandoff(conversation, {
+  contextVersion = 1,
+  controlRevision = 1,
+} = {}) {
+  assert.equal(conversation.currentContextVersion, contextVersion);
+  assert.equal(conversation.controlRevision, controlRevision);
+  assert.equal(conversation.aiActive, false);
+  assert.equal(conversation.pausedByHuman, true);
+  assert.equal(conversation.status, "ACTIVE");
+  assert.equal(conversation.pauseReason, "OPERATIONAL_HUMAN_HANDOFF");
+  assert.ok(conversation.lastAiPausedAt);
+}
+
+function assertOperationalHandoffDecision(manifest, scope, {
+  operation,
+  status,
+  destinationType,
+  confirmationAuthorized,
+  confirmationResult,
+  outboundResult,
+  remoteMutationResult,
+  remoteVerificationResult,
+  effectiveRevision = 1,
+  blockingReason = null,
+} = {}) {
+  assertV1TurnManifest(manifest, scope);
+  assertSealedV1Decision(manifest, {
+    terminalPath: "OPERATIONAL_HUMAN_HANDOFF",
+    decisionType: "OPERATIONAL_HANDOFF",
+    stateEffect: "BLOCK_AI_AND_HANDOFF",
+  });
+  assert.equal(manifest.provider.finalGeneration.count, 0);
+  assert.equal(manifest.handoff.schemaVersion, "TURN_EXECUTION_HANDOFF_V1");
+  assert.equal(manifest.handoff.operationId, operation.id);
+  assert.equal(manifest.handoff.status, status);
+  assert.equal(manifest.handoff.destination.type, destinationType);
+  assert.equal(
+    manifest.handoff.destination.resolution,
+    destinationType === "UNRESOLVED" ? "UNRESOLVED" : "RESOLVED",
+  );
+  assert.equal(manifest.handoff.expectedContextVersion, scope.contextVersion);
+  assert.equal(manifest.handoff.expectedControlRevision, 0);
+  assert.equal(manifest.handoff.postBlockControlRevision, 1);
+  assert.equal(manifest.handoff.localBlockResult, "CONFIRMED");
+  assert.equal(manifest.handoff.remoteMutation.result, remoteMutationResult);
+  assert.equal(
+    manifest.handoff.remoteVerification.result,
+    remoteVerificationResult,
+  );
+  assert.equal(manifest.handoff.confirmation.authorized, confirmationAuthorized);
+  assert.equal(manifest.handoff.confirmation.decisionId, manifest.decisionId);
+  assert.equal(manifest.handoff.confirmation.result, confirmationResult);
+  assert.equal(manifest.handoff.blockingReason, blockingReason);
+  assert.equal(manifest.outbound.result, outboundResult);
+  assertControlTrace(manifest, {
+    acceptedRevision: 0,
+    effectiveRevision,
+    requiredCheckpoints: confirmationAuthorized
+      ? ["ADMISSION", "PRE_SEAL", "PRE_EFFECTS", "PRE_OUTBOUND"]
+      : ["ADMISSION", "PRE_SEAL"],
+    authorizedTransition: {
+      reasonPattern: /^OPERATIONAL_HUMAN_HANDOFF:/,
+      previousRevision: 0,
+      currentRevision: 1,
+      contextVersion: scope.contextVersion,
+    },
+  });
+}
+
+function assertHandoffRemoteCallOrder(scope, {
+  expectMutation = true,
+  expectOutbound = true,
+} = {}) {
+  const path = handoffConversationPath(scope);
+  const reads = chatwoot.calls("chatwoot_read");
+  const mutations = chatwoot.calls("chatwoot_mutation");
+  const outbounds = chatwoot.calls("chatwoot_outbound");
+  assert.equal(reads[0]?.path, path);
+  if (expectMutation) {
+    assert.equal(mutations.length, 1);
+    assert.equal(mutations[0].method, "PUT");
+    assert.equal(mutations[0].path, path);
+    assert.deepEqual(mutations[0].body, { ai_active: false });
+    assert.equal(reads.length, 2);
+    assert.ok(reads[0].order < mutations[0].order);
+    assert.ok(mutations[0].order < reads[1].order);
+  } else {
+    assert.equal(mutations.length, 0);
+    assert.equal(reads.length, 1);
+  }
+  if (expectOutbound) {
+    assert.equal(outbounds.length, 1);
+    assert.ok(reads.at(-1).order < outbounds[0].order);
+  } else {
+    assert.equal(outbounds.length, 0);
+  }
+}
+
+function assertWithheldOperationalHandoff(evidence, scope, {
+  destinationType,
+  operationDestinationType,
+  remoteMutationResult,
+  remoteVerificationResult,
+  blockingReason,
+} = {}) {
+  assertLocallyBlockedHandoff(evidence.conversation);
+  assert.equal(evidence.operations.length, 1);
+  assert.equal(evidence.runtimeLogs.length, 1);
+  assert.equal(evidence.assistantMessages.length, 0);
+  assert.equal(evidence.deliveries.length, 0);
+  const [operation] = evidence.operations;
+  assert.equal(operation.status, "RECONCILIATION_REQUIRED");
+  assert.equal(operation.destinationType, operationDestinationType);
+  assert.equal(operation.errorCode, blockingReason);
+  assert.equal(evidence.runtimeLogs[0].status, "SKIPPED");
+  assert.equal(evidence.runtimeLogs[0].assistantMessageId, null);
+  assertOperationalHandoffDecision(evidence.manifest, scope, {
+    operation,
+    status: "RECONCILIATION_REQUIRED",
+    destinationType,
+    confirmationAuthorized: false,
+    confirmationResult: "NOT_AUTHORIZED",
+    outboundResult: "NOT_ATTEMPTED",
+    remoteMutationResult,
+    remoteVerificationResult,
+    blockingReason,
+  });
+  assert.equal(evidence.manifest.outbound.planned, false);
+  assert.equal(evidence.manifest.outbound.attempted, false);
+  assert.equal(evidence.manifest.outbound.attemptCount, 0);
+  assert.equal(evidence.manifest.outbound.sender, "NOT_APPLICABLE");
+  assert.equal(evidence.manifest.handoff.confirmation.deliveryId, null);
+  assertNoProviderCallsForHandoff();
+  return operation;
 }
 
 function assertExternalCallSummary(expected) {
@@ -868,13 +1105,16 @@ test(
 );
 
 test(
-  "F — handoff legado permanece textual, sem transição operacional, pelo executor único",
+  "F — handoff com assignee existente bloqueia localmente, verifica o remoto e só então confirma",
   { concurrency: false },
   async (t) => {
     const scope = await seedProductionHttpFixture(prisma, {
       label: "f",
       chatwootBaseUrl: chatwoot.baseUrl,
       providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    setHandoffRemoteConversation(scope, {
+      assignee: { id: "block4a-human-assignee-f" },
     });
     const inboundContent = "Quero falar com um atendente";
     const result = await postWebhook(scope, {
@@ -883,56 +1123,67 @@ test(
     });
     assert.equal(result.response.status, 201);
 
-    const conversation = await prisma.assistantConversation.findFirstOrThrow({
-      where: { companyId: scope.companyId, externalConversationId: scope.externalConversationId },
-    });
-    assert.equal(conversation.aiActive, true);
-    assert.equal(conversation.pausedByHuman, false);
-    assert.equal(conversation.status, "ACTIVE");
-
-    const [assistantMessage, runtimeLog] = await Promise.all([
-      prisma.assistantConversationMessage.findFirstOrThrow({
-        where: {
-          companyId: scope.companyId,
-          conversationId: conversation.id,
-          role: "assistant",
-        },
-      }),
-      prisma.assistantRuntimeLog.findFirstOrThrow({
-        where: { companyId: scope.companyId },
-        orderBy: { createdAt: "desc" },
-      }),
-    ]);
+    const evidence = await loadHandoffEvidence(scope);
+    assertLocallyBlockedHandoff(evidence.conversation);
+    assert.equal(evidence.operations.length, 1);
+    assert.equal(evidence.runtimeLogs.length, 1);
+    assert.equal(evidence.assistantMessages.length, 1);
+    assert.equal(evidence.deliveries.length, 1);
+    const [operation] = evidence.operations;
+    const [assistantMessage] = evidence.assistantMessages;
+    const [delivery] = evidence.deliveries;
     assert.equal(assistantMessage.content, "Transferindo para um atendente...");
+    assert.equal(operation.status, "COMPLETED");
+    assert.equal(operation.destinationType, "EXISTING_ASSIGNEE");
+    assert.equal(operation.destinationResolution, "RESOLVED");
+    assert.equal(operation.destinationAssigneeId, "block4a-human-assignee-f");
+    assert.equal(operation.destinationTeamId, null);
+    assert.equal(operation.expectedControlRevision, 0);
+    assert.equal(operation.postBlockControlRevision, 1);
+    assert.equal(operation.remoteMutationResult, "ACKNOWLEDGED");
+    assert.equal(operation.remoteVerificationResult, "CONFIRMED");
+    assert.equal(operation.observedAiActive, false);
+    assert.ok(operation.verifiedAt);
+    assert.ok(operation.confirmationAuthorizedAt);
+    assert.ok(operation.completedAt);
 
-    const manifest = turnManifestOf(runtimeLog);
-    assertV1TurnManifest(manifest, scope);
-    assertSealedV1Decision(manifest, {
-      terminalPath: "EXPLICIT_HUMAN_HANDOFF_LEGACY",
-      decisionType: "LEGACY_HANDOFF_TEXT",
-      stateEffect: "LEGACY_HANDOFF_TEXT_ONLY",
+    const manifest = evidence.manifest;
+    assertOperationalHandoffDecision(manifest, scope, {
+      operation,
+      status: "COMPLETED",
+      destinationType: "ASSIGNEE",
+      confirmationAuthorized: true,
+      confirmationResult: "ACKNOWLEDGED",
+      outboundResult: "ACKNOWLEDGED",
+      remoteMutationResult: "ACKNOWLEDGED",
+      remoteVerificationResult: "CONFIRMED",
     });
-    assert.equal(manifest.provider.finalGeneration.count, 0);
-    assert.equal(manifest.outbound.result, "ACKNOWLEDGED");
-    const handoffDeliveries = await outboundDeliveriesFor(scope);
-    assert.equal(handoffDeliveries.length, 1);
     assertAcknowledgedDelivery(
-      handoffDeliveries[0],
+      delivery,
       manifest,
       chatwoot.calls("chatwoot_outbound")[0].response.body.id,
+      {
+        expectedControlRevision: 1,
+        handoffOperationId: operation.id,
+      },
     );
+    assert.equal(delivery.handoff, true);
+    assert.equal(manifest.handoff.confirmation.deliveryId, delivery.id);
+    assert.equal(assistantMessage.externalPayload?.handoffOperationId, operation.id);
 
     const remoteConversation = chatwoot.getConversation(
       scope.accountId,
       scope.externalConversationId,
     );
-    assert.equal(remoteConversation.ai_active, true);
+    assert.equal(remoteConversation.ai_active, false);
     assert.equal(remoteConversation.status, "open");
-    assert.equal(remoteConversation.assignee, null);
+    assert.deepEqual(remoteConversation.assignee, {
+      id: "block4a-human-assignee-f",
+    });
     assert.equal(remoteConversation.team, null);
     assert.deepEqual(remoteConversation.labels, []);
-    assert.equal(chatwoot.calls("chatwoot_mutation").length, 0);
-    assert.equal(chatwoot.calls("chatwoot_outbound").length, 1);
+    assertHandoffRemoteCallOrder(scope);
+    assertNoProviderCallsForHandoff();
     assertSanitizedTurnManifest(manifest, { inboundContent });
     await assertRuntimeV2Absent(scope);
     t.diagnostic(
@@ -944,12 +1195,644 @@ test(
           memoryExtraction: 0,
           toolCapableGeneration: 0,
           toolCallsReturned: 0,
-          chatwootReads: 0,
-          chatwootMutations: 0,
+          chatwootReads: 2,
+          chatwootMutations: 1,
           outbound: 1,
         }),
       )}`,
     );
+  },
+);
+
+test(
+  "4A-B — handoff com team existente preserva o destino e conclui uma única confirmação",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "ak",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    setHandoffRemoteConversation(scope, {
+      team: { id: "block4a-human-team-o" },
+    });
+
+    const result = await postWebhook(scope, {
+      content: "Quero falar com um atendente",
+      messageId: "block4a-o-team-handoff",
+    });
+    assert.equal(result.response.status, 201);
+    const evidence = await loadHandoffEvidence(scope);
+    assertLocallyBlockedHandoff(evidence.conversation);
+    assert.equal(evidence.operations.length, 1);
+    assert.equal(evidence.assistantMessages.length, 1);
+    assert.equal(evidence.deliveries.length, 1);
+    const [operation] = evidence.operations;
+    assert.equal(operation.status, "COMPLETED");
+    assert.equal(operation.destinationType, "EXISTING_TEAM");
+    assert.equal(operation.destinationResolution, "RESOLVED");
+    assert.equal(operation.destinationAssigneeId, null);
+    assert.equal(operation.destinationTeamId, "block4a-human-team-o");
+    assertOperationalHandoffDecision(evidence.manifest, scope, {
+      operation,
+      status: "COMPLETED",
+      destinationType: "TEAM",
+      confirmationAuthorized: true,
+      confirmationResult: "ACKNOWLEDGED",
+      outboundResult: "ACKNOWLEDGED",
+      remoteMutationResult: "ACKNOWLEDGED",
+      remoteVerificationResult: "CONFIRMED",
+    });
+    assertAcknowledgedDelivery(
+      evidence.deliveries[0],
+      evidence.manifest,
+      chatwoot.calls("chatwoot_outbound")[0].response.body.id,
+      { expectedControlRevision: 1, handoffOperationId: operation.id },
+    );
+    const remote = chatwoot.getConversation(
+      scope.accountId,
+      scope.externalConversationId,
+    );
+    assert.equal(remote.ai_active, false);
+    assert.equal(remote.assignee, null);
+    assert.deepEqual(remote.team, { id: "block4a-human-team-o" });
+    assertHandoffRemoteCallOrder(scope);
+    assertNoProviderCallsForHandoff();
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "4A-C — destino humano não resolvido mantém bloqueio local e retém confirmação",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "al",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    setHandoffRemoteConversation(scope);
+    const inboundContent = "Quero falar com um atendente";
+
+    const result = await postWebhook(scope, {
+      content: inboundContent,
+      messageId: "block4a-p-unresolved-handoff",
+    });
+    assert.equal(result.response.status, 201);
+    const evidence = await loadHandoffEvidence(scope);
+    const operation = assertWithheldOperationalHandoff(evidence, scope, {
+      destinationType: "UNRESOLVED",
+      operationDestinationType: "UNRESOLVED",
+      remoteMutationResult: "NOT_ATTEMPTED",
+      remoteVerificationResult: "NOT_ATTEMPTED",
+      blockingReason: "DESTINATION_UNRESOLVED",
+    });
+    assert.equal(operation.attemptCount, 0);
+    assert.equal(operation.destinationResolution, "UNRESOLVED");
+    assertHandoffRemoteCallOrder(scope, {
+      expectMutation: false,
+      expectOutbound: false,
+    });
+    assertSanitizedTurnManifest(evidence.manifest, { inboundContent });
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "4A-D — mutation 4xx não confirma transferência e mantém a IA local bloqueada",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "am",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    setHandoffRemoteConversation(scope, {
+      assignee: { id: "block4a-human-assignee-q" },
+    });
+    chatwoot.enqueueBehavior({
+      method: "PUT",
+      path: handoffConversationPath(scope),
+      kind: "configured_4xx",
+      status: 422,
+      body: { error: "SENSITIVE_HANDOFF_MUTATION_BODY" },
+    });
+
+    const result = await postWebhook(scope, {
+      content: "Quero falar com um atendente",
+      messageId: "block4a-q-handoff-4xx",
+    });
+    assert.equal(result.response.status, 201);
+    const evidence = await loadHandoffEvidence(scope);
+    const operation = assertWithheldOperationalHandoff(evidence, scope, {
+      destinationType: "ASSIGNEE",
+      operationDestinationType: "EXISTING_ASSIGNEE",
+      remoteMutationResult: "FAILED",
+      remoteVerificationResult: "FAILED",
+      blockingReason: "CHATWOOT_AI_ACTIVE_NOT_CONFIRMED_INACTIVE",
+    });
+    assert.equal(operation.attemptCount, 1);
+    assert.equal(operation.remoteMutationResult, "FAILED");
+    assert.equal(
+      operation.remoteMutationErrorCode,
+      "CHATWOOT_HANDOFF_MUTATION_HTTP_422",
+    );
+    assert.equal(operation.remoteVerificationResult, "NOT_CONFIRMED");
+    assert.equal(
+      chatwoot.getConversation(scope.accountId, scope.externalConversationId).ai_active,
+      true,
+    );
+    assertHandoffRemoteCallOrder(scope, { expectOutbound: false });
+    assert.doesNotMatch(
+      JSON.stringify({ operation, manifest: evidence.manifest }),
+      /SENSITIVE_HANDOFF_MUTATION_BODY/,
+    );
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "4A-E — mutation 5xx sem efeito exige reconciliação e não produz confirmação",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "an",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    setHandoffRemoteConversation(scope, {
+      assignee: { id: "block4a-human-assignee-r" },
+    });
+    chatwoot.enqueueBehavior({
+      method: "PUT",
+      path: handoffConversationPath(scope),
+      kind: "mutation_5xx_without_effect",
+      status: 503,
+    });
+
+    const result = await postWebhook(scope, {
+      content: "Quero falar com um atendente",
+      messageId: "block4a-r-handoff-5xx-no-effect",
+    });
+    assert.equal(result.response.status, 201);
+    const evidence = await loadHandoffEvidence(scope);
+    const operation = assertWithheldOperationalHandoff(evidence, scope, {
+      destinationType: "ASSIGNEE",
+      operationDestinationType: "EXISTING_ASSIGNEE",
+      remoteMutationResult: "FAILED",
+      remoteVerificationResult: "FAILED",
+      blockingReason: "CHATWOOT_AI_ACTIVE_NOT_CONFIRMED_INACTIVE",
+    });
+    assert.equal(
+      operation.remoteMutationErrorCode,
+      "CHATWOOT_HANDOFF_MUTATION_HTTP_503",
+    );
+    assert.equal(
+      chatwoot.getConversation(scope.accountId, scope.externalConversationId).ai_active,
+      true,
+    );
+    assertHandoffRemoteCallOrder(scope, { expectOutbound: false });
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "4A-F — mutation 5xx após efeito é verificada por GET sem segunda mutation",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "ao",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    setHandoffRemoteConversation(scope, {
+      assignee: { id: "block4a-human-assignee-s" },
+    });
+    chatwoot.enqueueBehavior({
+      method: "PUT",
+      path: handoffConversationPath(scope),
+      kind: "mutation_5xx_after_effect",
+      status: 503,
+    });
+
+    const result = await postWebhook(scope, {
+      content: "Quero falar com um atendente",
+      messageId: "block4a-s-handoff-5xx-after-effect",
+    });
+    assert.equal(result.response.status, 201);
+    const evidence = await loadHandoffEvidence(scope);
+    assertLocallyBlockedHandoff(evidence.conversation);
+    const [operation] = evidence.operations;
+    assert.equal(operation.status, "COMPLETED");
+    assert.equal(operation.remoteMutationResult, "FAILED");
+    assert.equal(
+      operation.remoteMutationErrorCode,
+      "CHATWOOT_HANDOFF_MUTATION_HTTP_503",
+    );
+    assert.equal(operation.remoteVerificationResult, "CONFIRMED");
+    assertOperationalHandoffDecision(evidence.manifest, scope, {
+      operation,
+      status: "COMPLETED",
+      destinationType: "ASSIGNEE",
+      confirmationAuthorized: true,
+      confirmationResult: "ACKNOWLEDGED",
+      outboundResult: "ACKNOWLEDGED",
+      remoteMutationResult: "FAILED",
+      remoteVerificationResult: "CONFIRMED",
+    });
+    assert.equal(evidence.assistantMessages.length, 1);
+    assert.equal(evidence.deliveries.length, 1);
+    assertHandoffRemoteCallOrder(scope);
+    assertNoProviderCallsForHandoff();
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "4A-G — timeout após efeito remoto é verificado sem repetir mutation",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "ap",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    setHandoffRemoteConversation(scope, {
+      assignee: { id: "block4a-human-assignee-t" },
+    });
+    chatwoot.enqueueBehavior({
+      method: "PUT",
+      path: handoffConversationPath(scope),
+      kind: "mutation_timeout_after_effect",
+      timeoutMs: 6_000,
+    });
+
+    const result = await postWebhook(scope, {
+      content: "Quero falar com um atendente",
+      messageId: "block4a-t-handoff-timeout-after-effect",
+    });
+    assert.equal(result.response.status, 201);
+    const evidence = await loadHandoffEvidence(scope);
+    const [operation] = evidence.operations;
+    assert.equal(operation.status, "COMPLETED");
+    assert.equal(operation.remoteMutationResult, "AMBIGUOUS");
+    assert.equal(operation.remoteVerificationResult, "CONFIRMED");
+    assertOperationalHandoffDecision(evidence.manifest, scope, {
+      operation,
+      status: "COMPLETED",
+      destinationType: "ASSIGNEE",
+      confirmationAuthorized: true,
+      confirmationResult: "ACKNOWLEDGED",
+      outboundResult: "ACKNOWLEDGED",
+      remoteMutationResult: "UNKNOWN",
+      remoteVerificationResult: "CONFIRMED",
+    });
+    assert.equal(evidence.deliveries.length, 1);
+    assertHandoffRemoteCallOrder(scope);
+    assertNoProviderCallsForHandoff();
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "4A-H — timeout sem efeito permanece inconclusivo e retém confirmação",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "aq",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    setHandoffRemoteConversation(scope, {
+      assignee: { id: "block4a-human-assignee-u" },
+    });
+    chatwoot.enqueueBehavior({
+      method: "PUT",
+      path: handoffConversationPath(scope),
+      kind: "mutation_timeout_without_effect",
+      timeoutMs: 6_000,
+    });
+
+    const result = await postWebhook(scope, {
+      content: "Quero falar com um atendente",
+      messageId: "block4a-u-handoff-timeout-no-effect",
+    });
+    assert.equal(result.response.status, 201);
+    const evidence = await loadHandoffEvidence(scope);
+    const operation = assertWithheldOperationalHandoff(evidence, scope, {
+      destinationType: "ASSIGNEE",
+      operationDestinationType: "EXISTING_ASSIGNEE",
+      remoteMutationResult: "UNKNOWN",
+      remoteVerificationResult: "FAILED",
+      blockingReason: "CHATWOOT_AI_ACTIVE_NOT_CONFIRMED_INACTIVE",
+    });
+    assert.equal(operation.remoteMutationResult, "AMBIGUOUS");
+    assert.equal(operation.remoteVerificationResult, "NOT_CONFIRMED");
+    assertHandoffRemoteCallOrder(scope, { expectOutbound: false });
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "4A-I — falha do outbound de confirmação não desfaz o handoff remoto confirmado",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "ar",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    setHandoffRemoteConversation(scope, {
+      assignee: { id: "block4a-human-assignee-v" },
+    });
+    chatwoot.enqueueBehavior({
+      category: "chatwoot_outbound",
+      kind: "configured_4xx",
+      status: 422,
+      body: { error: "SENSITIVE_CONFIRMATION_OUTBOUND_BODY" },
+    });
+
+    const result = await postWebhook(scope, {
+      content: "Quero falar com um atendente",
+      messageId: "block4a-v-handoff-confirmation-failed",
+    });
+    assert.equal(result.response.status, 201);
+    const evidence = await loadHandoffEvidence(scope);
+    assertLocallyBlockedHandoff(evidence.conversation);
+    assert.equal(evidence.operations.length, 1);
+    assert.equal(evidence.assistantMessages.length, 1);
+    assert.equal(evidence.deliveries.length, 1);
+    const [operation] = evidence.operations;
+    const [delivery] = evidence.deliveries;
+    assert.equal(operation.status, "CONFIRMATION_PENDING");
+    assert.equal(operation.remoteVerificationResult, "CONFIRMED");
+    assert.equal(delivery.handoffOperationId, operation.id);
+    assert.equal(delivery.status, "FAILED_TERMINAL");
+    assert.equal(delivery.retrySafety, "NOT_RETRYABLE");
+    assert.equal(delivery.attemptCount, 1);
+    assert.equal(delivery.externalMessageId, null);
+    assertOperationalHandoffDecision(evidence.manifest, scope, {
+      operation,
+      status: "CONFIRMATION_PENDING",
+      destinationType: "ASSIGNEE",
+      confirmationAuthorized: true,
+      confirmationResult: "FAILED",
+      outboundResult: "FAILED",
+      remoteMutationResult: "ACKNOWLEDGED",
+      remoteVerificationResult: "CONFIRMED",
+    });
+    assert.equal(evidence.manifest.handoff.confirmation.deliveryId, delivery.id);
+    assert.equal(
+      chatwoot.getConversation(scope.accountId, scope.externalConversationId).ai_active,
+      false,
+    );
+    assertHandoffRemoteCallOrder(scope);
+    assertNoProviderCallsForHandoff();
+    assert.doesNotMatch(
+      JSON.stringify({ operation, delivery, manifest: evidence.manifest }),
+      /SENSITIVE_CONFIRMATION_OUTBOUND_BODY/,
+    );
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "4A-J — duplicate após handoff concluído reutiliza operação, decisão e delivery",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "as",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    setHandoffRemoteConversation(scope, {
+      assignee: { id: "block4a-human-assignee-w" },
+    });
+    const input = {
+      content: "Quero falar com um atendente",
+      messageId: "block4a-w-handoff-duplicate-completed",
+    };
+    const first = await postWebhook(scope, input);
+    assert.equal(first.response.status, 201);
+    const before = await loadHandoffEvidence(scope);
+    const callCounts = {
+      reads: chatwoot.calls("chatwoot_read").length,
+      mutations: chatwoot.calls("chatwoot_mutation").length,
+      outbounds: chatwoot.calls("chatwoot_outbound").length,
+      provider: provider.requests.length,
+    };
+
+    const duplicate = await postWebhook(scope, input);
+    assert.equal(duplicate.response.status, 201);
+    assert.equal(duplicate.body?.ignored, true);
+    assert.equal(duplicate.body?.reason, "duplicate");
+    const afterDuplicate = await loadHandoffEvidence(scope);
+    assert.equal(afterDuplicate.operations.length, 1);
+    assert.equal(afterDuplicate.operations[0].id, before.operations[0].id);
+    assert.equal(afterDuplicate.manifest.turnExecutionId, before.manifest.turnExecutionId);
+    assert.equal(afterDuplicate.manifest.decisionId, before.manifest.decisionId);
+    assert.equal(afterDuplicate.deliveries.length, 1);
+    assert.equal(afterDuplicate.deliveries[0].id, before.deliveries[0].id);
+    assert.equal(afterDuplicate.deliveries[0].attemptCount, 1);
+    assert.deepEqual(
+      {
+        reads: chatwoot.calls("chatwoot_read").length,
+        mutations: chatwoot.calls("chatwoot_mutation").length,
+        outbounds: chatwoot.calls("chatwoot_outbound").length,
+        provider: provider.requests.length,
+      },
+      callCounts,
+    );
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "4A-K — duplicate de operação parcial não dispara reconciliação nem nova mutation",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "at",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    setHandoffRemoteConversation(scope);
+    const input = {
+      content: "Quero falar com um atendente",
+      messageId: "block4a-x-handoff-duplicate-partial",
+    };
+    const first = await postWebhook(scope, input);
+    assert.equal(first.response.status, 201);
+    const before = await loadHandoffEvidence(scope);
+    assert.equal(before.operations[0].status, "RECONCILIATION_REQUIRED");
+    const callCount = chatwoot.requests.length;
+
+    const duplicate = await postWebhook(scope, input);
+    assert.equal(duplicate.response.status, 201);
+    assert.equal(duplicate.body?.reason, "duplicate");
+    const afterDuplicate = await loadHandoffEvidence(scope);
+    assert.equal(afterDuplicate.operations.length, 1);
+    assert.equal(afterDuplicate.operations[0].id, before.operations[0].id);
+    assert.equal(afterDuplicate.operations[0].attemptCount, 0);
+    assert.equal(afterDuplicate.deliveries.length, 0);
+    assert.equal(chatwoot.requests.length, callCount);
+    assertNoProviderCallsForHandoff();
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "4A-L — reset concorrente supersede a operação e impede confirmação stale",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "au",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+      precreateConversation: true,
+    });
+    setHandoffRemoteConversation(scope, {
+      assignee: { id: "block4a-human-assignee-y" },
+    });
+    const mutation = chatwoot.deferNextMutation({
+      path: handoffConversationPath(scope),
+      effectTiming: "before_release",
+      outcome: "success",
+    });
+    const responsePromise = postWebhook(scope, {
+      content: "Quero falar com um atendente",
+      messageId: "block4a-y-handoff-reset-concurrent",
+    });
+    await waitFor(mutation.started, "handoff remote mutation start");
+    await waitFor(mutation.effectApplied, "handoff remote mutation effect");
+
+    const reset = await prisma.assistantConversation.updateMany({
+      where: {
+        id: scope.internalConversationId,
+        companyId: scope.companyId,
+        currentContextVersion: 1,
+        controlRevision: 1,
+        aiActive: false,
+        pausedByHuman: true,
+      },
+      data: {
+        currentContextVersion: { increment: 1 },
+        controlRevision: { increment: 1 },
+        aiActive: true,
+        pausedByHuman: false,
+        pauseReason: null,
+        resumeReason: "BLOCK4A_CONCURRENT_RESET_TEST",
+      },
+    });
+    assert.equal(reset.count, 1);
+    mutation.release();
+
+    const result = await responsePromise;
+    assert.equal(result.response.status, 201);
+    const evidence = await loadHandoffEvidence(scope);
+    assert.equal(evidence.conversation.currentContextVersion, 2);
+    assert.equal(evidence.conversation.controlRevision, 2);
+    assert.equal(evidence.conversation.aiActive, true);
+    assert.equal(evidence.conversation.pausedByHuman, false);
+    assert.equal(evidence.operations.length, 1);
+    assert.equal(evidence.operations[0].status, "SUPERSEDED");
+    assert.equal(evidence.operations[0].contextVersion, 1);
+    assert.equal(evidence.assistantMessages.length, 0);
+    assert.equal(evidence.deliveries.length, 0);
+    assert.equal(chatwoot.calls("chatwoot_mutation").length, 1);
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 0);
+    assert.equal(evidence.manifest.handoff.status, "SUPERSEDED");
+    assert.equal(evidence.manifest.handoff.confirmation.authorized, false);
+    assert.equal(evidence.manifest.outbound.result, "NOT_ATTEMPTED");
+    assertNoProviderCallsForHandoff();
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "4A-M — novo inbound após handoff permanece sem provider e sem resposta da IA",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "av",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    setHandoffRemoteConversation(scope, {
+      assignee: { id: "block4a-human-assignee-z" },
+    });
+    const first = await postWebhook(scope, {
+      content: "Quero falar com um atendente",
+      messageId: "block4a-z-handoff-first",
+    });
+    assert.equal(first.response.status, 201);
+    const before = await loadHandoffEvidence(scope);
+    assert.equal(before.operations[0].status, "COMPLETED");
+    assert.equal(before.assistantMessages.length, 1);
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 1);
+
+    const second = await postWebhook(scope, {
+      content: "Ainda estou aguardando uma pessoa",
+      messageId: "block4a-z-inbound-after-handoff",
+      aiActive: false,
+    });
+    assert.equal(second.response.status, 201);
+    assert.equal(second.body?.ignored, true);
+    const afterInbound = await loadHandoffEvidence(scope);
+    assertLocallyBlockedHandoff(afterInbound.conversation);
+    assert.equal(afterInbound.operations.length, 1);
+    assert.equal(afterInbound.assistantMessages.length, 1);
+    assert.equal(afterInbound.deliveries.length, 1);
+    assert.equal(provider.requests.length, 0);
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 1);
+    const remote = chatwoot.getConversation(
+      scope.accountId,
+      scope.externalConversationId,
+    );
+    assert.equal(
+      remote.messages.filter(
+        (message) => String(message.id) === "block4a-z-inbound-after-handoff",
+      ).length,
+      1,
+    );
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "4A-N — operação, manifesto e delivery de handoff permanecem sanitizados e V1",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "aw",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    setHandoffRemoteConversation(scope, {
+      assignee: { id: "block4a-human-assignee-aa" },
+    });
+    const inboundContent = "Quero falar com um atendente SEGREDO_HANDOFF_INTEGRAL";
+    const result = await postWebhook(scope, {
+      content: inboundContent,
+      messageId: "block4a-aa-handoff-sanitized",
+    });
+    assert.equal(result.response.status, 201);
+    const evidence = await loadHandoffEvidence(scope);
+    const serialized = JSON.stringify({
+      operation: evidence.operations[0],
+      manifest: evidence.manifest,
+      delivery: evidence.deliveries[0],
+    });
+    assert.doesNotMatch(serialized, /SEGREDO_HANDOFF_INTEGRAL/);
+    assert.doesNotMatch(serialized, /\+00000000000/);
+    assert.doesNotMatch(serialized, /block0-(?:webhook|chatwoot|provider)-token/);
+    assert.doesNotMatch(serialized, /"authorization"\s*:|"api_access_token"\s*:/i);
+    assert.doesNotMatch(serialized, /BASE DE CONHECIMENTO RELEVANTE/i);
+    assert.equal(evidence.manifest.policyVersion, "V1_COMPATIBILITY_POLICY");
+    assert.equal(evidence.operations[0].policyVersion, "V1_COMPATIBILITY_POLICY");
+    assertSanitizedTurnManifest(evidence.manifest, { inboundContent });
+    assertNoProviderCallsForHandoff();
+    await assertRuntimeV2Absent(scope);
   },
 );
 
@@ -1713,5 +2596,5 @@ test.todo(
   "Gap 4 — computador lento deverá qualificar ou orientar próximo passo sem diagnóstico factual ou resposta puramente genérica",
 );
 test.todo(
-  "Gap 5 — handoff deverá bloquear localmente, confirmar transição remota e destino humano antes da confirmação visível",
+  "Bloco 4B — operações parciais de handoff deverão possuir recovery e reconciliação automáticos sem duplicate como gatilho",
 );

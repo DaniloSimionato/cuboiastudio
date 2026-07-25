@@ -13,6 +13,7 @@ import { AssistantConversationsService } from "../dist/assistant-conversations/a
 import { deriveHumanHandoffSignal } from "../dist/runtime-v2/turn-understanding.js";
 import { IntentRouterService } from "../dist/intent-router/intent-router.service.js";
 import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
+import { createStatefulChatwootFake } from "./helpers/stateful-http-fakes.mjs";
 
 const positives = [
   ["Qual o horário de atendimento?", "WEEKLY_SUMMARY"],
@@ -379,7 +380,7 @@ function createDirectService(prisma, options = {}) {
       },
     },
     { buildRuntimeInputText: ({ rawText }) => rawText ?? "" },
-    {},
+    options.chatwootInboxConfigService ?? {},
   );
   service.sendChatwootOutboundText = async (payload) => {
     outboundCalls.push(payload);
@@ -512,6 +513,7 @@ async function createDirectFixture(prisma, overrides = {}) {
     companyId: `${prefix}-company`,
     assistantId: `${prefix}-assistant`,
     conversationId: `${prefix}-conversation`,
+    externalConversationId: `${prefix}-external-conversation`,
     accountId: "106",
     inboxId: "533",
   };
@@ -544,7 +546,7 @@ async function createDirectFixture(prisma, overrides = {}) {
       channelType: "WHATSAPP",
       externalAccountId: fixture.accountId,
       externalInboxId: fixture.inboxId,
-      externalConversationId: `${prefix}-external-conversation`,
+      externalConversationId: fixture.externalConversationId,
       currentContextVersion: 1,
     },
   });
@@ -596,6 +598,7 @@ async function cleanupDirectFixture(prisma, fixture) {
   await prisma.assistantConversationStateV2.deleteMany({ where: { companyId: fixture.companyId } });
   await prisma.assistantRuntimeLog.deleteMany({ where: { companyId: fixture.companyId } });
   await prisma.assistantOutboundDelivery.deleteMany({ where: { companyId: fixture.companyId } });
+  await prisma.assistantHandoffOperation.deleteMany({ where: { companyId: fixture.companyId } });
   await prisma.assistantConversationMessage.deleteMany({ where: { companyId: fixture.companyId } });
   await prisma.assistantConversation.deleteMany({ where: { companyId: fixture.companyId } });
   await prisma.assistant.deleteMany({ where: { companyId: fixture.companyId } });
@@ -613,7 +616,10 @@ async function withDirectFixture(overrides, run) {
     return await run({
       prisma,
       fixture,
-      ...createDirectService(prisma, { runtimeEnabled: overrides.runtimeEnabled }),
+      ...createDirectService(prisma, {
+        runtimeEnabled: overrides.runtimeEnabled,
+        chatwootInboxConfigService: overrides.chatwootInboxConfigService,
+      }),
     });
   } finally {
     if (oldEnabled === undefined) delete process.env.BUSINESS_HOURS_DIRECT_DETERMINISTIC_ENABLED;
@@ -636,7 +642,7 @@ function directInbound(fixture, message, externalMessageId, overrides = {}) {
       externalMessageId,
       externalAccountId: overrides.accountId ?? fixture.accountId,
       externalInboxId: overrides.inboxId ?? fixture.inboxId,
-      externalConversationId: `${fixture.conversationId}-external`,
+      externalConversationId: fixture.externalConversationId,
     },
     ...directAuth(fixture.companyId),
   };
@@ -1041,44 +1047,89 @@ test(
 test(
   "PostgreSQL: pedido explícito de humano mantém prioridade sobre a rota direta",
   { concurrency: false },
-  async () =>
-    withDirectFixture({}, async ({ prisma, fixture, service, providerCalls, outboundCalls }) => {
+  async () => {
+    const chatwoot = await createStatefulChatwootFake();
+    try {
       for (const [index, message] of [
         "Quero falar com humano, vocês estão abertos agora?",
         "Quero falar com humano, o técnico volta às 13?",
       ].entries()) {
-        const response = await service.sendMessage(
-          directInbound(fixture, message, `direct-handoff-priority-${index}`),
+        chatwoot.reset();
+        await withDirectFixture(
+          {
+            chatwootInboxConfigService: {
+              resolveActiveForAssistantConversation: async () => ({
+                isActive: true,
+                apiAccessToken: "direct-test-chatwoot-token",
+                baseUrl: chatwoot.baseUrl,
+                accountId: "106",
+                inboxId: "533",
+              }),
+            },
+          },
+          async ({ prisma, fixture, service, providerCalls, outboundCalls }) => {
+            chatwoot.setConversation({
+              accountId: fixture.accountId,
+              conversationId: fixture.externalConversationId,
+              inboxId: fixture.inboxId,
+              aiActive: true,
+              status: "open",
+              assignee: { id: `direct-human-${index}` },
+            });
+            const response = await service.sendMessage(
+              directInbound(fixture, message, `direct-handoff-priority-${index}`),
+            );
+            assert.equal(response.runtime.reason, "EXPLICIT_HUMAN_HANDOFF");
+            assert.equal(
+              response.assistantMessage.content,
+              "Transferindo para um atendente...",
+            );
+            const operation = await prisma.assistantHandoffOperation.findFirstOrThrow({
+              where: { companyId: fixture.companyId },
+            });
+            const conversation = await prisma.assistantConversation.findUniqueOrThrow({
+              where: { id: fixture.conversationId },
+            });
+            assert.equal(providerCalls.length, 0);
+            assert.equal(
+              outboundCalls.length,
+              1,
+              "verified handoff must produce exactly one confirmation outbound",
+            );
+            assert.equal(outboundCalls[0].handoff, true);
+            assert.equal(
+              await prisma.assistantRuntimeLog.count({
+                where: {
+                  companyId: fixture.companyId,
+                  mode: "business-hours-direct-deterministic",
+                },
+              }),
+              0,
+            );
+            const log = await prisma.assistantRuntimeLog.findFirstOrThrow({
+              where: { companyId: fixture.companyId, mode: "explicit-human-handoff" },
+            });
+            assert.equal(log.metadata.handoffTriggered, true);
+            assert.equal(log.metadata.providerCount, 0);
+            assert.equal(log.metadata.flowRouterUsed, false);
+            assert.equal(log.metadata.businessHoursRendererUsed, false);
+            assert.equal(operation.status, "COMPLETED");
+            assert.equal(conversation.aiActive, false);
+            assert.equal(conversation.pausedByHuman, true);
+            assert.equal(conversation.controlRevision, 1);
+            assert.equal(
+              await prisma.assistantConversationStateV2.count({
+                where: { companyId: fixture.companyId },
+              }),
+              0,
+            );
+          },
         );
-        assert.equal(response.runtime.reason, "EXPLICIT_HUMAN_HANDOFF");
-        assert.equal(response.assistantMessage.content, "Transferindo para um atendente...");
       }
-      assert.equal(providerCalls.length, 0);
-      assert.equal(outboundCalls.length, 2);
-      assert.equal(
-        outboundCalls.every((call) => call.handoff === true),
-        true,
-      );
-      assert.equal(
-        await prisma.assistantRuntimeLog.count({
-          where: { companyId: fixture.companyId, mode: "business-hours-direct-deterministic" },
-        }),
-        0,
-      );
-      const log = await prisma.assistantRuntimeLog.findFirstOrThrow({
-        where: { companyId: fixture.companyId, mode: "explicit-human-handoff" },
-      });
-      assert.equal(log.metadata.handoffTriggered, true);
-      assert.equal(log.metadata.providerCount, 0);
-      assert.equal(log.metadata.flowRouterUsed, false);
-      assert.equal(log.metadata.businessHoursRendererUsed, false);
-      assert.equal(
-        await prisma.assistantConversationStateV2.count({
-          where: { companyId: fixture.companyId },
-        }),
-        0,
-      );
-    }),
+    } finally {
+      await chatwoot.close();
+    }
+  },
 );
 
 test(

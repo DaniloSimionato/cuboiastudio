@@ -122,9 +122,12 @@ function consumeBehavior(queue, request) {
 function applyConfiguredBehavior({ behavior, record, response, timers }) {
   if (!behavior) return false;
 
-  if (behavior.kind === "timeout") {
+  if (
+    behavior.kind === "timeout" ||
+    behavior.kind === "mutation_timeout_without_effect"
+  ) {
     const timeoutMs = behavior.timeoutMs ?? 250;
-    record.response = { kind: "timeout", timeoutMs };
+    record.response = { kind: behavior.kind, timeoutMs };
     const timer = setTimeout(() => {
       timers.delete(timer);
       response.destroy();
@@ -133,7 +136,13 @@ function applyConfiguredBehavior({ behavior, record, response, timers }) {
     return true;
   }
 
-  const status = behavior.status ?? (behavior.kind === "accepted" ? 202 : 200);
+  const status =
+    behavior.status ??
+    (behavior.kind === "accepted"
+      ? 202
+      : behavior.kind === "mutation_5xx_without_effect"
+        ? 503
+        : 200);
   const body = behavior.body ?? { ok: status >= 200 && status < 300 };
   record.response = {
     kind: behavior.kind ?? "configured",
@@ -148,10 +157,86 @@ function chatwootConversationKey(accountId, conversationId) {
   return `${accountId}:${conversationId}`;
 }
 
+function applyAiActiveMutation(conversation, body) {
+  if (typeof body?.ai_active === "boolean") {
+    conversation.ai_active = body.ai_active;
+  }
+}
+
+function applyLegacyConversationMutation(conversation, body) {
+  applyAiActiveMutation(conversation, body);
+  if (typeof body?.status === "string") conversation.status = body.status;
+  if (Object.hasOwn(body ?? {}, "assignee")) conversation.assignee = body.assignee;
+  if (Object.hasOwn(body ?? {}, "team")) conversation.team = body.team;
+  if (Array.isArray(body?.labels)) conversation.labels = [...body.labels];
+}
+
+function conversationReadView(conversation, snapshot) {
+  if (!snapshot) return conversation;
+  return {
+    ...conversation,
+    ...(Object.hasOwn(snapshot, "aiActive")
+      ? { ai_active: snapshot.aiActive }
+      : Object.hasOwn(snapshot, "ai_active")
+        ? { ai_active: snapshot.ai_active }
+        : {}),
+    ...(Object.hasOwn(snapshot, "status") ? { status: snapshot.status } : {}),
+    ...(Object.hasOwn(snapshot, "assignee") ? { assignee: snapshot.assignee } : {}),
+    ...(Object.hasOwn(snapshot, "team") ? { team: snapshot.team } : {}),
+    ...(Object.hasOwn(snapshot, "labels")
+      ? { labels: Array.isArray(snapshot.labels) ? [...snapshot.labels] : conversation.labels }
+      : {}),
+  };
+}
+
+function conversationResponseBody(conversation, snapshot = null) {
+  const view = conversationReadView(conversation, snapshot);
+  return {
+    ...view,
+    custom_attributes: { ai_active: view.ai_active },
+    additional_attributes: {},
+    meta: { ai_active: view.ai_active },
+  };
+}
+
+function finishMutationResponse({ behavior, conversation, record, response, timers }) {
+  const outcome = behavior?.outcome ?? "success";
+  if (outcome === "timeout" || behavior?.kind === "mutation_timeout_after_effect") {
+    const timeoutMs = behavior?.timeoutMs ?? 100;
+    record.response = { kind: behavior?.kind ?? "mutation_timeout_after_effect", timeoutMs };
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      response.destroy();
+    }, timeoutMs);
+    timers.add(timer);
+    return;
+  }
+  if (outcome === "5xx" || behavior?.kind === "mutation_5xx_after_effect") {
+    const status = behavior?.status ?? 503;
+    const body = behavior?.body ?? { error: "mutation_applied_then_failed" };
+    record.response = {
+      kind: behavior?.kind ?? "mutation_5xx_after_effect",
+      status,
+      body,
+    };
+    writeJson(response, status, body);
+    return;
+  }
+  const status = behavior?.status ?? 200;
+  const body = behavior?.body ?? conversationResponseBody(conversation);
+  record.response = {
+    kind: behavior?.kind ?? "deferred_mutation",
+    status,
+    body,
+  };
+  writeJson(response, status, body);
+}
+
 export async function createStatefulChatwootFake() {
   const requests = [];
   const behaviorQueue = [];
   const conversations = new Map();
+  const conversationReadSnapshots = new Map();
   let order = 0;
   let outboundSequence = 0;
 
@@ -184,7 +269,13 @@ export async function createStatefulChatwootFake() {
 
     const configured = consumeBehavior(behaviorQueue, record);
     if (
-      !["accepted_timeout", "accepted_5xx"].includes(configured?.kind) &&
+      ![
+        "accepted_timeout",
+        "accepted_5xx",
+        "mutation_5xx_after_effect",
+        "mutation_timeout_after_effect",
+        "deferred_mutation",
+      ].includes(configured?.kind) &&
       applyConfiguredBehavior({ behavior: configured, record, response, timers })
     ) {
       return;
@@ -222,13 +313,15 @@ export async function createStatefulChatwootFake() {
     }
 
     if (method === "GET" && suffix === null) {
-      const responseBody = {
-        ...conversation,
-        custom_attributes: { ai_active: conversation.ai_active },
-        additional_attributes: {},
-        meta: { ai_active: conversation.ai_active },
+      const snapshots = conversationReadSnapshots.get(key);
+      const snapshot = snapshots?.shift() ?? null;
+      if (snapshots?.length === 0) conversationReadSnapshots.delete(key);
+      const responseBody = conversationResponseBody(conversation, snapshot);
+      record.response = {
+        kind: snapshot ? "conversation_snapshot" : "default",
+        status: 200,
+        body: responseBody,
       };
-      record.response = { kind: "default", status: 200, body: responseBody };
       writeJson(response, 200, responseBody);
       return;
     }
@@ -269,11 +362,42 @@ export async function createStatefulChatwootFake() {
     }
 
     if ((method === "PUT" || method === "PATCH") && suffix === null) {
-      if (typeof body?.ai_active === "boolean") conversation.ai_active = body.ai_active;
-      if (typeof body?.status === "string") conversation.status = body.status;
-      if (Object.hasOwn(body ?? {}, "assignee")) conversation.assignee = body.assignee;
-      if (Object.hasOwn(body ?? {}, "team")) conversation.team = body.team;
-      if (Array.isArray(body?.labels)) conversation.labels = [...body.labels];
+      if (
+        configured?.kind === "mutation_5xx_after_effect" ||
+        configured?.kind === "mutation_timeout_after_effect"
+      ) {
+        applyAiActiveMutation(conversation, body);
+        finishMutationResponse({
+          behavior: configured,
+          conversation,
+          record,
+          response,
+          timers,
+        });
+        return;
+      }
+      if (configured?.kind === "deferred_mutation") {
+        const effectTiming = configured.effectTiming ?? "before_release";
+        configured.markStarted?.();
+        if (effectTiming === "before_release") {
+          applyAiActiveMutation(conversation, body);
+          configured.markEffectApplied?.();
+        }
+        await configured.releaseSignal;
+        if (effectTiming === "after_release") {
+          applyAiActiveMutation(conversation, body);
+          configured.markEffectApplied?.();
+        }
+        finishMutationResponse({
+          behavior: configured,
+          conversation,
+          record,
+          response,
+          timers,
+        });
+        return;
+      }
+      applyLegacyConversationMutation(conversation, body);
       record.response = { kind: "default", status: 200, body: { ...conversation } };
       writeJson(response, 200, { ...conversation });
       return;
@@ -317,6 +441,39 @@ export async function createStatefulChatwootFake() {
     enqueueBehavior(behavior) {
       behaviorQueue.push({ ...behavior });
     },
+    deferNextMutation(behavior = {}) {
+      let markStarted;
+      let markEffectApplied;
+      let release;
+      let released = false;
+      const started = new Promise((resolve) => {
+        markStarted = resolve;
+      });
+      const effectApplied = new Promise((resolve) => {
+        markEffectApplied = resolve;
+      });
+      const releaseSignal = new Promise((resolve) => {
+        release = resolve;
+      });
+      behaviorQueue.push({
+        ...behavior,
+        method: "PUT",
+        category: "chatwoot_mutation",
+        kind: "deferred_mutation",
+        markStarted,
+        markEffectApplied,
+        releaseSignal,
+      });
+      return {
+        started,
+        effectApplied,
+        release() {
+          if (released) return;
+          released = true;
+          release();
+        },
+      };
+    },
     setConversation(input) {
       const key = chatwootConversationKey(String(input.accountId), String(input.conversationId));
       conversations.set(key, {
@@ -330,6 +487,19 @@ export async function createStatefulChatwootFake() {
         labels: [...(input.labels ?? [])],
         messages: [...(input.messages ?? [])],
       });
+    },
+    queueConversationReadSnapshot(input) {
+      const key = chatwootConversationKey(String(input.accountId), String(input.conversationId));
+      const snapshots = conversationReadSnapshots.get(key) ?? [];
+      snapshots.push({
+        ...(Object.hasOwn(input, "aiActive") ? { aiActive: input.aiActive } : {}),
+        ...(Object.hasOwn(input, "ai_active") ? { ai_active: input.ai_active } : {}),
+        ...(Object.hasOwn(input, "status") ? { status: input.status } : {}),
+        ...(Object.hasOwn(input, "assignee") ? { assignee: input.assignee } : {}),
+        ...(Object.hasOwn(input, "team") ? { team: input.team } : {}),
+        ...(Object.hasOwn(input, "labels") ? { labels: input.labels } : {}),
+      });
+      conversationReadSnapshots.set(key, snapshots);
     },
     noteInbound(envelope) {
       const accountId = String(envelope.account?.id ?? envelope.account_id ?? "");
@@ -364,6 +534,7 @@ export async function createStatefulChatwootFake() {
       requests.length = 0;
       behaviorQueue.length = 0;
       conversations.clear();
+      conversationReadSnapshots.clear();
       order = 0;
       outboundSequence = 0;
     },

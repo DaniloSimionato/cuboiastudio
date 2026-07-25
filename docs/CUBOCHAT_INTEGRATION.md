@@ -60,6 +60,22 @@ Fluxo validado:
 
 Ack do POST nao deve ser descrito como prova de entrega final ao usuario.
 
+Pedido humano explicito segue uma variante fail-closed do mesmo fluxo:
+
+1. o Runtime V1 sela `OPERATIONAL_HUMAN_HANDOFF`, sem provider;
+2. persiste uma operacao unica de handoff;
+3. bloqueia a IA localmente por CAS e incrementa `controlRevision`;
+4. le a conversa Chatwoot para resolver um assignee ou team ja existente;
+5. envia `PUT` somente para tornar `ai_active=false`;
+6. executa novo `GET` e verifica conversa, account, inbox, estado, status e
+   destino;
+7. somente depois da verificacao positiva cria a confirmacao visivel;
+8. entrega essa confirmacao pelo ledger outbound existente.
+
+Um 2xx da mutacao nao e suficiente. Falha, ambiguidade, destino ausente ou
+estado remoto contraditorio preservam o bloqueio local e nao produzem texto de
+sucesso.
+
 ## 4. Identificadores sanitizados de exemplo
 
 Use identificadores ficticios na documentacao e em fixtures:
@@ -197,7 +213,7 @@ curl -i \
     "contact": {
       "id": "contact-001",
       "name": "Cliente Teste",
-      "phone_number": "+5511999999999"
+      "phone_number": "<TELEFONE_FICTICIO>"
     }
   }'
 ```
@@ -252,6 +268,7 @@ Campos uteis para rastrear:
 - `turnExecutionId`
 - `decisionId`
 - `deliveryId`
+- `handoffOperationId`
 - `attemptNumber`
 - `controlRevision`
 - `currentContextVersion`
@@ -327,6 +344,8 @@ Regras:
 - budget e backoff limitam apenas novos envios;
 - reconciliacao sem reenvio continua possivel quando o budget acabou;
 - controle stale cancela o delivery;
+- confirmacao de handoff remoto verificado referencia a mesma operacao pelo
+  `handoffOperationId`;
 - resposta dividida ou payload historico sem contrato verificavel nao e
   recuperado automaticamente.
 
@@ -350,7 +369,63 @@ npm run test:http-harness
 O harness usa `AppModule`, bootstrap, webhook, Prisma, Redis e Runtime V1 reais.
 Somente Chatwoot e provider sao fronteiras HTTP falsas e stateful.
 
-## 15. Pontos criticos de modelagem
+## 15. Handoff humano operacional
+
+O pedido explicito de atendimento humano nao e mais representado apenas por
+`content_attributes.handoff=true` ou pelo texto
+`Transferindo para um atendente...`.
+
+O owner persistente e `AssistantHandoffOperation`, unico por decisao e chave
+idempotente. A operacao registra, de forma sanitizada:
+
+- turno, decisao, conversa interna e `contextVersion`;
+- revisao aceita e revisao produzida pelo bloqueio;
+- resolucao do destino;
+- resultado da mutacao e da verificacao remotas;
+- autorizacao e delivery da confirmacao;
+- estado parcial, concluido ou superseded.
+
+O CAS local exige a mesma conversa, versao, revisao, `aiActive=true` e
+`pausedByHuman=false`. Na mesma transacao ele grava `aiActive=false`,
+`pausedByHuman=true`, incrementa `controlRevision` e marca a operacao como
+localmente bloqueada.
+
+Destinos humanos validos neste contrato:
+
+1. assignee ja presente na conversa;
+2. team ja presente, quando nao existe assignee.
+
+Inbox sem assignee ou team nao e considerada fila humana comprovada. O bloco
+nao cria ou altera assignee, team, labels ou status e nao possui IDs hardcoded.
+O status remoto observado precisa permanecer compativel com atendimento humano.
+
+A sequencia remota e `GET -> PUT ai_active=false -> GET`. A segunda leitura
+precisa confirmar exatamente:
+
+- conversation, account e inbox esperados;
+- `ai_active=false`;
+- status compativel;
+- o mesmo assignee ou team resolvido na primeira leitura.
+
+Somente entao o executor cria a mensagem de confirmacao e o
+`AssistantOutboundDelivery`. Se esse outbound falhar, o handoff continua
+valido e fica `CONFIRMATION_PENDING`; o recovery outbound pode recuperar apenas
+a confirmacao, sem repetir a mutacao remota.
+
+Quando mutacao ou verificacao falham ou ficam ambiguas:
+
+- a IA local permanece bloqueada;
+- nenhuma confirmacao de sucesso e criada;
+- a operacao fica `RECONCILIATION_REQUIRED`;
+- duplicate do webhook apenas reutiliza a operacao;
+- nao existe recovery automatico de handoff neste bloco.
+
+Reset concorrente invalida a autorizacao pela mudanca de `contextVersion` e
+`controlRevision`, marca a operacao anterior como `SUPERSEDED` e impede
+confirmacao stale. O Bloco 4B permanece responsavel por recovery e
+reconciliacao automatizados das operacoes parciais.
+
+## 16. Pontos criticos de modelagem
 
 Regras importantes:
 
@@ -364,10 +439,12 @@ Regras importantes:
 - duplicate reutiliza turno, decisao e delivery; ele nao chama provider, sender
   ou recovery
 - Runtime V2 permanece OFF
-- handoff ainda e `EXPLICIT_HUMAN_HANDOFF_LEGACY` e nao deve ser apresentado
-  como transferencia operacional
+- handoff explicito usa `OPERATIONAL_HUMAN_HANDOFF`; somente operacao remota
+  verificada pode produzir confirmacao de transferencia
+- o caminho de handoff acionado por flow permanece separado e nao deve ser
+  confundido com o contrato explicito do Bloco 4A
 
-## 16. Troubleshooting
+## 17. Troubleshooting
 
 ### EADDRINUSE na porta 3001
 
@@ -461,7 +538,25 @@ Validar:
 
 Se a consulta remota for inconclusiva, preserve `UNCERTAIN`.
 
-## 17. Seguranca
+### Handoff localmente bloqueado sem confirmacao
+
+Esse estado e intencionalmente fail-closed.
+
+Validar:
+
+1. `AssistantHandoffOperation.status`;
+2. resolucao de assignee ou team;
+3. resultado da mutacao;
+4. resultado do GET de verificacao;
+5. `contextVersion` e revisoes esperada/pos-bloqueio;
+6. `errorCode` sanitizado;
+7. se a operacao foi `SUPERSEDED` por reset concorrente.
+
+Nao envie confirmacao manual automatizada nem reative a IA apenas porque a
+mutation retornou sucesso. O Bloco 4B devera fornecer recovery proprio para
+operacoes parciais.
+
+## 18. Seguranca
 
 Nunca commitar:
 
@@ -491,8 +586,10 @@ Nao registrar:
 - conteudo integral duplicado no ledger ou manifesto
 - response body remoto completo
 - owner de lease bruto; use fingerprint tecnico
+- IDs de destino humano em logs livres; no manifesto use referencia tecnica
+  sanitizada
 
-## 18. Referencias rapidas
+## 19. Referencias rapidas
 
 - guia rapido: [CHATWOOT_E2E_QUICKSTART.md](./CHATWOOT_E2E_QUICKSTART.md)
 - roteiro completo de validacao: [CHATWOOT_E2E_TEST.md](./CHATWOOT_E2E_TEST.md)
@@ -500,3 +597,4 @@ Nao registrar:
 - setup do backend: [BACKEND_SETUP.md](./BACKEND_SETUP.md)
 - harness HTTP: [README.production-http-harness.md](../apps/api/test/README.production-http-harness.md)
 - relatorio Bloco 3B.2: [BLOCK3B2_OUTBOUND_RECOVERY_REPORT.md](../apps/api/test/BLOCK3B2_OUTBOUND_RECOVERY_REPORT.md)
+- relatorio Bloco 4A: [BLOCK4A_OPERATIONAL_HANDOFF_REPORT.md](../apps/api/test/BLOCK4A_OPERATIONAL_HANDOFF_REPORT.md)

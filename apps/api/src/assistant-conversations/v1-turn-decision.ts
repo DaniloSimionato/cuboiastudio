@@ -13,11 +13,14 @@ export const V1_TURN_DECISION_SCHEMA_VERSION = "V1_TURN_DECISION_V1";
 export const V1_TURN_DECISION_ID_ALGORITHM = "sha256/v1-turn-decision-v1";
 export const V1_TURN_DECISION_EXECUTOR_OWNER = "V1_TURN_DECISION_EXECUTOR";
 export const V1_TURN_DECISION_ORDINAL = 1;
+export const V1_OPERATIONAL_HANDOFF_EFFECT_SCHEMA_VERSION =
+  "V1_OPERATIONAL_HANDOFF_EFFECT_V1";
 
 export type V1TurnDecisionType =
   | "PROVIDER_RESPONSE"
   | "DETERMINISTIC_RESPONSE"
   | "FALLBACK_RESPONSE"
+  | "OPERATIONAL_HANDOFF"
   | "LEGACY_HANDOFF_TEXT"
   | "LEGACY_RESET_RESPONSE";
 
@@ -30,8 +33,25 @@ export type V1TurnProviderDisposition =
 
 export type V1TurnStateEffect =
   | "NONE"
+  | "BLOCK_AI_AND_HANDOFF"
   | "LEGACY_HANDOFF_TEXT_ONLY"
   | "LEGACY_RESET_ALREADY_APPLIED";
+
+export type V1OperationalHandoffEffect = Readonly<{
+  schemaVersion: typeof V1_OPERATIONAL_HANDOFF_EFFECT_SCHEMA_VERSION;
+  operationRequired: true;
+  localBlockRequired: true;
+  remoteMutationRequired: true;
+  remoteVerificationRequired: true;
+  confirmationPrecondition: "REMOTE_STATE_VERIFIED";
+  confirmationAllowedBeforeRemoteVerification: false;
+  expectedPostBlockControl: Readonly<{
+    contextVersion: number;
+    controlRevision: number;
+    aiActive: false;
+    pausedByHuman: true;
+  }>;
+}>;
 
 export type V1TurnDecisionResponseBlock = Readonly<{
   ordinal: number;
@@ -92,6 +112,7 @@ export type V1TurnDecision = Readonly<{
     outboundIntended: boolean;
     sender: "CHATWOOT_V1" | "NOT_APPLICABLE";
     stateEffect: V1TurnStateEffect;
+    operationalHandoff: V1OperationalHandoffEffect | null;
   }>;
   compatibility: Readonly<{
     runtimeMode: string;
@@ -108,7 +129,9 @@ export type V1TurnDecisionDraft = {
   provider: V1TurnDecision["provider"];
   controlSnapshot: ConversationControlSnapshot;
   authority?: V1TurnDecisionAuthority | null;
-  effects: V1TurnDecision["effects"];
+  effects: Omit<V1TurnDecision["effects"], "operationalHandoff"> & {
+    operationalHandoff?: V1OperationalHandoffEffect | null;
+  };
   compatibility: V1TurnDecision["compatibility"];
 };
 
@@ -157,6 +180,50 @@ function freezeDecision(draft: V1TurnDecisionDraft): V1TurnDecision {
   if (draft.effects.outboundIntended && blocks.length === 0) {
     throw new Error("V1_TURN_DECISION_OUTBOUND_BLOCK_REQUIRED");
   }
+  const isOperationalHandoff =
+    draft.classification.type === "OPERATIONAL_HANDOFF" ||
+    draft.effects.stateEffect === "BLOCK_AI_AND_HANDOFF";
+  if (
+    isOperationalHandoff &&
+    (draft.classification.type !== "OPERATIONAL_HANDOFF" ||
+      draft.effects.stateEffect !== "BLOCK_AI_AND_HANDOFF")
+  ) {
+    throw new Error("V1_OPERATIONAL_HANDOFF_DECISION_EFFECT_MISMATCH");
+  }
+  if (isOperationalHandoff && !draft.effects.operationalHandoff) {
+    throw new Error("V1_OPERATIONAL_HANDOFF_EFFECT_REQUIRED");
+  }
+  if (!isOperationalHandoff && draft.effects.operationalHandoff) {
+    throw new Error("V1_OPERATIONAL_HANDOFF_EFFECT_UNEXPECTED");
+  }
+  if (
+    isOperationalHandoff &&
+    (draft.provider.used ||
+      draft.classification.providerDisposition !== "PROHIBITED" ||
+      !draft.effects.persistLocalResponse ||
+      !draft.effects.outboundIntended)
+  ) {
+    throw new Error("V1_OPERATIONAL_HANDOFF_CONFIRMATION_CONTRACT_INVALID");
+  }
+  if (
+    draft.effects.operationalHandoff &&
+    (draft.effects.operationalHandoff.expectedPostBlockControl.contextVersion !==
+      draft.controlSnapshot.currentContextVersion ||
+      draft.effects.operationalHandoff.expectedPostBlockControl.controlRevision !==
+        draft.controlSnapshot.controlRevision + 1 ||
+      draft.effects.operationalHandoff.expectedPostBlockControl.aiActive !== false ||
+      draft.effects.operationalHandoff.expectedPostBlockControl.pausedByHuman !== true)
+  ) {
+    throw new Error("V1_OPERATIONAL_HANDOFF_POST_BLOCK_CONTROL_INVALID");
+  }
+  const operationalHandoff = draft.effects.operationalHandoff
+    ? Object.freeze({
+        ...draft.effects.operationalHandoff,
+        expectedPostBlockControl: Object.freeze({
+          ...draft.effects.operationalHandoff.expectedPostBlockControl,
+        }),
+      })
+    : null;
 
   return Object.freeze({
     schemaVersion: V1_TURN_DECISION_SCHEMA_VERSION,
@@ -187,7 +254,7 @@ function freezeDecision(draft: V1TurnDecisionDraft): V1TurnDecision {
       expectedPausedByHuman: draft.controlSnapshot.pausedByHuman,
     }),
     authority: draft.authority ? Object.freeze({ ...draft.authority }) : null,
-    effects: Object.freeze({ ...draft.effects }),
+    effects: Object.freeze({ ...draft.effects, operationalHandoff }),
     compatibility: Object.freeze({ ...draft.compatibility }),
   });
 }

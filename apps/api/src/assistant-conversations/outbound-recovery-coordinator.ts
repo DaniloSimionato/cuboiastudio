@@ -36,6 +36,38 @@ const recoveryDeliveryInclude = {
       externalMessageId: true,
     },
   },
+  handoffOperation: {
+    select: {
+      id: true,
+      companyId: true,
+      assistantId: true,
+      conversationId: true,
+      turnExecutionId: true,
+      decisionId: true,
+      contextVersion: true,
+      policyVersion: true,
+      expectedControlRevision: true,
+      postBlockControlRevision: true,
+      destinationResolution: true,
+      destinationType: true,
+      destinationAssigneeId: true,
+      destinationTeamId: true,
+      destinationInboxId: true,
+      desiredAiActive: true,
+      observedAiActive: true,
+      observedStatus: true,
+      observedAssigneeId: true,
+      observedTeamId: true,
+      observedAccountId: true,
+      observedInboxId: true,
+      observedConversationId: true,
+      remoteVerificationResult: true,
+      verifiedAt: true,
+      confirmationAuthorizedAt: true,
+      status: true,
+      errorCode: true,
+    },
+  },
   attempts: {
     orderBy: { attemptNumber: "desc" as const },
   },
@@ -129,6 +161,62 @@ type ClaimResult = Readonly<{
 }>;
 
 function controlMatches(delivery: OutboundRecoveryDelivery): boolean {
+  const operationalHandoff = delivery.handoffOperation;
+  if (operationalHandoff) {
+    const destinationMatches =
+      (operationalHandoff.destinationType === "EXISTING_ASSIGNEE" &&
+        operationalHandoff.destinationAssigneeId !== null &&
+        operationalHandoff.observedAssigneeId ===
+          operationalHandoff.destinationAssigneeId) ||
+      (operationalHandoff.destinationType === "EXISTING_TEAM" &&
+        operationalHandoff.destinationTeamId !== null &&
+        operationalHandoff.observedTeamId === operationalHandoff.destinationTeamId);
+    const remoteScopeMatches =
+      delivery.conversation.externalAccountId !== null &&
+      delivery.conversation.externalInboxId !== null &&
+      delivery.conversation.externalConversationId !== null &&
+      operationalHandoff.observedAccountId === delivery.conversation.externalAccountId &&
+      operationalHandoff.observedInboxId === delivery.conversation.externalInboxId &&
+      operationalHandoff.observedConversationId ===
+        delivery.conversation.externalConversationId &&
+      operationalHandoff.destinationInboxId === delivery.conversation.externalInboxId;
+    return (
+      delivery.handoff === true &&
+      delivery.handoffOperationId === operationalHandoff.id &&
+      operationalHandoff.companyId === delivery.companyId &&
+      operationalHandoff.assistantId === delivery.assistantId &&
+      operationalHandoff.conversationId === delivery.conversationId &&
+      operationalHandoff.turnExecutionId === delivery.turnExecutionId &&
+      operationalHandoff.decisionId === delivery.decisionId &&
+      operationalHandoff.policyVersion === delivery.policyVersion &&
+      operationalHandoff.contextVersion === delivery.expectedContextVersion &&
+      operationalHandoff.expectedControlRevision + 1 ===
+        operationalHandoff.postBlockControlRevision &&
+      operationalHandoff.postBlockControlRevision ===
+        delivery.expectedControlRevision &&
+      operationalHandoff.destinationResolution === "RESOLVED" &&
+      destinationMatches &&
+      remoteScopeMatches &&
+      operationalHandoff.desiredAiActive === false &&
+      operationalHandoff.observedAiActive === false &&
+      (operationalHandoff.observedStatus === "open" ||
+        operationalHandoff.observedStatus === "pending") &&
+      operationalHandoff.remoteVerificationResult === "CONFIRMED" &&
+      operationalHandoff.verifiedAt !== null &&
+      operationalHandoff.confirmationAuthorizedAt !== null &&
+      ["REMOTE_CONFIRMED", "CONFIRMATION_PENDING", "COMPLETED"].includes(
+        operationalHandoff.status,
+      ) &&
+      delivery.conversation.id === delivery.conversationId &&
+      delivery.conversation.currentContextVersion === delivery.expectedContextVersion &&
+      delivery.conversation.controlRevision === delivery.expectedControlRevision &&
+      delivery.conversation.aiActive === false &&
+      delivery.conversation.pausedByHuman === true
+    );
+  }
+  if (delivery.handoff === true || delivery.handoffOperationId !== null) {
+    return false;
+  }
   return (
     delivery.conversation.id === delivery.conversationId &&
     delivery.conversation.currentContextVersion === delivery.expectedContextVersion &&
@@ -195,17 +283,36 @@ export class OutboundRecoveryCoordinator {
     delivery: OutboundRecoveryDelivery,
   ): Promise<OutboundRecoveryDelivery> {
     const now = this.now();
+    const activeAttempt =
+      delivery.attempts.find(
+        (attempt) =>
+          attempt.result === "SENDING" &&
+          (delivery.attemptOwner === null || attempt.owner === delivery.attemptOwner),
+      ) ?? null;
+    const boundaryMayHaveBeenCrossed =
+      Boolean(activeAttempt?.boundaryStartedAt) ||
+      (delivery.status === "UNCERTAIN" &&
+        delivery.retrySafety === "RECONCILE_REQUIRED");
+    const deliveryStatus: "UNCERTAIN" | "CANCELLED_STALE" =
+      boundaryMayHaveBeenCrossed ? "UNCERTAIN" : "CANCELLED_STALE";
+    const retrySafety: OutboundRetrySafety = boundaryMayHaveBeenCrossed
+      ? "RECONCILE_REQUIRED"
+      : "NOT_RETRYABLE";
+    const errorCode = boundaryMayHaveBeenCrossed
+      ? "CONTROL_CHANGED_AFTER_OUTBOUND_BOUNDARY"
+      : "BLOCKED_CONTROL_STATE_RECOVERY";
     await tx.assistantOutboundAttempt.updateMany({
       where: {
         deliveryId: delivery.id,
         result: "SENDING",
+        ...(delivery.attemptOwner ? { owner: delivery.attemptOwner } : {}),
       },
       data: {
         finishedAt: now,
-        result: "CANCELLED_STALE",
-        retrySafety: "NOT_RETRYABLE",
+        result: deliveryStatus,
+        retrySafety,
         errorClass: "CONTROL_STATE_STALE",
-        errorCode: "BLOCKED_CONTROL_STATE_RECOVERY",
+        errorCode,
       },
     });
     await tx.assistantOutboundDelivery.updateMany({
@@ -214,18 +321,43 @@ export class OutboundRecoveryCoordinator {
         status: { in: ["PENDING", "SENDING", "FAILED_RETRYABLE", "UNCERTAIN"] },
       },
       data: {
-        status: "CANCELLED_STALE",
-        retrySafety: "NOT_RETRYABLE",
+        status: deliveryStatus,
+        retrySafety,
         attemptOwner: null,
         claimStartedAt: null,
         claimExpiresAt: null,
         nextEligibleAt: null,
         failedAt: now,
         errorClass: "CONTROL_STATE_STALE",
-        errorCode: "BLOCKED_CONTROL_STATE_RECOVERY",
-        recoveryBlockedReason: "CONTROL_STATE_STALE",
+        errorCode,
+        recoveryBlockedReason: boundaryMayHaveBeenCrossed
+          ? "RECONCILIATION_REQUIRED"
+          : "CONTROL_STATE_STALE",
       },
     });
+    if (delivery.handoffOperationId) {
+      const operationUpdate = await tx.assistantHandoffOperation.updateMany({
+        where: {
+          id: delivery.handoffOperationId,
+          status: {
+            in: [
+              "REMOTE_CONFIRMED",
+              "CONFIRMATION_PENDING",
+              "SUPERSEDED",
+            ],
+          },
+        },
+        data: {
+          status: "SUPERSEDED",
+          supersededAt: now,
+          errorClass: "CONTROL_STATE_STALE",
+          errorCode,
+        },
+      });
+      if (operationUpdate.count !== 1) {
+        throw new Error("HANDOFF_OPERATION_STALE_TRANSITION_FAILED");
+      }
+    }
     return this.loadDelivery(delivery.id, tx);
   }
 
@@ -363,14 +495,13 @@ export class OutboundRecoveryCoordinator {
     if (update.count !== 1) throw new Error("OUTBOUND_ATTEMPT_BOUNDARY_MARK_REJECTED");
   }
 
-  public async finishClaim(input: {
+  private async finishNonHandoffClaim(input: {
     deliveryId: string;
     attemptId: string;
     claimToken: string;
     result: OutboundRecoverySendResult;
-    persistMessageReference?: boolean;
+    now: Date;
   }): Promise<OutboundRecoveryDelivery> {
-    const now = this.now();
     const attemptUpdate = await this.prisma.assistantOutboundAttempt.updateMany({
       where: {
         id: input.attemptId,
@@ -379,7 +510,7 @@ export class OutboundRecoveryCoordinator {
         result: "SENDING",
       },
       data: {
-        finishedAt: now,
+        finishedAt: input.now,
         result: input.result.status,
         retrySafety: input.result.retrySafety,
         httpStatus: input.result.httpStatus,
@@ -404,7 +535,7 @@ export class OutboundRecoveryCoordinator {
         ? calculateOutboundBackoff({
             deliveryId: current.id,
             attemptNumber: current.attemptCount,
-            now,
+            now: input.now,
             scheduleMs: this.options.backoffScheduleMs,
             capMs: this.options.backoffCapMs,
             jitterRatio: this.options.jitterRatio,
@@ -423,8 +554,8 @@ export class OutboundRecoveryCoordinator {
         claimStartedAt: null,
         claimExpiresAt: null,
         nextEligibleAt: backoff?.nextEligibleAt ?? null,
-        acknowledgedAt: finalStatus === "ACKNOWLEDGED" ? now : null,
-        failedAt: finalStatus === "ACKNOWLEDGED" ? null : now,
+        acknowledgedAt: finalStatus === "ACKNOWLEDGED" ? input.now : null,
+        failedAt: finalStatus === "ACKNOWLEDGED" ? null : input.now,
         externalMessageId: input.result.externalMessageId,
         errorClass: budgetExhausted
           ? "OUTBOUND_RECOVERY"
@@ -440,10 +571,154 @@ export class OutboundRecoveryCoordinator {
     if (deliveryUpdate.count !== 1) {
       throw new Error("OUTBOUND_DELIVERY_FINALIZATION_FAILED");
     }
-    const delivery = await this.loadDelivery(input.deliveryId);
+    return this.loadDelivery(input.deliveryId);
+  }
+
+  public async finishClaim(input: {
+    deliveryId: string;
+    attemptId: string;
+    claimToken: string;
+    result: OutboundRecoverySendResult;
+    persistMessageReference?: boolean;
+  }): Promise<OutboundRecoveryDelivery> {
+    const now = this.now();
+    const initial = await this.loadDelivery(input.deliveryId);
+    const delivery = !initial.handoffOperationId
+      ? await this.finishNonHandoffClaim({ ...input, now })
+      : await this.prisma.$transaction(async (tx) => {
+      let current = await this.loadDelivery(input.deliveryId, tx);
+      if (current.handoffOperationId) {
+        await this.lockConversation(tx, current);
+        current = await this.loadDelivery(input.deliveryId, tx);
+      }
+      const attemptUpdate = await tx.assistantOutboundAttempt.updateMany({
+        where: {
+          id: input.attemptId,
+          deliveryId: input.deliveryId,
+          owner: input.claimToken,
+          result: "SENDING",
+        },
+        data: {
+          finishedAt: now,
+          result: input.result.status,
+          retrySafety: input.result.retrySafety,
+          httpStatus: input.result.httpStatus,
+          externalMessageId: input.result.externalMessageId,
+          errorClass: input.result.errorClass,
+          errorCode: input.result.errorCode,
+        },
+      });
+      if (attemptUpdate.count !== 1) throw new Error("OUTBOUND_ATTEMPT_CLAIM_LOST");
+
+      const budgetExhausted =
+        input.result.status === "FAILED_RETRYABLE" &&
+        current.attemptCount >= current.maxAttempts;
+      const finalStatus: Exclude<OutboundDeliveryStatus, "PENDING" | "SENDING"> =
+        budgetExhausted ? "FAILED_TERMINAL" : input.result.status;
+      const retrySafety: OutboundRetrySafety = budgetExhausted
+        ? "NOT_RETRYABLE"
+        : input.result.retrySafety;
+      const backoff =
+        finalStatus === "FAILED_RETRYABLE" && retrySafety === "PROVEN_SAFE"
+          ? calculateOutboundBackoff({
+              deliveryId: current.id,
+              attemptNumber: current.attemptCount,
+              now,
+              scheduleMs: this.options.backoffScheduleMs,
+              capMs: this.options.backoffCapMs,
+              jitterRatio: this.options.jitterRatio,
+            })
+          : null;
+      const deliveryUpdate = await tx.assistantOutboundDelivery.updateMany({
+        where: {
+          id: input.deliveryId,
+          status: "SENDING",
+          attemptOwner: input.claimToken,
+        },
+        data: {
+          status: finalStatus,
+          retrySafety,
+          attemptOwner: null,
+          claimStartedAt: null,
+          claimExpiresAt: null,
+          nextEligibleAt: backoff?.nextEligibleAt ?? null,
+          acknowledgedAt: finalStatus === "ACKNOWLEDGED" ? now : null,
+          failedAt: finalStatus === "ACKNOWLEDGED" ? null : now,
+          externalMessageId: input.result.externalMessageId,
+          errorClass: budgetExhausted
+            ? "OUTBOUND_RECOVERY"
+            : input.result.errorClass,
+          errorCode: budgetExhausted
+            ? "RECOVERY_BUDGET_EXHAUSTED"
+            : input.result.errorCode,
+          recoveryBlockedReason: budgetExhausted
+            ? "RECOVERY_BUDGET_EXHAUSTED"
+            : null,
+        },
+      });
+      if (deliveryUpdate.count !== 1) {
+        throw new Error("OUTBOUND_DELIVERY_FINALIZATION_FAILED");
+      }
+      let updated = await this.loadDelivery(input.deliveryId, tx);
+      if (updated.handoffOperationId) {
+        const controlStillMatches = controlMatches(updated);
+        const targetStatus =
+          finalStatus === "ACKNOWLEDGED" && controlStillMatches
+            ? "COMPLETED"
+            : finalStatus === "CANCELLED_STALE" || !controlStillMatches
+              ? "SUPERSEDED"
+              : "CONFIRMATION_PENDING";
+        const operationUpdate = await tx.assistantHandoffOperation.updateMany({
+          where: {
+            id: updated.handoffOperationId,
+            status: {
+              in:
+                targetStatus === "COMPLETED"
+                  ? ["REMOTE_CONFIRMED", "CONFIRMATION_PENDING", "COMPLETED"]
+                  : targetStatus === "SUPERSEDED"
+                    ? [
+                        "REMOTE_CONFIRMED",
+                        "CONFIRMATION_PENDING",
+                        "COMPLETED",
+                        "SUPERSEDED",
+                      ]
+                    : ["REMOTE_CONFIRMED", "CONFIRMATION_PENDING"],
+            },
+          },
+          data:
+            targetStatus === "COMPLETED"
+              ? {
+                  status: "COMPLETED",
+                  completedAt: now,
+                  errorClass: null,
+                  errorCode: null,
+                }
+              : targetStatus === "SUPERSEDED"
+                ? {
+                    status: "SUPERSEDED",
+                    supersededAt: now,
+                    errorClass: "CONTROL_STATE_STALE",
+                    errorCode:
+                      input.result.errorCode ?? "BLOCKED_CONTROL_STATE_RECOVERY",
+                  }
+                : {
+                    status: "CONFIRMATION_PENDING",
+                    errorClass:
+                      input.result.errorClass ?? "HANDOFF_CONFIRMATION_OUTBOUND",
+                    errorCode:
+                      input.result.errorCode ?? "HANDOFF_CONFIRMATION_OUTBOUND_FAILED",
+                  },
+        });
+        if (operationUpdate.count !== 1) {
+          throw new Error("HANDOFF_OPERATION_FINALIZATION_FAILED");
+        }
+        updated = await this.loadDelivery(input.deliveryId, tx);
+      }
+          return updated;
+        });
     if (
       input.persistMessageReference !== false &&
-      finalStatus === "ACKNOWLEDGED" &&
+      delivery.status === "ACKNOWLEDGED" &&
       input.result.externalMessageId
     ) {
       await this.prisma.assistantConversationMessage
@@ -553,6 +828,64 @@ export class OutboundRecoveryCoordinator {
     return updated;
   }
 
+  private async repairAcknowledgedHandoffOperation(
+    delivery: OutboundRecoveryDelivery,
+  ): Promise<OutboundRecoveryDelivery> {
+    if (
+      delivery.status !== "ACKNOWLEDGED" ||
+      !delivery.handoffOperationId ||
+      !delivery.handoffOperation ||
+      delivery.handoffOperation.status === "COMPLETED"
+    ) {
+      return delivery;
+    }
+    return this.prisma.$transaction(async (tx) => {
+      let current = await this.loadDelivery(delivery.id, tx);
+      await this.lockConversation(tx, current);
+      current = await this.loadDelivery(delivery.id, tx);
+      if (
+        current.status !== "ACKNOWLEDGED" ||
+        !current.handoffOperationId ||
+        !current.handoffOperation
+      ) {
+        return current;
+      }
+      const controlStillMatches = controlMatches(current);
+      const operationUpdate = await tx.assistantHandoffOperation.updateMany({
+        where: {
+          id: current.handoffOperationId,
+          status: {
+            in: controlStillMatches
+              ? ["REMOTE_CONFIRMED", "CONFIRMATION_PENDING", "COMPLETED"]
+              : [
+                  "REMOTE_CONFIRMED",
+                  "CONFIRMATION_PENDING",
+                  "COMPLETED",
+                  "SUPERSEDED",
+                ],
+          },
+        },
+        data: controlStillMatches
+          ? {
+              status: "COMPLETED",
+              completedAt: current.acknowledgedAt ?? this.now(),
+              errorClass: null,
+              errorCode: null,
+            }
+          : {
+              status: "SUPERSEDED",
+              supersededAt: this.now(),
+              errorClass: "CONTROL_STATE_STALE",
+              errorCode: "BLOCKED_CONTROL_STATE_ACK_REPAIR",
+            },
+      });
+      if (operationUpdate.count !== 1) {
+        throw new Error("HANDOFF_OPERATION_ACK_REPAIR_FAILED");
+      }
+      return this.loadDelivery(current.id, tx);
+    });
+  }
+
   private async reconcileDelivery(
     delivery: OutboundRecoveryDelivery,
   ): Promise<OutboundRecoveryRunResult> {
@@ -563,31 +896,82 @@ export class OutboundRecoveryCoordinator {
     });
     const now = this.now();
     if (result.status === "FOUND" && result.externalMessageId) {
-      await this.prisma.assistantOutboundDelivery.update({
-        where: { id: delivery.id },
-        data: {
-          status: "ACKNOWLEDGED",
-          retrySafety: "NOT_RETRYABLE",
-          attemptOwner: null,
-          claimStartedAt: null,
-          claimExpiresAt: null,
-          nextEligibleAt: null,
-          acknowledgedAt: now,
-          failedAt: null,
-          externalMessageId: result.externalMessageId,
-          errorClass: null,
-          errorCode: null,
-          reconciliationStatus: "FOUND",
-          reconciliationEvidenceType: result.evidenceType,
-          reconciledAt: now,
-          recoveryBlockedReason: null,
-        },
+      const updated = await this.prisma.$transaction(async (tx) => {
+        let current = await this.loadDelivery(delivery.id, tx);
+        if (current.handoffOperationId) {
+          await this.lockConversation(tx, current);
+          current = await this.loadDelivery(delivery.id, tx);
+        }
+        const deliveryUpdate = await tx.assistantOutboundDelivery.updateMany({
+          where: {
+            id: delivery.id,
+            status: current.status,
+            attemptCount: current.attemptCount,
+          },
+          data: {
+            status: "ACKNOWLEDGED",
+            retrySafety: "NOT_RETRYABLE",
+            attemptOwner: null,
+            claimStartedAt: null,
+            claimExpiresAt: null,
+            nextEligibleAt: null,
+            acknowledgedAt: now,
+            failedAt: null,
+            externalMessageId: result.externalMessageId,
+            errorClass: null,
+            errorCode: null,
+            reconciliationStatus: "FOUND",
+            reconciliationEvidenceType: result.evidenceType,
+            reconciledAt: now,
+            recoveryBlockedReason: null,
+          },
+        });
+        if (deliveryUpdate.count !== 1) {
+          throw new Error("OUTBOUND_RECONCILIATION_FINALIZATION_FAILED");
+        }
+        current = await this.loadDelivery(delivery.id, tx);
+        if (current.handoffOperationId) {
+          const controlStillMatches = controlMatches(current);
+          const operationUpdate = await tx.assistantHandoffOperation.updateMany({
+            where: {
+              id: current.handoffOperationId,
+              status: {
+                in: controlStillMatches
+                  ? ["REMOTE_CONFIRMED", "CONFIRMATION_PENDING", "COMPLETED"]
+                  : [
+                      "REMOTE_CONFIRMED",
+                      "CONFIRMATION_PENDING",
+                      "COMPLETED",
+                      "SUPERSEDED",
+                    ],
+              },
+            },
+            data: controlStillMatches
+              ? {
+                  status: "COMPLETED",
+                  completedAt: now,
+                  errorClass: null,
+                  errorCode: null,
+                }
+              : {
+                  status: "SUPERSEDED",
+                  supersededAt: now,
+                  errorClass: "CONTROL_STATE_STALE",
+                  errorCode: "BLOCKED_CONTROL_STATE_RECONCILIATION",
+                },
+          });
+          if (operationUpdate.count !== 1) {
+            throw new Error("HANDOFF_OPERATION_RECONCILIATION_FAILED");
+          }
+        }
+        return this.loadDelivery(delivery.id, tx);
       });
-      await this.prisma.assistantConversationMessage.updateMany({
-        where: { id: delivery.assistantMessageId },
-        data: { externalMessageId: result.externalMessageId },
-      });
-      const updated = await this.loadDelivery(delivery.id);
+      await this.prisma.assistantConversationMessage
+        .updateMany({
+          where: { id: delivery.assistantMessageId },
+          data: { externalMessageId: result.externalMessageId },
+        })
+        .catch(() => ({ count: 0 }));
       await this.updateManifest(updated);
       return {
         deliveryId: updated.id,
@@ -657,6 +1041,23 @@ export class OutboundRecoveryCoordinator {
     const manifest = metadata.turnExecutionManifest;
     if (!manifest || typeof manifest !== "object") return;
     const latestAttempt = delivery.attempts[0] ?? null;
+    const handoffOperation = delivery.handoffOperationId
+      ? await this.prisma.assistantHandoffOperation.findUnique({
+          where: { id: delivery.handoffOperationId },
+          select: {
+            status: true,
+            confirmationAuthorizedAt: true,
+            errorCode: true,
+          },
+        })
+      : null;
+    const handoffConfirmationAuthorized = Boolean(
+      handoffOperation?.confirmationAuthorizedAt &&
+        ["REMOTE_CONFIRMED", "CONFIRMATION_PENDING", "COMPLETED"].includes(
+          handoffOperation.status,
+        ) &&
+        delivery.status !== "CANCELLED_STALE",
+    );
     const deliveries = Array.isArray(manifest.outbound?.deliveries)
       ? manifest.outbound.deliveries.map((reference: Record<string, any>) =>
           reference.deliveryId === delivery.id
@@ -701,6 +1102,30 @@ export class OutboundRecoveryCoordinator {
           ...metadata,
           turnExecutionManifest: {
             ...manifest,
+            ...(handoffOperation && manifest.handoff
+              ? {
+                  handoff: {
+                    ...manifest.handoff,
+                    status: handoffOperation.status,
+                    confirmation: {
+                      ...manifest.handoff.confirmation,
+                      authorized: handoffConfirmationAuthorized,
+                      deliveryId: delivery.id,
+                      result: !handoffConfirmationAuthorized
+                        ? "NOT_AUTHORIZED"
+                        : handoffOperation.status === "COMPLETED" &&
+                            delivery.status === "ACKNOWLEDGED"
+                          ? "ACKNOWLEDGED"
+                          : delivery.status === "FAILED_RETRYABLE" ||
+                              delivery.status === "FAILED_TERMINAL" ||
+                              delivery.status === "UNCERTAIN"
+                            ? "FAILED"
+                            : "PENDING",
+                    },
+                    blockingReason: handoffOperation.errorCode,
+                  },
+                }
+              : {}),
             outbound: {
               ...manifest.outbound,
               deliveries,
@@ -723,6 +1148,20 @@ export class OutboundRecoveryCoordinator {
       };
     }
     let delivery = control.delivery;
+    if (
+      delivery.status === "ACKNOWLEDGED" &&
+      delivery.handoffOperation &&
+      delivery.handoffOperation.status !== "COMPLETED"
+    ) {
+      delivery = await this.repairAcknowledgedHandoffOperation(delivery);
+      await this.updateManifest(delivery);
+      return {
+        deliveryId,
+        action: "RECONCILED",
+        status: delivery.status,
+        attemptCount: delivery.attemptCount,
+      };
+    }
     let eligibility = evaluateOutboundRecoveryEligibility({ ...delivery, now: this.now() });
     if (eligibility === "LEASE_ACTIVE") {
       return {
@@ -886,9 +1325,21 @@ export class OutboundRecoveryCoordinator {
     const deliveries = await this.prisma.assistantOutboundDelivery.findMany({
       where: {
         ...(input.deliveryIds?.length ? { id: { in: input.deliveryIds } } : {}),
-        status: {
-          in: ["PENDING", "FAILED_RETRYABLE", "SENDING", "UNCERTAIN"],
-        },
+        OR: [
+          {
+            status: {
+              in: ["PENDING", "FAILED_RETRYABLE", "SENDING", "UNCERTAIN"],
+            },
+          },
+          {
+            status: "ACKNOWLEDGED",
+            handoffOperation: {
+              is: {
+                status: { in: ["REMOTE_CONFIRMED", "CONFIRMATION_PENDING"] },
+              },
+            },
+          },
+        ],
       },
       select: { id: true },
       orderBy: [{ nextEligibleAt: "asc" }, { createdAt: "asc" }],

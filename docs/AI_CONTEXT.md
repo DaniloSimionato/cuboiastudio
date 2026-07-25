@@ -82,6 +82,19 @@ Os blocos de estabilizacao arquitetural concluidos sao:
 - Bloco 3A: `controlRevision`, snapshots, checkpoints e bloqueio de turno stale;
 - Bloco 3B.1: ledger duravel antes da fronteira outbound e claim unico;
 - Bloco 3B.2: retry safety, leases, tentativas, recovery e reconciliacao segura.
+- Bloco 4A: handoff humano operacional fail-closed, com operacao persistida,
+  bloqueio local por CAS, mutacao e verificacao remotas antes da confirmacao.
+
+No handoff explicito, o Runtime V1 nao trata mais o texto de transferencia como
+prova da operacao. A sequencia e:
+
+`decisao operacional -> operacao persistida -> bloqueio local -> GET remoto -> PUT ai_active=false -> GET de verificacao -> confirmacao via ledger`
+
+A confirmacao visivel so e autorizada quando o Chatwoot confirma a conversa
+correta, a IA remota inativa, status compativel e um destino humano ja
+existente. Neste bloco, os unicos destinos comprovados sao o assignee existente
+e, na ausencia dele, o team existente. Inbox sem assignee ou team nao e tratada
+como fila humana comprovada.
 
 Um ack do POST ao Chatwoot significa `ACKNOWLEDGED`; ele nao prova entrega final
 ao usuario. Recovery automatico nao foi ativado. O coordinator existe como
@@ -115,6 +128,7 @@ Documentos operacionais atuais:
 
 - `apps/api/test/README.production-http-harness.md`;
 - `apps/api/test/BLOCK3B2_OUTBOUND_RECOVERY_REPORT.md`;
+- `apps/api/test/BLOCK4A_OPERATIONAL_HANDOFF_REPORT.md`;
 - `docs/CUBOCHAT_INTEGRATION.md`.
 
 ## 4. Objetivo do MVP
@@ -171,12 +185,19 @@ forte, mas ainda conserva limitacoes funcionais conhecidas:
   `placa_mae`;
 - evidencia relevante alem do preview de 250 caracteres ainda pode ser perdida;
 - resposta tecnica sobre computador lento ainda pode ficar generica;
-- handoff continua textual e nao operacional;
 - divergencia remota de pausa sem atualizacao local ainda nao e detectada;
 - recovery outbound ainda nao possui ativacao automatica.
+- operacoes parciais de handoff ainda nao possuem coordinator automatico de
+  recovery e reconciliacao.
 
-Esses pontos permanecem visiveis como especificacoes `test.todo`; nao devem ser
-tratados como comportamento correto.
+Os quatro primeiros gaps funcionais permanecem visiveis como especificacoes
+`test.todo`. A recuperacao automatica de handoff parcial aparece separadamente
+como especificacao futura do Bloco 4B; nenhum desses itens deve ser tratado
+como comportamento correto.
+
+O gate final do Bloco 4A passou 27 cenarios HTTP executaveis, manteve 5
+especificacoes `todo`, passou 254 testes relacionados e 7 testes unitarios do
+contrato operacional. Runtime V2 permaneceu OFF.
 
 ## 7. Como queremos que funcione
 

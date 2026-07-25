@@ -16,6 +16,7 @@ import type {
 export const TURN_EXECUTION_MANIFEST_VERSION = "TURN_EXECUTION_MANIFEST_V1";
 export const V1_COMPATIBILITY_POLICY = "V1_COMPATIBILITY_POLICY";
 export const TURN_EXECUTION_ID_ALGORITHM = "sha256/canonical-turn-v1";
+export const TURN_EXECUTION_HANDOFF_SCHEMA_VERSION = "TURN_EXECUTION_HANDOFF_V1";
 
 export type FragmentIdentityCoverage = "COMPLETE" | "FIRST_FRAGMENT_ONLY" | "UNKNOWN";
 export type TurnExecutionObservation = "OBSERVED" | "NOT_OBSERVED" | "UNKNOWN";
@@ -31,6 +32,7 @@ export type TurnExecutionTerminalPath =
   | "DETERMINISTIC_PRICE_AUTHORITY"
   | "BUSINESS_HOURS_DIRECT"
   | "BUSINESS_HOURS_DIRECT_SAFE_FALLBACK_LEGACY"
+  | "OPERATIONAL_HUMAN_HANDOFF"
   | "EXPLICIT_HUMAN_HANDOFF_LEGACY"
   | "FLOW_BYPASS_LEGACY"
   | "DETERMINISTIC_FALLBACK_LEGACY"
@@ -43,6 +45,50 @@ export type TurnExecutionTerminalPath =
   | "FAILED_BEFORE_OUTBOUND"
   | "FAILED_OUTBOUND"
   | "UNCLASSIFIED_LEGACY";
+
+export type TurnExecutionHandoffStatus =
+  | "REQUESTED"
+  | "LOCALLY_BLOCKED"
+  | "REMOTE_PENDING"
+  | "REMOTE_CONFIRMED"
+  | "CONFIRMATION_PENDING"
+  | "COMPLETED"
+  | "RECONCILIATION_REQUIRED"
+  | "FAILED_TERMINAL"
+  | "SUPERSEDED";
+
+export type TurnExecutionHandoffSummary = {
+  schemaVersion: typeof TURN_EXECUTION_HANDOFF_SCHEMA_VERSION;
+  operationId: string;
+  status: TurnExecutionHandoffStatus;
+  destination: {
+    resolution: "RESOLVED" | "UNRESOLVED" | "UNKNOWN";
+    type: "ASSIGNEE" | "TEAM" | "INBOX_QUEUE" | "UNRESOLVED" | "UNKNOWN";
+    referenceHash: string | null;
+  };
+  expectedContextVersion: number;
+  expectedControlRevision: number;
+  postBlockControlRevision: number | null;
+  localBlockResult: "NOT_ATTEMPTED" | "CONFIRMED" | "FAILED" | "SUPERSEDED";
+  remoteMutation: {
+    attempted: boolean;
+    attemptCount: number;
+    result: "NOT_ATTEMPTED" | "ACKNOWLEDGED" | "FAILED" | "UNKNOWN";
+    errorCode: string | null;
+  };
+  remoteVerification: {
+    attempted: boolean;
+    result: "NOT_ATTEMPTED" | "CONFIRMED" | "FAILED" | "INCONCLUSIVE";
+    verifiedAt: string | null;
+  };
+  confirmation: {
+    authorized: boolean;
+    decisionId: string | null;
+    deliveryId: string | null;
+    result: "NOT_AUTHORIZED" | "PENDING" | "ACKNOWLEDGED" | "FAILED";
+  };
+  blockingReason: string | null;
+};
 
 export type TurnExecutionIdentityInput = {
   companyId: string;
@@ -140,6 +186,7 @@ export type TurnExecutionManifest = {
   decisionPlannedBlockCount: number;
   decisionStateEffect: string | null;
   decisionOutboundIntended: boolean | null;
+  handoff: TurnExecutionHandoffSummary | null;
   control: {
     schemaVersion: typeof CONVERSATION_CONTROL_SNAPSHOT_SCHEMA_VERSION | null;
     acceptedSnapshot: ConversationControlSnapshot | null;
@@ -297,6 +344,7 @@ export function createTurnExecutionManifest(input: {
     decisionPlannedBlockCount: 0,
     decisionStateEffect: null,
     decisionOutboundIntended: null,
+    handoff: null,
     control: input.controlTrace
       ? controlManifestFromTrace(input.controlTrace)
       : {
@@ -426,6 +474,64 @@ export function withTurnExecutionDecision(
     decisionPlannedBlockCount: decision.plannedBlockCount,
     decisionStateEffect: decision.stateEffect,
     decisionOutboundIntended: decision.outboundIntended,
+  };
+}
+
+export function createTurnExecutionHandoffSummary(input: {
+  operationId: string;
+  status: TurnExecutionHandoffStatus;
+  expectedContextVersion: number;
+  expectedControlRevision: number;
+}): TurnExecutionHandoffSummary {
+  return {
+    schemaVersion: TURN_EXECUTION_HANDOFF_SCHEMA_VERSION,
+    operationId: input.operationId,
+    status: input.status,
+    destination: {
+      resolution: "UNKNOWN",
+      type: "UNKNOWN",
+      referenceHash: null,
+    },
+    expectedContextVersion: input.expectedContextVersion,
+    expectedControlRevision: input.expectedControlRevision,
+    postBlockControlRevision: null,
+    localBlockResult: "NOT_ATTEMPTED",
+    remoteMutation: {
+      attempted: false,
+      attemptCount: 0,
+      result: "NOT_ATTEMPTED",
+      errorCode: null,
+    },
+    remoteVerification: {
+      attempted: false,
+      result: "NOT_ATTEMPTED",
+      verifiedAt: null,
+    },
+    confirmation: {
+      authorized: false,
+      decisionId: null,
+      deliveryId: null,
+      result: "NOT_AUTHORIZED",
+    },
+    blockingReason: null,
+  };
+}
+
+export function withTurnExecutionHandoff(
+  manifest: TurnExecutionManifest,
+  handoff: TurnExecutionHandoffSummary | null,
+): TurnExecutionManifest {
+  return {
+    ...manifest,
+    handoff: handoff
+      ? {
+          ...handoff,
+          destination: { ...handoff.destination },
+          remoteMutation: { ...handoff.remoteMutation },
+          remoteVerification: { ...handoff.remoteVerification },
+          confirmation: { ...handoff.confirmation },
+        }
+      : null,
   };
 }
 

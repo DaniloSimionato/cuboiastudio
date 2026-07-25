@@ -169,18 +169,22 @@ import type { TriageResponseGenerationInput } from "./triage-response-generation
 import type { V2PrimaryResponseExecutionContext } from "./v2-primary-response-executor";
 import {
   createTurnExecutionManifest,
+  createTurnExecutionHandoffSummary,
   finalizeLegacyNonProviderTurnExecutionManifest,
   finalizeTurnExecutionManifest,
   withTurnExecutionControl,
   withTurnExecutionDecision,
+  withTurnExecutionHandoff,
   withTurnExecutionOutbound,
   withTurnExecutionOutboundDeliveries,
   type FragmentIdentityCoverage,
   type TurnExecutionManifest,
+  type TurnExecutionHandoffSummary,
   type TurnExecutionOutboundDeliveryReference,
   type TurnExecutionTerminalPath,
 } from "./turn-execution-manifest";
 import {
+  V1_OPERATIONAL_HANDOFF_EFFECT_SCHEMA_VERSION,
   V1_TURN_DECISION_EXECUTOR_OWNER,
   V1TurnDecisionSealer,
   createV1TurnDecisionId,
@@ -222,6 +226,16 @@ import {
   type OutboundRecoverySendResult,
   type OutboundReconciliationResult,
 } from "./outbound-recovery-coordinator";
+import {
+  createOperationalHandoffPlan,
+  parseChatwootOperationalHandoffState,
+  resolveOperationalHandoffDestination,
+  sanitizeOperationalHandoffErrorCode,
+  verifyOperationalHandoffRemoteState,
+  type ChatwootOperationalHandoffState,
+  type OperationalHandoffDestination,
+  type OperationalHandoffStatus,
+} from "./operational-handoff";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -709,12 +723,64 @@ const assistantOutboundDeliverySafeSelect = {
   reconciliationEvidenceType: true,
   reconciledAt: true,
   recoveryBlockedReason: true,
+  handoffOperationId: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.AssistantOutboundDeliverySelect;
 
 type AssistantOutboundDeliverySafeRecord = Prisma.AssistantOutboundDeliveryGetPayload<{
   select: typeof assistantOutboundDeliverySafeSelect;
+}>;
+
+const assistantHandoffOperationSafeSelect = {
+  id: true,
+  companyId: true,
+  assistantId: true,
+  conversationId: true,
+  turnExecutionId: true,
+  decisionId: true,
+  contextVersion: true,
+  idempotencyKey: true,
+  policyVersion: true,
+  expectedControlRevision: true,
+  postBlockControlRevision: true,
+  reason: true,
+  destinationType: true,
+  destinationResolution: true,
+  destinationAssigneeId: true,
+  destinationTeamId: true,
+  destinationInboxId: true,
+  desiredAiActive: true,
+  desiredStatus: true,
+  observedAiActive: true,
+  observedStatus: true,
+  observedAssigneeId: true,
+  observedTeamId: true,
+  observedAccountId: true,
+  observedInboxId: true,
+  observedConversationId: true,
+  remoteStateFingerprint: true,
+  verifiedAt: true,
+  status: true,
+  attemptCount: true,
+  lastAttemptAt: true,
+  localBlockedAt: true,
+  remoteMutationResult: true,
+  remoteMutationErrorCode: true,
+  remoteVerificationResult: true,
+  remoteVerificationErrorCode: true,
+  confirmationAuthorizedAt: true,
+  confirmationDeliveryCreatedAt: true,
+  completedAt: true,
+  supersededAt: true,
+  errorClass: true,
+  errorCode: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.AssistantHandoffOperationSelect;
+
+type AssistantHandoffOperationSafeRecord = Prisma.AssistantHandoffOperationGetPayload<{
+  select: typeof assistantHandoffOperationSafeSelect;
 }>;
 
 const assistantConversationAssistantSelect = {
@@ -831,6 +897,7 @@ const MAX_RUNTIME_HISTORY_MESSAGES = 24;
 const MAX_RUNTIME_LOG_PROVIDER_ERROR_MESSAGE_LENGTH = 500;
 const DEFAULT_MANUAL_TEST_TITLE_PREFIX = "Teste manual";
 const ADMIN_SILENT_CONTEXT_RESET_SOURCE = "ADMIN_SILENT_CONTEXT_RESET" as const;
+const OPERATIONAL_HANDOFF_HTTP_TIMEOUT_MS = 5_000;
 
 function conversationTriageCacheKey(input: {
   companyId: string;
@@ -1452,8 +1519,9 @@ export class AssistantConversationsService {
     const handoff = deriveHumanHandoffSignal(input.message);
     if (!handoff.requested) return { handled: false };
 
-    // This uses the existing handoff signal and outbound contract. It is terminal
-    // here so a request for a human cannot reach the direct-hours or V1 paths.
+    // The existing signal remains in the same position. The sealed decision now
+    // declares an operational effect; its text is only a candidate confirmation
+    // until local blocking and remote verification have both succeeded.
     const answer = "Transferindo para um atendente...";
     const metadata = {
       route: "EXPLICIT_HUMAN_HANDOFF",
@@ -1475,7 +1543,8 @@ export class AssistantConversationsService {
       blockedTemporalFallbackUsed: false,
       officialScheduleUsed: false,
       approvalCreated: false,
-      outboundCount: 1,
+      outboundCount: 0,
+      outboundPlannedCount: 1,
     };
     await this.assertConversationControlSnapshotCurrent({
       trace: input.controlTrace,
@@ -1488,8 +1557,8 @@ export class AssistantConversationsService {
       finalizeLegacyNonProviderTurnExecutionManifest({
       manifest: input.turnExecutionManifestBase,
       terminal: {
-        path: "EXPLICIT_HUMAN_HANDOFF_LEGACY",
-        reasonCode: handoff.reasonCode ?? "EXPLICIT_HUMAN_HANDOFF",
+        path: "OPERATIONAL_HUMAN_HANDOFF",
+        reasonCode: "OPERATIONAL_HUMAN_HANDOFF",
       },
       primaryIntent: "human_handoff",
       explicitRequests: ["human_handoff"],
@@ -1513,12 +1582,12 @@ export class AssistantConversationsService {
       turnExecutionId: turnExecutionManifest.turnExecutionId,
       contextVersion: input.conversation.currentContextVersion ?? 1,
       classification: {
-        type: "LEGACY_HANDOFF_TEXT",
-        terminalPath: "EXPLICIT_HUMAN_HANDOFF_LEGACY",
+        type: "OPERATIONAL_HANDOFF",
+        terminalPath: "OPERATIONAL_HUMAN_HANDOFF",
         terminalReasonCode: turnExecutionManifest.terminal!.reasonCode,
         strategy: metadata.strategy,
         providerDisposition: "PROHIBITED",
-        legacyCapability: "EXPLICIT_HUMAN_HANDOFF_LEGACY",
+        legacyCapability: null,
       },
       response: {
         blocks: [{ ordinal: 1, content: answer }],
@@ -1533,7 +1602,7 @@ export class AssistantConversationsService {
       provider: {
         used: false,
         finalGenerationCount: 0,
-        skipReason: "LEGACY_HANDOFF_TEXT_BRANCH",
+        skipReason: "OPERATIONAL_HANDOFF_PROVIDER_PROHIBITED",
       },
       controlSnapshot: input.controlTrace.expectedSnapshot,
       authority: null,
@@ -1542,7 +1611,22 @@ export class AssistantConversationsService {
         finalizeRuntimeLog: true,
         outboundIntended: true,
         sender: "CHATWOOT_V1",
-        stateEffect: "LEGACY_HANDOFF_TEXT_ONLY",
+        stateEffect: "BLOCK_AI_AND_HANDOFF",
+        operationalHandoff: {
+          schemaVersion: V1_OPERATIONAL_HANDOFF_EFFECT_SCHEMA_VERSION,
+          operationRequired: true,
+          localBlockRequired: true,
+          remoteMutationRequired: true,
+          remoteVerificationRequired: true,
+          confirmationPrecondition: "REMOTE_STATE_VERIFIED",
+          confirmationAllowedBeforeRemoteVerification: false,
+          expectedPostBlockControl: {
+            contextVersion: input.controlTrace.expectedSnapshot.currentContextVersion,
+            controlRevision: input.controlTrace.expectedSnapshot.controlRevision + 1,
+            aiActive: false,
+            pausedByHuman: true,
+          },
+        },
       },
       compatibility: {
         runtimeMode: "explicit-human-handoff",
@@ -1575,6 +1659,7 @@ export class AssistantConversationsService {
         knowledgeCount: 0,
         historyMessagesUsed: 0,
         historyLimit: 0,
+        handoffTriggered: true,
       },
       runtimeLogMetadata: metadata,
       outboundConversation: {
@@ -1981,6 +2066,818 @@ export class AssistantConversationsService {
     return observed!;
   }
 
+  private operationalHandoffDestinationReferenceHash(
+    operation: AssistantHandoffOperationSafeRecord,
+  ): string | null {
+    const reference =
+      operation.destinationAssigneeId ??
+      operation.destinationTeamId ??
+      operation.destinationInboxId;
+    return reference
+      ? `destination_${createHash("sha256").update(reference).digest("hex").slice(0, 16)}`
+      : null;
+  }
+
+  private toOperationalHandoffManifestSummary(input: {
+    operation: AssistantHandoffOperationSafeRecord;
+    confirmationDeliveryId?: string | null;
+    confirmationResult?: TurnExecutionHandoffSummary["confirmation"]["result"];
+  }): TurnExecutionHandoffSummary {
+    const operation = input.operation;
+    const destinationType =
+      operation.destinationType === "EXISTING_ASSIGNEE"
+        ? "ASSIGNEE"
+        : operation.destinationType === "EXISTING_TEAM"
+          ? "TEAM"
+          : "UNRESOLVED";
+    const remoteMutationResult =
+      operation.remoteMutationResult === "ACKNOWLEDGED"
+        ? "ACKNOWLEDGED"
+        : operation.remoteMutationResult === "FAILED"
+          ? "FAILED"
+        : operation.remoteMutationResult === "AMBIGUOUS"
+            ? "UNKNOWN"
+            : "NOT_ATTEMPTED";
+    const remoteVerificationResult =
+      operation.remoteVerificationResult === "CONFIRMED"
+        ? "CONFIRMED"
+        : operation.remoteVerificationResult
+          ? "FAILED"
+          : operation.attemptCount > 0
+            ? "INCONCLUSIVE"
+            : "NOT_ATTEMPTED";
+    const confirmationAuthorized = [
+      "REMOTE_CONFIRMED",
+      "CONFIRMATION_PENDING",
+      "COMPLETED",
+    ].includes(operation.status);
+    return {
+      ...createTurnExecutionHandoffSummary({
+        operationId: operation.id,
+        status: operation.status as TurnExecutionHandoffSummary["status"],
+        expectedContextVersion: operation.contextVersion,
+        expectedControlRevision: operation.expectedControlRevision,
+      }),
+      destination: {
+        resolution:
+          operation.destinationResolution === "RESOLVED" ? "RESOLVED" : "UNRESOLVED",
+        type: destinationType,
+        referenceHash: this.operationalHandoffDestinationReferenceHash(operation),
+      },
+      postBlockControlRevision: operation.postBlockControlRevision,
+      localBlockResult:
+        operation.status === "SUPERSEDED" && !operation.localBlockedAt
+          ? "SUPERSEDED"
+          : operation.localBlockedAt
+            ? "CONFIRMED"
+            : "NOT_ATTEMPTED",
+      remoteMutation: {
+        attempted: operation.attemptCount > 0,
+        attemptCount: operation.attemptCount,
+        result: remoteMutationResult,
+        errorCode: operation.remoteMutationErrorCode,
+      },
+      remoteVerification: {
+        attempted: operation.attemptCount > 0,
+        result: remoteVerificationResult,
+        verifiedAt: operation.verifiedAt?.toISOString() ?? null,
+      },
+      confirmation: {
+        authorized: confirmationAuthorized,
+        decisionId: operation.decisionId,
+        deliveryId: input.confirmationDeliveryId ?? null,
+        result:
+          input.confirmationResult ??
+          (operation.status === "COMPLETED"
+            ? "ACKNOWLEDGED"
+            : confirmationAuthorized
+              ? "PENDING"
+              : "NOT_AUTHORIZED"),
+      },
+      blockingReason:
+        operation.status === "RECONCILIATION_REQUIRED" ||
+        operation.status === "FAILED_TERMINAL" ||
+        operation.status === "SUPERSEDED"
+          ? operation.errorCode ?? operation.status
+          : null,
+    };
+  }
+
+  private async readOperationalHandoffRemoteState(input: {
+    url: string;
+    apiAccessToken: string;
+  }): Promise<
+    | { ok: true; state: ChatwootOperationalHandoffState; httpStatus: number }
+    | { ok: false; errorCode: string; httpStatus: number | null }
+  > {
+    try {
+      const response = await fetch(input.url, {
+        method: "GET",
+        headers: { api_access_token: input.apiAccessToken },
+        signal: AbortSignal.timeout(OPERATIONAL_HANDOFF_HTTP_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        return {
+          ok: false,
+          errorCode: `CHATWOOT_HANDOFF_READ_HTTP_${response.status}`,
+          httpStatus: response.status,
+        };
+      }
+      const payload = await response.json().catch(() => null);
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        return {
+          ok: false,
+          errorCode: "CHATWOOT_HANDOFF_READ_INVALID_RESPONSE",
+          httpStatus: response.status,
+        };
+      }
+      return {
+        ok: true,
+        state: parseChatwootOperationalHandoffState(payload),
+        httpStatus: response.status,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        errorCode: sanitizeOperationalHandoffErrorCode(
+          error,
+          "CHATWOOT_HANDOFF_READ_TRANSPORT_ERROR",
+        ),
+        httpStatus: null,
+      };
+    }
+  }
+
+  private async mutateOperationalHandoffRemoteState(input: {
+    url: string;
+    apiAccessToken: string;
+  }): Promise<{
+    result: "ACKNOWLEDGED" | "FAILED" | "AMBIGUOUS";
+    errorCode: string | null;
+    httpStatus: number | null;
+  }> {
+    let serializedBody: string;
+    try {
+      serializedBody = JSON.stringify({ ai_active: false });
+    } catch (error) {
+      return {
+        result: "FAILED",
+        errorCode: sanitizeOperationalHandoffErrorCode(
+          error,
+          "CHATWOOT_HANDOFF_MUTATION_SERIALIZATION_FAILED",
+        ),
+        httpStatus: null,
+      };
+    }
+    try {
+      const response = await fetch(input.url, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          api_access_token: input.apiAccessToken,
+        },
+        body: serializedBody,
+        signal: AbortSignal.timeout(OPERATIONAL_HANDOFF_HTTP_TIMEOUT_MS),
+      });
+      return response.ok
+        ? { result: "ACKNOWLEDGED", errorCode: null, httpStatus: response.status }
+        : {
+            result: "FAILED",
+            errorCode: `CHATWOOT_HANDOFF_MUTATION_HTTP_${response.status}`,
+            httpStatus: response.status,
+          };
+    } catch (error) {
+      return {
+        result: "AMBIGUOUS",
+        errorCode: sanitizeOperationalHandoffErrorCode(
+          error,
+          "CHATWOOT_HANDOFF_MUTATION_TRANSPORT_ERROR",
+        ),
+        httpStatus: null,
+      };
+    }
+  }
+
+  private async markOperationalHandoffPartial(input: {
+    operationId: string;
+    status?: "RECONCILIATION_REQUIRED" | "FAILED_TERMINAL" | "SUPERSEDED";
+    expectedStatuses?: readonly OperationalHandoffStatus[];
+    expectedContextVersion?: number;
+    expectedPostBlockControlRevision?: number | null;
+    errorClass: string;
+    errorCode: string;
+    remoteVerificationResult?: string | null;
+    observedState?: ChatwootOperationalHandoffState | null;
+  }): Promise<AssistantHandoffOperationSafeRecord> {
+    const now = new Date();
+    const transition = await this.prisma.assistantHandoffOperation.updateMany({
+      where: {
+        id: input.operationId,
+        ...(input.expectedStatuses?.length
+          ? { status: { in: [...input.expectedStatuses] } }
+          : {}),
+        ...(input.expectedContextVersion !== undefined
+          ? { contextVersion: input.expectedContextVersion }
+          : {}),
+        ...(input.expectedPostBlockControlRevision !== undefined
+          ? { postBlockControlRevision: input.expectedPostBlockControlRevision }
+          : {}),
+      },
+      data: {
+        status: input.status ?? "RECONCILIATION_REQUIRED",
+        errorClass: sanitizeOperationalHandoffErrorCode(
+          input.errorClass,
+          "OPERATIONAL_HANDOFF",
+        ),
+        errorCode: sanitizeOperationalHandoffErrorCode(input.errorCode),
+        ...(input.remoteVerificationResult !== undefined
+          ? {
+              remoteVerificationResult: input.remoteVerificationResult,
+              remoteVerificationErrorCode:
+                input.remoteVerificationResult === "CONFIRMED" ? null : input.errorCode,
+            }
+          : {}),
+        ...(input.status === "SUPERSEDED" ? { supersededAt: now } : {}),
+        ...(input.observedState
+          ? {
+              observedAiActive: input.observedState.aiActive,
+              observedStatus: input.observedState.status,
+              observedAssigneeId: input.observedState.assigneeId,
+              observedTeamId: input.observedState.teamId,
+              observedAccountId: input.observedState.accountId,
+              observedInboxId: input.observedState.inboxId,
+              observedConversationId: input.observedState.conversationId,
+              remoteStateFingerprint: input.observedState.stateFingerprint,
+            }
+          : {}),
+      },
+    });
+    if (transition.count !== 1) {
+      const current = await this.prisma.assistantHandoffOperation.findUniqueOrThrow({
+        where: { id: input.operationId },
+        select: assistantHandoffOperationSafeSelect,
+      });
+      if (
+        current.status === "SUPERSEDED" ||
+        current.status === "RECONCILIATION_REQUIRED" ||
+        current.status === "FAILED_TERMINAL"
+      ) {
+        return current;
+      }
+      throw new Error("OPERATIONAL_HANDOFF_PARTIAL_TRANSITION_REJECTED");
+    }
+    return this.prisma.assistantHandoffOperation.findUniqueOrThrow({
+      where: { id: input.operationId },
+      select: assistantHandoffOperationSafeSelect,
+    });
+  }
+
+  private async prepareOperationalHandoff(input: {
+    decision: V1TurnDecision;
+    assistant: AssistantConversationRuntimeAssistantRecord;
+    conversation: AssistantConversationSafeRecord;
+    controlTrace: ConversationControlTrace;
+    manifest: TurnExecutionManifest;
+  }): Promise<{
+    authorized: boolean;
+    operation: AssistantHandoffOperationSafeRecord;
+    manifest: TurnExecutionManifest;
+  }> {
+    if (
+      input.decision.classification.type !== "OPERATIONAL_HANDOFF" ||
+      input.decision.effects.stateEffect !== "BLOCK_AI_AND_HANDOFF" ||
+      !input.decision.effects.operationalHandoff
+    ) {
+      throw new Error("V1_OPERATIONAL_HANDOFF_DECISION_REQUIRED");
+    }
+    const plan = createOperationalHandoffPlan({
+      turnExecutionId: input.decision.turnExecutionId,
+      decisionId: input.decision.decisionId,
+      contextVersion: input.decision.contextVersion,
+      expectedControlRevision: input.decision.control.expectedRevision,
+      reasonCode: input.decision.classification.terminalReasonCode,
+    });
+    let operation = await this.prisma.assistantHandoffOperation.findUnique({
+      where: { decisionId: input.decision.decisionId },
+      select: assistantHandoffOperationSafeSelect,
+    });
+    if (!operation) {
+      try {
+        operation = await this.prisma.assistantHandoffOperation.create({
+          data: {
+            id: plan.operationId,
+            companyId: input.conversation.companyId,
+            assistantId: input.assistant.id,
+            conversationId: input.conversation.id,
+            turnExecutionId: plan.turnExecutionId,
+            decisionId: plan.decisionId,
+            contextVersion: plan.contextVersion,
+            idempotencyKey: plan.idempotencyKey,
+            policyVersion: plan.policyVersion,
+            expectedControlRevision: plan.expectedControlRevision,
+            reason: plan.reasonCode,
+            destinationInboxId: input.conversation.externalInboxId,
+            desiredAiActive: false,
+            status: "REQUESTED",
+          },
+          select: assistantHandoffOperationSafeSelect,
+        });
+      } catch (error) {
+        if (!isPrismaUniqueConstraintError(error)) throw error;
+        operation = await this.prisma.assistantHandoffOperation.findUniqueOrThrow({
+          where: { decisionId: input.decision.decisionId },
+          select: assistantHandoffOperationSafeSelect,
+        });
+      }
+    }
+    if (
+      operation.id !== plan.operationId ||
+      operation.turnExecutionId !== input.decision.turnExecutionId ||
+      operation.conversationId !== input.conversation.id ||
+      operation.contextVersion !== input.decision.contextVersion
+    ) {
+      throw new Error("OPERATIONAL_HANDOFF_OPERATION_IDENTITY_MISMATCH");
+    }
+    if (operation.status !== "REQUESTED") {
+      return {
+        authorized: false,
+        operation,
+        manifest: withTurnExecutionHandoff(
+          input.manifest,
+          this.toOperationalHandoffManifestSummary({ operation }),
+        ),
+      };
+    }
+
+    const blockAt = new Date();
+    const locallyBlocked = await this.prisma.$transaction(async (tx) => {
+      const updatedConversation = await tx.assistantConversation.updateMany({
+        where: {
+          id: input.conversation.id,
+          companyId: input.conversation.companyId,
+          assistantId: input.assistant.id,
+          currentContextVersion: input.decision.control.expectedContextVersion,
+          controlRevision: input.decision.control.expectedRevision,
+          aiActive: true,
+          pausedByHuman: false,
+        },
+        data: {
+          aiActive: false,
+          pausedByHuman: true,
+          controlRevision: { increment: 1 },
+          lastAiPausedAt: blockAt,
+          pauseReason: "OPERATIONAL_HUMAN_HANDOFF",
+        },
+      });
+      if (updatedConversation.count !== 1) return false;
+      const updatedOperation = await tx.assistantHandoffOperation.updateMany({
+        where: {
+          id: operation!.id,
+          status: "REQUESTED",
+          expectedControlRevision: input.decision.control.expectedRevision,
+          contextVersion: input.decision.control.expectedContextVersion,
+        },
+        data: {
+          status: "LOCALLY_BLOCKED",
+          postBlockControlRevision: input.decision.control.expectedRevision + 1,
+          localBlockedAt: blockAt,
+          errorClass: null,
+          errorCode: null,
+        },
+      });
+      if (updatedOperation.count !== 1) {
+        throw new Error("OPERATIONAL_HANDOFF_LOCAL_BLOCK_OPERATION_CAS_FAILED");
+      }
+      return true;
+    });
+    if (!locallyBlocked) {
+      operation = await this.markOperationalHandoffPartial({
+        operationId: operation.id,
+        status: "SUPERSEDED",
+        expectedStatuses: ["REQUESTED"],
+        expectedContextVersion: input.decision.control.expectedContextVersion,
+        errorClass: "CONTROL_STATE_STALE",
+        errorCode: "OPERATIONAL_HANDOFF_LOCAL_BLOCK_CAS_REJECTED",
+      });
+      return {
+        authorized: false,
+        operation,
+        manifest: withTurnExecutionHandoff(
+          input.manifest,
+          this.toOperationalHandoffManifestSummary({ operation }),
+        ),
+      };
+    }
+    operation = await this.prisma.assistantHandoffOperation.findUniqueOrThrow({
+      where: { id: operation.id },
+      select: assistantHandoffOperationSafeSelect,
+    });
+
+    const postBlockSnapshot = await this.readConversationControlSnapshot({
+      assistantId: input.assistant.id,
+      conversationId: input.conversation.id,
+      companyId: input.conversation.companyId,
+      source: "LOCAL_DATABASE_CONTROL_TRANSITION",
+      reason: `OPERATIONAL_HUMAN_HANDOFF:${operation.id}`,
+    });
+    const expectedPostBlock = input.decision.effects.operationalHandoff.expectedPostBlockControl;
+    if (
+      !postBlockSnapshot ||
+      postBlockSnapshot.currentContextVersion !== expectedPostBlock.contextVersion ||
+      postBlockSnapshot.controlRevision !== expectedPostBlock.controlRevision ||
+      postBlockSnapshot.aiActive !== false ||
+      postBlockSnapshot.pausedByHuman !== true
+    ) {
+      operation = await this.markOperationalHandoffPartial({
+        operationId: operation.id,
+        status: "SUPERSEDED",
+        expectedStatuses: ["LOCALLY_BLOCKED"],
+        expectedContextVersion: input.decision.control.expectedContextVersion,
+        expectedPostBlockControlRevision:
+          input.decision.control.expectedRevision + 1,
+        errorClass: "CONTROL_STATE_STALE",
+        errorCode: "OPERATIONAL_HANDOFF_POST_BLOCK_STATE_MISMATCH",
+      });
+      return {
+        authorized: false,
+        operation,
+        manifest: withTurnExecutionHandoff(
+          input.manifest,
+          this.toOperationalHandoffManifestSummary({ operation }),
+        ),
+      };
+    }
+    advanceConversationControlTrace({
+      trace: input.controlTrace,
+      nextSnapshot: postBlockSnapshot,
+      reason: `OPERATIONAL_HUMAN_HANDOFF:${operation.id}`,
+      transitionedAt: blockAt.toISOString(),
+    });
+    const locallyBlockedTransitionGuard = {
+      expectedStatuses: ["LOCALLY_BLOCKED"] as const,
+      expectedContextVersion: postBlockSnapshot.currentContextVersion,
+      expectedPostBlockControlRevision: postBlockSnapshot.controlRevision,
+    };
+
+    const accountId = input.conversation.externalAccountId?.trim() ?? "";
+    const inboxId = input.conversation.externalInboxId?.trim() ?? "";
+    const externalConversationId =
+      input.conversation.externalConversationId?.trim() ?? "";
+    if (!accountId || !inboxId || !externalConversationId) {
+      operation = await this.markOperationalHandoffPartial({
+        operationId: operation.id,
+        ...locallyBlockedTransitionGuard,
+        errorClass: "CHATWOOT_HANDOFF_CONFIGURATION",
+        errorCode: "CHATWOOT_HANDOFF_SCOPE_MISSING",
+      });
+      return {
+        authorized: false,
+        operation,
+        manifest: withTurnExecutionControl(
+          withTurnExecutionHandoff(
+            input.manifest,
+            this.toOperationalHandoffManifestSummary({ operation }),
+          ),
+          input.controlTrace,
+        ),
+      };
+    }
+    const config =
+      await this.chatwootInboxConfigService.resolveActiveForAssistantConversation({
+        companyId: input.conversation.companyId,
+        assistantId: input.assistant.id,
+        accountId,
+        inboxId,
+      });
+    if (
+      !config?.isActive ||
+      !config.apiAccessToken ||
+      !config.baseUrl?.trim() ||
+      config.accountId !== accountId ||
+      config.inboxId !== inboxId
+    ) {
+      operation = await this.markOperationalHandoffPartial({
+        operationId: operation.id,
+        ...locallyBlockedTransitionGuard,
+        errorClass: "CHATWOOT_HANDOFF_CONFIGURATION",
+        errorCode: "CHATWOOT_HANDOFF_CONFIG_UNAVAILABLE",
+      });
+      return {
+        authorized: false,
+        operation,
+        manifest: withTurnExecutionControl(
+          withTurnExecutionHandoff(
+            input.manifest,
+            this.toOperationalHandoffManifestSummary({ operation }),
+          ),
+          input.controlTrace,
+        ),
+      };
+    }
+    const remoteUrl = `${config.baseUrl.replace(/\/$/, "")}/api/v1/accounts/${encodeURIComponent(
+      accountId,
+    )}/conversations/${encodeURIComponent(externalConversationId)}`;
+    const initialRead = await this.readOperationalHandoffRemoteState({
+      url: remoteUrl,
+      apiAccessToken: config.apiAccessToken,
+    });
+    if (!initialRead.ok) {
+      operation = await this.markOperationalHandoffPartial({
+        operationId: operation.id,
+        ...locallyBlockedTransitionGuard,
+        errorClass: "CHATWOOT_HANDOFF_READ",
+        errorCode: initialRead.errorCode,
+      });
+      return {
+        authorized: false,
+        operation,
+        manifest: withTurnExecutionControl(
+          withTurnExecutionHandoff(
+            input.manifest,
+            this.toOperationalHandoffManifestSummary({ operation }),
+          ),
+          input.controlTrace,
+        ),
+      };
+    }
+    if (
+      initialRead.state.conversationId !== externalConversationId ||
+      initialRead.state.accountId !== accountId ||
+      initialRead.state.inboxId !== inboxId
+    ) {
+      operation = await this.markOperationalHandoffPartial({
+        operationId: operation.id,
+        ...locallyBlockedTransitionGuard,
+        errorClass: "CHATWOOT_HANDOFF_SCOPE",
+        errorCode: "CHATWOOT_HANDOFF_INITIAL_SCOPE_MISMATCH",
+        observedState: initialRead.state,
+      });
+      return {
+        authorized: false,
+        operation,
+        manifest: withTurnExecutionControl(
+          withTurnExecutionHandoff(
+            input.manifest,
+            this.toOperationalHandoffManifestSummary({ operation }),
+          ),
+          input.controlTrace,
+        ),
+      };
+    }
+    const destination = resolveOperationalHandoffDestination(initialRead.state);
+    if (destination.resolution !== "RESOLVED") {
+      const unresolvedTransition = await this.prisma.assistantHandoffOperation.updateMany({
+        where: {
+          id: operation.id,
+          status: "LOCALLY_BLOCKED",
+          contextVersion: postBlockSnapshot.currentContextVersion,
+          postBlockControlRevision: postBlockSnapshot.controlRevision,
+        },
+        data: {
+          status: "RECONCILIATION_REQUIRED",
+          destinationType: "UNRESOLVED",
+          destinationResolution: "UNRESOLVED",
+          destinationInboxId: destination.inboxId,
+          errorClass: "OPERATIONAL_HANDOFF_DESTINATION",
+          errorCode: destination.reasonCode,
+        },
+      });
+      if (unresolvedTransition.count !== 1) {
+        throw new Error("OPERATIONAL_HANDOFF_DESTINATION_TRANSITION_REJECTED");
+      }
+      operation = await this.prisma.assistantHandoffOperation.findUniqueOrThrow({
+        where: { id: operation.id },
+        select: assistantHandoffOperationSafeSelect,
+      });
+      return {
+        authorized: false,
+        operation,
+        manifest: withTurnExecutionControl(
+          withTurnExecutionHandoff(
+            input.manifest,
+            this.toOperationalHandoffManifestSummary({ operation }),
+          ),
+          input.controlTrace,
+        ),
+      };
+    }
+    try {
+      await this.assertConversationControlSnapshotCurrent({
+        trace: input.controlTrace,
+        checkpoint: "PRE_EFFECTS",
+        assistantId: input.assistant.id,
+        conversationId: input.conversation.id,
+        companyId: input.conversation.companyId,
+      });
+    } catch (error) {
+      if (!isConversationControlSnapshotStaleError(error)) throw error;
+      operation = await this.markOperationalHandoffPartial({
+        operationId: operation.id,
+        status: "SUPERSEDED",
+        ...locallyBlockedTransitionGuard,
+        errorClass: "CONTROL_STATE_STALE",
+        errorCode:
+          error.record.blockingReason ??
+          "OPERATIONAL_HANDOFF_CONTROL_STATE_STALE_PRE_MUTATION",
+      });
+      return {
+        authorized: false,
+        operation,
+        manifest: withTurnExecutionControl(
+          withTurnExecutionHandoff(
+            input.manifest,
+            this.toOperationalHandoffManifestSummary({ operation }),
+          ),
+          input.controlTrace,
+        ),
+      };
+    }
+    const mutationAt = new Date();
+    const remotePendingTransition =
+      await this.prisma.assistantHandoffOperation.updateMany({
+      where: {
+        id: operation.id,
+        status: "LOCALLY_BLOCKED",
+        contextVersion: postBlockSnapshot.currentContextVersion,
+        postBlockControlRevision: postBlockSnapshot.controlRevision,
+      },
+      data: {
+        status: "REMOTE_PENDING",
+        destinationType: destination.type,
+        destinationResolution: destination.resolution,
+        destinationAssigneeId: destination.assigneeId,
+        destinationTeamId: destination.teamId,
+        destinationInboxId: destination.inboxId,
+        attemptCount: { increment: 1 },
+        lastAttemptAt: mutationAt,
+        errorClass: null,
+        errorCode: null,
+      },
+    });
+    if (remotePendingTransition.count !== 1) {
+      throw new Error("OPERATIONAL_HANDOFF_REMOTE_PENDING_TRANSITION_REJECTED");
+    }
+    operation = await this.prisma.assistantHandoffOperation.findUniqueOrThrow({
+      where: { id: operation.id },
+      select: assistantHandoffOperationSafeSelect,
+    });
+    const remotePendingTransitionGuard = {
+      expectedStatuses: ["REMOTE_PENDING"] as const,
+      expectedContextVersion: postBlockSnapshot.currentContextVersion,
+      expectedPostBlockControlRevision: postBlockSnapshot.controlRevision,
+    };
+    const mutation = await this.mutateOperationalHandoffRemoteState({
+      url: remoteUrl,
+      apiAccessToken: config.apiAccessToken,
+    });
+    const mutationResultTransition =
+      await this.prisma.assistantHandoffOperation.updateMany({
+      where: {
+        id: operation.id,
+        status: "REMOTE_PENDING",
+        contextVersion: postBlockSnapshot.currentContextVersion,
+        postBlockControlRevision: postBlockSnapshot.controlRevision,
+      },
+      data: {
+        remoteMutationResult: mutation.result,
+        remoteMutationErrorCode: mutation.errorCode,
+        errorClass: mutation.errorCode ? "CHATWOOT_HANDOFF_MUTATION" : null,
+        errorCode: mutation.errorCode,
+      },
+    });
+    if (mutationResultTransition.count !== 1) {
+      throw new Error("OPERATIONAL_HANDOFF_MUTATION_RESULT_TRANSITION_REJECTED");
+    }
+
+    const verificationRead = await this.readOperationalHandoffRemoteState({
+      url: remoteUrl,
+      apiAccessToken: config.apiAccessToken,
+    });
+    try {
+      await this.assertConversationControlSnapshotCurrent({
+        trace: input.controlTrace,
+        checkpoint: "PRE_EFFECTS",
+        assistantId: input.assistant.id,
+        conversationId: input.conversation.id,
+        companyId: input.conversation.companyId,
+      });
+    } catch (error) {
+      if (!isConversationControlSnapshotStaleError(error)) throw error;
+      operation = await this.markOperationalHandoffPartial({
+        operationId: operation.id,
+        status: "SUPERSEDED",
+        ...remotePendingTransitionGuard,
+        errorClass: "CONTROL_STATE_STALE",
+        errorCode:
+          error.record.blockingReason ??
+          "OPERATIONAL_HANDOFF_CONTROL_STATE_STALE_POST_MUTATION",
+      });
+      return {
+        authorized: false,
+        operation,
+        manifest: withTurnExecutionControl(
+          withTurnExecutionHandoff(
+            input.manifest,
+            this.toOperationalHandoffManifestSummary({ operation }),
+          ),
+          input.controlTrace,
+        ),
+      };
+    }
+    if (!verificationRead.ok) {
+      operation = await this.markOperationalHandoffPartial({
+        operationId: operation.id,
+        ...remotePendingTransitionGuard,
+        errorClass: "CHATWOOT_HANDOFF_VERIFICATION",
+        errorCode: verificationRead.errorCode,
+        remoteVerificationResult: "FAILED",
+      });
+      return {
+        authorized: false,
+        operation,
+        manifest: withTurnExecutionControl(
+          withTurnExecutionHandoff(
+            input.manifest,
+            this.toOperationalHandoffManifestSummary({ operation }),
+          ),
+          input.controlTrace,
+        ),
+      };
+    }
+    const verification = verifyOperationalHandoffRemoteState({
+      state: verificationRead.state,
+      destination,
+      expectedConversationId: externalConversationId,
+      expectedAccountId: accountId,
+      expectedInboxId: inboxId,
+    });
+    if (!verification.verified) {
+      operation = await this.markOperationalHandoffPartial({
+        operationId: operation.id,
+        ...remotePendingTransitionGuard,
+        errorClass: "CHATWOOT_HANDOFF_VERIFICATION",
+        errorCode: verification.reasonCode,
+        remoteVerificationResult: "NOT_CONFIRMED",
+        observedState: verification.state,
+      });
+      return {
+        authorized: false,
+        operation,
+        manifest: withTurnExecutionControl(
+          withTurnExecutionHandoff(
+            input.manifest,
+            this.toOperationalHandoffManifestSummary({ operation }),
+          ),
+          input.controlTrace,
+        ),
+      };
+    }
+    const remoteConfirmedTransition =
+      await this.prisma.assistantHandoffOperation.updateMany({
+      where: {
+        id: operation.id,
+        status: "REMOTE_PENDING",
+        contextVersion: postBlockSnapshot.currentContextVersion,
+        postBlockControlRevision: postBlockSnapshot.controlRevision,
+      },
+      data: {
+        status: "REMOTE_CONFIRMED",
+        observedAiActive: verification.state.aiActive,
+        observedStatus: verification.state.status,
+        observedAssigneeId: verification.state.assigneeId,
+        observedTeamId: verification.state.teamId,
+        observedAccountId: verification.state.accountId,
+        observedInboxId: verification.state.inboxId,
+        observedConversationId: verification.state.conversationId,
+        remoteStateFingerprint: verification.state.stateFingerprint,
+        verifiedAt: new Date(verification.state.observedAt),
+        remoteVerificationResult: "CONFIRMED",
+        remoteVerificationErrorCode: null,
+        confirmationAuthorizedAt: new Date(),
+        errorClass: null,
+        errorCode: null,
+      },
+    });
+    if (remoteConfirmedTransition.count !== 1) {
+      throw new Error("OPERATIONAL_HANDOFF_REMOTE_CONFIRMED_TRANSITION_REJECTED");
+    }
+    operation = await this.prisma.assistantHandoffOperation.findUniqueOrThrow({
+      where: { id: operation.id },
+      select: assistantHandoffOperationSafeSelect,
+    });
+    return {
+      authorized: true,
+      operation,
+      manifest: withTurnExecutionControl(
+        withTurnExecutionHandoff(
+          input.manifest,
+          this.toOperationalHandoffManifestSummary({ operation }),
+        ),
+        input.controlTrace,
+      ),
+    };
+  }
+
   private resolveConversationProcessingSkipReason(
     conversation: Pick<AssistantConversationSafeRecord, "aiActive" | "pausedByHuman">,
   ): ConversationProcessingSkipReason | null {
@@ -2200,6 +3097,109 @@ export class AssistantConversationsService {
     return { runtimeLogId: runtimeLog.id, manifest };
   }
 
+  private async persistOperationalHandoffWithheldTurn(input: {
+    decision: V1TurnDecision;
+    operation: AssistantHandoffOperationSafeRecord;
+    assistant: AssistantConversationRuntimeAssistantRecord;
+    conversation: AssistantConversationSafeRecord;
+    userMessage: AssistantConversationMessageSafeRecord;
+    manifest: TurnExecutionManifest;
+    controlTrace: ConversationControlTrace;
+    runtimeStartedAt: number;
+    runtimeLogData: Record<string, unknown>;
+    runtimeLogMetadata: Record<string, unknown>;
+  }): Promise<{ runtimeLogId: string; manifest: TurnExecutionManifest }> {
+    input.controlTrace.outboundAuthorization = "BLOCKED";
+    input.controlTrace.decisionResult =
+      input.operation.localBlockedAt && input.operation.status !== "SUPERSEDED"
+        ? "EXECUTED"
+        : "DISCARDED";
+    const manifest = withTurnExecutionControl(
+      withTurnExecutionOutbound(
+        withTurnExecutionHandoff(
+          input.manifest,
+          this.toOperationalHandoffManifestSummary({
+            operation: input.operation,
+            confirmationResult: "NOT_AUTHORIZED",
+          }),
+        ),
+        {
+          ...input.manifest.outbound,
+          planned: false,
+          attempted: false,
+          attemptCount: 0,
+          sender: "NOT_APPLICABLE",
+          externalMessageId: null,
+          result: "NOT_ATTEMPTED",
+          deliveries: [],
+        },
+      ),
+      input.controlTrace,
+    );
+    const blockingReason =
+      input.operation.errorCode ??
+      (input.operation.status === "SUPERSEDED"
+        ? "OPERATIONAL_HANDOFF_SUPERSEDED"
+        : "OPERATIONAL_HANDOFF_RECONCILIATION_REQUIRED");
+    const runtimeLog = await this.prisma.$transaction(async (tx) => {
+      const currentInbound = await tx.assistantConversationMessage.findUnique({
+        where: { id: input.userMessage.id },
+        select: { externalPayload: true },
+      });
+      const externalPayload =
+        currentInbound?.externalPayload &&
+        typeof currentInbound.externalPayload === "object" &&
+        !Array.isArray(currentInbound.externalPayload)
+          ? currentInbound.externalPayload
+          : {};
+      await tx.assistantConversationMessage.update({
+        where: { id: input.userMessage.id },
+        data: {
+          externalPayload: this.toSerializableJsonValue({
+            ...externalPayload,
+            turnExecutionId: input.decision.turnExecutionId,
+            decisionId: input.decision.decisionId,
+            handoffOperationId: input.operation.id,
+          }),
+        },
+      });
+      return tx.assistantRuntimeLog.create({
+        data: {
+          ...input.runtimeLogData,
+          companyId: input.conversation.companyId,
+          assistantId: input.assistant.id,
+          conversationId: input.conversation.id,
+          userMessageId: input.userMessage.id,
+          assistantMessageId: null,
+          mode: "operational-human-handoff",
+          status: "SKIPPED",
+          provider: null,
+          model: null,
+          configurationSource: "verified-operational-handoff",
+          fallback: false,
+          fallbackReason: blockingReason,
+          outcome: "handoff",
+          durationMs: Date.now() - input.runtimeStartedAt,
+          knowledgeCount: 0,
+          historyMessagesUsed: 0,
+          historyLimit: 0,
+          handoffTriggered: true,
+          blockReason: blockingReason,
+          metadata: this.toSerializableJsonValue({
+            ...input.runtimeLogMetadata,
+            confirmationWithheld: true,
+            providerRetryAttempted: false,
+            fallbackCreated: false,
+            handoffOperationId: input.operation.id,
+            turnExecutionManifest: manifest,
+          }),
+        } as Prisma.AssistantRuntimeLogUncheckedCreateInput,
+        select: { id: true },
+      });
+    });
+    return { runtimeLogId: runtimeLog.id, manifest };
+  }
+
   private async buildConversationControlBlockedResponse(input: {
     assistant: AssistantConversationRuntimeAssistantRecord;
     conversation: AssistantConversationSafeRecord;
@@ -2365,23 +3365,47 @@ export class AssistantConversationsService {
       };
     } catch (error) {
       if (!isConversationControlSnapshotStaleError(error)) throw error;
-      await this.prisma.assistantOutboundDelivery.updateMany({
-        where: {
-          id: input.delivery.id,
-          status: "PENDING",
-        },
-        data: {
-          status: "CANCELLED_STALE",
-          retrySafety: "NOT_RETRYABLE",
-          attemptOwner: null,
-          claimStartedAt: null,
-          claimExpiresAt: null,
-          nextEligibleAt: null,
-          errorClass: "CONTROL_STATE_STALE",
-          errorCode:
-            error.record.blockingReason ?? "BLOCKED_CONTROL_STATE_PRE_OUTBOUND",
-          recoveryBlockedReason: "CONTROL_STATE_STALE",
-        },
+      const staleReason =
+        error.record.blockingReason ?? "BLOCKED_CONTROL_STATE_PRE_OUTBOUND";
+      await this.prisma.$transaction(async (tx) => {
+        const deliveryTransition = await tx.assistantOutboundDelivery.updateMany({
+          where: {
+            id: input.delivery.id,
+            status: "PENDING",
+          },
+          data: {
+            status: "CANCELLED_STALE",
+            retrySafety: "NOT_RETRYABLE",
+            attemptOwner: null,
+            claimStartedAt: null,
+            claimExpiresAt: null,
+            nextEligibleAt: null,
+            errorClass: "CONTROL_STATE_STALE",
+            errorCode: staleReason,
+            recoveryBlockedReason: "CONTROL_STATE_STALE",
+          },
+        });
+        if (deliveryTransition.count !== 1 || !input.delivery.handoffOperationId) return;
+        const operationTransition = await tx.assistantHandoffOperation.updateMany({
+          where: {
+            id: input.delivery.handoffOperationId,
+            status: { in: ["REMOTE_CONFIRMED", "CONFIRMATION_PENDING"] },
+          },
+          data: {
+            status: "SUPERSEDED",
+            supersededAt: new Date(),
+            errorClass: "CONTROL_STATE_STALE",
+            errorCode: staleReason,
+          },
+        });
+        if (operationTransition.count === 1) return;
+        const currentOperation = await tx.assistantHandoffOperation.findUnique({
+          where: { id: input.delivery.handoffOperationId },
+          select: { status: true },
+        });
+        if (currentOperation?.status !== "SUPERSEDED") {
+          throw new Error("OPERATIONAL_HANDOFF_STALE_CANCELLATION_REJECTED");
+        }
       });
       const delivery = await this.prisma.assistantOutboundDelivery.findUniqueOrThrow({
         where: { id: input.delivery.id },
@@ -2445,6 +3469,7 @@ export class AssistantConversationsService {
           assistantId: delivery.assistantId,
           content,
           handoff,
+          handoffOperationId: delivery.handoffOperationId,
           deliveryReference: {
             attribute: remoteReferenceAttribute,
             value: remoteReferenceValue,
@@ -2621,13 +3646,19 @@ export class AssistantConversationsService {
     outboundAttempted: boolean;
     outboundPerformed: ResponseTailOutboundState;
   }> {
+    const operationalHandoffDecision =
+      input.decision.classification.type === "OPERATIONAL_HANDOFF" &&
+      input.decision.effects.stateEffect === "BLOCK_AI_AND_HANDOFF";
+    const decisionControlSnapshot = operationalHandoffDecision
+      ? input.controlTrace.acceptedSnapshot
+      : input.controlTrace.expectedSnapshot;
     if (
       input.decision.turnExecutionId !== input.manifest.turnExecutionId ||
       input.decision.contextVersion !== input.manifest.identity.contextVersion ||
       input.decision.control.expectedRevision !==
-        input.controlTrace.expectedSnapshot.controlRevision ||
+        decisionControlSnapshot.controlRevision ||
       input.decision.control.expectedContextVersion !==
-        input.controlTrace.expectedSnapshot.currentContextVersion
+        decisionControlSnapshot.currentContextVersion
     ) {
       throw new Error("V1_TURN_DECISION_IDENTITY_MISMATCH");
     }
@@ -2652,6 +3683,45 @@ export class AssistantConversationsService {
       }),
       input.controlTrace,
     );
+    let operationalHandoffOperation: AssistantHandoffOperationSafeRecord | null = null;
+    if (operationalHandoffDecision) {
+      const preparation = await this.prepareOperationalHandoff({
+        decision: input.decision,
+        assistant: input.assistant,
+        conversation: input.conversation,
+        controlTrace: input.controlTrace,
+        manifest,
+      });
+      operationalHandoffOperation = preparation.operation;
+      manifest = preparation.manifest;
+      if (!preparation.authorized) {
+        const withheld = await this.persistOperationalHandoffWithheldTurn({
+          decision: input.decision,
+          operation: preparation.operation,
+          assistant: input.assistant,
+          conversation: input.conversation,
+          userMessage: input.userMessage,
+          manifest,
+          controlTrace: input.controlTrace,
+          runtimeStartedAt: input.runtimeStartedAt,
+          runtimeLogData: input.runtimeLogData,
+          runtimeLogMetadata: input.runtimeLogMetadata,
+        });
+        return {
+          assistantMessage: null,
+          runtimeLogId: withheld.runtimeLogId,
+          runtime: {
+            ...input.runtime,
+            logId: withheld.runtimeLogId,
+            outcome: "handoff",
+            fallback: false,
+          },
+          manifest: withheld.manifest,
+          outboundAttempted: false,
+          outboundPerformed: "NOT_ATTEMPTED",
+        };
+      }
+    }
     const persistence = input.decision.response.persistence;
     const runtimeLogPersistence = input.runtimeLogPersistence ?? "BEFORE_OUTBOUND";
 
@@ -2730,6 +3800,9 @@ export class AssistantConversationsService {
             externalPayload: this.toSerializableJsonValue({
               turnExecutionId: input.decision.turnExecutionId,
               decisionId: input.decision.decisionId,
+              ...(operationalHandoffOperation
+                ? { handoffOperationId: operationalHandoffOperation.id }
+                : {}),
             }),
           },
           select: assistantConversationMessageSafeSelect,
@@ -2746,8 +3819,8 @@ export class AssistantConversationsService {
             turnExecutionId: input.decision.turnExecutionId,
             decisionId: input.decision.decisionId,
             blockOrdinal: block.ordinal,
-            expectedContextVersion: input.decision.control.expectedContextVersion,
-            expectedControlRevision: input.decision.control.expectedRevision,
+            expectedContextVersion: input.controlTrace.expectedSnapshot.currentContextVersion,
+            expectedControlRevision: input.controlTrace.expectedSnapshot.controlRevision,
             sender: input.decision.effects.sender,
             content: block.content,
           });
@@ -2773,6 +3846,7 @@ export class AssistantConversationsService {
                   ? OUTBOUND_RECOVERABLE_PAYLOAD_CONTRACT
                   : OUTBOUND_LEGACY_PAYLOAD_CONTRACT,
               handoff: input.outboundHandoff === true,
+              handoffOperationId: operationalHandoffOperation?.id ?? null,
               status: "PENDING",
               retrySafety: "UNKNOWN",
               maxAttempts: DEFAULT_OUTBOUND_MAX_ATTEMPTS,
@@ -2782,6 +3856,39 @@ export class AssistantConversationsService {
           createdDeliveries.push(delivery);
         }
         outboundDeliveries = createdDeliveries;
+        if (operationalHandoffOperation) {
+          const operationTransition = await tx.assistantHandoffOperation.updateMany({
+            where: {
+              id: operationalHandoffOperation.id,
+              status: "REMOTE_CONFIRMED",
+              contextVersion: input.controlTrace.expectedSnapshot.currentContextVersion,
+              postBlockControlRevision:
+                input.controlTrace.expectedSnapshot.controlRevision,
+            },
+            data: {
+              status: "CONFIRMATION_PENDING",
+              confirmationDeliveryCreatedAt: new Date(),
+              errorClass: null,
+              errorCode: null,
+            },
+          });
+          if (operationTransition.count !== 1) {
+            throw new Error("OPERATIONAL_HANDOFF_CONFIRMATION_NOT_AUTHORIZED");
+          }
+          operationalHandoffOperation =
+            await tx.assistantHandoffOperation.findUniqueOrThrow({
+              where: { id: operationalHandoffOperation.id },
+              select: assistantHandoffOperationSafeSelect,
+            });
+          manifest = withTurnExecutionHandoff(
+            manifest,
+            this.toOperationalHandoffManifestSummary({
+              operation: operationalHandoffOperation,
+              confirmationDeliveryId: createdDeliveries[0]?.id ?? null,
+              confirmationResult: "PENDING",
+            }),
+          );
+        }
         manifest = this.withOutboundDeliveryManifest(manifest, outboundDeliveries);
       }
 
@@ -2829,6 +3936,28 @@ export class AssistantConversationsService {
       });
     } catch (error) {
       if (!isConversationControlSnapshotStaleError(error)) throw error;
+      if (operationalHandoffOperation) {
+        operationalHandoffOperation = await this.markOperationalHandoffPartial({
+          operationId: operationalHandoffOperation.id,
+          status: "SUPERSEDED",
+          expectedStatuses: ["REMOTE_CONFIRMED"],
+          expectedContextVersion:
+            input.controlTrace.expectedSnapshot.currentContextVersion,
+          expectedPostBlockControlRevision:
+            input.controlTrace.expectedSnapshot.controlRevision,
+          errorClass: "CONTROL_STATE_STALE",
+          errorCode:
+            error.record.blockingReason ??
+            "OPERATIONAL_HANDOFF_CONTROL_STATE_STALE_PRE_EFFECTS",
+        });
+        manifest = withTurnExecutionHandoff(
+          manifest,
+          this.toOperationalHandoffManifestSummary({
+            operation: operationalHandoffOperation,
+            confirmationResult: "NOT_AUTHORIZED",
+          }),
+        );
+      }
       const blocked = await this.persistConversationControlBlockedTurn({
         assistant: input.assistant,
         conversation: input.conversation,
@@ -2966,6 +4095,7 @@ export class AssistantConversationsService {
             assistantId: input.assistant.id,
             content: block.content,
             handoff: input.outboundHandoff,
+            handoffOperationId: claimedDelivery.handoffOperationId,
             controlTrace: input.controlTrace,
             deliveryReference: {
               attribute: OUTBOUND_REMOTE_REFERENCE_ATTRIBUTE,
@@ -3171,6 +4301,27 @@ export class AssistantConversationsService {
               ? "FAILED"
               : "NOT_ATTEMPTED";
       }
+    }
+
+    if (operationalHandoffOperation) {
+      operationalHandoffOperation =
+        await this.prisma.assistantHandoffOperation.findUniqueOrThrow({
+          where: { id: operationalHandoffOperation.id },
+          select: assistantHandoffOperationSafeSelect,
+        });
+      manifest = withTurnExecutionHandoff(
+        manifest,
+        this.toOperationalHandoffManifestSummary({
+          operation: operationalHandoffOperation,
+          confirmationDeliveryId: outboundDeliveries[0]?.id ?? null,
+          confirmationResult:
+            operationalHandoffOperation.status === "COMPLETED"
+              ? "ACKNOWLEDGED"
+              : outboundResult === "FAILED"
+                ? "FAILED"
+                : "PENDING",
+        }),
+      );
     }
 
     manifest = withTurnExecutionControl(
@@ -3854,12 +5005,56 @@ export class AssistantConversationsService {
     };
   }
 
+  private async isOperationalHandoffConfirmationAuthorized(input: {
+    operationId: string | null;
+    assistantId: string;
+    conversation: AssistantConversationSafeRecord;
+  }): Promise<boolean> {
+    if (!input.operationId) return false;
+    const operation = await this.prisma.assistantHandoffOperation.findFirst({
+      where: {
+        id: input.operationId,
+        companyId: input.conversation.companyId,
+        assistantId: input.assistantId,
+        conversationId: input.conversation.id,
+      },
+      select: {
+        contextVersion: true,
+        postBlockControlRevision: true,
+        destinationResolution: true,
+        desiredAiActive: true,
+        observedAiActive: true,
+        remoteVerificationResult: true,
+        verifiedAt: true,
+        confirmationAuthorizedAt: true,
+        status: true,
+      },
+    });
+    return Boolean(
+      operation &&
+        operation.contextVersion === input.conversation.currentContextVersion &&
+        operation.postBlockControlRevision === input.conversation.controlRevision &&
+        operation.destinationResolution === "RESOLVED" &&
+        operation.desiredAiActive === false &&
+        operation.observedAiActive === false &&
+        operation.remoteVerificationResult === "CONFIRMED" &&
+        operation.verifiedAt &&
+        operation.confirmationAuthorizedAt &&
+        ["REMOTE_CONFIRMED", "CONFIRMATION_PENDING", "COMPLETED"].includes(
+          operation.status,
+        ) &&
+        input.conversation.aiActive === false &&
+        input.conversation.pausedByHuman === true,
+    );
+  }
+
   private async sendChatwootOutboundText(input: {
     conversation: ChatwootOutboundConversation;
     assistantMessageId: string;
     assistantId: string;
     content: string;
     handoff?: boolean;
+    handoffOperationId?: string | null;
     controlTrace?: ConversationControlTrace;
     deliveryReference?: {
       attribute: typeof OUTBOUND_REMOTE_REFERENCE_ATTRIBUTE;
@@ -3907,10 +5102,18 @@ export class AssistantConversationsService {
       conversationId: input.conversation.id,
       companyId: input.conversation.companyId,
     });
+    const operationalHandoffConfirmationAuthorized =
+      await this.isOperationalHandoffConfirmationAuthorized({
+        operationId: input.handoffOperationId ?? null,
+        assistantId: input.assistantId,
+        conversation: currentConversation,
+      });
     const skipReason =
       currentConversation.currentContextVersion !== input.conversation.currentContextVersion
         ? "stale_context"
-        : this.resolveConversationProcessingSkipReason(currentConversation);
+        : operationalHandoffConfirmationAuthorized
+          ? null
+          : this.resolveConversationProcessingSkipReason(currentConversation);
     if (skipReason) {
       this.logConversationProcessingGate({
         event:
@@ -4011,6 +5214,29 @@ export class AssistantConversationsService {
           performed: false,
           externalMessageId: null,
           ...classification,
+        };
+      }
+    }
+    if (input.controlTrace) {
+      try {
+        await this.assertConversationControlSnapshotCurrent({
+          trace: input.controlTrace,
+          checkpoint: "PRE_OUTBOUND",
+          assistantId: input.assistantId,
+          conversationId: input.conversation.id,
+          companyId: input.conversation.companyId,
+        });
+      } catch (error) {
+        if (!isConversationControlSnapshotStaleError(error)) throw error;
+        return {
+          status: "skipped",
+          performed: false,
+          externalMessageId: null,
+          blocked: true,
+          blockReason:
+            error.record.blockingReason ?? "BLOCKED_CONTROL_STATE_PRE_OUTBOUND",
+          retrySafety: "NOT_RETRYABLE",
+          httpStatus: null,
         };
       }
     }

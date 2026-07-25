@@ -6,7 +6,7 @@ Este documento define a evolucao do runtime mantendo autoridade deterministica,
 seguranca de secrets e separacao clara entre provider, assistant, knowledge,
 pipeline, logs, tools, controle de conversa e canais.
 
-> Estado de referencia: Runtime V1 estabilizado ate o Bloco 3B.2. Runtime V2
+> Estado de referencia: Runtime V1 estabilizado ate o Bloco 4A. Runtime V2
 > permanece OFF. As secoes AI-000 a AI-007 abaixo registram marcos historicos e
 > nao substituem os contratos atuais dos relatorios de estabilizacao.
 
@@ -32,6 +32,14 @@ pipeline, logs, tools, controle de conversa e canais.
   exata, sem gerar nova decisao ou mensagem.
 - Recovery automatico nao esta ativado; nao existe scheduler, worker, endpoint
   ou hook de startup para o coordinator.
+- Pedido humano explicito produz uma decisao operacional e uma operacao
+  persistida unica. O CAS local bloqueia a IA antes de qualquer mutacao
+  Chatwoot.
+- A confirmacao de handoff somente e criada depois de `GET -> PUT
+  ai_active=false -> GET` comprovar a conversa, o estado remoto e um assignee
+  ou team humano ja existente.
+- Falha ou ambiguidade remota mantem a IA local bloqueada, nao produz texto de
+  sucesso e exige reconciliacao futura do Bloco 4B.
 - O smoke e o harness HTTP nao dependem de provider ou servico real.
 
 ## 2. Problema atual
@@ -47,10 +55,13 @@ Os principais limites ainda abertos sao:
 - evidencia integral pode ser perdida quando o runtime reduz knowledge a
   preview;
 - consultas abertas podem resultar em respostas genericas;
-- handoff continua textual e nao executa transicao humana operacional;
 - PostgreSQL e a autoridade local, mas divergencia remota de pausa sem
   sincronizacao ainda nao e detectada;
 - recovery seguro existe, mas sua ativacao operacional permanece pendente;
+- operacoes de handoff parciais ainda dependem de reconciliacao manual; o
+  Bloco 4A nao ativa scheduler ou worker para elas;
+- somente assignee ou team ja presentes na conversa constituem destino humano
+  comprovado; inbox isolada nao e assumida como fila;
 - ausencia em lista paginada do Chatwoot nao prova ausencia do efeito remoto.
 
 ## 3. Objetivo do cerebro da IA
@@ -116,6 +127,22 @@ O caminho operacional atual segue, em alto nivel:
 Fallbacks existentes continuam sob compatibilidade V1, mas nao podem criar uma
 segunda decisao ou enviar fora do executor.
 
+O pedido humano explicito acrescenta uma sequencia especial, ainda dentro do
+mesmo Runtime V1 e do mesmo executor:
+
+1. selar `OPERATIONAL_HUMAN_HANDOFF`, com provider proibido;
+2. persistir uma operacao unica para turno e decisao;
+3. alterar `aiActive=false`, `pausedByHuman=true` e incrementar
+   `controlRevision` no mesmo CAS local;
+4. ler a conversa remota para resolver assignee ou team existente;
+5. solicitar somente `ai_active=false` pelo contrato Chatwoot comprovado;
+6. reler e verificar scope, estado, status e destino;
+7. criar a confirmacao somente se a verificacao for positiva;
+8. entregar a confirmacao pelo ledger outbound existente.
+
+O Bloco 4A nao atribui assignee/team, nao muda labels/status e nao considera
+resposta 2xx da mutacao, isoladamente, como prova de handoff.
+
 ### 4.4 Fallback deterministico
 
 O runtime deterministico deve continuar existindo para:
@@ -140,6 +167,8 @@ sanitizada:
 - categorias observaveis de provider;
 - referencias de autoridade;
 - delivery, attempt, lease, retry safety e reconciliacao;
+- operacao de handoff, resolucao sanitizada do destino, revisoes, mutacao,
+  verificacao e referencia da confirmacao;
 - resultado conhecido do outbound.
 
 O manifesto nao duplica mensagem, prompt completo, knowledge integral, token,
@@ -234,9 +263,11 @@ Sequencia de estabilizacao arquitetural concluida posteriormente:
 6. Bloco 3A - `controlRevision`, snapshots e checkpoints CAS;
 7. Bloco 3B.1 - ledger duravel e ownership de tentativa;
 8. Bloco 3B.2 - recovery e reconciliacao segura.
+9. Bloco 4A - handoff humano operacional fail-closed.
 
-O Bloco 4 nao foi iniciado. Runtime V2 nao deve ser ativado como atalho para as
-etapas seguintes.
+O Bloco 4B permanece pendente e devera tratar recovery e reconciliacao de
+operacoes parciais de handoff. Runtime V2 nao deve ser ativado como atalho para
+as etapas seguintes.
 
 ## 6. Variaveis de ambiente futuras
 
@@ -300,14 +331,31 @@ O harness principal:
 - impede rede nao loopback;
 - encerra app, Prisma, Redis, fakes, portas e containers.
 
-Controles atuais:
+Controles declarados no working tree do Bloco 4A:
 
-- 14 cenarios HTTP executaveis;
-- 5 gaps funcionais como `test.todo`;
-- 241 testes relacionados no gate do Bloco 3B.2;
+- 27 cenarios HTTP executaveis, incluindo 14 caracterizacoes de handoff
+  operacional e 13 controles anteriores;
+- 4 gaps funcionais como `test.todo`;
+- 1 especificacao `test.todo` separada para recovery automatico de handoff no
+  Bloco 4B;
+- 7 testes unitarios do contrato operacional;
 - migrations testadas em banco vazio e upgrade local;
-- restart, multi-worker, backoff, budget, stale control e reconciliacao;
+- restart, multi-worker, backoff, budget, stale control e reconciliacao
+  outbound continuam no gate relacionado;
 - Runtime V2 OFF como invariante transversal.
+
+Gate final do Bloco 4A:
+
+- harness HTTP: 27 passed, 0 failed e 5 `todo`;
+- regressao relacionada: 254 passed e 0 failed;
+- contrato unitario de handoff: 7 passed e 0 failed;
+- build fresco, SHA-256 combinado do conjunto de artefatos V1:
+  `56c4a24b720184b7e843fb4d84c107a48935d9f091d8848d9d6c5c73cd4696af`.
+- `dist/main.js`, SHA-256 individual:
+  `3b6f23e68dbc6103c45b3949ad8206e8e90e11dd8e71368be9c341a76ac0c4df`.
+
+Consulte o relatorio do bloco para migrations, teardown, sanitizacao e
+limitacoes.
 
 Comando principal:
 
@@ -319,14 +367,16 @@ npm run test:http-harness
 Consulte `apps/api/test/README.production-http-harness.md` para limites e
 evidencias de build.
 
-## 10. O que nao entrou no Bloco 3B.2
+## 10. O que nao entrou no Bloco 4A
 
 - scheduler ou worker de recovery;
 - retry automatico ativado;
 - prova remota de ausencia;
 - recuperacao automatica de payload historico ou resposta dividida;
-- handoff operacional;
-- mutacao de assignee, team, labels, status ou `ai_active`;
+- recovery automatico de operacao parcial de handoff;
+- criacao ou alteracao de assignee, team, labels ou status;
+- configuracao administrativa de destino humano;
+- inbox tratada por presuncao como fila humana valida;
 - polling remoto de pausa;
 - outbox para outros canais;
 - correcao de BusinessHours com erro ortografico;
@@ -342,6 +392,10 @@ evidencias de build.
 - tratar ack do POST como entrega final;
 - usar ausencia em pagina Chatwoot como prova conclusiva;
 - recuperar payload historico cuja equivalencia nao pode ser demonstrada;
+- confirmar handoff com apenas o 2xx da mutacao, sem leitura remota;
+- assumir inbox sem assignee/team como destino humano;
+- reativar a IA automaticamente depois de falha remota de handoff;
+- repetir mutacao de handoff parcial por duplicate do webhook;
 - permitir que outro branch volte a enviar fora do executor unico;
 - alterar controle sem incrementar `controlRevision`;
 - expor segredo, payload ou conteudo integral no manifesto;
@@ -352,8 +406,9 @@ evidencias de build.
 O proximo bloco deve ser autorizado separadamente. Ate essa autorizacao:
 
 - nao ativar o coordinator de recovery;
-- nao iniciar o Bloco 4;
-- nao alterar os cinco gaps funcionais;
+- nao iniciar o Bloco 4B;
+- nao alterar os quatro gaps funcionais restantes;
+- nao automatizar recovery de handoff parcial;
 - nao ativar Runtime V2;
 - usar os relatorios dos blocos como fonte de contrato e evidencia.
 
