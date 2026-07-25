@@ -93,6 +93,45 @@ test("standard strategy propagates provider failures without a retry", async () 
   );
 });
 
+test("standard strategy checks control immediately before every provider call", async () => {
+  const { input, events } = createInput({
+    responses: [
+      completion({ answer: "", toolCalls: [toolCall()] }),
+      completion({ answer: "final" }),
+    ],
+  });
+  input.beforeProviderCall = async () => {
+    events.push({ type: "control-checkpoint" });
+  };
+
+  await generateStandardResponse(input);
+
+  assert.deepEqual(
+    events.map((event) => event.type),
+    [
+      "control-checkpoint",
+      "provider",
+      "tool-count",
+      "tool",
+      "control-checkpoint",
+      "provider",
+    ],
+  );
+});
+
+test("standard strategy does not call provider when the control checkpoint blocks", async () => {
+  const { input, events } = createInput();
+  input.beforeProviderCall = async () => {
+    throw new Error("BLOCKED_CONTROL_STATE_PRE_PROVIDER");
+  };
+
+  await assert.rejects(
+    () => generateStandardResponse(input),
+    /BLOCKED_CONTROL_STATE_PRE_PROVIDER/,
+  );
+  assert.equal(events.filter((event) => event.type === "provider").length, 0);
+});
+
 test("standard strategy preserves provider, tool, provider ordering", async () => {
   const { input, events } = createInput({
     responses: [

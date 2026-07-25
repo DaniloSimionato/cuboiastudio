@@ -419,6 +419,7 @@ export async function createStatefulOpenAiFake() {
     if (
       configured &&
       configured.kind !== "chat_completion" &&
+      configured.kind !== "deferred_chat_completion" &&
       configured.kind !== "embedding"
     ) {
       if (applyConfiguredBehavior({ behavior: configured, record, response, timers })) return;
@@ -450,6 +451,10 @@ export async function createStatefulOpenAiFake() {
     }
 
     const selected = configured ?? defaults.get(category) ?? defaults.get("final_generation");
+    if (selected?.kind === "deferred_chat_completion") {
+      selected.markStarted();
+      await selected.releaseSignal;
+    }
     const responseBody = openAiChatResponse({
       content: selected?.content ?? "",
       toolCalls: selected?.toolCalls,
@@ -470,6 +475,32 @@ export async function createStatefulOpenAiFake() {
     requests,
     enqueue(category, behavior) {
       behaviorQueue.push({ category, ...behavior });
+    },
+    deferNext(category, behavior = {}) {
+      let markStarted;
+      let release;
+      let released = false;
+      const started = new Promise((resolve) => {
+        markStarted = resolve;
+      });
+      const releaseSignal = new Promise((resolve) => {
+        release = resolve;
+      });
+      behaviorQueue.push({
+        category,
+        ...behavior,
+        kind: "deferred_chat_completion",
+        markStarted,
+        releaseSignal,
+      });
+      return {
+        started,
+        release() {
+          if (released) return;
+          released = true;
+          release();
+        },
+      };
     },
     setDefault(category, behavior) {
       defaults.set(category, { ...behavior });

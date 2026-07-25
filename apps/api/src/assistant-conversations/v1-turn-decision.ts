@@ -4,6 +4,10 @@ import {
   type TurnExecutionOutboundResult,
   type TurnExecutionTerminalPath,
 } from "./turn-execution-manifest";
+import {
+  CONVERSATION_CONTROL_SNAPSHOT_SCHEMA_VERSION,
+  type ConversationControlSnapshot,
+} from "./conversation-control-snapshot";
 
 export const V1_TURN_DECISION_SCHEMA_VERSION = "V1_TURN_DECISION_V1";
 export const V1_TURN_DECISION_ID_ALGORITHM = "sha256/v1-turn-decision-v1";
@@ -74,6 +78,13 @@ export type V1TurnDecision = Readonly<{
     finalGenerationCount: number;
     skipReason: string | null;
   }>;
+  control: Readonly<{
+    schemaVersion: typeof CONVERSATION_CONTROL_SNAPSHOT_SCHEMA_VERSION;
+    expectedRevision: number;
+    expectedContextVersion: number;
+    expectedAiActive: boolean;
+    expectedPausedByHuman: boolean;
+  }>;
   authority: V1TurnDecisionAuthority | null;
   effects: Readonly<{
     persistLocalResponse: boolean;
@@ -95,6 +106,7 @@ export type V1TurnDecisionDraft = {
   classification: V1TurnDecision["classification"];
   response: V1TurnDecision["response"];
   provider: V1TurnDecision["provider"];
+  controlSnapshot: ConversationControlSnapshot;
   authority?: V1TurnDecisionAuthority | null;
   effects: V1TurnDecision["effects"];
   compatibility: V1TurnDecision["compatibility"];
@@ -167,6 +179,13 @@ function freezeDecision(draft: V1TurnDecisionDraft): V1TurnDecision {
         : null,
     }),
     provider: Object.freeze({ ...draft.provider }),
+    control: Object.freeze({
+      schemaVersion: CONVERSATION_CONTROL_SNAPSHOT_SCHEMA_VERSION,
+      expectedRevision: draft.controlSnapshot.controlRevision,
+      expectedContextVersion: draft.controlSnapshot.currentContextVersion,
+      expectedAiActive: draft.controlSnapshot.aiActive,
+      expectedPausedByHuman: draft.controlSnapshot.pausedByHuman,
+    }),
     authority: draft.authority ? Object.freeze({ ...draft.authority }) : null,
     effects: Object.freeze({ ...draft.effects }),
     compatibility: Object.freeze({ ...draft.compatibility }),

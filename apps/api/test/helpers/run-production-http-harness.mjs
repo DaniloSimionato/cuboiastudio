@@ -5,10 +5,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertIsolatedServiceUrls } from "./production-app-process.mjs";
 
-const BASELINE_COMMIT = "5bad8f16ac944b4ac566f4025e51b825c1111b3d";
-const ALLOWED_BLOCK2_RUNTIME_PATHS = new Set([
+const BASELINE_COMMIT = "2aa8bb964a6c277f0a97ea3f638532d8c831fa8e";
+const ALLOWED_BLOCK3A_RUNTIME_PATHS = new Set([
+  "apps/api/prisma/schema.prisma",
+  "apps/api/prisma/migrations/20260725090000_add_conversation_control_revision/migration.sql",
+  "apps/api/src/assistant-conversations/assistant-conversations.controller.ts",
   "apps/api/src/assistant-conversations/assistant-conversations.service.ts",
+  "apps/api/src/assistant-conversations/conversation-control-snapshot.ts",
+  "apps/api/src/assistant-conversations/standard-response-generation-strategy.ts",
   "apps/api/src/assistant-conversations/turn-execution-manifest.ts",
+  "apps/api/src/assistant-conversations/triage-response-generation-strategy.ts",
   "apps/api/src/assistant-conversations/v1-turn-decision.ts",
 ]);
 const helperDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -194,13 +200,16 @@ async function startServices() {
       commandSucceeds("docker", [
         "exec",
         postgresContainer,
-        "pg_isready",
+        "psql",
         "-U",
         "postgres",
         "-d",
         databaseName,
+        "-Atqc",
+        "SELECT 1",
       ]),
     "isolated PostgreSQL",
+    90_000,
   );
   await waitUntil(
     async () => {
@@ -248,11 +257,11 @@ async function assertBaselineAndScope() {
     .map((entry) => entry.trim())
     .filter(Boolean);
   const disallowedChanges = protectedChanges.filter(
-    (entry) => !ALLOWED_BLOCK2_RUNTIME_PATHS.has(entry),
+    (entry) => !ALLOWED_BLOCK3A_RUNTIME_PATHS.has(entry),
   );
   if (disallowedChanges.length > 0) {
     throw new Error(
-      `Harness refuses production source, schema or migration changes outside Block 2:\n${disallowedChanges.join("\n")}`,
+      `Harness refuses production source, schema or migration changes outside Block 3A:\n${disallowedChanges.join("\n")}`,
     );
   }
   const prismaBinary = path.join(apiDirectory, "node_modules/.bin/prisma");
@@ -288,6 +297,7 @@ async function buildFresh(environment) {
     path.join(apiDirectory, "dist/main.js"),
     path.join(apiDirectory, "dist/app.module.js"),
     path.join(apiDirectory, "dist/assistant-conversations/assistant-conversations.service.js"),
+    path.join(apiDirectory, "dist/assistant-conversations/conversation-control-snapshot.js"),
     path.join(apiDirectory, "dist/assistant-conversations/turn-execution-manifest.js"),
     path.join(apiDirectory, "dist/assistant-conversations/v1-turn-decision.js"),
   ];

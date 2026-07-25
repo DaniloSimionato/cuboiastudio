@@ -16,6 +16,16 @@ import {
   createStatefulChatwootFake,
   createStatefulOpenAiFake,
 } from "./helpers/stateful-http-fakes.mjs";
+import { AssistantConversationsService } from "../dist/assistant-conversations/assistant-conversations.service.js";
+import {
+  createConversationControlSnapshot,
+  createConversationControlTrace,
+} from "../dist/assistant-conversations/conversation-control-snapshot.js";
+import {
+  createTurnExecutionManifest,
+  finalizeTurnExecutionManifest,
+} from "../dist/assistant-conversations/turn-execution-manifest.js";
+import { V1TurnDecisionSealer } from "../dist/assistant-conversations/v1-turn-decision.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 const redisUrl = process.env.REDIS_URL;
@@ -48,7 +58,7 @@ function assertSanitizedTurnManifest(manifest, { inboundContent }) {
   assert.doesNotMatch(serialized, new RegExp(inboundContent.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(serialized, /\+00000000000/);
   assert.doesNotMatch(serialized, /block0-(?:webhook|chatwoot|provider)-token/);
-  assert.doesNotMatch(serialized, /authorization/i);
+  assert.doesNotMatch(serialized, /"authorization"\s*:/i);
   assert.doesNotMatch(serialized, /BASE DE CONHECIMENTO RELEVANTE/i);
 }
 
@@ -62,6 +72,52 @@ function assertV1TurnManifest(manifest, scope) {
   assert.equal(manifest.inbound.fragmentCount, 1);
   assert.equal(manifest.inbound.fragmentIdentityCoverage, "COMPLETE");
   assert.equal(manifest.initialState.snapshotSource, "LOCAL_CONVERSATION_PROCESSING_STATE");
+}
+
+function assertControlTrace(
+  manifest,
+  {
+    acceptedRevision = 0,
+    effectiveRevision = acceptedRevision,
+    requiredCheckpoints = [],
+    blockedCheckpoint = null,
+  } = {},
+) {
+  assert.equal(manifest.control.schemaVersion, "CONVERSATION_CONTROL_SNAPSHOT_V1");
+  assert.equal(manifest.control.acceptedSnapshot.controlRevision, acceptedRevision);
+  assert.equal(manifest.control.effectiveSnapshot.controlRevision, effectiveRevision);
+  assert.equal(manifest.control.acceptedSnapshot.aiActive, true);
+  assert.equal(manifest.control.acceptedSnapshot.pausedByHuman, false);
+  const checkpoints = manifest.control.checkpoints.map((record) => record.checkpoint);
+  for (const checkpoint of requiredCheckpoints) {
+    assert.ok(checkpoints.includes(checkpoint), `missing control checkpoint ${checkpoint}`);
+  }
+  if (blockedCheckpoint) {
+    const record = manifest.control.checkpoints.find(
+      (candidate) => candidate.checkpoint === blockedCheckpoint,
+    );
+    assert.ok(record, `missing blocked checkpoint ${blockedCheckpoint}`);
+    assert.equal(record.result, "BLOCKED");
+  } else {
+    assert.equal(
+      manifest.control.checkpoints.every((record) => record.result === "PASSED"),
+      true,
+    );
+  }
+}
+
+async function waitFor(promise, label, timeoutMs = 10_000) {
+  let timer;
+  try {
+    await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function assertSealedV1Decision(
@@ -302,6 +358,17 @@ test(
       "decisionId",
       "turnExecutionId",
     ]);
+    assertControlTrace(manifest, {
+      requiredCheckpoints: [
+        "ADMISSION",
+        "PRE_PROVIDER",
+        "PRE_SEAL",
+        "PRE_EFFECTS",
+        "PRE_OUTBOUND",
+      ],
+    });
+    assert.equal(manifest.control.decisionResult, "EXECUTED");
+    assert.equal(manifest.control.outboundAuthorization, "ALLOWED");
     assertSanitizedTurnManifest(manifest, { inboundContent: "Oi tudo bem?" });
     await assertRuntimeV2Absent(scope);
     t.diagnostic(
@@ -607,6 +674,13 @@ test(
     assert.equal(manifest.routing.eligibleAuthorityCount, 1);
     assert.equal(manifest.outbound.result, "ACKNOWLEDGED");
     assert.equal(manifest.outbound.attemptCount, 1);
+    assertControlTrace(manifest, {
+      requiredCheckpoints: ["ADMISSION", "PRE_SEAL", "PRE_EFFECTS", "PRE_OUTBOUND"],
+    });
+    assert.equal(
+      manifest.control.checkpoints.some((record) => record.checkpoint === "PRE_PROVIDER"),
+      false,
+    );
     assertSanitizedTurnManifest(manifest, {
       inboundContent: "Qual o valor pra formatar um PC ai?",
     });
@@ -770,6 +844,409 @@ test(
         }),
       )}`,
     );
+  },
+);
+
+test(
+  "G — pausa local durante geração descarta o draft e bloqueia efeitos terminais",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "g",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+      precreateConversation: true,
+    });
+    const generation = provider.deferNext("final_generation", {
+      content: "DRAFT_DESCARTADO_NAO_PERSISTIR",
+    });
+    const responsePromise = postWebhook(scope, {
+      content: "Oi tudo bem?",
+      messageId: "block0-g-external-message-stale-pause",
+    });
+    await waitFor(generation.started, "final provider generation");
+
+    const transition = await prisma.assistantConversation.updateMany({
+      where: {
+        id: scope.internalConversationId,
+        companyId: scope.companyId,
+        controlRevision: 0,
+      },
+      data: {
+        aiActive: false,
+        pausedByHuman: true,
+        controlRevision: { increment: 1 },
+        lastAiPausedAt: new Date(),
+        pauseReason: "BLOCK3A_CONCURRENCY_TEST",
+      },
+    });
+    assert.equal(transition.count, 1);
+    generation.release();
+
+    const result = await responsePromise;
+    assert.equal(result.response.status, 201);
+    const messages = await prisma.assistantConversationMessage.findMany({
+      where: { companyId: scope.companyId, conversationId: scope.internalConversationId },
+    });
+    assert.equal(messages.filter((message) => message.role === "user").length, 1);
+    assert.equal(messages.filter((message) => message.role === "assistant").length, 0);
+    assert.equal(
+      messages.some((message) => message.content.includes("DRAFT_DESCARTADO_NAO_PERSISTIR")),
+      false,
+    );
+    assert.equal(provider.calls("final_generation").length, 1);
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 0);
+
+    const runtimeLog = await prisma.assistantRuntimeLog.findFirstOrThrow({
+      where: { companyId: scope.companyId },
+      orderBy: { createdAt: "desc" },
+    });
+    assert.equal(runtimeLog.status, "SKIPPED");
+    assert.equal(runtimeLog.assistantMessageId, null);
+    const manifest = turnManifestOf(runtimeLog);
+    assert.equal(manifest.terminal.path, "BLOCKED_CONTROL_STATE");
+    assert.equal(manifest.terminal.reasonCode, "BLOCKED_CONTROL_STATE_PRE_SEAL");
+    assert.equal(manifest.decisionId, null);
+    assert.equal(manifest.provider.finalGeneration.count, 1);
+    assert.equal(manifest.outbound.result, "NOT_ATTEMPTED");
+    assertControlTrace(manifest, {
+      acceptedRevision: 0,
+      effectiveRevision: 0,
+      requiredCheckpoints: ["ADMISSION", "PRE_PROVIDER", "PRE_SEAL"],
+      blockedCheckpoint: "PRE_SEAL",
+    });
+    const failedCheckpoint = manifest.control.checkpoints.find(
+      (record) => record.checkpoint === "PRE_SEAL",
+    );
+    assert.equal(failedCheckpoint.expectedRevision, 0);
+    assert.equal(failedCheckpoint.observedRevision, 1);
+    assert.equal(failedCheckpoint.mismatchReason, "CONTROL_REVISION_MISMATCH");
+    assert.equal(manifest.control.decisionResult, "DISCARDED");
+    assert.equal(manifest.control.outboundAuthorization, "BLOCKED");
+    assertSanitizedTurnManifest(manifest, { inboundContent: "Oi tudo bem?" });
+    assert.doesNotMatch(JSON.stringify(manifest), /DRAFT_DESCARTADO_NAO_PERSISTIR/);
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "H — reset CAS durante geração invalida contextVersion e revisão do turno antigo",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "h",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+      precreateConversation: true,
+    });
+    const generation = provider.deferNext("final_generation", {
+      content: "DRAFT_DE_CONTEXTO_ANTIGO",
+    });
+    const responsePromise = postWebhook(scope, {
+      content: "Oi tudo bem?",
+      messageId: "block0-h-external-message-stale-reset",
+    });
+    await waitFor(generation.started, "final provider generation");
+
+    const transition = await prisma.assistantConversation.updateMany({
+      where: {
+        id: scope.internalConversationId,
+        companyId: scope.companyId,
+        currentContextVersion: 1,
+        controlRevision: 0,
+      },
+      data: {
+        currentContextVersion: { increment: 1 },
+        controlRevision: { increment: 1 },
+      },
+    });
+    assert.equal(transition.count, 1);
+    generation.release();
+
+    const result = await responsePromise;
+    assert.equal(result.response.status, 201);
+    const conversation = await prisma.assistantConversation.findUniqueOrThrow({
+      where: { id: scope.internalConversationId },
+    });
+    assert.equal(conversation.currentContextVersion, 2);
+    assert.equal(conversation.controlRevision, 1);
+    assert.equal(
+      await prisma.assistantConversationMessage.count({
+        where: {
+          companyId: scope.companyId,
+          conversationId: scope.internalConversationId,
+          role: "assistant",
+          contextVersion: 1,
+        },
+      }),
+      0,
+    );
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 0);
+
+    const runtimeLog = await prisma.assistantRuntimeLog.findFirstOrThrow({
+      where: { companyId: scope.companyId },
+      orderBy: { createdAt: "desc" },
+    });
+    const manifest = turnManifestOf(runtimeLog);
+    assert.equal(manifest.identity.contextVersion, 1);
+    assert.equal(manifest.terminal.path, "BLOCKED_CONTROL_STATE");
+    assert.equal(manifest.provider.finalGeneration.count, 1);
+    assert.equal(manifest.outbound.result, "NOT_ATTEMPTED");
+    assertControlTrace(manifest, {
+      acceptedRevision: 0,
+      effectiveRevision: 0,
+      requiredCheckpoints: ["ADMISSION", "PRE_PROVIDER", "PRE_SEAL"],
+      blockedCheckpoint: "PRE_SEAL",
+    });
+    const failedCheckpoint = manifest.control.checkpoints.find(
+      (record) => record.checkpoint === "PRE_SEAL",
+    );
+    assert.equal(failedCheckpoint.expectedContextVersion, 1);
+    assert.equal(failedCheckpoint.observedContextVersion, 2);
+    assert.equal(failedCheckpoint.mismatchReason, "CONTEXT_VERSION_MISMATCH");
+    assertSanitizedTurnManifest(manifest, { inboundContent: "Oi tudo bem?" });
+    assert.doesNotMatch(JSON.stringify(manifest), /DRAFT_DE_CONTEXTO_ANTIGO/);
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "I — decisão selada permanece única e checkpoint pré-outbound bloqueia o sender",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "i",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+      precreateConversation: true,
+    });
+    const [assistant, conversation] = await Promise.all([
+      prisma.assistant.findUniqueOrThrow({ where: { id: scope.assistantId } }),
+      prisma.assistantConversation.findUniqueOrThrow({
+        where: { id: scope.internalConversationId },
+      }),
+    ]);
+    const userMessage = await prisma.assistantConversationMessage.create({
+      data: {
+        companyId: scope.companyId,
+        assistantId: scope.assistantId,
+        conversationId: scope.internalConversationId,
+        role: "user",
+        content: "Mensagem de controle estrutural",
+        source: "tests",
+        contextVersion: 1,
+      },
+    });
+    const acceptedSnapshot = createConversationControlSnapshot({
+      conversation,
+      capturedAt: "2026-07-25T00:00:00.000Z",
+      snapshotSource: "LOCAL_DATABASE_ADMISSION",
+      snapshotReason: "TURN_ADMISSION",
+    });
+    const controlTrace = createConversationControlTrace(acceptedSnapshot);
+    const baseManifest = createTurnExecutionManifest({
+      identity: {
+        companyId: scope.companyId,
+        assistantId: scope.assistantId,
+        source: "chatwoot",
+        accountId: scope.accountId,
+        inboxId: scope.inboxId,
+        externalConversationId: scope.externalConversationId,
+        externalMessageId: "block0-i-structural-message",
+        internalConversationId: scope.internalConversationId,
+        internalMessageId: userMessage.id,
+        contextVersion: 1,
+      },
+      aiActive: true,
+      pausedByHuman: false,
+      sessionState: "ACTIVE",
+      capturedAt: "2026-07-25T00:00:00.000Z",
+      fragmentCount: 1,
+      fragmentIdentityCoverage: "COMPLETE",
+      normalizedContentHash: "structural-test-hash",
+      normalizedContentLength: 30,
+      controlTrace,
+    });
+    const manifest = finalizeTurnExecutionManifest(baseManifest, {
+      terminal: { path: "PROVIDER_STANDARD", reasonCode: "PROVIDER_STANDARD" },
+      routing: baseManifest.routing,
+      provider: {
+        ...baseManifest.provider,
+        finalGeneration: { observation: "OBSERVED", count: 1 },
+      },
+      outbound: {
+        planned: true,
+        attempted: false,
+        attemptCount: 0,
+        sender: "CHATWOOT_V1",
+        externalMessageId: null,
+        result: "NOT_ATTEMPTED",
+      },
+    });
+    const decision = new V1TurnDecisionSealer().seal({
+      turnExecutionId: manifest.turnExecutionId,
+      contextVersion: 1,
+      classification: {
+        type: "PROVIDER_RESPONSE",
+        terminalPath: "PROVIDER_STANDARD",
+        terminalReasonCode: "PROVIDER_STANDARD",
+        strategy: "STANDARD",
+        providerDisposition: "USED",
+        legacyCapability: null,
+      },
+      response: {
+        blocks: [{ ordinal: 1, content: "Resposta já decidida." }],
+        persistedContent: "Resposta já decidida.",
+        persistence: {
+          source: "chatwoot",
+          mode: "ai-runtime",
+          contextVersion: 1,
+          sources: null,
+        },
+      },
+      provider: {
+        used: true,
+        finalGenerationCount: 1,
+        skipReason: null,
+      },
+      controlSnapshot: acceptedSnapshot,
+      authority: null,
+      effects: {
+        persistLocalResponse: true,
+        finalizeRuntimeLog: true,
+        outboundIntended: true,
+        sender: "CHATWOOT_V1",
+        stateEffect: "NONE",
+      },
+      compatibility: {
+        runtimeMode: "ai-runtime",
+        runtimeReason: "PROVIDER_STANDARD",
+        expectedOutcome: "success",
+      },
+    });
+    const service = new AssistantConversationsService(prisma, {}, {}, {});
+    let senderCalls = 0;
+    service.sendChatwootOutboundText = async () => {
+      senderCalls += 1;
+      return { status: "sent", performed: true, externalMessageId: "unexpected" };
+    };
+    let transitionCount = 0;
+    const lifecycle = {
+      beforeResponsePersist: async () => {},
+      afterResponsePersist: async () => {},
+      beforeOutbound: async () => {
+        const updated = await prisma.assistantConversation.updateMany({
+          where: {
+            id: scope.internalConversationId,
+            companyId: scope.companyId,
+            controlRevision: 0,
+          },
+          data: {
+            aiActive: false,
+            controlRevision: { increment: 1 },
+            lastAiPausedAt: new Date(),
+            pauseReason: "BLOCK3A_PRE_OUTBOUND_COMPONENT_TEST",
+          },
+        });
+        transitionCount += updated.count;
+      },
+      afterOutboundConfirmed: async () => {},
+      afterOutboundUncertain: async () => {},
+      afterOutboundFailure: async () => {},
+      afterTailCompleted: async () => {},
+    };
+
+    const execution = await service.executeV1TurnDecision({
+      decision,
+      manifest,
+      controlTrace,
+      assistant,
+      conversation,
+      userMessage,
+      runtime: {
+        mode: "ai-runtime",
+        assistant: { id: assistant.id, name: assistant.name },
+        temperature: 0.2,
+        temperatureSource: "assistant",
+        configurationSource: "tenant-settings",
+        fallback: false,
+        outcome: "success",
+        summary: "Structural pre-outbound test",
+        context: {
+          historyMessagesUsed: 0,
+          historyLimit: 0,
+          initialMessageIncluded: false,
+          instructionsIncluded: true,
+        },
+      },
+      runtimeStartedAt: Date.now(),
+      runtimeLogData: {
+        companyId: scope.companyId,
+        assistantId: scope.assistantId,
+        conversationId: scope.internalConversationId,
+        userMessageId: userMessage.id,
+        mode: "ai-runtime",
+        status: "COMPLETED",
+        provider: "openai-compatible",
+        model: "block0-fake-model",
+        configurationSource: "tenant-settings",
+        fallback: false,
+        fallbackReason: null,
+        outcome: "success",
+        durationMs: 0,
+        knowledgeCount: 0,
+        historyMessagesUsed: 0,
+        historyLimit: 0,
+      },
+      runtimeLogMetadata: { componentScenario: "PRE_OUTBOUND_STALE" },
+      outboundConversation: conversation,
+      persistExternalMessageReference: true,
+      lifecycle: {
+        hooks: lifecycle,
+        base: {
+          executionOwner: "V1_NORMAL",
+          route: "V1",
+          strategy: "V1_STANDARD",
+          internalMessageId: userMessage.id,
+          generationId: null,
+          externalMessageReferenceFingerprint: null,
+        },
+      },
+    });
+
+    assert.equal(transitionCount, 1);
+    assert.equal(senderCalls, 0);
+    assert.equal(execution.outboundAttempted, false);
+    assert.equal(execution.outboundPerformed, "SKIPPED");
+    assert.ok(execution.assistantMessage);
+    const runtimeLog = await prisma.assistantRuntimeLog.findUniqueOrThrow({
+      where: { id: execution.runtimeLogId },
+    });
+    const persistedManifest = turnManifestOf(runtimeLog);
+    assert.equal(persistedManifest.decisionId, decision.decisionId);
+    assert.equal(persistedManifest.decisionStatus, "SEALED");
+    assert.equal(persistedManifest.decisionExecutorExecutionCount, 1);
+    assert.equal(persistedManifest.outbound.attempted, false);
+    assert.equal(persistedManifest.outbound.result, "NOT_ATTEMPTED");
+    assert.equal(persistedManifest.control.decisionResult, "EXECUTED");
+    assert.equal(persistedManifest.control.outboundAuthorization, "BLOCKED");
+    const checkpoint = persistedManifest.control.checkpoints.find(
+      (record) => record.checkpoint === "PRE_OUTBOUND",
+    );
+    assert.equal(checkpoint.result, "BLOCKED");
+    assert.equal(checkpoint.expectedRevision, 0);
+    assert.equal(checkpoint.observedRevision, 1);
+    assert.equal(
+      await prisma.assistantConversationMessage.count({
+        where: {
+          companyId: scope.companyId,
+          conversationId: scope.internalConversationId,
+          role: "assistant",
+        },
+      }),
+      1,
+    );
+    await assertRuntimeV2Absent(scope);
   },
 );
 

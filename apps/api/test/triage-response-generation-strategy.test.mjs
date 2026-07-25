@@ -125,6 +125,25 @@ test("triage strategy contains provider failures and preserves the fallback stat
   assert.equal(calls.cache.length, 1);
 });
 
+test("triage does not contain or retry a stale control checkpoint", async () => {
+  const { input, calls } = createInput({
+    responses: ["invalid", validAnswer()],
+    input: {
+      beforeProviderCall: async () => {
+        throw new Error("BLOCKED_CONTROL_STATE_PRE_PROVIDER");
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => generateTriageResponse(input),
+    /BLOCKED_CONTROL_STATE_PRE_PROVIDER/,
+  );
+  assert.equal(calls.provider.length, 0);
+  assert.equal(calls.errors.length, 0);
+  assert.equal(calls.cache.length, 0);
+});
+
 test("triage strategy clears the state only after a resolved response", async () => {
   const { input, calls } = createInput({
     responses: [validAnswer({ message: "Obrigado pelas informações.", triageResolved: true })],

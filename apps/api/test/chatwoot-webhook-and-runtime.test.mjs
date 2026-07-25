@@ -571,7 +571,10 @@ function createAssistantServiceDeps(overrides = {}) {
     externalContactId: "contact-1",
     externalChannelId: "inbox-1",
     externalInboxId: "inbox-1",
+    aiActive: true,
     pausedByHuman: false,
+    currentContextVersion: 1,
+    controlRevision: 0,
     lastMessageAt: new Date(),
     status: "ACTIVE",
     createdAt: new Date(),
@@ -581,6 +584,11 @@ function createAssistantServiceDeps(overrides = {}) {
 
   const tx = {
     assistantConversationMessage: {
+      findUnique: async () => ({
+        externalPayload:
+          calls.messageUpdates.findLast((update) => update.externalPayload)?.externalPayload ??
+          null,
+      }),
       create: async ({ data }) => {
         calls.messageCreates.push(data);
         return {
@@ -604,6 +612,7 @@ function createAssistantServiceDeps(overrides = {}) {
       findMany: async () => [],
     },
     assistantConversation: {
+      findFirst: async (args) => prisma.assistantConversation.findFirst(args),
       update: async ({ data }) => {
         calls.conversationUpdates.push(data);
         return { id: "conversation-1" };
@@ -698,6 +707,10 @@ function createAssistantServiceDeps(overrides = {}) {
     generateChatCompletion: async (request) => {
       calls.runtimeResolved.push("generateChatCompletion");
       calls.providerPayloads.push(request);
+      await overrides.onGenerateChatCompletion?.({
+        request,
+        conversation: conversationRecord,
+      });
       return (
         overrides.completion ?? {
           provider: "openai-compatible",
@@ -803,6 +816,7 @@ function createAssistantServiceDeps(overrides = {}) {
     service,
     calls,
     prisma,
+    conversationRecord,
     aiService,
     attachmentInterpreterService,
     chatwootInboxConfigService,
@@ -3357,36 +3371,15 @@ test("conversa ativa executa provider e outbound normalmente", async () => {
 });
 
 test("pausa ocorrida durante o provider bloqueia o outbound", async () => {
-  const { service, calls, prisma } = createAssistantServiceDeps({
+  const { service, calls } = createAssistantServiceDeps({
     conversation: { aiActive: true, pausedByHuman: false },
     outboundConfig: { baseUrl: "https://chatwoot.example.com", apiAccessToken: "token" },
+    onGenerateChatCompletion: ({ conversation }) => {
+      conversation.aiActive = false;
+      conversation.pausedByHuman = true;
+      conversation.controlRevision += 1;
+    },
   });
-  let conversationReads = 0;
-  prisma.assistantConversation.findFirst = async () => {
-    conversationReads += 1;
-    const paused = conversationReads >= 3;
-    return {
-      id: "conversation-1",
-      companyId: "company-1",
-      assistantId: "assistant-1",
-      title: "Conversa WhatsApp",
-      source: "CHATWOOT",
-      channelType: "WHATSAPP",
-      sourceProvider: "chatwoot",
-      externalAccountId: "account-1",
-      externalConversationId: "conversation-1",
-      externalContactId: "contact-1",
-      externalChannelId: "inbox-1",
-      externalInboxId: "inbox-1",
-      aiActive: !paused,
-      pausedByHuman: paused,
-      lastMessageAt: new Date(),
-      status: "ACTIVE",
-      currentContextVersion: 1,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-  };
   const originalFetch = globalThis.fetch;
   let outboundAttempts = 0;
   globalThis.fetch = async () => {
@@ -3399,9 +3392,9 @@ test("pausa ocorrida durante o provider bloqueia o outbound", async () => {
 
     assert.equal(calls.providerPayloads.length, 1);
     assert.equal(outboundAttempts, 0);
-    assert.equal(result.runtime.context.outboundStatus, "skipped");
-    assert.equal(result.runtime.context.outboundBlocked, true);
-    assert.equal(result.runtime.context.outboundBlockReason, "paused_by_human");
+    assert.equal(result.runtime.outcome, "skipped");
+    assert.equal(result.runtime.reason, "BLOCKED_CONTROL_STATE_PRE_SEAL");
+    assert.equal(result.assistantMessage, null);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -1,4 +1,12 @@
 import { createHash } from "node:crypto";
+import {
+  CONVERSATION_CONTROL_SNAPSHOT_SCHEMA_VERSION,
+  type ConversationControlAuthorizedTransition,
+  type ConversationControlBlockingReason,
+  type ConversationControlCheckpointRecord,
+  type ConversationControlSnapshot,
+  type ConversationControlTrace,
+} from "./conversation-control-snapshot";
 
 export const TURN_EXECUTION_MANIFEST_VERSION = "TURN_EXECUTION_MANIFEST_V1";
 export const V1_COMPATIBILITY_POLICY = "V1_COMPATIBILITY_POLICY";
@@ -25,6 +33,7 @@ export type TurnExecutionTerminalPath =
   | "RESET_KEYWORD_LEGACY"
   | "BLOCKED_PAUSED"
   | "BLOCKED_STALE_CONTEXT"
+  | "BLOCKED_CONTROL_STATE"
   | "DUPLICATE_REUSED"
   | "FAILED_BEFORE_OUTBOUND"
   | "FAILED_OUTBOUND"
@@ -125,6 +134,16 @@ export type TurnExecutionManifest = {
   decisionPlannedBlockCount: number;
   decisionStateEffect: string | null;
   decisionOutboundIntended: boolean | null;
+  control: {
+    schemaVersion: typeof CONVERSATION_CONTROL_SNAPSHOT_SCHEMA_VERSION | null;
+    acceptedSnapshot: ConversationControlSnapshot | null;
+    effectiveSnapshot: ConversationControlSnapshot | null;
+    checkpoints: ConversationControlCheckpointRecord[];
+    authorizedTransitions: ConversationControlAuthorizedTransition[];
+    blockingReason: ConversationControlBlockingReason | null;
+    decisionResult: ConversationControlTrace["decisionResult"];
+    outboundAuthorization: ConversationControlTrace["outboundAuthorization"];
+  };
 };
 
 function canonicalString(input: TurnExecutionIdentityInput): string {
@@ -159,6 +178,7 @@ export function createTurnExecutionManifest(input: {
   fragmentIdentityCoverage?: FragmentIdentityCoverage;
   normalizedContentHash?: string | null;
   normalizedContentLength?: number | null;
+  controlTrace?: ConversationControlTrace | null;
 }): TurnExecutionManifest {
   return {
     schemaVersion: TURN_EXECUTION_MANIFEST_VERSION,
@@ -234,6 +254,33 @@ export function createTurnExecutionManifest(input: {
     decisionPlannedBlockCount: 0,
     decisionStateEffect: null,
     decisionOutboundIntended: null,
+    control: input.controlTrace
+      ? controlManifestFromTrace(input.controlTrace)
+      : {
+          schemaVersion: null,
+          acceptedSnapshot: null,
+          effectiveSnapshot: null,
+          checkpoints: [],
+          authorizedTransitions: [],
+          blockingReason: null,
+          decisionResult: "PENDING",
+          outboundAuthorization: "PENDING",
+        },
+  };
+}
+
+function controlManifestFromTrace(
+  trace: ConversationControlTrace,
+): TurnExecutionManifest["control"] {
+  return {
+    schemaVersion: CONVERSATION_CONTROL_SNAPSHOT_SCHEMA_VERSION,
+    acceptedSnapshot: trace.acceptedSnapshot,
+    effectiveSnapshot: trace.expectedSnapshot,
+    checkpoints: [...trace.checkpoints],
+    authorizedTransitions: [...trace.authorizedTransitions],
+    blockingReason: trace.blockingReason,
+    decisionResult: trace.decisionResult,
+    outboundAuthorization: trace.outboundAuthorization,
   };
 }
 
@@ -323,5 +370,15 @@ export function withTurnExecutionDecision(
     decisionPlannedBlockCount: decision.plannedBlockCount,
     decisionStateEffect: decision.stateEffect,
     decisionOutboundIntended: decision.outboundIntended,
+  };
+}
+
+export function withTurnExecutionControl(
+  manifest: TurnExecutionManifest,
+  trace: ConversationControlTrace,
+): TurnExecutionManifest {
+  return {
+    ...manifest,
+    control: controlManifestFromTrace(trace),
   };
 }

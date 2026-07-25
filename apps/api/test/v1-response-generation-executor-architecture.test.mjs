@@ -70,14 +70,15 @@ test("sendMessage reaches the ownership-aware tail through the single-use-capabl
     lifecycleSource,
     /prisma\.|fetch\(/,
   );
-  const beforePersist = serviceSource.indexOf("responseTailLifecycleHooks.beforeResponsePersist");
-  const persisted = serviceSource.indexOf("const { assistantMessage, runtimeLogId }");
-  const afterPersist = serviceSource.indexOf("responseTailLifecycleHooks.afterResponsePersist");
-  const beforeOutbound = serviceSource.indexOf("responseTailLifecycleHooks.beforeOutbound");
+  const beforePersist = serviceSource.indexOf("hooks.beforeResponsePersist");
+  const preEffects = serviceSource.indexOf('checkpoint: "PRE_EFFECTS"', beforePersist);
+  const persisted = serviceSource.indexOf("await persistTerminalRecords(tx", preEffects);
+  const afterPersist = serviceSource.indexOf("hooks.afterResponsePersist", persisted);
+  const beforeOutbound = serviceSource.indexOf("hooks.beforeOutbound", afterPersist);
   const sender = serviceSource.indexOf("this.sendChatwootOutboundText", beforeOutbound);
   const afterTail = serviceSource.indexOf("responseTailLifecycleHooks.afterTailCompleted");
   const shadow = serviceSource.indexOf("this.scheduleRuntimeV2Shadow", afterTail);
-  assert.ok(beforePersist < persisted && persisted < afterPersist);
+  assert.ok(beforePersist < preEffects && preEffects < persisted && persisted < afterPersist);
   assert.ok(afterPersist < beforeOutbound && beforeOutbound < sender);
   assert.ok(sender < afterTail && afterTail < shadow);
   assert.doesNotMatch(serviceSource, /RuntimeV2ResponseExecutionCoordinator/);

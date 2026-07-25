@@ -1,11 +1,11 @@
-# Production HTTP harness — policy blocks 0–2
+# Production HTTP harness — policy blocks 0–3A
 
 This harness originated against deployed baseline
-`02f3ccc61f320f87c06ff50d2f7ba809e08cc4ad`. Its current Block 2 scope is
-anchored at approved Block 1 commit
-`5bad8f16ac944b4ac566f4025e51b825c1111b3d`. It characterizes behavior while
-the decision/executor structure changes; it does not authorize functional
-response changes.
+`02f3ccc61f320f87c06ff50d2f7ba809e08cc4ad`. Its current Block 3A scope is
+anchored at approved Block 2 commit
+`2aa8bb964a6c277f0a97ea3f638532d8c831fa8e`. It characterizes behavior while
+local control snapshots and stale-turn guards are introduced; it does not
+authorize functional response changes.
 
 ## Production-equivalent path
 
@@ -37,9 +37,9 @@ host-aware bootstrap would require a forbidden production-code change.
 
 Only existing migrations are applied with `prisma migrate deploy`. The runner
 fails closed if either URL is non-loopback, if the database name is outside the
-harness namespace, if the approved Block 1 commit is not an ancestor of
+harness namespace, if the approved Block 2 commit is not an ancestor of
 `HEAD`, or if production source, schema or migration changes exceed the
-explicit Block 2 allowlist. Teardown removes only containers created by that
+explicit Block 3A allowlist. Teardown removes only containers created by that
 runner invocation.
 
 ## Stateful boundaries
@@ -56,17 +56,21 @@ separately. Responses are configurable per category. Both fakes listen only on
 
 ## Executable coverage and limits
 
-The runner currently declares eleven Node tests: six executable scenarios
-(A–F) and five future specifications marked `test.todo`. Scenarios A–D retain
-the Block 0 controls; E characterizes the already-recognized direct
-BusinessHours path; F characterizes the still-textual legacy handoff. Runtime
-V2 OFF is a transversal invariant asserted inside every executable scenario,
-not an additional executable scenario.
+The runner currently declares fourteen Node tests: nine executable scenarios
+(A–I) and five future specifications marked `test.todo`. Scenarios A–F retain
+the Block 0–2 controls. G pauses local control while final generation is
+blocked and proves the returned draft is discarded. H performs a local CAS
+context reset during generation and proves the old turn is invalidated. I
+changes local control after sealing and proves the pre-outbound checkpoint
+blocks the V1 sender without creating a second decision. Runtime V2 OFF is a
+transversal invariant asserted inside every executable scenario, not an
+additional executable scenario.
 
-Every executable scenario also verifies the sealed V1 decision owner added in
-Block 2. Provider draft ownership, manifest sanitization and the single
-terminal executor are asserted within those end-to-end controls rather than
-through duplicate artificial scenarios.
+Every applicable executable scenario verifies the sealed V1 decision owner
+added in Block 2 and the accepted local control revision added in Block 3A.
+Provider draft ownership, manifest sanitization, checkpoints and the single
+terminal executor are asserted within those controls rather than through
+duplicate artificial scenarios.
 
 The fixtures deliberately disable message buffering, memory and response
 splitting to keep lifecycle and outbound counts deterministic. Therefore this
@@ -74,6 +78,12 @@ harness does not yet validate concurrent buffering. It also does not reproduce
 every possible production condition; it validates the named controls through
 the production bootstrap and central services while Chatwoot and the provider
 remain fake HTTP boundaries.
+
+PostgreSQL is the operational authority for Block 3A checkpoints. A remote
+Chatwoot pause that is not reflected locally remains undetectable here; no
+additional remote reads or polling were introduced. The harness also does not
+claim outbox, delivery retry or reconciliation coverage. Those delivery
+contracts remain outside Block 3A.
 
 ## Lifecycle and build evidence
 
@@ -83,8 +93,8 @@ The runner:
 2. generates Prisma Client and applies existing migrations;
 3. performs a fresh TypeScript build;
 4. records the SHA-256 and timestamp of `dist/main.js` plus
-   `dist/app.module.js` and the instrumented V1 decision/manifest/runtime
-   artifacts;
+   `dist/app.module.js` and the instrumented V1
+   decision/manifest/control/runtime artifacts;
 5. starts both fakes and the production bootstrap;
 6. waits for `/health`;
 7. runs the HTTP tests serially;

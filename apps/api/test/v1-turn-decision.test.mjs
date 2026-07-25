@@ -10,6 +10,20 @@ import {
   outboundResultForDecision,
 } from "../dist/assistant-conversations/v1-turn-decision.js";
 
+const controlSnapshot = Object.freeze({
+  schemaVersion: "CONVERSATION_CONTROL_SNAPSHOT_V1",
+  internalConversationId: "conversation-internal",
+  currentContextVersion: 2,
+  controlRevision: 7,
+  aiActive: true,
+  pausedByHuman: false,
+  sessionState: "ACTIVE",
+  derivedState: "ACTIVE",
+  capturedAt: "2026-07-25T00:00:00.000Z",
+  snapshotSource: "LOCAL_DATABASE_ADMISSION",
+  snapshotReason: "TURN_ADMISSION",
+});
+
 function draft(overrides = {}) {
   return {
     turnExecutionId: "turn_v1_0123456789abcdef0123456789abcdef",
@@ -37,6 +51,7 @@ function draft(overrides = {}) {
       finalGenerationCount: 0,
       skipReason: "OFFICIAL_AUTHORITY",
     },
+    controlSnapshot,
     authority: {
       id: "authority-test",
       serviceKey: "formatacao",
@@ -92,6 +107,8 @@ test("decisão selada é tipada, profundamente imutável e preserva efeito legad
   assert.equal(decision.policyVersion, "V1_COMPATIBILITY_POLICY");
   assert.equal(V1_TURN_DECISION_EXECUTOR_OWNER, "V1_TURN_DECISION_EXECUTOR");
   assert.equal(decision.effects.stateEffect, "LEGACY_HANDOFF_TEXT_ONLY");
+  assert.equal(decision.control.expectedRevision, 7);
+  assert.equal(decision.control.expectedContextVersion, 2);
   assert.equal(Object.isFrozen(decision), true);
   assert.equal(Object.isFrozen(decision.response.blocks), true);
   assert.equal(Object.isFrozen(decision.response.persistence.sources), true);

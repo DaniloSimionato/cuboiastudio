@@ -5,7 +5,7 @@ export const TEST_WEBHOOK_SECRET = "block0-webhook-secret";
 const TEST_CHATWOOT_TOKEN = "block0-chatwoot-token";
 const TEST_PROVIDER_TOKEN = "block0-provider-token";
 
-export const FIXTURE_LABELS = ["a", "b", "c", "d", "e", "f"];
+export const FIXTURE_LABELS = ["a", "b", "c", "d", "e", "f", "g", "h", "i"];
 
 export const OFFICIAL_WEEKLY_SCHEDULE = Object.freeze({
   monday: [{ start: "08:00", end: "22:00" }],

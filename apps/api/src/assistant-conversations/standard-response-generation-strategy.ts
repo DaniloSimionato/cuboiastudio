@@ -24,6 +24,7 @@ export type StandardResponseGenerationInput = {
   temperature: number;
   tools: unknown[] | undefined;
   provider: StandardResponseProvider;
+  beforeProviderCall?(): Promise<void>;
   onToolCalls(event: StandardToolCallsEvent): Promise<void>;
   onToolCallCount?(toolCallCount: number): void;
   maxIterations?: number;
@@ -48,6 +49,7 @@ export async function generateStandardResponse(
   let toolCallsResolved = false;
 
   while (loopCount < maxIterations && !toolCallsResolved) {
+    await input.beforeProviderCall?.();
     providerCallCount += 1;
     completion = await input.provider.generateChatCompletion({
       companyId: input.companyId,

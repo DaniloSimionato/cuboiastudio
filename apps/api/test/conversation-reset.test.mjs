@@ -427,6 +427,8 @@ test("Admin silent reset usa CAS, preserva auditoria e inicia o próximo turno s
 
     assert.equal(pausedReset.previousContextVersion, 1);
     assert.equal(pausedReset.currentContextVersion, 2);
+    assert.equal(pausedReset.previousControlRevision, 0);
+    assert.equal(pausedReset.currentControlRevision, 1);
     assert.equal(pausedReset.aiActive, false);
     assert.equal(pausedReset.pausedByHuman, true);
     assert.equal(aiCalls.length, 0);
@@ -478,6 +480,8 @@ test("Admin silent reset usa CAS, preserva auditoria e inicia o próximo turno s
     });
 
     assert.equal(resumedReset.currentContextVersion, 2);
+    assert.equal(resumedReset.previousControlRevision, 0);
+    assert.equal(resumedReset.currentControlRevision, 1);
     assert.equal(resumedReset.aiActive, true);
     assert.equal(resumedReset.pausedByHuman, false);
     assert.equal(aiCalls.length, 0);
@@ -553,7 +557,9 @@ test("Admin silent reset usa CAS, preserva auditoria e inicia o próximo turno s
           log.metadata.event === "ADMIN_SILENT_CONTEXT_RESET" &&
           log.metadata.providerCalled === false &&
           log.metadata.outboundAttempted === false &&
-          log.metadata.resetReplyCreated === false,
+          log.metadata.resetReplyCreated === false &&
+          log.metadata.currentControlRevision ===
+            log.metadata.previousControlRevision + 1,
       ),
     );
 
@@ -584,6 +590,7 @@ test("Admin silent reset usa CAS, preserva auditoria e inicia o próximo turno s
       where: { id: conversationResumedId },
     });
     assert.equal(afterCasFailure.currentContextVersion, beforeCasFailure.currentContextVersion);
+    assert.equal(afterCasFailure.controlRevision, beforeCasFailure.controlRevision);
     assert.equal(afterCasFailure.aiActive, beforeCasFailure.aiActive);
     assert.equal(afterCasFailure.pausedByHuman, beforeCasFailure.pausedByHuman);
     assert.equal(
@@ -659,6 +666,14 @@ test("Admin silent reset usa CAS, preserva auditoria e inicia o próximo turno s
         })
       ).currentContextVersion,
       2,
+    );
+    assert.equal(
+      (
+        await prisma.assistantConversation.findUnique({
+          where: { id: conversationConcurrentId },
+        })
+      ).controlRevision,
+      1,
     );
     assert.equal(
       await prisma.assistantRuntimeLog.count({
@@ -852,6 +867,7 @@ test("Integration: Session Reset preserva memória durável, limpa só contexto 
       where: { id: conversationId },
     });
     assert.equal(dbConversation.currentContextVersion, 2);
+    assert.equal(dbConversation.controlRevision, 1);
 
     const sessions = await prisma.assistantConversationSession.findMany({
       where: { conversationId },

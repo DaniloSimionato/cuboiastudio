@@ -54,6 +54,7 @@ export type TriageResponseGenerationInput = {
   model: string;
   temperature: number;
   provider: TriageProvider;
+  beforeProviderCall?(): Promise<void>;
   compiler?: Pick<PromptCompilerService, "compile">;
   cache?: TriageCache;
   logger: TriageLogger;
@@ -182,6 +183,7 @@ export async function generateTriageResponse(
   };
 
   const generateAttempt = async (attempt: 1 | 2): Promise<void> => {
+    await input.beforeProviderCall?.();
     try {
       providerCallCount += 1;
       completion = await input.provider.generateChatCompletion({
