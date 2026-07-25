@@ -8,7 +8,7 @@ import {
   NotFoundException,
   Optional,
 } from "@nestjs/common";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ConversationChannelType, ConversationSource, Prisma, Status } from "@prisma/client";
 import type { AssistantFlow } from "@prisma/client";
 import type { AiResolvedRuntimeConfig } from "../ai/ai.types";
@@ -174,8 +174,10 @@ import {
   withTurnExecutionControl,
   withTurnExecutionDecision,
   withTurnExecutionOutbound,
+  withTurnExecutionOutboundDeliveries,
   type FragmentIdentityCoverage,
   type TurnExecutionManifest,
+  type TurnExecutionOutboundDeliveryReference,
   type TurnExecutionTerminalPath,
 } from "./turn-execution-manifest";
 import {
@@ -199,6 +201,11 @@ import {
   type ConversationControlSnapshotSource,
   type ConversationControlTrace,
 } from "./conversation-control-snapshot";
+import {
+  OUTBOUND_DELIVERY_SCHEMA_VERSION,
+  createOutboundDeliveryPlan,
+  type OutboundDeliveryStatus,
+} from "./outbound-delivery";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -260,6 +267,9 @@ type ChatwootOutboundResult = {
   externalMessageId: string | null;
   blocked?: boolean;
   blockReason?: ConversationProcessingSkipReason | ConversationControlBlockReason;
+  deliveryStatus?: Exclude<OutboundDeliveryStatus, "PENDING" | "SENDING" | "ACKNOWLEDGED">;
+  errorClass?: string;
+  errorCode?: string;
 };
 
 type ConversationProcessingSkipReason = "paused_by_human" | "ai_inactive" | "stale_context";
@@ -633,6 +643,39 @@ const assistantConversationMessageSafeSelect = {
 
 type AssistantConversationMessageSafeRecord = Prisma.AssistantConversationMessageGetPayload<{
   select: typeof assistantConversationMessageSafeSelect;
+}>;
+
+const assistantOutboundDeliverySafeSelect = {
+  id: true,
+  companyId: true,
+  assistantId: true,
+  conversationId: true,
+  assistantMessageId: true,
+  turnExecutionId: true,
+  decisionId: true,
+  blockOrdinal: true,
+  idempotencyKey: true,
+  policyVersion: true,
+  expectedContextVersion: true,
+  expectedControlRevision: true,
+  sender: true,
+  payloadHash: true,
+  payloadSize: true,
+  status: true,
+  attemptCount: true,
+  attemptOwner: true,
+  attemptedAt: true,
+  acknowledgedAt: true,
+  failedAt: true,
+  externalMessageId: true,
+  errorClass: true,
+  errorCode: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.AssistantOutboundDeliverySelect;
+
+type AssistantOutboundDeliverySafeRecord = Prisma.AssistantOutboundDeliveryGetPayload<{
+  select: typeof assistantOutboundDeliverySafeSelect;
 }>;
 
 const assistantConversationAssistantSelect = {
@@ -2178,6 +2221,149 @@ export class AssistantConversationsService {
     };
   }
 
+  private toTurnExecutionOutboundDeliveryReference(
+    delivery: AssistantOutboundDeliverySafeRecord,
+  ): TurnExecutionOutboundDeliveryReference {
+    return {
+      schemaVersion: OUTBOUND_DELIVERY_SCHEMA_VERSION,
+      deliveryId: delivery.id,
+      idempotencyKey: delivery.idempotencyKey,
+      blockOrdinal: delivery.blockOrdinal,
+      expectedContextVersion: delivery.expectedContextVersion,
+      expectedControlRevision: delivery.expectedControlRevision,
+      status: delivery.status as OutboundDeliveryStatus,
+      attemptCount: delivery.attemptCount,
+      attemptedAt: delivery.attemptedAt?.toISOString() ?? null,
+      acknowledgedAt: delivery.acknowledgedAt?.toISOString() ?? null,
+      externalMessageId: delivery.externalMessageId,
+      errorClass: delivery.errorClass,
+      errorCode: delivery.errorCode,
+    };
+  }
+
+  private withOutboundDeliveryManifest(
+    manifest: TurnExecutionManifest,
+    deliveries: AssistantOutboundDeliverySafeRecord[],
+  ): TurnExecutionManifest {
+    return withTurnExecutionOutboundDeliveries(
+      manifest,
+      [...deliveries]
+        .sort((left, right) => left.blockOrdinal - right.blockOrdinal)
+        .map((delivery) => this.toTurnExecutionOutboundDeliveryReference(delivery)),
+    );
+  }
+
+  private async claimV1OutboundDelivery(input: {
+    delivery: AssistantOutboundDeliverySafeRecord;
+    controlTrace: ConversationControlTrace;
+    assistantId: string;
+    conversationId: string;
+    companyId: string;
+  }): Promise<{
+    delivery: AssistantOutboundDeliverySafeRecord;
+    claimToken: string | null;
+    staleError: ConversationControlSnapshotStaleError | null;
+  }> {
+    const claimToken = `outbound_claim_${randomUUID()}`;
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await this.assertConversationControlSnapshotCurrent({
+          trace: input.controlTrace,
+          checkpoint: "PRE_OUTBOUND",
+          assistantId: input.assistantId,
+          conversationId: input.conversationId,
+          companyId: input.companyId,
+          client: tx,
+          lock: true,
+        });
+        const claimedAt = new Date();
+        const claim = await tx.assistantOutboundDelivery.updateMany({
+          where: {
+            id: input.delivery.id,
+            status: "PENDING",
+            expectedContextVersion: input.delivery.expectedContextVersion,
+            expectedControlRevision: input.delivery.expectedControlRevision,
+          },
+          data: {
+            status: "SENDING",
+            attemptCount: { increment: 1 },
+            attemptOwner: claimToken,
+            attemptedAt: claimedAt,
+            errorClass: null,
+            errorCode: null,
+          },
+        });
+        const delivery = await tx.assistantOutboundDelivery.findUniqueOrThrow({
+          where: { id: input.delivery.id },
+          select: assistantOutboundDeliverySafeSelect,
+        });
+        if (claim.count === 0) {
+          return { delivery, claimToken: null, staleError: null };
+        }
+        return { delivery, claimToken, staleError: null };
+      });
+    } catch (error) {
+      if (!isConversationControlSnapshotStaleError(error)) throw error;
+      await this.prisma.assistantOutboundDelivery.updateMany({
+        where: {
+          id: input.delivery.id,
+          status: "PENDING",
+        },
+        data: {
+          status: "CANCELLED_STALE",
+          attemptOwner: null,
+          errorClass: "CONTROL_STATE_STALE",
+          errorCode:
+            error.record.blockingReason ?? "BLOCKED_CONTROL_STATE_PRE_OUTBOUND",
+        },
+      });
+      const delivery = await this.prisma.assistantOutboundDelivery.findUniqueOrThrow({
+        where: { id: input.delivery.id },
+        select: assistantOutboundDeliverySafeSelect,
+      });
+      return { delivery, claimToken: null, staleError: error };
+    }
+  }
+
+  private async transitionClaimedV1OutboundDelivery(input: {
+    deliveryId: string;
+    claimToken: string;
+    status: Exclude<OutboundDeliveryStatus, "PENDING" | "SENDING">;
+    externalMessageId?: string | null;
+    errorClass?: string | null;
+    errorCode?: string | null;
+  }): Promise<AssistantOutboundDeliverySafeRecord> {
+    const now = new Date();
+    const transition = await this.prisma.assistantOutboundDelivery.updateMany({
+      where: {
+        id: input.deliveryId,
+        status: "SENDING",
+        attemptOwner: input.claimToken,
+      },
+      data: {
+        status: input.status,
+        attemptOwner: null,
+        acknowledgedAt: input.status === "ACKNOWLEDGED" ? now : null,
+        failedAt:
+          input.status === "FAILED_RETRYABLE" ||
+          input.status === "FAILED_TERMINAL" ||
+          input.status === "UNCERTAIN"
+            ? now
+            : null,
+        externalMessageId: input.externalMessageId ?? null,
+        errorClass: input.errorClass ?? null,
+        errorCode: input.errorCode ?? null,
+      },
+    });
+    if (transition.count !== 1) {
+      throw new Error("V1_OUTBOUND_DELIVERY_CLAIM_LOST");
+    }
+    return this.prisma.assistantOutboundDelivery.findUniqueOrThrow({
+      where: { id: input.deliveryId },
+      select: assistantOutboundDeliverySafeSelect,
+    });
+  }
+
   private async executeV1TurnDecision(input: {
     decision: V1TurnDecision;
     manifest: TurnExecutionManifest;
@@ -2271,6 +2457,7 @@ export class AssistantConversationsService {
     }
 
     let assistantMessage: AssistantConversationMessageSafeRecord | null = null;
+    let outboundDeliveries: AssistantOutboundDeliverySafeRecord[] = [];
     let runtimeLogId = "";
     const persistTerminalRecords = async (
       tx: Prisma.TransactionClient | PrismaService,
@@ -2329,6 +2516,47 @@ export class AssistantConversationsService {
           },
           select: assistantConversationMessageSafeSelect,
         });
+      }
+
+      if (input.decision.effects.outboundIntended) {
+        if (!assistantMessage) {
+          throw new Error("V1_OUTBOUND_DELIVERY_MESSAGE_REFERENCE_REQUIRED");
+        }
+        const createdDeliveries: AssistantOutboundDeliverySafeRecord[] = [];
+        for (const block of input.decision.response.blocks) {
+          const plan = createOutboundDeliveryPlan({
+            turnExecutionId: input.decision.turnExecutionId,
+            decisionId: input.decision.decisionId,
+            blockOrdinal: block.ordinal,
+            expectedContextVersion: input.decision.control.expectedContextVersion,
+            expectedControlRevision: input.decision.control.expectedRevision,
+            sender: input.decision.effects.sender,
+            content: block.content,
+          });
+          const delivery = await tx.assistantOutboundDelivery.create({
+            data: {
+              companyId: input.conversation.companyId,
+              assistantId: input.assistant.id,
+              conversationId: input.conversation.id,
+              assistantMessageId: assistantMessage.id,
+              turnExecutionId: plan.turnExecutionId,
+              decisionId: plan.decisionId,
+              blockOrdinal: plan.blockOrdinal,
+              idempotencyKey: plan.idempotencyKey,
+              policyVersion: plan.policyVersion,
+              expectedContextVersion: plan.expectedContextVersion,
+              expectedControlRevision: plan.expectedControlRevision,
+              sender: plan.sender,
+              payloadHash: plan.payloadHash,
+              payloadSize: plan.payloadSize,
+              status: "PENDING",
+            },
+            select: assistantOutboundDeliverySafeSelect,
+          });
+          createdDeliveries.push(delivery);
+        }
+        outboundDeliveries = createdDeliveries;
+        manifest = this.withOutboundDeliveryManifest(manifest, outboundDeliveries);
       }
 
       if (includeRuntimeLog && input.decision.effects.finalizeRuntimeLog) {
@@ -2444,6 +2672,14 @@ export class AssistantConversationsService {
       }
 
       for (const block of input.decision.response.blocks) {
+        const deliveryIndex = outboundDeliveries.findIndex(
+          (delivery) => delivery.blockOrdinal === block.ordinal,
+        );
+        if (deliveryIndex < 0) {
+          throw new Error("V1_OUTBOUND_DELIVERY_NOT_FOUND");
+        }
+        let claimedDelivery = outboundDeliveries[deliveryIndex];
+        let claimToken: string | null = null;
         try {
           const beforeOutboundMetadata = lifecycleMetadata(
             terminalAssistantMessage.id,
@@ -2453,23 +2689,40 @@ export class AssistantConversationsService {
           if (beforeOutboundMetadata) {
             await input.lifecycle!.hooks.beforeOutbound(beforeOutboundMetadata);
           }
-          try {
-            await this.assertConversationControlSnapshotCurrent({
-              trace: input.controlTrace,
-              checkpoint: "PRE_OUTBOUND",
-              assistantId: input.assistant.id,
-              conversationId: input.conversation.id,
-              companyId: input.conversation.companyId,
-            });
-          } catch (error) {
-            if (!isConversationControlSnapshotStaleError(error)) throw error;
+          const claim = await this.claimV1OutboundDelivery({
+            delivery: claimedDelivery,
+            controlTrace: input.controlTrace,
+            assistantId: input.assistant.id,
+            conversationId: input.conversation.id,
+            companyId: input.conversation.companyId,
+          });
+          claimedDelivery = claim.delivery;
+          claimToken = claim.claimToken;
+          outboundDeliveries[deliveryIndex] = claimedDelivery;
+          manifest = this.withOutboundDeliveryManifest(manifest, outboundDeliveries);
+          if (claim.staleError) {
             outboundPerformed = "SKIPPED";
             outboundResult = "NOT_ATTEMPTED";
             if (input.contextMetadata) {
               input.contextMetadata.outboundStatus = "skipped";
               input.contextMetadata.outboundBlocked = true;
-              input.contextMetadata.outboundBlockReason = error.record.blockingReason;
+              input.contextMetadata.outboundBlockReason =
+                claim.staleError.record.blockingReason;
             }
+            break;
+          }
+          if (!claimToken) {
+            outboundPerformed =
+              claimedDelivery.status === "ACKNOWLEDGED" ? "CONFIRMED" : "SKIPPED";
+            outboundResult =
+              claimedDelivery.status === "ACKNOWLEDGED"
+                ? "ACKNOWLEDGED"
+                : claimedDelivery.status === "FAILED_RETRYABLE" ||
+                    claimedDelivery.status === "FAILED_TERMINAL" ||
+                    claimedDelivery.status === "UNCERTAIN"
+                  ? "FAILED"
+                  : "NOT_ATTEMPTED";
+            outboundExternalMessageId = claimedDelivery.externalMessageId;
             break;
           }
           input.controlTrace.outboundAuthorization = "ALLOWED";
@@ -2489,6 +2742,12 @@ export class AssistantConversationsService {
             outboundAttempted = outboundAttemptCount > 0;
           }
           if (result.status === "sent") {
+            claimedDelivery = await this.transitionClaimedV1OutboundDelivery({
+              deliveryId: claimedDelivery.id,
+              claimToken,
+              status: "ACKNOWLEDGED",
+              externalMessageId: result.externalMessageId,
+            });
             blocksSent += 1;
             outboundPerformed = "CONFIRMED";
             outboundResult = "ACKNOWLEDGED";
@@ -2536,6 +2795,15 @@ export class AssistantConversationsService {
               );
             }
           } else if (result.status === "skipped") {
+            claimedDelivery = await this.transitionClaimedV1OutboundDelivery({
+              deliveryId: claimedDelivery.id,
+              claimToken,
+              status: result.blocked ? "CANCELLED_STALE" : "FAILED_TERMINAL",
+              errorClass: result.blocked
+                ? "CONTROL_STATE_STALE"
+                : result.errorClass ?? "OUTBOUND_NOT_CONFIGURED",
+              errorCode: result.blockReason ?? result.errorCode ?? "OUTBOUND_SKIPPED",
+            });
             outboundPerformed = "SKIPPED";
             outboundResult = "NOT_ATTEMPTED";
             if (input.contextMetadata && result.blocked) {
@@ -2553,6 +2821,13 @@ export class AssistantConversationsService {
               }
             }
           } else {
+            claimedDelivery = await this.transitionClaimedV1OutboundDelivery({
+              deliveryId: claimedDelivery.id,
+              claimToken,
+              status: result.deliveryStatus ?? "UNCERTAIN",
+              errorClass: result.errorClass ?? "OUTBOUND_TRANSPORT",
+              errorCode: result.errorCode ?? "OUTBOUND_FAILURE_UNCLASSIFIED",
+            });
             outboundPerformed = "FAILED";
             outboundResult = "FAILED";
             externalReferenceStatus = "NOT_CONFIRMED";
@@ -2573,8 +2848,28 @@ export class AssistantConversationsService {
                   ? "skipped"
                   : "failed";
           }
+          outboundDeliveries[deliveryIndex] = claimedDelivery;
+          manifest = this.withOutboundDeliveryManifest(manifest, outboundDeliveries);
           if (result.blocked) break;
         } catch (error: any) {
+          if (claimToken && claimedDelivery.status === "SENDING") {
+            try {
+              claimedDelivery = await this.transitionClaimedV1OutboundDelivery({
+                deliveryId: claimedDelivery.id,
+                claimToken,
+                status: "UNCERTAIN",
+                errorClass: "OUTBOUND_EXECUTION_EXCEPTION",
+                errorCode: this.outboundErrorCode(error),
+              });
+              outboundDeliveries[deliveryIndex] = claimedDelivery;
+              manifest = this.withOutboundDeliveryManifest(manifest, outboundDeliveries);
+            } catch (transitionError: any) {
+              this.logger.error(
+                `Error finalizing outbound delivery ${claimedDelivery.id}: ${transitionError.message}`,
+                transitionError.stack,
+              );
+            }
+          }
           this.logger.error(
             `Error sending Chatwoot block ${block.ordinal - 1}: ${error.message}`,
             error.stack,
@@ -2636,6 +2931,7 @@ export class AssistantConversationsService {
         sender: input.decision.effects.sender,
         externalMessageId: outboundExternalMessageId,
         result: outboundResultForDecision(input.decision, outboundResult),
+        deliveries: manifest.outbound.deliveries,
       }),
       input.controlTrace,
     );
@@ -3321,7 +3617,13 @@ export class AssistantConversationsService {
     const conversationIdentifier = (input.conversation.externalConversationId ?? "").trim();
 
     if (!accountIdentifier || !conversationIdentifier) {
-      return { status: "skipped", performed: false, externalMessageId: null };
+      return {
+        status: "skipped",
+        performed: false,
+        externalMessageId: null,
+        errorClass: "OUTBOUND_CONFIGURATION",
+        errorCode: "CHATWOOT_DESTINATION_MISSING",
+      };
     }
 
     const resolvedConfig = await this.chatwootInboxConfigService.resolveActiveForConversation({
@@ -3332,7 +3634,13 @@ export class AssistantConversationsService {
 
     const baseUrl = resolvedConfig?.baseUrl?.trim() || "";
     if (!baseUrl) {
-      return { status: "skipped", performed: false, externalMessageId: null };
+      return {
+        status: "skipped",
+        performed: false,
+        externalMessageId: null,
+        errorClass: "OUTBOUND_CONFIGURATION",
+        errorCode: "CHATWOOT_BASE_URL_MISSING",
+      };
     }
 
     const currentConversation = await this.readCurrentConversationProcessingState({
@@ -3435,7 +3743,17 @@ export class AssistantConversationsService {
         this.logger.warn(
           `Chatwoot outbound failed: company=${input.conversation.companyId} outboundUrl=${outboundUrl} account=${accountIdentifier} externalConversation=${conversationIdentifier} inbox=${inboxIdentifier || "unknown"} assistantMessageId=${input.assistantMessageId} status=${response.status} responseBody=${safeResponseBody}`,
         );
-        return { status: "failed", performed: false, externalMessageId: null };
+        return {
+          status: "failed",
+          performed: false,
+          externalMessageId: null,
+          deliveryStatus:
+            response.status >= 500 || [408, 425, 429].includes(response.status)
+              ? "FAILED_RETRYABLE"
+              : "FAILED_TERMINAL",
+          errorClass: "CHATWOOT_HTTP",
+          errorCode: `HTTP_${response.status}`,
+        };
       }
 
       const externalMessageId = this.extractChatwootExternalMessageId(responseBody);
@@ -3445,11 +3763,29 @@ export class AssistantConversationsService {
       );
       return { status: "sent", performed: true, externalMessageId };
     } catch (error) {
+      const errorCode = this.outboundErrorCode(error);
+      const failureProvenBeforeRemoteAcceptance = [
+        "ECONNREFUSED",
+        "ENOTFOUND",
+        "EAI_AGAIN",
+        "UND_ERR_CONNECT_TIMEOUT",
+      ].includes(errorCode);
       this.logger.warn(
         `Chatwoot outbound failed: company=${input.conversation.companyId} outboundUrl=${outboundUrl} account=${accountIdentifier} externalConversation=${conversationIdentifier} inbox=${inboxIdentifier || "unknown"} assistantMessageId=${input.assistantMessageId} error=${this.summarizeOutboundError(error)}`,
       );
       // Non-blocking by design. The conversation turn still succeeds locally.
-      return { status: "failed", performed: false, externalMessageId: null };
+      return {
+        status: "failed",
+        performed: false,
+        externalMessageId: null,
+        deliveryStatus: failureProvenBeforeRemoteAcceptance
+          ? "FAILED_RETRYABLE"
+          : "UNCERTAIN",
+        errorClass: failureProvenBeforeRemoteAcceptance
+          ? "CHATWOOT_CONNECTION"
+          : "CHATWOOT_TRANSPORT_AMBIGUOUS",
+        errorCode,
+      };
     }
   }
 
@@ -3605,6 +3941,19 @@ export class AssistantConversationsService {
     }
 
     return String(error).slice(0, 300);
+  }
+
+  private outboundErrorCode(error: unknown): string {
+    const candidates = [
+      (error as { code?: unknown } | null)?.code,
+      (error as { cause?: { code?: unknown } } | null)?.cause?.code,
+      error instanceof Error ? error.name : null,
+    ];
+    const selected = candidates.find(
+      (candidate): candidate is string =>
+        typeof candidate === "string" && /^[A-Za-z0-9_:-]{1,80}$/.test(candidate),
+    );
+    return selected?.toUpperCase() ?? "UNKNOWN_OUTBOUND_ERROR";
   }
 
   async create(input: {

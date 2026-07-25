@@ -26,6 +26,9 @@ function createAuth(companyId) {
 
 async function cleanupResetTestData(prisma, companyIds) {
   await prisma.assistantRuntimeLog.deleteMany({ where: { companyId: { in: companyIds } } });
+  await prisma.assistantOutboundDelivery.deleteMany({
+    where: { companyId: { in: companyIds } },
+  });
   await prisma.assistantConversationSession.deleteMany({
     where: { companyId: { in: companyIds } },
   });

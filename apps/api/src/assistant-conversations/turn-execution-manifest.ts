@@ -7,6 +7,7 @@ import {
   type ConversationControlSnapshot,
   type ConversationControlTrace,
 } from "./conversation-control-snapshot";
+import type { OutboundDeliveryStatus } from "./outbound-delivery";
 
 export const TURN_EXECUTION_MANIFEST_VERSION = "TURN_EXECUTION_MANIFEST_V1";
 export const V1_COMPATIBILITY_POLICY = "V1_COMPATIBILITY_POLICY";
@@ -122,6 +123,7 @@ export type TurnExecutionManifest = {
     sender: "CHATWOOT_V1" | "NOT_APPLICABLE" | "UNKNOWN";
     externalMessageId: string | null;
     result: TurnExecutionOutboundResult;
+    deliveries?: TurnExecutionOutboundDeliveryReference[];
   };
   decisionSchemaVersion: string | null;
   decisionId: string | null;
@@ -144,6 +146,22 @@ export type TurnExecutionManifest = {
     decisionResult: ConversationControlTrace["decisionResult"];
     outboundAuthorization: ConversationControlTrace["outboundAuthorization"];
   };
+};
+
+export type TurnExecutionOutboundDeliveryReference = {
+  schemaVersion: string;
+  deliveryId: string;
+  idempotencyKey: string;
+  blockOrdinal: number;
+  expectedContextVersion: number;
+  expectedControlRevision: number;
+  status: OutboundDeliveryStatus;
+  attemptCount: number;
+  attemptedAt: string | null;
+  acknowledgedAt: string | null;
+  externalMessageId: string | null;
+  errorClass: string | null;
+  errorCode: string | null;
 };
 
 function canonicalString(input: TurnExecutionIdentityInput): string {
@@ -242,6 +260,7 @@ export function createTurnExecutionManifest(input: {
       sender: "NOT_APPLICABLE",
       externalMessageId: null,
       result: "NOT_ATTEMPTED",
+      deliveries: [],
     },
     decisionSchemaVersion: null,
     decisionId: null,
@@ -339,6 +358,19 @@ export function withTurnExecutionOutbound(
   outbound: TurnExecutionManifest["outbound"],
 ): TurnExecutionManifest {
   return { ...manifest, outbound };
+}
+
+export function withTurnExecutionOutboundDeliveries(
+  manifest: TurnExecutionManifest,
+  deliveries: TurnExecutionOutboundDeliveryReference[],
+): TurnExecutionManifest {
+  return {
+    ...manifest,
+    outbound: {
+      ...manifest.outbound,
+      deliveries: deliveries.map((delivery) => ({ ...delivery })),
+    },
+  };
 }
 
 export function withTurnExecutionDecision(

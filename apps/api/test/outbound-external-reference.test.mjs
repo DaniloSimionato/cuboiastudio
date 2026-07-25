@@ -162,8 +162,56 @@ test("sender oficial falha sem gerar uma segunda chamada", async () => {
         status: "failed",
         performed: false,
         externalMessageId: null,
+        deliveryStatus: "FAILED_RETRYABLE",
+        errorClass: "CHATWOOT_HTTP",
+        errorCode: "HTTP_500",
       });
       assert.equal(calls.length, 1);
     },
   );
+});
+
+test("sender classifica 4xx permanente sem armazenar o corpo", async () => {
+  await withFakeFetch(
+    {
+      ok: false,
+      status: 422,
+      text: async () => JSON.stringify({ error: "sensitive-body" }),
+    },
+    async (calls) => {
+      const result = await createSenderService().sendChatwootOutboundText(
+        createOutboundInput(),
+      );
+      assert.deepEqual(result, {
+        status: "failed",
+        performed: false,
+        externalMessageId: null,
+        deliveryStatus: "FAILED_TERMINAL",
+        errorClass: "CHATWOOT_HTTP",
+        errorCode: "HTTP_422",
+      });
+      assert.doesNotMatch(JSON.stringify(result), /sensitive-body/);
+      assert.equal(calls.length, 1);
+    },
+  );
+});
+
+test("sender classifica fechamento ambíguo como UNCERTAIN", async () => {
+  const ambiguous = new TypeError("fetch failed", {
+    cause: Object.assign(new Error("socket closed"), { code: "UND_ERR_SOCKET" }),
+  });
+  await withFakeFetch(ambiguous, async (calls) => {
+    const result = await createSenderService().sendChatwootOutboundText(
+      createOutboundInput(),
+    );
+    assert.deepEqual(result, {
+      status: "failed",
+      performed: false,
+      externalMessageId: null,
+      deliveryStatus: "UNCERTAIN",
+      errorClass: "CHATWOOT_TRANSPORT_AMBIGUOUS",
+      errorCode: "UND_ERR_SOCKET",
+    });
+    assert.equal(calls.length, 1);
+  });
 });

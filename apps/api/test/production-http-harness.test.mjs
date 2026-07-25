@@ -25,6 +25,9 @@ import {
   createTurnExecutionManifest,
   finalizeTurnExecutionManifest,
 } from "../dist/assistant-conversations/turn-execution-manifest.js";
+import {
+  createOutboundDeliveryPlan,
+} from "../dist/assistant-conversations/outbound-delivery.js";
 import { V1TurnDecisionSealer } from "../dist/assistant-conversations/v1-turn-decision.js";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -142,6 +145,55 @@ function assertSealedV1Decision(
   assert.equal(manifest.decisionPlannedBlockCount, plannedBlockCount);
   assert.equal(manifest.decisionStateEffect, stateEffect);
   assert.equal(manifest.decisionOutboundIntended, outboundIntended);
+}
+
+async function outboundDeliveriesFor(scope) {
+  return prisma.assistantOutboundDelivery.findMany({
+    where: { companyId: scope.companyId },
+    orderBy: [{ blockOrdinal: "asc" }, { createdAt: "asc" }],
+  });
+}
+
+function assertAcknowledgedDelivery(delivery, manifest, externalMessageId) {
+  assert.equal(delivery.turnExecutionId, manifest.turnExecutionId);
+  assert.equal(delivery.decisionId, manifest.decisionId);
+  assert.equal(delivery.blockOrdinal, 1);
+  assert.match(delivery.idempotencyKey, /^outbound_v1_[a-f0-9]{32}$/);
+  assert.equal(delivery.policyVersion, "V1_COMPATIBILITY_POLICY");
+  assert.equal(delivery.expectedContextVersion, manifest.identity.contextVersion);
+  assert.equal(
+    delivery.expectedControlRevision,
+    manifest.control.acceptedSnapshot.controlRevision,
+  );
+  assert.equal(delivery.sender, "CHATWOOT_V1");
+  assert.match(delivery.payloadHash, /^sha256:[a-f0-9]{64}$/);
+  assert.ok(delivery.payloadSize > 0);
+  assert.equal(delivery.status, "ACKNOWLEDGED");
+  assert.equal(delivery.attemptCount, 1);
+  assert.equal(delivery.attemptOwner, null);
+  assert.ok(delivery.attemptedAt);
+  assert.ok(delivery.acknowledgedAt);
+  assert.equal(delivery.failedAt, null);
+  assert.equal(delivery.externalMessageId, externalMessageId);
+  assert.equal(delivery.errorClass, null);
+  assert.equal(delivery.errorCode, null);
+
+  assert.equal(manifest.outbound.deliveries.length, 1);
+  assert.deepEqual(manifest.outbound.deliveries[0], {
+    schemaVersion: "ASSISTANT_OUTBOUND_DELIVERY_V1",
+    deliveryId: delivery.id,
+    idempotencyKey: delivery.idempotencyKey,
+    blockOrdinal: 1,
+    expectedContextVersion: delivery.expectedContextVersion,
+    expectedControlRevision: delivery.expectedControlRevision,
+    status: "ACKNOWLEDGED",
+    attemptCount: 1,
+    attemptedAt: delivery.attemptedAt.toISOString(),
+    acknowledgedAt: delivery.acknowledgedAt.toISOString(),
+    externalMessageId,
+    errorClass: null,
+    errorCode: null,
+  });
 }
 
 async function assertRuntimeV2Absent(scope) {
@@ -369,7 +421,11 @@ test(
     });
     assert.equal(manifest.control.decisionResult, "EXECUTED");
     assert.equal(manifest.control.outboundAuthorization, "ALLOWED");
+    const deliveries = await outboundDeliveriesFor(scope);
+    assert.equal(deliveries.length, 1);
+    assertAcknowledgedDelivery(deliveries[0], manifest, returnedExternalId);
     assertSanitizedTurnManifest(manifest, { inboundContent: "Oi tudo bem?" });
+    assert.doesNotMatch(JSON.stringify(deliveries[0]), /Oi tudo bem|Como posso ajudar/i);
     await assertRuntimeV2Absent(scope);
     t.diagnostic(
       `external calls A: ${JSON.stringify(
@@ -412,6 +468,10 @@ test(
     const firstManifest = turnManifestOf(firstRuntimeLog);
     const originalTurnExecutionId = firstManifest.turnExecutionId;
     const originalDecisionId = firstManifest.decisionId;
+    const firstDeliveries = await outboundDeliveriesFor(scope);
+    assert.equal(firstDeliveries.length, 1);
+    const originalDeliveryId = firstDeliveries[0].id;
+    const originalIdempotencyKey = firstDeliveries[0].idempotencyKey;
     const callsAfterFirst = {
       provider: provider.requests.length,
       finalGeneration: provider.calls("final_generation").length,
@@ -481,6 +541,16 @@ test(
     assert.equal(manifest.terminal.path, "PROVIDER_STANDARD");
     assert.equal(manifest.provider.finalGeneration.count, 1);
     assert.equal(manifest.outbound.attemptCount, 1);
+    const deliveries = await outboundDeliveriesFor(scope);
+    assert.equal(deliveries.length, 1);
+    assert.equal(deliveries[0].id, originalDeliveryId);
+    assert.equal(deliveries[0].idempotencyKey, originalIdempotencyKey);
+    assert.equal(deliveries[0].attemptCount, 1);
+    assertAcknowledgedDelivery(
+      deliveries[0],
+      manifest,
+      deliveries[0].externalMessageId,
+    );
     const inboundPayload =
       inboundMessage.externalPayload && typeof inboundMessage.externalPayload === "object"
         ? inboundMessage.externalPayload
@@ -504,7 +574,7 @@ test(
       )}`,
     );
     t.diagnostic(
-      "current V1 limitation: inbound dedupe does not reconcile a persisted decision whose outbound was never confirmed",
+      "Block 3B.1 records pending/failure states durably; duplicate deliberately does not retry or reconcile them",
     );
   },
 );
@@ -674,6 +744,13 @@ test(
     assert.equal(manifest.routing.eligibleAuthorityCount, 1);
     assert.equal(manifest.outbound.result, "ACKNOWLEDGED");
     assert.equal(manifest.outbound.attemptCount, 1);
+    const deliveries = await outboundDeliveriesFor(scope);
+    assert.equal(deliveries.length, 1);
+    assertAcknowledgedDelivery(
+      deliveries[0],
+      manifest,
+      chatwoot.calls("chatwoot_outbound")[0].response.body.id,
+    );
     assertControlTrace(manifest, {
       requiredCheckpoints: ["ADMISSION", "PRE_SEAL", "PRE_EFFECTS", "PRE_OUTBOUND"],
     });
@@ -815,6 +892,13 @@ test(
     });
     assert.equal(manifest.provider.finalGeneration.count, 0);
     assert.equal(manifest.outbound.result, "ACKNOWLEDGED");
+    const handoffDeliveries = await outboundDeliveriesFor(scope);
+    assert.equal(handoffDeliveries.length, 1);
+    assertAcknowledgedDelivery(
+      handoffDeliveries[0],
+      manifest,
+      chatwoot.calls("chatwoot_outbound")[0].response.body.id,
+    );
 
     const remoteConversation = chatwoot.getConversation(
       scope.accountId,
@@ -1236,6 +1320,23 @@ test(
     assert.equal(checkpoint.result, "BLOCKED");
     assert.equal(checkpoint.expectedRevision, 0);
     assert.equal(checkpoint.observedRevision, 1);
+    const staleDeliveries = await outboundDeliveriesFor(scope);
+    assert.equal(staleDeliveries.length, 1);
+    assert.equal(staleDeliveries[0].decisionId, decision.decisionId);
+    assert.equal(staleDeliveries[0].status, "CANCELLED_STALE");
+    assert.equal(staleDeliveries[0].attemptCount, 0);
+    assert.equal(staleDeliveries[0].attemptOwner, null);
+    assert.equal(staleDeliveries[0].externalMessageId, null);
+    assert.equal(staleDeliveries[0].errorClass, "CONTROL_STATE_STALE");
+    assert.equal(
+      staleDeliveries[0].errorCode,
+      "BLOCKED_CONTROL_STATE_PRE_OUTBOUND",
+    );
+    assert.equal(persistedManifest.outbound.deliveries.length, 1);
+    assert.equal(
+      persistedManifest.outbound.deliveries[0].status,
+      "CANCELLED_STALE",
+    );
     assert.equal(
       await prisma.assistantConversationMessage.count({
         where: {
@@ -1246,6 +1347,324 @@ test(
       }),
       1,
     );
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "J — claim concorrente concede ownership a uma única execução",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "n",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+      precreateConversation: true,
+    });
+    const [conversation, assistantMessage] = await Promise.all([
+      prisma.assistantConversation.findUniqueOrThrow({
+        where: { id: scope.internalConversationId },
+      }),
+      prisma.assistantConversationMessage.create({
+        data: {
+          companyId: scope.companyId,
+          assistantId: scope.assistantId,
+          conversationId: scope.internalConversationId,
+          role: "assistant",
+          content: "Resposta estrutural de claim.",
+          source: "tests",
+          contextVersion: 1,
+        },
+      }),
+    ]);
+    const delivery = await prisma.assistantOutboundDelivery.create({
+      data: {
+        companyId: scope.companyId,
+        assistantId: scope.assistantId,
+        conversationId: scope.internalConversationId,
+        assistantMessageId: assistantMessage.id,
+        turnExecutionId: "turn_v1_claim_concorrente_000000000000",
+        decisionId: "decision_v1_claim_concorrente_00000000",
+        blockOrdinal: 1,
+        idempotencyKey: "outbound_v1_claim_concorrente_00000000",
+        policyVersion: "V1_COMPATIBILITY_POLICY",
+        expectedContextVersion: 1,
+        expectedControlRevision: 0,
+        sender: "CHATWOOT_V1",
+        payloadHash: "sha256:claim-test",
+        payloadSize: 29,
+      },
+    });
+    const acceptedSnapshot = createConversationControlSnapshot({
+      conversation,
+      capturedAt: "2026-07-25T14:00:00.000Z",
+      snapshotSource: "LOCAL_DATABASE_ADMISSION",
+      snapshotReason: "TURN_ADMISSION",
+    });
+    const service = new AssistantConversationsService(prisma, {}, {}, {});
+    const claims = await Promise.all([
+      service.claimV1OutboundDelivery({
+        delivery,
+        controlTrace: createConversationControlTrace(acceptedSnapshot),
+        assistantId: scope.assistantId,
+        conversationId: scope.internalConversationId,
+        companyId: scope.companyId,
+      }),
+      service.claimV1OutboundDelivery({
+        delivery,
+        controlTrace: createConversationControlTrace(acceptedSnapshot),
+        assistantId: scope.assistantId,
+        conversationId: scope.internalConversationId,
+        companyId: scope.companyId,
+      }),
+    ]);
+    const winners = claims.filter((claim) => claim.claimToken);
+    assert.equal(winners.length, 1);
+    assert.equal(claims.filter((claim) => !claim.claimToken).length, 1);
+    assert.equal(
+      claims.every((claim) => claim.delivery.id === delivery.id),
+      true,
+    );
+
+    let senderCalls = 0;
+    senderCalls += 1;
+    const acknowledged = await service.transitionClaimedV1OutboundDelivery({
+      deliveryId: delivery.id,
+      claimToken: winners[0].claimToken,
+      status: "ACKNOWLEDGED",
+      externalMessageId: "claim-owner-external-id",
+    });
+    assert.equal(senderCalls, 1);
+    assert.equal(acknowledged.status, "ACKNOWLEDGED");
+    assert.equal(acknowledged.attemptCount, 1);
+    assert.equal(acknowledged.attemptOwner, null);
+    assert.equal(
+      await prisma.assistantOutboundDelivery.count({
+        where: { decisionId: delivery.decisionId, blockOrdinal: 1 },
+      }),
+      1,
+    );
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 0);
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "K — HTTP 4xx registra falha terminal sem retry e sem corpo sensível",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "j",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    chatwoot.enqueueBehavior({
+      category: "chatwoot_outbound",
+      kind: "configured_4xx",
+      status: 422,
+      body: { error: "SENSITIVE_CHATWOOT_RESPONSE_BODY" },
+    });
+    const input = {
+      content: "Oi tudo bem?",
+      messageId: "block0-j-external-message-4xx",
+    };
+    const result = await postWebhook(scope, input);
+    assert.equal(result.response.status, 201);
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 1);
+    const [delivery] = await outboundDeliveriesFor(scope);
+    assert.equal(delivery.status, "FAILED_TERMINAL");
+    assert.equal(delivery.attemptCount, 1);
+    assert.equal(delivery.externalMessageId, null);
+    assert.equal(delivery.errorClass, "CHATWOOT_HTTP");
+    assert.equal(delivery.errorCode, "HTTP_422");
+
+    const duplicate = await postWebhook(scope, input);
+    assert.equal(duplicate.response.status, 201);
+    assert.equal(duplicate.body?.reason, "duplicate");
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 1);
+    assert.equal((await outboundDeliveriesFor(scope))[0].attemptCount, 1);
+    const runtimeLog = await prisma.assistantRuntimeLog.findFirstOrThrow({
+      where: { companyId: scope.companyId },
+    });
+    const manifest = turnManifestOf(runtimeLog);
+    assert.equal(manifest.outbound.result, "FAILED");
+    assert.equal(manifest.outbound.deliveries[0].status, "FAILED_TERMINAL");
+    assert.doesNotMatch(JSON.stringify({ delivery, manifest }), /SENSITIVE_CHATWOOT_RESPONSE_BODY/);
+    assertSanitizedTurnManifest(manifest, { inboundContent: input.content });
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "L — HTTP 5xx registra FAILED_RETRYABLE sem retry automático ou por duplicate",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "k",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    chatwoot.enqueueBehavior({
+      category: "chatwoot_outbound",
+      kind: "configured_5xx",
+      status: 503,
+      body: { error: "temporarily_unavailable" },
+    });
+    const input = {
+      content: "Oi tudo bem?",
+      messageId: "block0-k-external-message-5xx",
+    };
+    const result = await postWebhook(scope, input);
+    assert.equal(result.response.status, 201);
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 1);
+    assert.equal(provider.calls("final_generation").length, 1);
+    const [delivery] = await outboundDeliveriesFor(scope);
+    assert.equal(delivery.status, "FAILED_RETRYABLE");
+    assert.equal(delivery.attemptCount, 1);
+    assert.equal(delivery.errorClass, "CHATWOOT_HTTP");
+    assert.equal(delivery.errorCode, "HTTP_503");
+
+    const duplicate = await postWebhook(scope, input);
+    assert.equal(duplicate.body?.reason, "duplicate");
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 1);
+    assert.equal(provider.calls("final_generation").length, 1);
+    const persisted = (await outboundDeliveriesFor(scope))[0];
+    assert.equal(persisted.id, delivery.id);
+    assert.equal(persisted.attemptCount, 1);
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "M — timeout após aceitação possível registra UNCERTAIN sem repetição",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "l",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    chatwoot.enqueueBehavior({
+      category: "chatwoot_outbound",
+      kind: "accepted_timeout",
+      timeoutMs: 100,
+    });
+    const input = {
+      content: "Oi tudo bem?",
+      messageId: "block0-l-external-message-timeout",
+    };
+    const result = await postWebhook(scope, input);
+    assert.equal(result.response.status, 201);
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 1);
+    const remoteConversation = chatwoot.getConversation(
+      scope.accountId,
+      scope.externalConversationId,
+    );
+    assert.equal(remoteConversation.messages.filter((message) => message.direction === "outbound").length, 1);
+    const [delivery] = await outboundDeliveriesFor(scope);
+    assert.equal(delivery.status, "UNCERTAIN");
+    assert.equal(delivery.attemptCount, 1);
+    assert.equal(delivery.externalMessageId, null);
+    assert.equal(delivery.errorClass, "CHATWOOT_TRANSPORT_AMBIGUOUS");
+
+    const duplicate = await postWebhook(scope, input);
+    assert.equal(duplicate.body?.reason, "duplicate");
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 1);
+    assert.equal((await outboundDeliveriesFor(scope))[0].attemptCount, 1);
+    const runtimeLog = await prisma.assistantRuntimeLog.findFirstOrThrow({
+      where: { companyId: scope.companyId },
+    });
+    const manifest = turnManifestOf(runtimeLog);
+    assert.equal(manifest.outbound.result, "FAILED");
+    assert.equal(manifest.outbound.deliveries[0].status, "UNCERTAIN");
+    await assertRuntimeV2Absent(scope);
+  },
+);
+
+test(
+  "N — estados ACKNOWLEDGED e PENDING sobrevivem ao restart sem recuperação automática",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "m",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+      precreateConversation: true,
+    });
+    const result = await postWebhook(scope, {
+      content: "Oi tudo bem?",
+      messageId: "block0-m-external-message-restart",
+    });
+    assert.equal(result.response.status, 201);
+    const [beforeRestart] = await outboundDeliveriesFor(scope);
+    assert.equal(beforeRestart.status, "ACKNOWLEDGED");
+    const pendingMessage = await prisma.assistantConversationMessage.create({
+      data: {
+        companyId: scope.companyId,
+        assistantId: scope.assistantId,
+        conversationId: scope.internalConversationId,
+        role: "assistant",
+        content: "Resposta persistida aguardando política futura.",
+        source: "tests",
+        contextVersion: scope.contextVersion,
+      },
+    });
+    const pendingPlan = createOutboundDeliveryPlan({
+      turnExecutionId: "turn_v1_restart_pending",
+      decisionId: "decision_v1_restart_pending",
+      blockOrdinal: 1,
+      expectedContextVersion: scope.contextVersion,
+      expectedControlRevision: 0,
+      sender: "CHATWOOT_V1",
+      content: pendingMessage.content,
+    });
+    const pendingBeforeRestart = await prisma.assistantOutboundDelivery.create({
+      data: {
+        companyId: scope.companyId,
+        assistantId: scope.assistantId,
+        conversationId: scope.internalConversationId,
+        assistantMessageId: pendingMessage.id,
+        turnExecutionId: pendingPlan.turnExecutionId,
+        decisionId: pendingPlan.decisionId,
+        blockOrdinal: pendingPlan.blockOrdinal,
+        idempotencyKey: pendingPlan.idempotencyKey,
+        policyVersion: pendingPlan.policyVersion,
+        expectedContextVersion: pendingPlan.expectedContextVersion,
+        expectedControlRevision: pendingPlan.expectedControlRevision,
+        sender: pendingPlan.sender,
+        payloadHash: pendingPlan.payloadHash,
+        payloadSize: pendingPlan.payloadSize,
+      },
+    });
+    assert.equal(pendingBeforeRestart.status, "PENDING");
+    assert.equal(pendingBeforeRestart.attemptCount, 0);
+    const outboundCount = chatwoot.calls("chatwoot_outbound").length;
+
+    await application.stop();
+    application = await startProductionAppProcess({
+      databaseUrl,
+      redisUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+
+    const afterRestartDeliveries = await outboundDeliveriesFor(scope);
+    const afterRestart = afterRestartDeliveries.find(
+      (delivery) => delivery.id === beforeRestart.id,
+    );
+    const pendingAfterRestart = afterRestartDeliveries.find(
+      (delivery) => delivery.id === pendingBeforeRestart.id,
+    );
+    assert.ok(afterRestart);
+    assert.ok(pendingAfterRestart);
+    assert.equal(afterRestart.id, beforeRestart.id);
+    assert.equal(afterRestart.idempotencyKey, beforeRestart.idempotencyKey);
+    assert.equal(afterRestart.status, "ACKNOWLEDGED");
+    assert.equal(afterRestart.attemptCount, 1);
+    assert.equal(pendingAfterRestart.status, "PENDING");
+    assert.equal(pendingAfterRestart.attemptCount, 0);
+    assert.equal(pendingAfterRestart.attemptOwner, null);
+    assert.equal(pendingAfterRestart.externalMessageId, null);
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, outboundCount);
     await assertRuntimeV2Absent(scope);
   },
 );

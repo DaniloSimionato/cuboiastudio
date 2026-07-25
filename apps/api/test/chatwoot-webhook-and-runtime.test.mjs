@@ -582,6 +582,58 @@ function createAssistantServiceDeps(overrides = {}) {
     ...(overrides.conversation ?? {}),
   };
 
+  const outboundDeliveries = [];
+  const assistantOutboundDelivery = {
+    create: async ({ data }) => {
+      const now = new Date();
+      const delivery = {
+        id: `delivery-${outboundDeliveries.length + 1}`,
+        ...data,
+        status: data.status ?? "PENDING",
+        attemptCount: data.attemptCount ?? 0,
+        attemptOwner: data.attemptOwner ?? null,
+        attemptedAt: data.attemptedAt ?? null,
+        acknowledgedAt: data.acknowledgedAt ?? null,
+        failedAt: data.failedAt ?? null,
+        externalMessageId: data.externalMessageId ?? null,
+        errorClass: data.errorClass ?? null,
+        errorCode: data.errorCode ?? null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      outboundDeliveries.push(delivery);
+      return delivery;
+    },
+    updateMany: async ({ where, data }) => {
+      const delivery = outboundDeliveries.find(
+        (candidate) =>
+          candidate.id === where.id &&
+          (where.status === undefined || candidate.status === where.status) &&
+          (where.attemptOwner === undefined ||
+            candidate.attemptOwner === where.attemptOwner) &&
+          (where.expectedContextVersion === undefined ||
+            candidate.expectedContextVersion === where.expectedContextVersion) &&
+          (where.expectedControlRevision === undefined ||
+            candidate.expectedControlRevision === where.expectedControlRevision),
+      );
+      if (!delivery) return { count: 0 };
+      for (const [key, value] of Object.entries(data)) {
+        if (value && typeof value === "object" && "increment" in value) {
+          delivery[key] += value.increment;
+        } else {
+          delivery[key] = value;
+        }
+      }
+      delivery.updatedAt = new Date();
+      return { count: 1 };
+    },
+    findUniqueOrThrow: async ({ where }) => {
+      const delivery = outboundDeliveries.find((candidate) => candidate.id === where.id);
+      if (!delivery) throw new Error("mock outbound delivery not found");
+      return delivery;
+    },
+  };
+
   const tx = {
     assistantConversationMessage: {
       findUnique: async () => ({
@@ -624,6 +676,7 @@ function createAssistantServiceDeps(overrides = {}) {
         return { id: "runtime-log-1" };
       },
     },
+    assistantOutboundDelivery,
   };
 
   const prisma = {
@@ -674,6 +727,7 @@ function createAssistantServiceDeps(overrides = {}) {
         return { id: "runtime-log-1" };
       },
     },
+    assistantOutboundDelivery,
     $transaction: async (callback) => {
       calls.transactions += 1;
       return callback(tx);

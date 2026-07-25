@@ -1,11 +1,12 @@
-# Production HTTP harness — policy blocks 0–3A
+# Production HTTP harness — policy blocks 0–3B.1
 
 This harness originated against deployed baseline
-`02f3ccc61f320f87c06ff50d2f7ba809e08cc4ad`. Its current Block 3A scope is
-anchored at approved Block 2 commit
-`2aa8bb964a6c277f0a97ea3f638532d8c831fa8e`. It characterizes behavior while
-local control snapshots and stale-turn guards are introduced; it does not
-authorize functional response changes.
+`02f3ccc61f320f87c06ff50d2f7ba809e08cc4ad`. Its current Block 3B.1 scope is
+anchored at approved Block 3A commit
+`d22a1dd75dfbbf20c6316f23a9c08ae03eed2361`. It characterizes behavior while
+durable outbound identity, state and single-attempt ownership are introduced;
+it does not authorize functional response changes, automatic retry or external
+reconciliation.
 
 ## Production-equivalent path
 
@@ -35,19 +36,23 @@ host-aware bootstrap would require a forbidden production-code change.
   `cubo_policy_block0_test_*` database and random loopback port;
 - `redis:7-alpine`, without persistence and with a random loopback port.
 
-Only existing migrations are applied with `prisma migrate deploy`. The runner
-fails closed if either URL is non-loopback, if the database name is outside the
-harness namespace, if the approved Block 2 commit is not an ancestor of
-`HEAD`, or if production source, schema or migration changes exceed the
-explicit Block 3A allowlist. Teardown removes only containers created by that
-runner invocation.
+Only repository migrations are applied with `prisma migrate deploy`. Before the
+fresh database run, the runner also creates a separate local database, applies
+the approved Block 3A migrations, inserts a minimal baseline fixture and then
+applies the Block 3B.1 migration. It validates defaults, foreign keys and both
+outbound uniqueness constraints. The runner fails closed if either URL is
+non-loopback, if a database name is outside the harness namespace, if the
+approved Block 3A commit is not an ancestor of `HEAD`, or if production source,
+schema or migration changes exceed the explicit Block 3B.1 allowlist. Teardown
+removes only containers created by that runner invocation.
 
 ## Stateful boundaries
 
 The Chatwoot fake records sanitized method, path, headers, body, order,
 timestamp and configured response. It keeps conversation state (`ai_active`,
 status, assignee, team, labels and messages), returns external message IDs, and
-supports accepted, 4xx, 5xx and timeout behavior.
+supports accepted, 4xx, 5xx and accepted-but-response-ambiguous timeout
+behavior.
 
 The OpenAI-compatible fake records embeddings, intent classification, final
 generation, memory extraction, exposed tools and returned tool calls
@@ -56,15 +61,17 @@ separately. Responses are configurable per category. Both fakes listen only on
 
 ## Executable coverage and limits
 
-The runner currently declares fourteen Node tests: nine executable scenarios
-(A–I) and five future specifications marked `test.todo`. Scenarios A–F retain
-the Block 0–2 controls. G pauses local control while final generation is
-blocked and proves the returned draft is discarded. H performs a local CAS
-context reset during generation and proves the old turn is invalidated. I
-changes local control after sealing and proves the pre-outbound checkpoint
-blocks the V1 sender without creating a second decision. Runtime V2 OFF is a
-transversal invariant asserted inside every executable scenario, not an
-additional executable scenario.
+The runner currently declares nineteen Node tests: fourteen executable
+scenarios (A–N) and five future specifications marked `test.todo`. Scenarios
+A–F retain the Block 0–2 controls. G–I retain the Block 3A concurrency and
+stale-control controls. The Block 3B.1 assertions prove one durable delivery
+per decision block, `ACKNOWLEDGED` after a successful Chatwoot response,
+delivery reuse after duplicate, atomic claim ownership, `CANCELLED_STALE`,
+`FAILED_TERMINAL` for 4xx, `FAILED_RETRYABLE` for 5xx, `UNCERTAIN` after an
+accepted-but-ambiguous timeout, and persistence of both `ACKNOWLEDGED` and
+`PENDING` across application restart without automatic recovery. Runtime V2
+OFF is a transversal invariant asserted inside every executable scenario, not
+an additional executable scenario.
 
 Every applicable executable scenario verifies the sealed V1 decision owner
 added in Block 2 and the accepted local control revision added in Block 3A.
@@ -79,11 +86,12 @@ every possible production condition; it validates the named controls through
 the production bootstrap and central services while Chatwoot and the provider
 remain fake HTTP boundaries.
 
-PostgreSQL is the operational authority for Block 3A checkpoints. A remote
+PostgreSQL remains the operational authority for local checkpoints. A remote
 Chatwoot pause that is not reflected locally remains undetectable here; no
 additional remote reads or polling were introduced. The harness also does not
-claim outbox, delivery retry or reconciliation coverage. Those delivery
-contracts remain outside Block 3A.
+claim automatic retry, lease recovery or external reconciliation coverage.
+`PENDING`, `SENDING`, `FAILED_RETRYABLE` and `UNCERTAIN` remain durable for a
+future policy; no worker is started.
 
 ## Lifecycle and build evidence
 
@@ -94,7 +102,7 @@ The runner:
 3. performs a fresh TypeScript build;
 4. records the SHA-256 and timestamp of `dist/main.js` plus
    `dist/app.module.js` and the instrumented V1
-   decision/manifest/control/runtime artifacts;
+   decision/manifest/control/outbound-delivery/runtime artifacts;
 5. starts both fakes and the production bootstrap;
 6. waits for `/health`;
 7. runs the HTTP tests serially;
@@ -116,11 +124,11 @@ Five `test.todo` specifications intentionally remain non-blocking:
 They state the future contract and never assert the currently incorrect
 response as accepted behavior.
 
-## Current delivery limitation
+## Current delivery limits
 
-The dedupe control proves one logical processing, one final generation and one
-outbound for two deliveries of the same external message ID. It does not claim
-delivery reconciliation: in Runtime V1, an inbound already marked as processed
-can prevent a later attempt when a decision was persisted but its outbound was
-never confirmed. The harness records this limitation without changing the
-current behavior.
+The dedupe control proves one logical processing, one final generation, one
+durable delivery, one claim and one outbound for two deliveries of the same
+external message ID. A Chatwoot success is recorded as `ACKNOWLEDGED`, never as
+proof of end-user delivery. A duplicate does not retry `PENDING`,
+`FAILED_RETRYABLE`, `SENDING` or `UNCERTAIN`. Recovery of abandoned claims,
+retry and reconciliation are deliberately deferred to Block 3B.2.

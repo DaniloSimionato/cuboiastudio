@@ -183,7 +183,12 @@ export async function createStatefulChatwootFake() {
     requests.push(record);
 
     const configured = consumeBehavior(behaviorQueue, record);
-    if (applyConfiguredBehavior({ behavior: configured, record, response, timers })) return;
+    if (
+      configured?.kind !== "accepted_timeout" &&
+      applyConfiguredBehavior({ behavior: configured, record, response, timers })
+    ) {
+      return;
+    }
 
     if (!route) {
       record.response = { kind: "default", status: 404, body: { error: "not_found" } };
@@ -240,6 +245,16 @@ export async function createStatefulChatwootFake() {
         direction: "outbound",
       };
       conversation.messages.push(outbound);
+      if (configured?.kind === "accepted_timeout") {
+        const timeoutMs = configured.timeoutMs ?? 100;
+        record.response = { kind: "accepted_timeout", timeoutMs };
+        const timer = setTimeout(() => {
+          timers.delete(timer);
+          response.destroy();
+        }, timeoutMs);
+        timers.add(timer);
+        return;
+      }
       const responseBody = { ...outbound };
       record.response = { kind: "accepted", status: 201, body: responseBody };
       writeJson(response, 201, responseBody);

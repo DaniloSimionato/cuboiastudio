@@ -111,6 +111,7 @@ model Company {
   assistants                         Assistant[]
   assistantConversations             AssistantConversation[]
   assistantConversationMessages      AssistantConversationMessage[]
+  assistantOutboundDeliveries        AssistantOutboundDelivery[]
   assistantKnowledgeItems            AssistantKnowledge[]
   assistantPreviewLogs               AssistantPreviewLog[]
   assistantRuntimeLogs               AssistantRuntimeLog[]
@@ -502,6 +503,7 @@ model Assistant {
   runtimeLogs                        AssistantRuntimeLog[]
   knowledgeChunks                    AssistantKnowledgeChunk[]
   assistantConversationMessages      AssistantConversationMessage[]
+  assistantOutboundDeliveries        AssistantOutboundDelivery[]
   behavior                           AssistantBehavior?
   flows                              AssistantFlow[]
   securityRules                      AssistantSecurityRule[]
@@ -597,6 +599,7 @@ model AssistantConversation {
   assistant              Assistant                           @relation(fields: [assistantId], references: [id], onDelete: Restrict)
   user                   User?                               @relation(fields: [userId], references: [id], onDelete: SetNull)
   messages               AssistantConversationMessage[]
+  outboundDeliveries     AssistantOutboundDelivery[]
   googleCalendarBookings GoogleCalendarBooking[]
   sessions               AssistantConversationSession[]
   runtimeV2States        AssistantConversationStateV2[]
@@ -636,6 +639,7 @@ model AssistantConversationMessage {
   assistant      Assistant                          @relation(fields: [assistantId], references: [id], onDelete: Restrict)
   conversation   AssistantConversation              @relation(fields: [conversationId], references: [id], onDelete: Restrict)
   runtimeV2Event AssistantConversationStateV2Event?
+  outboundDeliveries AssistantOutboundDelivery[]
 
   @@unique([companyId, source, externalMessageId])
   @@index([companyId])
@@ -644,6 +648,47 @@ model AssistantConversationMessage {
   @@index([externalMessageId])
   @@index([createdAt])
   @@map("assistant_conversation_messages")
+}
+
+model AssistantOutboundDelivery {
+  id                      String   @id @default(cuid())
+  companyId               String
+  assistantId             String
+  conversationId          String
+  assistantMessageId      String
+  turnExecutionId         String
+  decisionId              String
+  blockOrdinal            Int
+  idempotencyKey          String   @unique
+  policyVersion           String
+  expectedContextVersion  Int
+  expectedControlRevision Int
+  sender                  String
+  payloadHash             String
+  payloadSize             Int
+  status                  String   @default("PENDING")
+  attemptCount            Int      @default(0)
+  attemptOwner            String?
+  attemptedAt             DateTime?
+  acknowledgedAt          DateTime?
+  failedAt                DateTime?
+  externalMessageId       String?
+  errorClass              String?
+  errorCode               String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  company          Company                      @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  assistant        Assistant                    @relation(fields: [assistantId], references: [id], onDelete: Restrict)
+  conversation     AssistantConversation        @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  assistantMessage AssistantConversationMessage @relation(fields: [assistantMessageId], references: [id], onDelete: Cascade)
+
+  @@unique([decisionId, blockOrdinal])
+  @@index([companyId, createdAt])
+  @@index([assistantId, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([status, updatedAt])
+  @@map("assistant_outbound_deliveries")
 }
 
 model AssistantPreviewLog {

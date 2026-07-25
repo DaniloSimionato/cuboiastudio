@@ -595,6 +595,7 @@ async function cleanupDirectFixture(prisma, fixture) {
   });
   await prisma.assistantConversationStateV2.deleteMany({ where: { companyId: fixture.companyId } });
   await prisma.assistantRuntimeLog.deleteMany({ where: { companyId: fixture.companyId } });
+  await prisma.assistantOutboundDelivery.deleteMany({ where: { companyId: fixture.companyId } });
   await prisma.assistantConversationMessage.deleteMany({ where: { companyId: fixture.companyId } });
   await prisma.assistantConversation.deleteMany({ where: { companyId: fixture.companyId } });
   await prisma.assistant.deleteMany({ where: { companyId: fixture.companyId } });

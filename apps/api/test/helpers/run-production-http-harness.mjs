@@ -1,25 +1,40 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertIsolatedServiceUrls } from "./production-app-process.mjs";
 
-const BASELINE_COMMIT = "2aa8bb964a6c277f0a97ea3f638532d8c831fa8e";
-const ALLOWED_BLOCK3A_RUNTIME_PATHS = new Set([
+const BASELINE_COMMIT = "d22a1dd75dfbbf20c6316f23a9c08ae03eed2361";
+const ALLOWED_BLOCK3B1_RUNTIME_PATHS = new Set([
   "apps/api/prisma/schema.prisma",
-  "apps/api/prisma/migrations/20260725090000_add_conversation_control_revision/migration.sql",
-  "apps/api/src/assistant-conversations/assistant-conversations.controller.ts",
+  "apps/api/prisma/migrations/20260725140000_add_assistant_outbound_delivery/migration.sql",
   "apps/api/src/assistant-conversations/assistant-conversations.service.ts",
-  "apps/api/src/assistant-conversations/conversation-control-snapshot.ts",
-  "apps/api/src/assistant-conversations/standard-response-generation-strategy.ts",
+  "apps/api/src/assistant-conversations/outbound-delivery.ts",
   "apps/api/src/assistant-conversations/turn-execution-manifest.ts",
-  "apps/api/src/assistant-conversations/triage-response-generation-strategy.ts",
-  "apps/api/src/assistant-conversations/v1-turn-decision.ts",
 ]);
 const helperDirectory = path.dirname(fileURLToPath(import.meta.url));
 const apiDirectory = path.resolve(helperDirectory, "../..");
 const repositoryDirectory = path.resolve(apiDirectory, "../..");
+const migrationsDirectory = path.join(apiDirectory, "prisma/migrations");
+const outboundDeliveryMigration = "20260725140000_add_assistant_outbound_delivery";
+const relatedRegressionTests = [
+  "test/chatwoot-webhook-and-runtime.test.mjs",
+  "test/canonical-inbound-message.test.mjs",
+  "test/rag-price-authority.test.mjs",
+  "test/business-hours-direct-deterministic.test.mjs",
+  "test/official-business-context.test.mjs",
+  "test/conversation-reset.test.mjs",
+  "test/conversation-control-snapshot.test.mjs",
+  "test/outbound-external-reference.test.mjs",
+  "test/outbound-delivery.test.mjs",
+  "test/split-response-style.test.mjs",
+  "test/assistant-calendar-tools.test.mjs",
+  "test/custom-webhook-tools.test.mjs",
+  "test/runtime-stabilization.test.mjs",
+  "test/v1-turn-decision.test.mjs",
+  "test/turn-execution-manifest.test.mjs",
+];
 const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
 const databaseName = `cubo_policy_block0_test_${suffix}`;
 const postgresContainer = `cubo-policy-block0-postgres-${suffix}`;
@@ -257,11 +272,11 @@ async function assertBaselineAndScope() {
     .map((entry) => entry.trim())
     .filter(Boolean);
   const disallowedChanges = protectedChanges.filter(
-    (entry) => !ALLOWED_BLOCK3A_RUNTIME_PATHS.has(entry),
+    (entry) => !ALLOWED_BLOCK3B1_RUNTIME_PATHS.has(entry),
   );
   if (disallowedChanges.length > 0) {
     throw new Error(
-      `Harness refuses production source, schema or migration changes outside Block 3A:\n${disallowedChanges.join("\n")}`,
+      `Harness refuses production source, schema or migration changes outside Block 3B.1:\n${disallowedChanges.join("\n")}`,
     );
   }
   const prismaBinary = path.join(apiDirectory, "node_modules/.bin/prisma");
@@ -298,6 +313,7 @@ async function buildFresh(environment) {
     path.join(apiDirectory, "dist/app.module.js"),
     path.join(apiDirectory, "dist/assistant-conversations/assistant-conversations.service.js"),
     path.join(apiDirectory, "dist/assistant-conversations/conversation-control-snapshot.js"),
+    path.join(apiDirectory, "dist/assistant-conversations/outbound-delivery.js"),
     path.join(apiDirectory, "dist/assistant-conversations/turn-execution-manifest.js"),
     path.join(apiDirectory, "dist/assistant-conversations/v1-turn-decision.js"),
   ];
@@ -321,9 +337,203 @@ async function buildFresh(environment) {
   };
 }
 
+async function validateOutboundDeliveryUpgradeMigration() {
+  const upgradeDatabase = `${databaseName}_upgrade`;
+  const containerMigrations = `/tmp/cubo-policy-migrations-${suffix}`;
+  await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    "postgres",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    `CREATE DATABASE "${upgradeDatabase}"`,
+  ]);
+  await run("docker", [
+    "cp",
+    `${migrationsDirectory}/.`,
+    `${postgresContainer}:${containerMigrations}`,
+  ]);
+
+  const migrationEntries = (await readdir(migrationsDirectory, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  const baselineMigrations = migrationEntries.filter(
+    (entry) => entry !== outboundDeliveryMigration,
+  );
+  for (const migration of baselineMigrations) {
+    await run("docker", [
+      "exec",
+      postgresContainer,
+      "psql",
+      "-U",
+      "postgres",
+      "-d",
+      upgradeDatabase,
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-f",
+      `${containerMigrations}/${migration}/migration.sql`,
+    ]);
+  }
+
+  const baselineFixtureSql = [
+    `INSERT INTO "companies" ("id", "name", "updatedAt") VALUES ('migration-company', 'Migration fixture', CURRENT_TIMESTAMP)`,
+    `INSERT INTO "assistants" ("id", "companyId", "name", "updatedAt") VALUES ('migration-assistant', 'migration-company', 'Migration assistant', CURRENT_TIMESTAMP)`,
+    `INSERT INTO "assistant_conversations" ("id", "companyId", "assistantId", "updatedAt") VALUES ('migration-conversation', 'migration-company', 'migration-assistant', CURRENT_TIMESTAMP)`,
+    `INSERT INTO "assistant_conversation_messages" ("id", "companyId", "assistantId", "conversationId", "role", "content") VALUES ('migration-message', 'migration-company', 'migration-assistant', 'migration-conversation', 'assistant', 'fixture')`,
+  ].join("; ");
+  await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    baselineFixtureSql,
+  ]);
+  await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-f",
+    `${containerMigrations}/${outboundDeliveryMigration}/migration.sql`,
+  ]);
+
+  const insertDeliverySql =
+    `INSERT INTO "assistant_outbound_deliveries" (` +
+    `"id", "companyId", "assistantId", "conversationId", "assistantMessageId", ` +
+    `"turnExecutionId", "decisionId", "blockOrdinal", "idempotencyKey", ` +
+    `"policyVersion", "expectedContextVersion", "expectedControlRevision", ` +
+    `"sender", "payloadHash", "payloadSize", "updatedAt") VALUES (` +
+    `'migration-delivery', 'migration-company', 'migration-assistant', ` +
+    `'migration-conversation', 'migration-message', 'migration-turn', ` +
+    `'migration-decision', 1, 'migration-idempotency', ` +
+    `'V1_COMPATIBILITY_POLICY', 1, 0, 'CHATWOOT_V1', 'sha256:migration', 7, ` +
+    `CURRENT_TIMESTAMP)`;
+  await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    insertDeliverySql,
+  ]);
+  const defaults = await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-At",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    `SELECT "status" || '|' || "attemptCount" FROM "assistant_outbound_deliveries" WHERE "id" = 'migration-delivery'`,
+  ]);
+  if (defaults.stdout !== "PENDING|0") {
+    throw new Error(`Outbound delivery migration defaults mismatch: ${defaults.stdout}`);
+  }
+
+  const duplicateWasAccepted = await commandSucceeds("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    insertDeliverySql
+      .replace("'migration-delivery'", "'migration-delivery-duplicate'")
+      .replace("'migration-idempotency'", "'migration-idempotency-duplicate'"),
+  ]);
+  if (duplicateWasAccepted) {
+    throw new Error("Outbound delivery decision/block uniqueness was not enforced");
+  }
+  const invalidForeignKeyWasAccepted = await commandSucceeds("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    insertDeliverySql
+      .replace("'migration-delivery'", "'migration-delivery-invalid-fk'")
+      .replace("'migration-message'", "'missing-assistant-message'")
+      .replace("'migration-decision'", "'migration-decision-invalid-fk'")
+      .replace("'migration-idempotency'", "'migration-idempotency-invalid-fk'"),
+  ]);
+  if (invalidForeignKeyWasAccepted) {
+    throw new Error("Outbound delivery assistant message foreign key was not enforced");
+  }
+  await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    `DELETE FROM "assistant_conversation_messages" WHERE "id" = 'migration-message'`,
+  ]);
+  const deliveriesAfterLegacyMessageDelete = await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-At",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    `SELECT COUNT(*) FROM "assistant_outbound_deliveries" WHERE "id" = 'migration-delivery'`,
+  ]);
+  if (deliveriesAfterLegacyMessageDelete.stdout !== "0") {
+    throw new Error("Outbound delivery did not preserve legacy message deletion compatibility");
+  }
+  process.stdout.write(
+    `[http-harness] outbound ledger migration upgrade validated database=${upgradeDatabase}\n`,
+  );
+}
+
 async function main() {
   await assertBaselineAndScope();
   const services = await startServices();
+  await validateOutboundDeliveryUpgradeMigration();
   const baseEnvironment = {
     ...process.env,
     NODE_ENV: "test",
@@ -347,6 +557,18 @@ async function main() {
         ...baseEnvironment,
         HTTP_HARNESS_BUILD_STARTED_AT: String(build.startedAt),
         HTTP_HARNESS_BUILD_SHA256: build.sha256,
+      },
+      forwardOutput: true,
+    },
+  );
+  await run(
+    process.execPath,
+    ["--test", "--test-concurrency=1", ...relatedRegressionTests],
+    {
+      cwd: apiDirectory,
+      env: {
+        ...baseEnvironment,
+        RUNTIME_V2_MODE: "OFF",
       },
       forwardOutput: true,
     },

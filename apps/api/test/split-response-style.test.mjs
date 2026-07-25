@@ -64,6 +64,7 @@ async function expectValidationError(DtoClass, payload, fieldName) {
 
 async function cleanupAssistantTestData(prisma, companyId) {
   await prisma.assistantRuntimeLog.deleteMany({ where: { companyId } });
+  await prisma.assistantOutboundDelivery.deleteMany({ where: { companyId } });
   await prisma.assistantConversationSession.deleteMany({ where: { companyId } });
   await prisma.assistantConversationMessage.deleteMany({ where: { companyId } });
   await prisma.assistantConversation.deleteMany({ where: { companyId } });
