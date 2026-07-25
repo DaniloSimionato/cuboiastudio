@@ -46,18 +46,27 @@ Fluxo validado:
 5. O backend valida o segredo pela query string.
 6. O backend resolve `company`, `account`, `inbox` e `assistant`.
 7. O backend cria ou reutiliza a conversa interna do Cubo AI Studio.
-8. O runtime da IA processa a entrada.
-9. O backend envia a resposta outbound ao CuboChat.
-10. O CuboChat publica a resposta na conversa.
-11. A resposta aparece no WhatsApp.
+8. O Runtime V1 cria uma identidade, captura o estado de controle e processa a
+   entrada.
+9. Uma unica decisao terminal e selada.
+10. O executor persiste resposta, runtime log e delivery `PENDING`.
+11. O checkpoint pre-outbound valida `contextVersion`, `controlRevision`,
+    `aiActive` e `pausedByHuman`.
+12. O vencedor do claim registra uma attempt e envia pelo sender V1.
+13. O Chatwoot retorna ack, falha ou resultado ambiguo.
+14. Ledger e manifesto registram o resultado conhecido.
+15. O CuboChat publica a resposta na conversa quando aceitou o outbound.
+16. A resposta pode entao aparecer no WhatsApp.
 
-## 4. Identificadores reais validados
+Ack do POST nao deve ser descrito como prova de entrega final ao usuario.
 
-Valores usados no teste real validado:
+## 4. Identificadores sanitizados de exemplo
 
-- `account.id = 106`
-- `inbox.id = 524`
-- `conversation.id` externo do CuboChat = `1`
+Use identificadores ficticios na documentacao e em fixtures:
+
+- `account.id = 9001`
+- `inbox.id = 9002`
+- `conversation.id` externo do CuboChat = `9003`
 
 Ponto critico:
 
@@ -171,10 +180,10 @@ curl -i \
   -H "x-correlation-id: teste-manual-001" \
   -d '{
     "event": "message_created",
-    "account": { "id": 106 },
-    "inbox": { "id": 524, "identifier": "524" },
+    "account": { "id": 9001 },
+    "inbox": { "id": 9002, "identifier": "inbox-test" },
     "conversation": {
-      "id": 1,
+      "id": 9003,
       "meta": { "title": "Conversa WhatsApp" }
     },
     "message": {
@@ -224,8 +233,12 @@ Sinais importantes nos logs:
 - conversa externa resolvida
 - runtime iniciado
 - runtime concluido
+- decisao selada
+- delivery criado
+- attempt/lease adquirido
 - outbound iniciado
-- outbound concluido
+- outbound reconhecido, falho, incerto ou cancelado
+- reconciliacao, quando executada
 
 Campos uteis para rastrear:
 
@@ -236,6 +249,13 @@ Campos uteis para rastrear:
 - `inbox`
 - `externalConversation`
 - `assistantMessageId`
+- `turnExecutionId`
+- `decisionId`
+- `deliveryId`
+- `attemptNumber`
+- `controlRevision`
+- `currentContextVersion`
+- `retrySafety`
 - `status` do outbound
 
 ## 13. Contrato outbound correto
@@ -258,7 +278,15 @@ Body correto:
 {
   "content": "Sua resposta aqui",
   "message_type": "outgoing",
-  "private": false
+  "private": false,
+  "sender_type": "Captain::Assistant",
+  "content_attributes": {
+    "automation_rule_id": "cubo_ai_studio",
+    "source": "cubo_ai_studio",
+    "assistant_id": "ID_TECNICO_DO_ASSISTANT",
+    "internal_conversation_id": "ID_TECNICO_DA_CONVERSA",
+    "cubo_outbound_delivery_id": "ID_TECNICO_DO_DELIVERY"
+  }
 }
 ```
 
@@ -268,8 +296,61 @@ Pontos criticos:
 - nao usar `private: true`
 - nao usar o ID interno da conversa do Cubo AI Studio
 - usar sempre o `conversation.id` externo do CuboChat
+- preservar `cubo_outbound_delivery_id`; ele permite reconciliacao positiva sem
+  comparar texto ou telefone
+- nao assumir que esse atributo e uma chave de idempotencia remota
 
-## 14. Pontos criticos de modelagem
+## 14. Ledger, tentativa e recovery seguro
+
+Antes de qualquer POST outbound existe um `AssistantOutboundDelivery`
+persistido e unico por decisao/bloco.
+
+Estados:
+
+- `PENDING`: registrado, sem tentativa;
+- `SENDING`: um owner possui lease da tentativa;
+- `ACKNOWLEDGED`: Chatwoot respondeu com sucesso;
+- `FAILED_RETRYABLE`: somente elegivel quando `retrySafety=PROVEN_SAFE`;
+- `FAILED_TERMINAL`: nao repetir automaticamente;
+- `UNCERTAIN`: efeito remoto pode ter ocorrido; nunca reenviar diretamente;
+- `CANCELLED_STALE`: controle local mudou antes do envio.
+
+Cada attempt preserva owner, ordinal, lease, entrada na fronteira, resultado,
+status HTTP e erro sanitizado.
+
+Regras:
+
+- timeout e socket ambiguo exigem reconciliacao;
+- 5xx recebido nao prova ausencia do efeito;
+- lease expirado depois da fronteira vira `UNCERTAIN`;
+- duplicate de webhook nao dispara recovery;
+- budget e backoff limitam apenas novos envios;
+- reconciliacao sem reenvio continua possivel quando o budget acabou;
+- controle stale cancela o delivery;
+- resposta dividida ou payload historico sem contrato verificavel nao e
+  recuperado automaticamente.
+
+Evidencia positiva de reconciliacao:
+
+- external message ID ja persistido;
+- mensagem remota com `cubo_outbound_delivery_id` exatamente igual ao delivery.
+
+Ausencia em uma pagina de mensagens nao e conclusiva.
+
+O coordinator de recovery nao esta automaticamente ativo. Nao existe cron,
+worker, endpoint ou hook de startup para executa-lo.
+
+Validacao local principal:
+
+```bash
+cd apps/api
+npm run test:http-harness
+```
+
+O harness usa `AppModule`, bootstrap, webhook, Prisma, Redis e Runtime V1 reais.
+Somente Chatwoot e provider sao fronteiras HTTP falsas e stateful.
+
+## 15. Pontos criticos de modelagem
 
 Regras importantes:
 
@@ -280,8 +361,13 @@ Regras importantes:
 - o outbound sempre usa o ID externo da conversa do CuboChat
 - o webhook deve processar apenas mensagens `incoming`
 - ignorar `outgoing`, `template`, `activity`, `private` e `agent_bot` para evitar loop
+- duplicate reutiliza turno, decisao e delivery; ele nao chama provider, sender
+  ou recovery
+- Runtime V2 permanece OFF
+- handoff ainda e `EXPLICIT_HUMAN_HANDOFF_LEGACY` e nao deve ser apresentado
+  como transferencia operacional
 
-## 15. Troubleshooting
+## 16. Troubleshooting
 
 ### EADDRINUSE na porta 3001
 
@@ -345,7 +431,7 @@ Resolucao:
 - nao mapear IDs externos de Chatwoot para a FK de usuario interno
 - em conversa inbound, `userId` interno pode ser `null`
 
-### Outbound completed mas nao aparece no WhatsApp
+### Outbound acknowledged mas nao aparece no WhatsApp
 
 Validar:
 
@@ -355,8 +441,27 @@ Validar:
 4. `conversation.id` externo correto
 5. `api_access_token` valido
 6. status HTTP e body da resposta do CuboChat
+7. `AssistantOutboundDelivery.status`
+8. external message ID persistido
 
-## 16. Seguranca
+`ACKNOWLEDGED` confirma apenas que o Chatwoot aceitou o POST conhecido pelo
+runtime. Nao comprova entrega final no WhatsApp.
+
+### Delivery UNCERTAIN
+
+Nao repita manualmente apenas porque nao houve ack.
+
+Validar:
+
+1. attempt e `boundaryStartedAt`
+2. `retrySafety`
+3. external message ID local
+4. referencia `cubo_outbound_delivery_id` nas mensagens remotas
+5. resultado da reconciliacao
+
+Se a consulta remota for inconclusiva, preserve `UNCERTAIN`.
+
+## 17. Seguranca
 
 Nunca commitar:
 
@@ -383,10 +488,15 @@ Nao registrar:
 - token real
 - payload bruto completo com dados sensiveis
 - base64 de anexos
+- conteudo integral duplicado no ledger ou manifesto
+- response body remoto completo
+- owner de lease bruto; use fingerprint tecnico
 
-## 17. Referencias rapidas
+## 18. Referencias rapidas
 
 - guia rapido: [CHATWOOT_E2E_QUICKSTART.md](./CHATWOOT_E2E_QUICKSTART.md)
 - roteiro completo de validacao: [CHATWOOT_E2E_TEST.md](./CHATWOOT_E2E_TEST.md)
 - diagnostico local: [API_LOCAL_DIAGNOSTICS.md](./API_LOCAL_DIAGNOSTICS.md)
 - setup do backend: [BACKEND_SETUP.md](./BACKEND_SETUP.md)
+- harness HTTP: [README.production-http-harness.md](../apps/api/test/README.production-http-harness.md)
+- relatorio Bloco 3B.2: [BLOCK3B2_OUTBOUND_RECOVERY_REPORT.md](../apps/api/test/BLOCK3B2_OUTBOUND_RECOVERY_REPORT.md)

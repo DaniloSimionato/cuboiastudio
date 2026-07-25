@@ -1,46 +1,75 @@
 # AI_RUNTIME_PLAN.md
 
-Plano tecnico do cerebro da IA do Cubo AI Studio.
+Plano tecnico e registro de evolucao do cerebro da IA do Cubo AI Studio.
 
-Este documento define a evolucao do runtime mantendo fallback deterministico, seguranca de secrets e separacao clara entre provider, assistant, knowledge, pipeline, logs, tools e canais.
+Este documento define a evolucao do runtime mantendo autoridade deterministica,
+seguranca de secrets e separacao clara entre provider, assistant, knowledge,
+pipeline, logs, tools, controle de conversa e canais.
+
+> Estado de referencia: Runtime V1 estabilizado ate o Bloco 3B.2. Runtime V2
+> permanece OFF. As secoes AI-000 a AI-007 abaixo registram marcos historicos e
+> nao substituem os contratos atuais dos relatorios de estabilizacao.
 
 ## 1. Estado atual
 
-- A demo visual esta valida e conectada ao backend local nas telas principais.
-- O backend local esta validado com banco real, auth dev, tenant, RBAC, assistants, knowledge, preview, runtime e logs.
-- O runtime de conversa ja tenta IA real quando a configuracao por tenant ou `.env` esta habilitada e valida.
-- O fallback deterministico continua oficial para desenvolvimento, smoke e resiliencia.
-- AI-001 ja adicionou a camada backend-only de provider real e o diagnostico seguro.
-- AI-002 ja persistiu `instructions`, `model` e `temperature` no Assistant e expôs isso com seguranca nas rotas e na UI.
-- AI-003 ja ligou o runtime de conversa ao provider real com fallback deterministico.
-- AI-004 agora adicionou configuracao de IA por tenant/empresa, com API key cifrada e fallback global seguro.
-- AI-005 agora iniciou o Runtime Pipeline v1 com as 7 partes do assistente na UI de testes.
-- AI-006 agora melhora o contexto de conversa enviado ao provider e exibido no debug, incluindo identidade do assistant, mensagem inicial, instrucoes/persona e historico recente.
-- O frontend nao chama provedores externos diretamente.
-- O smoke oficial nao depende de IA real.
-- As conversas persistidas e os logs atuais servem como base para evolucao.
+- O Runtime V1 e o unico runtime operacional ativo; Runtime V2 esta OFF.
+- O backend possui tenant, RBAC, assistants, knowledge, flows, tools, conversas,
+  logs, provider real opcional, embeddings e RAG.
+- O frontend nunca chama provedores externos diretamente.
+- O Chatwoot entra pelo endpoint real `POST /webhooks/chatwoot`.
+- O inbound e normalizado, deduplicado e ligado a uma conversa interna e a um
+  `currentContextVersion`.
+- Cada turno aceito possui `turnExecutionId`, policy
+  `V1_COMPATIBILITY_POLICY`, manifesto sanitizado e uma decisao terminal selada.
+- Um executor unico persiste a mensagem terminal, finaliza o runtime log e
+  prepara o outbound.
+- `controlRevision` e checkpoints CAS bloqueiam provider, selamento, efeitos ou
+  outbound quando o estado local muda durante o turno.
+- Todo outbound pretendido possui ledger duravel antes da fronteira HTTP.
+- Claims e attempts possuem ownership, lease, budget, backoff e retry safety.
+- `UNCERTAIN` nunca e reenviado diretamente.
+- Reconciliacao pode restaurar ack por ID externo ou referencia tecnica remota
+  exata, sem gerar nova decisao ou mensagem.
+- Recovery automatico nao esta ativado; nao existe scheduler, worker, endpoint
+  ou hook de startup para o coordinator.
+- O smoke e o harness HTTP nao dependem de provider ou servico real.
 
 ## 2. Problema atual
 
-Hoje existe uma demo funcional com provider real opcional, mas o fluxo ainda precisa ficar mais explicito para operadores e implantacao.
+O problema atual nao e mais apenas ligar um provider. A prioridade e fazer todas
+as capacidades do Runtime V1 obedecerem a contratos coerentes de decisao,
+autoridade, estado e entrega.
 
-As respostas ja podem passar pelo provider configurado, porem o usuario precisa enxergar melhor quais partes formam o comportamento do assistente.
+Os principais limites ainda abertos sao:
 
-Isso cria tres limites:
-
-- o debug precisa mostrar claramente instrucoes, contexto, modelo, modo e saida
-- o resumo da execucao ainda e simples e nao persistido como memoria
-- tools, canais, embeddings e observabilidade avancada seguem fora do runtime v1
+- entendimento e continuidade multi-turno ainda nao possuem estado estruturado
+  completo;
+- evidencia integral pode ser perdida quando o runtime reduz knowledge a
+  preview;
+- consultas abertas podem resultar em respostas genericas;
+- handoff continua textual e nao executa transicao humana operacional;
+- PostgreSQL e a autoridade local, mas divergencia remota de pausa sem
+  sincronizacao ainda nao e detectada;
+- recovery seguro existe, mas sua ativacao operacional permanece pendente;
+- ausencia em lista paginada do Chatwoot nao prova ausencia do efeito remoto.
 
 ## 3. Objetivo do cerebro da IA
 
-Criar uma base tecnica para que o Cubo AI Studio consiga alternar entre:
+Manter uma unica politica de atendimento no Runtime V1 em que:
 
-- runtime deterministico de fallback
-- runtime real de IA
+- detectores produzem sinais;
+- flows produzem contexto;
+- RAG produz evidencia;
+- autoridades produzem fatos oficiais;
+- provider produz draft quando permitido;
+- guards validam;
+- uma unica decisao e selada;
+- um unico executor possui efeitos terminais;
+- controle stale bloqueia o turno;
+- outbound possui identidade, ledger e tentativa auditavel.
 
-O objetivo nao e abandonar o modo deterministico.
-O objetivo e adicionar uma camada real, segura e observavel sem quebrar a demo, o smoke ou o desenvolvimento local.
+O objetivo nao e responder tudo deterministicamente nem delegar fatos oficiais
+ao provider. Determinismo e provider devem coexistir sob uma unica precedencia.
 
 ## 4. Arquitetura proposta
 
@@ -69,15 +98,23 @@ Esses campos pertencem ao dominio do assistant e nao a mocks.
 
 ### 4.3 Runtime real de conversa
 
-O envio de mensagem deve seguir a ordem abaixo:
+O caminho operacional atual segue, em alto nivel:
 
-1. salvar a mensagem do usuario
-2. montar o contexto
-3. consultar o provider de IA, se habilitado
-4. salvar a resposta do assistant
-5. retornar a resposta para a UI
+1. receber e validar o webhook;
+2. normalizar e deduplicar o inbound;
+3. resolver binding e conversa;
+4. capturar `contextVersion` e control snapshot;
+5. executar detectores, flows, RAG e autoridades existentes;
+6. chamar o provider apenas quando o caminho atual permitir;
+7. executar guards e selar uma decisao;
+8. persistir mensagem terminal, runtime log e delivery `PENDING`;
+9. revalidar controle e disputar claim;
+10. cruzar a fronteira Chatwoot por um unico sender;
+11. registrar attempt, ack, falha ou incerteza;
+12. reconciliar apenas quando houver evidencia segura.
 
-Se o provider estiver desabilitado ou falhar de forma controlada, o runtime deterministico continua como fallback.
+Fallbacks existentes continuam sob compatibilidade V1, mas nao podem criar uma
+segunda decisao ou enviar fora do executor.
 
 ### 4.4 Fallback deterministico
 
@@ -92,15 +129,21 @@ Ele nao deve ser removido nem substituido antes do runtime real estar validado.
 
 ### 4.5 Logs e observabilidade
 
-O runtime real deve registrar:
+O owner canonico da execucao e
+`AssistantRuntimeLog.metadata.turnExecutionManifest`. Ele registra, de forma
+sanitizada:
 
-- modo usado
-- provider
-- modelo
-- tempo de resposta
-- erro controlado
-- tokens, quando existirem
-- custo estimado, quando aplicavel
+- identidade do turno e policy version;
+- conversa e `contextVersion`;
+- snapshot e checkpoints de controle;
+- caminho terminal e decisao selada;
+- categorias observaveis de provider;
+- referencias de autoridade;
+- delivery, attempt, lease, retry safety e reconciliacao;
+- resultado conhecido do outbound.
+
+O manifesto nao duplica mensagem, prompt completo, knowledge integral, token,
+headers ou response body sensivel.
 
 ### 4.5.1 Runtime Pipeline v1
 
@@ -135,42 +178,28 @@ Fica para issues futuras:
 
 ### 4.6 Knowledge e RAG
 
-O conhecimento precisa evoluir em camadas:
-
-- selecao melhor de contexto
-- limite de tamanho
-- preparacao para embeddings
-- futura busca semantica
-
-Nesta fase nao entram embeddings nem vetorizar tudo imediatamente.
+Embeddings, busca semantica, scopes e filtro por tags ja existem. A evolucao
+necessaria agora e preservar evidencia factual integral entre recuperacao,
+authority resolution, prompt e guards. Preview serve apenas para telemetria e
+nao pode ser a representacao factual autoritativa.
 
 ### 4.7 Tools e functions
 
-As tools reais entram depois da IA basica existir.
-
-Elas devem ficar atraves de uma interface segura do backend para:
-
-- consultar ordem de servico
-- consultar boleto
-- consultar pedido
-- chamar webhook
-- transferir humano
-- adicionar tag
+Tools backend-only, incluindo calendario e custom webhooks, ja possuem cobertura
+relacionada. Elas devem continuar sem acesso a secrets no frontend e sem
+adquirir ownership de decisao ou outbound. Handoff humano nao deve ser
+modelado como simples tool textual.
 
 ### 4.8 Canais externos
 
-Os canais externos so devem entrar depois do runtime estar estavel.
-
-Exemplos:
-
-- WhatsApp
-- Cubo.Chat
-- webhooks de entrada
-- outros canais externos
+Chatwoot/Cubo.Chat ja e um canal operacional. O contrato validado usa o webhook
+real e o sender V1 existente. Novos canais devem reutilizar identidade,
+dedupe, decisao, controle e ledger, sem criar runtimes ou senders terminais
+concorrentes.
 
 ## 5. Sequencia de implementacao
 
-Sequencia sugerida:
+Sequencia historica da construcao inicial:
 
 1. AI-000 - documentar este plano
 2. AI-001 - provider de IA real
@@ -194,6 +223,20 @@ AI-004 FIX adicionou presets seguros de OpenAI, DeepSeek e Custom em `GET /setti
 AI-004 FIX 2 melhorou o diagnostico seguro de `POST /settings/ai/test`: erros do provider agora podem retornar `providerStatus` e `providerError` sanitizados, sem API key, headers ou request completo.
 AI-005 agora foi entregue como Runtime Pipeline v1: o Assistant ganhou `initialMessage`, a conversa nova pode iniciar com essa mensagem, o runtime retorna `outcome` e `summary`, e `/testes` mostra as 7 partes do assistente sem expor prompts completos gigantes nem secrets.
 AI-005 FIX estabilizou o laboratorio `/testes`: conversas sao sempre carregadas por assistant, `Conversation not found` vira orientacao amigavel, assistants tecnicos de smoke ficam ocultos na UI padrao, e o smoke inativa o assistant criado ao final.
+
+Sequencia de estabilizacao arquitetural concluida posteriormente:
+
+1. Fase 1 - auditoria forense read-only;
+2. Fase 2 - arquitetura incremental da politica de atendimento;
+3. Bloco 0 - harness HTTP pelo entrypoint e bootstrap de producao;
+4. Bloco 1 - identidade e observabilidade minima do turno;
+5. Bloco 2 - decisao terminal e executor unicos;
+6. Bloco 3A - `controlRevision`, snapshots e checkpoints CAS;
+7. Bloco 3B.1 - ledger duravel e ownership de tentativa;
+8. Bloco 3B.2 - recovery e reconciliacao segura.
+
+O Bloco 4 nao foi iniciado. Runtime V2 nao deve ser ativado como atalho para as
+etapas seguintes.
 
 ## 6. Variaveis de ambiente futuras
 
@@ -244,60 +287,77 @@ Ele e util para:
 O fallback nao deve mascarar erro de integracao real.
 Quando ele for acionado, isso precisa ficar claro nos logs.
 
-## 9. Como sera testado
+## 9. Como e testado
 
-Quando a implementacao comecar, os testes devem cobrir:
+O harness principal:
 
-- smoke local sem dependencia de API key real
-- runtime com provider desabilitado
-- runtime com provider habilitado em ambiente controlado
-- persistencia de mensagem de usuario e assistant
-- retorno de modo, provider, modelo, temperatura, outcome e resumo
-- comportamento de fallback controlado
+- sobe PostgreSQL e Redis locais descartaveis;
+- aplica migrations reais;
+- gera build fresco;
+- inicia `dist/main.js` e o `AppModule` real;
+- entra por `POST /webhooks/chatwoot`;
+- usa fakes HTTP stateful apenas para Chatwoot e provider;
+- impede rede nao loopback;
+- encerra app, Prisma, Redis, fakes, portas e containers.
 
-O comando oficial de validacao continua sendo:
+Controles atuais:
+
+- 14 cenarios HTTP executaveis;
+- 5 gaps funcionais como `test.todo`;
+- 241 testes relacionados no gate do Bloco 3B.2;
+- migrations testadas em banco vazio e upgrade local;
+- restart, multi-worker, backoff, budget, stale control e reconciliacao;
+- Runtime V2 OFF como invariante transversal.
+
+Comando principal:
 
 ```bash
-npm run build
-npm run lint
-npm exec tsc -- --noEmit -p tsconfig.json
+cd apps/api
+npm run test:http-harness
 ```
 
-O smoke deve continuar local e deterministico ate a nova integracao estar madura.
+Consulte `apps/api/test/README.production-http-harness.md` para limites e
+evidencias de build.
 
-## 10. O que nao entra agora
+## 10. O que nao entrou no Bloco 3B.2
 
-Nao entra nesta fase do Runtime Pipeline v1:
+- scheduler ou worker de recovery;
+- retry automatico ativado;
+- prova remota de ausencia;
+- recuperacao automatica de payload historico ou resposta dividida;
+- handoff operacional;
+- mutacao de assignee, team, labels, status ou `ai_active`;
+- polling remoto de pausa;
+- outbox para outros canais;
+- correcao de BusinessHours com erro ortografico;
+- continuidade de preco;
+- preservacao integral da evidencia alem do preview;
+- politica de completude comercial;
+- Runtime V2.
 
-- API key real
-- embeddings
-- RAG vetorial
-- tool execution real
-- canais externos reais
-- Webhook de producao
-- timer real de inatividade
-- resumo persistido avancado
-- saida condicional real
-- observabilidade avancada de tokens/custos/tracing
+## 11. Riscos atuais
 
-## 11. Riscos
+- ativar recovery sem scheduler, lease e metricas operacionais adequadas;
+- interpretar 5xx ou timeout como prova de ausencia e duplicar mensagem;
+- tratar ack do POST como entrega final;
+- usar ausencia em pagina Chatwoot como prova conclusiva;
+- recuperar payload historico cuja equivalencia nao pode ser demonstrada;
+- permitir que outro branch volte a enviar fora do executor unico;
+- alterar controle sem incrementar `controlRevision`;
+- expor segredo, payload ou conteudo integral no manifesto;
+- ativar Runtime V2 como caminho concorrente.
 
-- misturar provider real com fallback pode esconder falhas se os logs forem fracos
-- expor segredo no frontend quebraria a arquitetura de seguranca
-- adicionar tools antes da IA basica pode complicar o runtime sem necessidade
-- introduzir embeddings cedo demais pode aumentar custo e complexidade
-- tentar integrar canais antes do runtime estabilizar pode gerar debito tecnico
+## 12. Continuidade
 
-## 12. Proximas issues sugeridas
+O proximo bloco deve ser autorizado separadamente. Ate essa autorizacao:
 
-1. AI-007 - logs e observabilidade de IA
-2. AI-008 - knowledge e RAG simples
-3. BE-022 - CRUD inicial de Tools
-4. AI-009 - canais externos
+- nao ativar o coordinator de recovery;
+- nao iniciar o Bloco 4;
+- nao alterar os cinco gaps funcionais;
+- nao ativar Runtime V2;
+- usar os relatorios dos blocos como fonte de contrato e evidencia.
 
-Essa ordem prioriza a base real de IA antes de ampliar integracoes.
-
-## AI-007 entregue - logs seguros de runtime
+## Registro historico: AI-007 - logs seguros de runtime
 
 A AI-007 adicionou logs de execucao do runtime de IA sem salvar prompt completo, API key ou payload bruto de provider.
 
@@ -313,7 +373,7 @@ O runtime agora cria um registro seguro para cada mensagem processada com sucess
 
 Os endpoints `GET /logs/ai` e `GET /logs/ai/:id` exigem `logs:read` e sempre filtram pelo tenant atual.
 
-Continua fora do escopo:
+Naquele marco ainda estavam fora do escopo:
 
 - tokens/custos/tracing avancado
 - dashboards agregados
@@ -322,9 +382,12 @@ Continua fora do escopo:
 - tools/functions
 - canais externos
 
-Proxima ordem sugerida:
+Ordem historica sugerida naquele momento:
 
 1. AI-008 - knowledge e RAG simples
 2. BE-022 - CRUD inicial de Tools
 3. AI-009 - canais externos
 4. AI-010 - observabilidade avancada de tokens, custo e tracing
+
+Essa lista foi superada pelas entregas posteriores e nao representa a
+prioridade atual.

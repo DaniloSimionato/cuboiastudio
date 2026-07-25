@@ -45,7 +45,8 @@ No futuro, o sistema podera ser liberado para clientes finais.
 
 ## 3. Qual problema estamos resolvendo
 
-Hoje muitos clientes utilizam IA baseada apenas em prompts enormes.
+Historicamente, muitos clientes utilizaram IA baseada apenas em prompts
+enormes.
 
 Isso gera:
 
@@ -58,13 +59,39 @@ Isso gera:
 
 O Cubo AI Studio nasce para resolver exatamente esse problema.
 
-Nesta fase, algumas rotas de preview do assistant apenas simulam respostas de forma determinística usando knowledge manual. Isso ainda nao e IA real nem RAG real.
+O estado operacional atual ja possui conversa persistida, provider real,
+embeddings, recuperacao de knowledge, flows, tools e integracao Chatwoot. O
+runtime ativo em producao continua sendo o Runtime V1. Runtime V2 permanece
+explicitamente desligado.
 
-As execucoes validas desse preview sao registradas em logs para auditoria e evolucao futura, mas ainda nao representam conversa, memoria ou runtime real de IA.
+O caminho principal validado e:
 
-A rota oficial de runtime inicial do assistant agora tenta o provider real quando ele esta habilitado e configurado, mas continua com fallback deterministico seguro quando a IA real nao puder ser usada. Ela ainda nao usa embeddings e nao conversa diretamente com canais.
+`POST /webhooks/chatwoot -> inbound canonico -> conversa interna -> Runtime V1 -> decisao selada -> executor unico -> persistencia -> ledger outbound -> sender Chatwoot`
 
-A fase operacional validada segue com fallback deterministico preservado: o runtime atual pode usar IA real no backend quando habilitado, o frontend de demo ja consome assistants, base de conhecimento e conversas persistidas, e a proxima evolucao deve ser planejada antes de qualquer integracao externa.
+O Runtime V1 preserva respostas deterministicas quando existe autoridade
+obrigatoria, como BusinessHours reconhecido e preco oficial inequivoco, e usa o
+provider para respostas abertas. Knowledge scopes, filtro por tags, flow
+routing, RAG, autoridades comerciais, guards de preco e isolamento por
+`currentContextVersion` continuam ativos.
+
+Os blocos de estabilizacao arquitetural concluidos sao:
+
+- Bloco 0: harness HTTP pelo mesmo `AppModule`, bootstrap e webhook da producao;
+- Bloco 1: `turnExecutionId`, policy version e manifesto sanitizado;
+- Bloco 2: uma decisao terminal selada e um executor unico por turno;
+- Bloco 3A: `controlRevision`, snapshots, checkpoints e bloqueio de turno stale;
+- Bloco 3B.1: ledger duravel antes da fronteira outbound e claim unico;
+- Bloco 3B.2: retry safety, leases, tentativas, recovery e reconciliacao segura.
+
+Um ack do POST ao Chatwoot significa `ACKNOWLEDGED`; ele nao prova entrega final
+ao usuario. Recovery automatico nao foi ativado. O coordinator existe como
+contrato interno testavel, sem cron, worker, endpoint ou hook de startup.
+
+Retries so podem ocorrer quando a ausencia de efeito remoto e tecnicamente
+comprovada. `UNCERTAIN` nunca e reenviado diretamente. A reconciliacao atual
+aceita apenas evidencia positiva por external message ID ou pela referencia
+tecnica exata preservada em `content_attributes`; ausencia em lista paginada e
+inconclusiva.
 
 O plano tecnico do "cerebro" da IA esta sendo documentado em `docs/AI_RUNTIME_PLAN.md` para separar com clareza provider, prompt, runtime, logs, knowledge, tools e canais.
 
@@ -79,8 +106,16 @@ As rotas `GET /settings/ai`, `PATCH /settings/ai`, `POST /settings/ai/test` e `D
 BE-022 continua reservado para Tools no backlog oficial.
 BE-023 ja criou a estrutura inicial de conversas e mensagens persistidas do runtime, que agora pode operar com IA real no backend ou com fallback deterministico seguro.
 A integraçao de IA real no `/testes` agora pode acontecer pelo runtime de conversa quando o backend estiver habilitado, mas continua segura e dependente da configuracao backend-only.
-A AI-005 nao adiciona Tools, canais externos, embeddings, RAG vetorial, timer real de inatividade ou observabilidade avancada. Essas frentes seguem futuras.
+A AI-005 foi um marco historico anterior a Tools, canais externos, embeddings e
+RAG. Essas capacidades foram adicionadas em etapas posteriores; seu texto nao
+deve ser usado como descricao do runtime atual.
 A demo local também foi estabilizada para as portas comuns do Vite em desenvolvimento, sem alterar o comportamento determinístico nem introduzir IA real.
+
+Documentos operacionais atuais:
+
+- `apps/api/test/README.production-http-harness.md`;
+- `apps/api/test/BLOCK3B2_OUTBOUND_RECOVERY_REPORT.md`;
+- `docs/CUBOCHAT_INTEGRATION.md`.
 
 ## 4. Objetivo do MVP
 
@@ -128,16 +163,20 @@ O foco e atender muito bem os clientes atuais.
 
 ## 6. Como funciona hoje
 
-O cenarios atual possui limitacoes importantes:
+O runtime atual possui uma base de controle e auditoria significativamente mais
+forte, mas ainda conserva limitacoes funcionais conhecidas:
 
-- dependencias de ferramentas externas
-- grande uso de prompts gigantes
-- baixa reutilizacao
-- dificil manutencao
-- pouca observabilidade
-- integracoes frageis
+- erro ortografico `atendiemnto` ainda pode escapar de BusinessHours direto;
+- continuidade eliptica de preco ainda nao troca corretamente para
+  `placa_mae`;
+- evidencia relevante alem do preview de 250 caracteres ainda pode ser perdida;
+- resposta tecnica sobre computador lento ainda pode ficar generica;
+- handoff continua textual e nao operacional;
+- divergencia remota de pausa sem atualizacao local ainda nao e detectada;
+- recovery outbound ainda nao possui ativacao automatica.
 
-Isso torna a operacao mais arriscada e menos previsivel.
+Esses pontos permanecem visiveis como especificacoes `test.todo`; nao devem ser
+tratados como comportamento correto.
 
 ## 7. Como queremos que funcione
 

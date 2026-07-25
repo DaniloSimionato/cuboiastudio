@@ -10,12 +10,15 @@ O trabalho foi realizado no worktree isolado
 `/Users/danilosimionato/Projetos/CuboIAStudio-policy-block3b2`, na branch
 `feat/unified-policy-block3b2-outbound-recovery`.
 
+Commit de implementacao validado e publicado:
+
+`1c9ad875a9a2e3b03cdcb5ec458e9c3ee223fe05`
+
 O repositório principal não foi usado como fonte de código não implantado. Seu
-HEAD e seu conjunto de alterações locais foram inventariados antes do trabalho
-e devem ser comparados novamente no gate final. Nenhum endpoint, banco, Redis,
-Chatwoot ou provider de staging/produção é usado pelos testes. Todas as URLs
-mutáveis do harness são loopback. Runtime V2 permanece explicitamente
-desligado.
+HEAD e seu conjunto de alterações locais foram comparados antes e depois do
+trabalho e permaneceram inalterados. Nenhum endpoint, banco, Redis, Chatwoot ou
+provider de staging/produção foi usado pelos testes. Todas as URLs mutáveis do
+harness são loopback. Runtime V2 permaneceu explicitamente desligado.
 
 ## 2. Auditoria read-only da fronteira existente
 
