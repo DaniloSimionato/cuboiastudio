@@ -5,11 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertIsolatedServiceUrls } from "./production-app-process.mjs";
 
-const BASELINE_COMMIT = "f9f95ebbfc20f61bb8f1e67fdecf17990eb0566e";
-const ALLOWED_BLOCK1_RUNTIME_PATHS = new Set([
+const BASELINE_COMMIT = "5bad8f16ac944b4ac566f4025e51b825c1111b3d";
+const ALLOWED_BLOCK2_RUNTIME_PATHS = new Set([
   "apps/api/src/assistant-conversations/assistant-conversations.service.ts",
   "apps/api/src/assistant-conversations/turn-execution-manifest.ts",
-  "apps/api/src/chatwoot/chatwoot-webhook.service.ts",
+  "apps/api/src/assistant-conversations/v1-turn-decision.ts",
 ]);
 const helperDirectory = path.dirname(fileURLToPath(import.meta.url));
 const apiDirectory = path.resolve(helperDirectory, "../..");
@@ -248,11 +248,11 @@ async function assertBaselineAndScope() {
     .map((entry) => entry.trim())
     .filter(Boolean);
   const disallowedChanges = protectedChanges.filter(
-    (entry) => !ALLOWED_BLOCK1_RUNTIME_PATHS.has(entry),
+    (entry) => !ALLOWED_BLOCK2_RUNTIME_PATHS.has(entry),
   );
   if (disallowedChanges.length > 0) {
     throw new Error(
-      `Harness refuses production source, schema or migration changes outside Block 1:\n${disallowedChanges.join("\n")}`,
+      `Harness refuses production source, schema or migration changes outside Block 2:\n${disallowedChanges.join("\n")}`,
     );
   }
   const prismaBinary = path.join(apiDirectory, "node_modules/.bin/prisma");
@@ -289,6 +289,7 @@ async function buildFresh(environment) {
     path.join(apiDirectory, "dist/app.module.js"),
     path.join(apiDirectory, "dist/assistant-conversations/assistant-conversations.service.js"),
     path.join(apiDirectory, "dist/assistant-conversations/turn-execution-manifest.js"),
+    path.join(apiDirectory, "dist/assistant-conversations/v1-turn-decision.js"),
   ];
   const artifacts = await Promise.all(
     artifactPaths.map(async (artifactPath) => ({

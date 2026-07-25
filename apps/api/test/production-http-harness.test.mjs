@@ -64,6 +64,30 @@ function assertV1TurnManifest(manifest, scope) {
   assert.equal(manifest.initialState.snapshotSource, "LOCAL_CONVERSATION_PROCESSING_STATE");
 }
 
+function assertSealedV1Decision(
+  manifest,
+  {
+    terminalPath,
+    decisionType,
+    plannedBlockCount = 1,
+    outboundIntended = true,
+    stateEffect = "NONE",
+  },
+) {
+  assert.equal(manifest.decisionSchemaVersion, "V1_TURN_DECISION_V1");
+  assert.match(manifest.decisionId, /^decision_v1_[a-f0-9]{32}$/);
+  assert.equal(manifest.decisionOrdinal, 1);
+  assert.equal(manifest.decisionStatus, "SEALED");
+  assert.equal(manifest.decisionType, decisionType);
+  assert.equal(manifest.terminal.path, terminalPath);
+  assert.equal(manifest.decisionTerminalReasonCode, manifest.terminal.reasonCode);
+  assert.equal(manifest.decisionExecutorOwner, "V1_TURN_DECISION_EXECUTOR");
+  assert.equal(manifest.decisionExecutorExecutionCount, 1);
+  assert.equal(manifest.decisionPlannedBlockCount, plannedBlockCount);
+  assert.equal(manifest.decisionStateEffect, stateEffect);
+  assert.equal(manifest.decisionOutboundIntended, outboundIntended);
+}
+
 async function assertRuntimeV2Absent(scope) {
   const [stateCount, eventCount, runtimeLogs] = await Promise.all([
     prisma.assistantConversationStateV2.count({ where: { companyId: scope.companyId } }),
@@ -255,6 +279,10 @@ test(
     });
     const manifest = turnManifestOf(runtimeLog);
     assertV1TurnManifest(manifest, scope);
+    assertSealedV1Decision(manifest, {
+      terminalPath: "PROVIDER_STANDARD",
+      decisionType: "PROVIDER_RESPONSE",
+    });
     assert.equal(manifest.terminal.path, "PROVIDER_STANDARD");
     assert.equal(manifest.provider.finalGeneration.observation, "OBSERVED");
     assert.equal(manifest.provider.finalGeneration.count, 1);
@@ -266,6 +294,14 @@ test(
     assert.equal(manifest.outbound.externalMessageId, returnedExternalId);
     assert.equal(manifest.identity.internalConversationId, conversation.id);
     assert.equal(manifest.identity.externalMessageId, "block0-a-external-message-1");
+    assert.equal(inbound[0].externalPayload?.turnExecutionId, manifest.turnExecutionId);
+    assert.equal(inbound[0].externalPayload?.decisionId, manifest.decisionId);
+    assert.equal(localResponses[0].externalPayload?.turnExecutionId, manifest.turnExecutionId);
+    assert.equal(localResponses[0].externalPayload?.decisionId, manifest.decisionId);
+    assert.deepEqual(Object.keys(localResponses[0].externalPayload ?? {}).sort(), [
+      "decisionId",
+      "turnExecutionId",
+    ]);
     assertSanitizedTurnManifest(manifest, { inboundContent: "Oi tudo bem?" });
     await assertRuntimeV2Absent(scope);
     t.diagnostic(
@@ -306,7 +342,9 @@ test(
       where: { companyId: scope.companyId },
       orderBy: { createdAt: "desc" },
     });
-    const originalTurnExecutionId = turnManifestOf(firstRuntimeLog).turnExecutionId;
+    const firstManifest = turnManifestOf(firstRuntimeLog);
+    const originalTurnExecutionId = firstManifest.turnExecutionId;
+    const originalDecisionId = firstManifest.decisionId;
     const callsAfterFirst = {
       provider: provider.requests.length,
       finalGeneration: provider.calls("final_generation").length,
@@ -366,7 +404,12 @@ test(
     ]);
     const manifest = turnManifestOf(runtimeLog);
     assertV1TurnManifest(manifest, scope);
+    assertSealedV1Decision(manifest, {
+      terminalPath: "PROVIDER_STANDARD",
+      decisionType: "PROVIDER_RESPONSE",
+    });
     assert.equal(manifest.turnExecutionId, originalTurnExecutionId);
+    assert.equal(manifest.decisionId, originalDecisionId);
     assert.equal(manifest.identity.externalMessageId, input.messageId);
     assert.equal(manifest.terminal.path, "PROVIDER_STANDARD");
     assert.equal(manifest.provider.finalGeneration.count, 1);
@@ -376,6 +419,7 @@ test(
         ? inboundMessage.externalPayload
         : {};
     assert.equal(inboundPayload.turnExecutionId, manifest.turnExecutionId);
+    assert.equal(inboundPayload.decisionId, manifest.decisionId);
     await assertRuntimeV2Absent(scope);
     t.diagnostic(
       `external calls B after duplicate delivery: ${JSON.stringify(
@@ -463,6 +507,10 @@ test(
     assert.equal(metadata.contextManifest?.contextVersion, 2);
     const manifest = turnManifestOf(runtimeLog);
     assertV1TurnManifest(manifest, scope);
+    assertSealedV1Decision(manifest, {
+      terminalPath: "PROVIDER_STANDARD",
+      decisionType: "PROVIDER_RESPONSE",
+    });
     assert.equal(manifest.identity.contextVersion, 2);
     assert.equal(manifest.initialState.aiActive, true);
     assert.equal(manifest.initialState.pausedByHuman, false);
@@ -541,6 +589,10 @@ test(
     assert.equal(priceTelemetry?.overallDecision, "AUTHORIZED");
     const manifest = turnManifestOf(runtimeLog);
     assertV1TurnManifest(manifest, scope);
+    assertSealedV1Decision(manifest, {
+      terminalPath: "DETERMINISTIC_PRICE_AUTHORITY",
+      decisionType: "DETERMINISTIC_RESPONSE",
+    });
     assert.equal(manifest.terminal.path, "DETERMINISTIC_PRICE_AUTHORITY");
     assert.equal(manifest.provider.finalGeneration.observation, "OBSERVED");
     assert.equal(manifest.provider.finalGeneration.count, 0);
@@ -563,6 +615,150 @@ test(
       `external calls D: ${JSON.stringify(
         assertExternalCallSummary({
           embedding: 1,
+          intentClassification: 0,
+          finalGeneration: 0,
+          memoryExtraction: 0,
+          toolCapableGeneration: 0,
+          toolCallsReturned: 0,
+          chatwootReads: 0,
+          chatwootMutations: 0,
+          outbound: 1,
+        }),
+      )}`,
+    );
+  },
+);
+
+test(
+  "E — BusinessHours reconhecido preserva resposta direta e usa o executor único",
+  { concurrency: false },
+  async (t) => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "e",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    const inboundContent = "Qual o horário na segunda?";
+    const result = await postWebhook(scope, {
+      content: inboundContent,
+      messageId: "block0-e-external-message-hours",
+    });
+    assert.equal(result.response.status, 201);
+
+    const conversation = await prisma.assistantConversation.findFirstOrThrow({
+      where: { companyId: scope.companyId, externalConversationId: scope.externalConversationId },
+    });
+    const [assistantMessage, runtimeLog] = await Promise.all([
+      prisma.assistantConversationMessage.findFirstOrThrow({
+        where: {
+          companyId: scope.companyId,
+          conversationId: conversation.id,
+          role: "assistant",
+        },
+      }),
+      prisma.assistantRuntimeLog.findFirstOrThrow({
+        where: { companyId: scope.companyId },
+        orderBy: { createdAt: "desc" },
+      }),
+    ]);
+    const expectedText = "Sim. Aos segundas-feiras atendemos das 08h às 22h.";
+    assert.equal(assistantMessage.content, expectedText);
+    assert.equal(chatwoot.calls("chatwoot_outbound")[0]?.body?.content, expectedText);
+
+    const manifest = turnManifestOf(runtimeLog);
+    assertV1TurnManifest(manifest, scope);
+    assertSealedV1Decision(manifest, {
+      terminalPath: "BUSINESS_HOURS_DIRECT",
+      decisionType: "DETERMINISTIC_RESPONSE",
+    });
+    assert.equal(manifest.provider.finalGeneration.count, 0);
+    assert.equal(manifest.outbound.result, "ACKNOWLEDGED");
+    assert.equal(manifest.outbound.attemptCount, 1);
+    assertSanitizedTurnManifest(manifest, { inboundContent });
+    await assertRuntimeV2Absent(scope);
+    t.diagnostic(
+      `external calls E: ${JSON.stringify(
+        assertExternalCallSummary({
+          embedding: 0,
+          intentClassification: 0,
+          finalGeneration: 0,
+          memoryExtraction: 0,
+          toolCapableGeneration: 0,
+          toolCallsReturned: 0,
+          chatwootReads: 0,
+          chatwootMutations: 0,
+          outbound: 1,
+        }),
+      )}`,
+    );
+  },
+);
+
+test(
+  "F — handoff legado permanece textual, sem transição operacional, pelo executor único",
+  { concurrency: false },
+  async (t) => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "f",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    const inboundContent = "Quero falar com um atendente";
+    const result = await postWebhook(scope, {
+      content: inboundContent,
+      messageId: "block0-f-external-message-handoff",
+    });
+    assert.equal(result.response.status, 201);
+
+    const conversation = await prisma.assistantConversation.findFirstOrThrow({
+      where: { companyId: scope.companyId, externalConversationId: scope.externalConversationId },
+    });
+    assert.equal(conversation.aiActive, true);
+    assert.equal(conversation.pausedByHuman, false);
+    assert.equal(conversation.status, "ACTIVE");
+
+    const [assistantMessage, runtimeLog] = await Promise.all([
+      prisma.assistantConversationMessage.findFirstOrThrow({
+        where: {
+          companyId: scope.companyId,
+          conversationId: conversation.id,
+          role: "assistant",
+        },
+      }),
+      prisma.assistantRuntimeLog.findFirstOrThrow({
+        where: { companyId: scope.companyId },
+        orderBy: { createdAt: "desc" },
+      }),
+    ]);
+    assert.equal(assistantMessage.content, "Transferindo para um atendente...");
+
+    const manifest = turnManifestOf(runtimeLog);
+    assertV1TurnManifest(manifest, scope);
+    assertSealedV1Decision(manifest, {
+      terminalPath: "EXPLICIT_HUMAN_HANDOFF_LEGACY",
+      decisionType: "LEGACY_HANDOFF_TEXT",
+      stateEffect: "LEGACY_HANDOFF_TEXT_ONLY",
+    });
+    assert.equal(manifest.provider.finalGeneration.count, 0);
+    assert.equal(manifest.outbound.result, "ACKNOWLEDGED");
+
+    const remoteConversation = chatwoot.getConversation(
+      scope.accountId,
+      scope.externalConversationId,
+    );
+    assert.equal(remoteConversation.ai_active, true);
+    assert.equal(remoteConversation.status, "open");
+    assert.equal(remoteConversation.assignee, null);
+    assert.equal(remoteConversation.team, null);
+    assert.deepEqual(remoteConversation.labels, []);
+    assert.equal(chatwoot.calls("chatwoot_mutation").length, 0);
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 1);
+    assertSanitizedTurnManifest(manifest, { inboundContent });
+    await assertRuntimeV2Absent(scope);
+    t.diagnostic(
+      `external calls F: ${JSON.stringify(
+        assertExternalCallSummary({
+          embedding: 0,
           intentClassification: 0,
           finalGeneration: 0,
           memoryExtraction: 0,

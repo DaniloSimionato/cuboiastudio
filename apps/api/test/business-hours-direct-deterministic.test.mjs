@@ -719,7 +719,7 @@ test(
       await createPricingAndWarrantyFlows(prisma, fixture);
       const { service, providerCalls, providerInputs, outboundCalls, ragCalls } =
         createTriagePreemptionService(prisma, cache);
-      const cacheKey = `triage:${fixture.companyId}:${fixture.conversationId}`;
+      const cacheKey = `triage:${fixture.companyId}:${fixture.conversationId}:v1`;
       const pendingBrandState = {
         active: true,
         startedAt: new Date().toISOString(),
@@ -738,19 +738,17 @@ test(
       const price = await service.sendMessage(
         directInbound(fixture, "Quanto sai para formatar?", "triage-preempt-price"),
       );
-      assert.match(price.assistantMessage.content, /a partir de R\$ 195,00/i);
+      assert.equal(
+        price.assistantMessage.content,
+        "A formatação custa a partir de R$ 195,00.",
+      );
       assert.equal(price.runtime.context.triageMode, false);
       assert.equal(price.runtime.context.ragItemCount, 1);
       assert.equal(ragCalls.at(-1), "Quanto sai para formatar?");
       assert.equal(cache.values.get(cacheKey).active, false);
       assert.ok(cache.values.get(cacheKey).knownFieldKeys.includes("device_type"));
-      assert.doesNotMatch(
-        providerInputs
-          .at(-1)
-          .messages.map((message) => String(message.content))
-          .join("\n"),
-        /HISTÓRICO E ESTADO DE TRIAGEM ANTERIOR/i,
-      );
+      assert.equal(providerCalls.length, 0);
+      assert.equal(providerInputs.length, 0);
       assert.equal(price.runtime.context.selectedFlowId, `${fixture.assistantId}-pricing`);
 
       await cache.set(cacheKey, pendingBrandState);
@@ -765,6 +763,14 @@ test(
       assert.doesNotMatch(warranty.assistantMessage.content, /qual é a marca/i);
       assert.equal(warranty.runtime.context.selectedFlowId, `${fixture.assistantId}-warranty`);
       assert.equal(warranty.runtime.context.triageMode, false);
+      assert.equal(providerCalls.length, 1);
+      assert.doesNotMatch(
+        providerInputs
+          .at(-1)
+          .messages.map((message) => String(message.content))
+          .join("\n"),
+        /HISTÓRICO E ESTADO DE TRIAGEM ANTERIOR/i,
+      );
 
       await cache.set(cacheKey, pendingBrandState);
       const brand = await service.sendMessage(

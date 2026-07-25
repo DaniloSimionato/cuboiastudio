@@ -1,8 +1,11 @@
-# Production HTTP harness — policy block 0
+# Production HTTP harness — policy blocks 0–2
 
-This harness is an integration boundary for the deployed baseline
-`02f3ccc61f320f87c06ff50d2f7ba809e08cc4ad`. It does not change production
-behavior.
+This harness originated against deployed baseline
+`02f3ccc61f320f87c06ff50d2f7ba809e08cc4ad`. Its current Block 2 scope is
+anchored at approved Block 1 commit
+`5bad8f16ac944b4ac566f4025e51b825c1111b3d`. It characterizes behavior while
+the decision/executor structure changes; it does not authorize functional
+response changes.
 
 ## Production-equivalent path
 
@@ -32,12 +35,12 @@ host-aware bootstrap would require a forbidden production-code change.
   `cubo_policy_block0_test_*` database and random loopback port;
 - `redis:7-alpine`, without persistence and with a random loopback port.
 
-Only baseline migrations are applied with `prisma migrate deploy`. The runner
+Only existing migrations are applied with `prisma migrate deploy`. The runner
 fails closed if either URL is non-loopback, if the database name is outside the
-harness namespace, if `HEAD` is not the approved baseline, or if production
-source, schema or migration files differ from `HEAD` in the index, worktree or
-untracked files. Teardown removes only containers created by that runner
-invocation.
+harness namespace, if the approved Block 1 commit is not an ancestor of
+`HEAD`, or if production source, schema or migration changes exceed the
+explicit Block 2 allowlist. Teardown removes only containers created by that
+runner invocation.
 
 ## Stateful boundaries
 
@@ -53,10 +56,17 @@ separately. Responses are configurable per category. Both fakes listen only on
 
 ## Executable coverage and limits
 
-The runner declares nine Node tests: four executable scenarios (A–D) and five
-future specifications marked `test.todo`. Runtime V2 OFF is a transversal
-invariant asserted inside every executable scenario, not a fifth executable
-scenario.
+The runner currently declares eleven Node tests: six executable scenarios
+(A–F) and five future specifications marked `test.todo`. Scenarios A–D retain
+the Block 0 controls; E characterizes the already-recognized direct
+BusinessHours path; F characterizes the still-textual legacy handoff. Runtime
+V2 OFF is a transversal invariant asserted inside every executable scenario,
+not an additional executable scenario.
+
+Every executable scenario also verifies the sealed V1 decision owner added in
+Block 2. Provider draft ownership, manifest sanitization and the single
+terminal executor are asserted within those end-to-end controls rather than
+through duplicate artificial scenarios.
 
 The fixtures deliberately disable message buffering, memory and response
 splitting to keep lifecycle and outbound counts deterministic. Therefore this
@@ -73,7 +83,8 @@ The runner:
 2. generates Prisma Client and applies existing migrations;
 3. performs a fresh TypeScript build;
 4. records the SHA-256 and timestamp of `dist/main.js` plus
-   `dist/app.module.js`;
+   `dist/app.module.js` and the instrumented V1 decision/manifest/runtime
+   artifacts;
 5. starts both fakes and the production bootstrap;
 6. waits for `/health`;
 7. runs the HTTP tests serially;

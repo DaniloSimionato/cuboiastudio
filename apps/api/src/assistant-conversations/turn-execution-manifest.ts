@@ -114,6 +114,17 @@ export type TurnExecutionManifest = {
     externalMessageId: string | null;
     result: TurnExecutionOutboundResult;
   };
+  decisionSchemaVersion: string | null;
+  decisionId: string | null;
+  decisionOrdinal: number | null;
+  decisionStatus: "SEALED" | null;
+  decisionType: string | null;
+  decisionTerminalReasonCode: string | null;
+  decisionExecutorOwner: string | null;
+  decisionExecutorExecutionCount: number;
+  decisionPlannedBlockCount: number;
+  decisionStateEffect: string | null;
+  decisionOutboundIntended: boolean | null;
 };
 
 function canonicalString(input: TurnExecutionIdentityInput): string {
@@ -212,6 +223,17 @@ export function createTurnExecutionManifest(input: {
       externalMessageId: null,
       result: "NOT_ATTEMPTED",
     },
+    decisionSchemaVersion: null,
+    decisionId: null,
+    decisionOrdinal: null,
+    decisionStatus: null,
+    decisionType: null,
+    decisionTerminalReasonCode: null,
+    decisionExecutorOwner: null,
+    decisionExecutorExecutionCount: 0,
+    decisionPlannedBlockCount: 0,
+    decisionStateEffect: null,
+    decisionOutboundIntended: null,
   };
 }
 
@@ -270,4 +292,36 @@ export function withTurnExecutionOutbound(
   outbound: TurnExecutionManifest["outbound"],
 ): TurnExecutionManifest {
   return { ...manifest, outbound };
+}
+
+export function withTurnExecutionDecision(
+  manifest: TurnExecutionManifest,
+  decision: {
+    schemaVersion: string;
+    decisionId: string;
+    decisionOrdinal: number;
+    decisionStatus: "SEALED";
+    decisionType: string;
+    terminalReasonCode: string;
+    executorOwner: string;
+    executorExecutionCount: number;
+    plannedBlockCount: number;
+    stateEffect: string;
+    outboundIntended: boolean;
+  },
+): TurnExecutionManifest {
+  return {
+    ...manifest,
+    decisionSchemaVersion: decision.schemaVersion,
+    decisionId: decision.decisionId,
+    decisionOrdinal: decision.decisionOrdinal,
+    decisionStatus: decision.decisionStatus,
+    decisionType: decision.decisionType,
+    decisionTerminalReasonCode: decision.terminalReasonCode,
+    decisionExecutorOwner: decision.executorOwner,
+    decisionExecutorExecutionCount: decision.executorExecutionCount,
+    decisionPlannedBlockCount: decision.plannedBlockCount,
+    decisionStateEffect: decision.stateEffect,
+    decisionOutboundIntended: decision.outboundIntended,
+  };
 }
