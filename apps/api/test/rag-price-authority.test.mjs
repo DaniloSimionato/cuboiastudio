@@ -165,7 +165,7 @@ test("extração de autoridade aceita somente evidência factual canônica", () 
 test("autoridade após caractere 800 usa conteúdo integral e span factual rastreável", () => {
   const filler = "detalhes técnicos documentais sem autoridade comercial ".repeat(18);
   const content =
-    `O reparo de placa-mãe ${filler}` +
+    `Reparos em placas-mãe ${filler}` +
     "tem valor inicial de R$ 395,00. O diagnóstico final depende da avaliação.";
   assert.ok(content.indexOf("R$ 395,00") > 800);
 
@@ -183,7 +183,7 @@ test("autoridade após caractere 800 usa conteúdo integral e span factual rastr
   assert.equal(authority.amount, 395);
   assert.equal(authority.currency, "BRL");
   assert.equal(authority.qualifier, "starting_at");
-  assert.match(authority.sourceText, /placa-mãe/iu);
+  assert.match(authority.sourceText, /placas-mãe/iu);
   assert.match(authority.sourceText, /valor inicial de R\$ 395,00/iu);
   assert.equal(
     content.slice(authority.evidenceStartOffset, authority.evidenceEndOffset),

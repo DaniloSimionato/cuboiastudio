@@ -16,7 +16,7 @@ export type PriceAuthorityQualifier = "starting_at";
 type ServicePattern = readonly [serviceKey: RagPriceServiceKey, pattern: RegExp];
 
 const PRICE_SERVICE_PATTERNS: readonly ServicePattern[] = [
-  ["placa_mae", /\bplaca[ -]?mae\b/u],
+  ["placa_mae", /\bplacas?[ -]?mae\b/u],
   ["remocao_virus", /\b(?:remocao|remover)\s+(?:de\s+)?(?:virus|malware)\b/u],
   ["recuperacao_dados", /\b(?:recupera[cr][aã]o|recuperar)\s+(?:de\s+)?(?:dados|arquivos?)\b/u],
   ["montagem_computadores", /\b(?:montagem|configuracao)\s+(?:de\s+)?computador(?:es)?\b/u],

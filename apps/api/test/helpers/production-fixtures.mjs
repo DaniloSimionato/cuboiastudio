@@ -105,10 +105,10 @@ export const FORMATTING_AUTHORITY_TEXT =
 const MOTHERBOARD_CONTEXT_PREFIX =
   "Contexto técnico sem valor comercial confirmado neste trecho. ";
 export const MOTHERBOARD_AUTHORITY_AFTER_250_TEXT =
-  `${MOTHERBOARD_CONTEXT_PREFIX.repeat(4)}O reparo de placa-mãe custa a partir de R$ 395,00.`;
+  `${MOTHERBOARD_CONTEXT_PREFIX.repeat(4)}Reparos em placas-mãe custam a partir de R$ 395,00.`;
 const MOTHERBOARD_PREFIX = MOTHERBOARD_CONTEXT_PREFIX.repeat(16);
 export const MOTHERBOARD_AUTHORITY_TEXT =
-  `${MOTHERBOARD_PREFIX}O reparo de placa-mãe custa a partir de R$ 395,00.`;
+  `${MOTHERBOARD_PREFIX}Reparos em placas-mãe custam a partir de R$ 395,00.`;
 
 const motherboardAfter250Position =
   MOTHERBOARD_AUTHORITY_AFTER_250_TEXT.indexOf("R$ 395,00");

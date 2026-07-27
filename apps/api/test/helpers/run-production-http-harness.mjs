@@ -9,6 +9,7 @@ const BASELINE_COMMIT = "8120f3647cc7672b3b93815673c38a7acc383e15";
 const ALLOWED_BLOCK6_RUNTIME_PATHS = new Set([
   "apps/api/src/assistant-conversations/assistant-conversations.service.ts",
   "apps/api/src/assistant-conversations/business-hours-direct-deterministic.ts",
+  "apps/api/src/assistant-conversations/rag-price-authority.ts",
   "apps/api/src/assistant-conversations/technical-response-completeness.ts",
 ]);
 const helperDirectory = path.dirname(fileURLToPath(import.meta.url));
