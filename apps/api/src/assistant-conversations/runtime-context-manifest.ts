@@ -1,4 +1,8 @@
 import { hashCanonicalInboundMessageContent } from "../inbound/canonical-inbound-message";
+import type {
+  EvidencePreview,
+  FactualEvidenceArtifact,
+} from "../assistant-knowledge/knowledge-evidence";
 import type { RagPriceAuthority } from "./rag-price-authority";
 
 export const RUNTIME_CONTEXT_MANIFEST_VERSION = "runtime-context-v1";
@@ -10,11 +14,8 @@ export type RuntimePromptSectionManifest = {
 };
 
 export type RuntimeKnowledgeSearchResult = {
-  knowledgeId: string;
-  knowledgeTitle: string;
-  chunkId: string;
-  contentPreview: string;
-  score?: number | null;
+  artifact: FactualEvidenceArtifact;
+  preview: EvidencePreview;
 };
 
 export const DEFAULT_RAG_SCORE_THRESHOLD = 0.7;
@@ -80,7 +81,8 @@ export function selectRuntimeKnowledgeItems(input: {
         id: string;
         knowledgeItemId: string;
         title: string;
-        content: string;
+        factualEvidence: FactualEvidenceArtifact;
+        preview: EvidencePreview;
         ragAuthorityEligible: true;
         priceAuthorities?: RagPriceAuthority[];
       }>,
@@ -100,10 +102,11 @@ export function selectRuntimeKnowledgeItems(input: {
   const results = input.results ?? [];
   return {
     items: results.map((result) => ({
-      id: result.chunkId,
-      knowledgeItemId: result.knowledgeId,
-      title: result.knowledgeTitle,
-      content: result.contentPreview,
+      id: result.artifact.chunkId,
+      knowledgeItemId: result.artifact.knowledgeId,
+      title: result.artifact.knowledgeTitle,
+      factualEvidence: result.artifact,
+      preview: result.preview,
       ragAuthorityEligible: true as const,
     })),
     manifest: {
@@ -111,9 +114,9 @@ export function selectRuntimeKnowledgeItems(input: {
       threshold,
       selectedCount: results.length,
       selectedItems: results.map((result) => ({
-        knowledgeId: result.knowledgeId,
-        chunkId: result.chunkId,
-        score: result.score ?? null,
+        knowledgeId: result.artifact.knowledgeId,
+        chunkId: result.artifact.chunkId,
+        score: result.artifact.rankingScore,
         reason: "score_at_or_above_threshold",
       })),
       rejectedCount: input.filteredOutCount ?? 0,

@@ -6,8 +6,8 @@ Este documento define a evolucao do runtime mantendo autoridade deterministica,
 seguranca de secrets e separacao clara entre provider, assistant, knowledge,
 pipeline, logs, tools, controle de conversa e canais.
 
-> Estado de referencia: Runtime V1 instrumentado ate o Bloco 4B. O resultado do
-> gate final deste bloco deve ser conferido no relatorio correspondente.
+> Estado de referencia: Runtime V1 instrumentado ate o Bloco 5A, com evidencia
+> factual integral separada do preview e do excerpt destinado ao provider.
 > Runtime V2 permanece OFF. As secoes AI-000 a AI-007 abaixo registram marcos
 > historicos e nao substituem os contratos atuais dos relatorios de
 > estabilizacao.
@@ -48,6 +48,11 @@ pipeline, logs, tools, controle de conversa e canais.
 - `REMOTE_CONFIRMED` sem confirmacao local cria ou reutiliza uma unica
   mensagem e um unico delivery; `CONFIRMATION_PENDING` delega apenas ao recovery
   outbound existente.
+- Chunks selecionados permanecem integrais em artefatos factuais efemeros.
+  Preview observacional e provider excerpt possuem tipos incompatíveis com a
+  evidencia usada por autoridades e guards.
+- O provider recebe no maximo 5 excerpts, 1.600 caracteres por excerpt e 4.800
+  caracteres no total. Offsets, anchors e coverage sao rastreaveis.
 - O smoke e o harness HTTP nao dependem de provider ou servico real.
 
 ## 2. Problema atual
@@ -60,8 +65,6 @@ Os principais limites ainda abertos sao:
 
 - entendimento e continuidade multi-turno ainda nao possuem estado estruturado
   completo;
-- evidencia integral pode ser perdida quando o runtime reduz knowledge a
-  preview;
 - consultas abertas podem resultar em respostas genericas;
 - PostgreSQL e a autoridade local, mas divergencia remota de pausa sem
   sincronizacao ainda nao e detectada;
@@ -124,7 +127,8 @@ O caminho operacional atual segue, em alto nivel:
 2. normalizar e deduplicar o inbound;
 3. resolver binding e conversa;
 4. capturar `contextVersion` e control snapshot;
-5. executar detectores, flows, RAG e autoridades existentes;
+5. executar detectores e flows, recuperar chunks integrais, extrair autoridades
+   e somente entao empacotar excerpts limitados para o provider;
 6. chamar o provider apenas quando o caminho atual permitir;
 7. executar guards e selar uma decisao;
 8. persistir mensagem terminal, runtime log e delivery `PENDING`;
@@ -196,6 +200,8 @@ sanitizada:
   verificacao e referencia da confirmacao;
 - recovery de handoff, safety, elegibilidade, lease owner em fingerprint,
   attempt, backoff, evidencia remota e intervencao externa observada;
+- evidence schema, chunk IDs, hashes, tamanhos, preview, spans, offsets,
+  coverage, budget e autoridade sanitizada;
 - resultado conhecido do outbound.
 
 O manifesto nao duplica mensagem, prompt completo, knowledge integral, token,
@@ -234,10 +240,20 @@ Fica para issues futuras:
 
 ### 4.6 Knowledge e RAG
 
-Embeddings, busca semantica, scopes e filtro por tags ja existem. A evolucao
-necessaria agora e preservar evidencia factual integral entre recuperacao,
-authority resolution, prompt e guards. Preview serve apenas para telemetria e
-nao pode ser a representacao factual autoritativa.
+Embeddings, busca semantica, scopes e filtro por tags ja existem. O Bloco 5A
+estabelece quatro representacoes diferentes:
+
+1. `CanonicalKnowledgeContent`: texto integral lido do chunk canonico;
+2. `FactualEvidenceArtifact`: artefato efemero para authority resolution e
+   guards, com hash, tamanho, score, spans e candidatos;
+3. `ProviderEvidenceExcerpt`: transporte limitado, com anchors, offsets,
+   coverage e budget;
+4. `EvidencePreview`: diagnostico truncado sem autoridade factual.
+
+O endpoint publico de busca continua projetando somente preview. O cache
+compartilhado guarda apenas o vetor da query; cache miss e hit sempre recarregam
+os chunks canonicos no PostgreSQL. Nenhuma copia integral e persistida em
+runtime log, manifesto, mensagem, ledger ou handoff.
 
 ### 4.7 Tools e functions
 
@@ -280,8 +296,7 @@ AI-004 FIX 2 melhorou o diagnostico seguro de `POST /settings/ai/test`: erros do
 AI-005 agora foi entregue como Runtime Pipeline v1: o Assistant ganhou `initialMessage`, a conversa nova pode iniciar com essa mensagem, o runtime retorna `outcome` e `summary`, e `/testes` mostra as 7 partes do assistente sem expor prompts completos gigantes nem secrets.
 AI-005 FIX estabilizou o laboratorio `/testes`: conversas sao sempre carregadas por assistant, `Conversation not found` vira orientacao amigavel, assistants tecnicos de smoke ficam ocultos na UI padrao, e o smoke inativa o assistant criado ao final.
 
-Sequencia de estabilizacao arquitetural concluida ate o Bloco 4A e
-implementada no worktree atual para o Bloco 4B:
+Sequencia de estabilizacao arquitetural concluida ate o Bloco 5A:
 
 1. Fase 1 - auditoria forense read-only;
 2. Fase 2 - arquitetura incremental da politica de atendimento;
@@ -292,10 +307,12 @@ implementada no worktree atual para o Bloco 4B:
 7. Bloco 3B.1 - ledger duravel e ownership de tentativa;
 8. Bloco 3B.2 - recovery e reconciliacao segura;
 9. Bloco 4A - handoff humano operacional fail-closed;
-10. Bloco 4B - recovery e reconciliacao segura de handoff.
+10. Bloco 4B - recovery e reconciliacao segura de handoff;
+11. Bloco 5A - evidencia factual integral e separacao de preview/excerpt.
 
 O Bloco 4B adiciona os contratos e testes de recovery. Seu runner permanece OFF
 por padrao e bloqueado em staging/producao; isso nao constitui ativacao remota.
+O Bloco 5A nao muda lifecycle, schema, modelo, temperatura, flows ou thresholds.
 Runtime V2 nao deve ser ativado como atalho para as etapas seguintes.
 
 ## 6. Variaveis de ambiente
@@ -373,45 +390,23 @@ O harness principal:
 - impede rede nao loopback;
 - encerra app, Prisma, Redis, fakes, portas e containers.
 
-Controles historicos confirmados no Bloco 4A:
+Gate final do Bloco 5A:
 
-- 27 cenarios HTTP executaveis, incluindo 14 caracterizacoes de handoff
-  operacional e 13 controles anteriores;
-- 4 gaps funcionais como `test.todo`;
-- 1 especificacao `test.todo` separada para recovery automatico de handoff no
-  Bloco 4B;
-- 7 testes unitarios do contrato operacional;
-- migrations testadas em banco vazio e upgrade local;
-- restart, multi-worker, backoff, budget, stale control e reconciliacao
-  outbound continuam no gate relacionado;
-- Runtime V2 OFF como invariante transversal.
-
-Gate final do Bloco 4A:
-
-- harness HTTP: 28 passed, 0 failed e 4 `todo`;
-- regressao relacionada: 286 passed e 0 failed;
-- contratos de handoff recovery, runner e integracao: aprovados;
+- harness HTTP: 31 passed, 0 failed e 3 `todo`;
+- regressao relacionada: 310 passed e 0 failed;
+- placa-mae explicita apos os caracteres 250 e 800: BRL 395,
+  `starting_at`, zero geracao final e um outbound;
+- provider aberto: excerpt relevante reconstruivel por offsets, dentro do
+  budget e sem chamada externa adicional;
+- cache miss/hit: mesmo hash, mesma autoridade e apenas vetor de query em cache;
+- formatação, BusinessHours, handoff, controle, ledger e recoveries: paridade;
+- migrations: nenhuma nova ou modificada;
+- Runtime V2 OFF como invariante transversal;
 - build fresco, SHA-256 combinado do conjunto de artefatos V1:
-  `3921d6684cbe13948c784a3596bd87d48fdae52f7502ed0bae1950e12dc4f8f6`.
+  `abd659d950f5f2e3620d44d493424477c83de23c6d5e96c3d79d65b2041f6ef0`.
 
-Consulte o relatorio do bloco para migrations, teardown, sanitizacao e
-limitacoes.
-
-Cobertura acrescentada no working tree do Bloco 4B:
-
-- recovery de `REQUESTED`, `LOCALLY_BLOCKED`, `REMOTE_PENDING`,
-  `REMOTE_CONFIRMED`, `CONFIRMATION_PENDING` e
-  `RECONCILIATION_REQUIRED`;
-- 5xx/timeout com efeito remoto, ambiguidade inconclusiva e falha
-  pre-fronteira comprovada;
-- attempt, lease, dois workers, restart, reset, budget e backoff;
-- destino humano alterado ou removido;
-- confirmacao idempotente e delegation ao outbound recovery;
-- feature flag OFF, bloqueio em staging/producao, no-overlap e shutdown;
-- somente quatro gaps funcionais permanecem `test.todo`.
-
-Resultado final do Bloco 4B: **APROVADO LOCALMENTE**. Consulte
-`apps/api/test/BLOCK4B_HANDOFF_RECOVERY_REPORT.md` para o gate completo.
+Consulte `apps/api/test/BLOCK5A_INTEGRAL_EVIDENCE_REPORT.md` para inventario,
+sanitizacao, comandos, teardown e limitacoes.
 
 Comando principal:
 
@@ -423,7 +418,7 @@ npm run test:http-harness
 Consulte `apps/api/test/README.production-http-harness.md` para limites e
 evidencias de build.
 
-## 10. O que nao entrou nos Blocos 4A e 4B
+## 10. O que nao entrou ate o Bloco 5A
 
 - ativacao automatica do runner em staging ou producao;
 - scheduler independente para todo o recovery outbound;
@@ -436,7 +431,6 @@ evidencias de build.
 - outbox para outros canais;
 - correcao de BusinessHours com erro ortografico;
 - continuidade de preco;
-- preservacao integral da evidencia alem do preview;
 - politica de completude comercial;
 - Runtime V2.
 
@@ -456,6 +450,8 @@ evidencias de build.
 - permitir que outro branch volte a enviar fora do executor unico;
 - alterar controle sem incrementar `controlRevision`;
 - expor segredo, payload ou conteudo integral no manifesto;
+- usar preview, snippet ou excerpt truncado como autoridade factual;
+- enviar chunks integrais sem budget ao provider;
 - ativar Runtime V2 como caminho concorrente.
 
 ## 12. Continuidade
@@ -464,9 +460,9 @@ O proximo bloco deve ser autorizado separadamente. Ate essa autorizacao:
 
 - manter `HANDOFF_RECOVERY_ENABLED=false`;
 - nao ativar o runner em staging ou producao;
-- nao alterar os quatro gaps funcionais restantes;
+- nao alterar os tres gaps funcionais restantes;
 - nao ativar Runtime V2;
-- usar `BLOCK4B_HANDOFF_RECOVERY_REPORT.md` e os relatorios anteriores como
+- usar `BLOCK5A_INTEGRAL_EVIDENCE_REPORT.md` e os relatorios anteriores como
   fonte de contrato e evidencia.
 
 ## Registro historico: AI-007 - logs seguros de runtime

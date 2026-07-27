@@ -1,14 +1,15 @@
-# Production HTTP harness — policy blocks 0–4A
+# Production HTTP harness — policy blocks 0–5A
 
 This harness originated against deployed baseline
-`02f3ccc61f320f87c06ff50d2f7ba809e08cc4ad`. Its current Block 4A scope is
-anchored at approved, documentation-sanitized Block 3B.2 baseline
-`657aeb0334bb00b9a51f661fcbcf68abc95ce94b`. That baseline contains the
-functional Block 3B.2 commit and changes only documentation afterward.
+`02f3ccc61f320f87c06ff50d2f7ba809e08cc4ad`. Its current Block 5A scope is
+anchored at the approved Block 4B baseline
+`59dd68d574560ca208615a4a8edbadf90fc3c58b`.
 
-Block 4A changes only the explicit human-handoff capability. It introduces a
-fail-closed operational transition without authorizing other functional
-response changes, automatic outbound recovery or automatic handoff recovery.
+Block 5A changes only factual-evidence transport in Runtime V1. It preserves
+canonical chunk content for factual decisions, keeps observability previews
+non-authoritative and limits the excerpt sent to the provider. It does not
+authorize multi-turn price continuity, typo-tolerant BusinessHours, commercial
+completion for technical answers, a model change or Runtime V2.
 
 ## Production-equivalent path
 
@@ -46,17 +47,16 @@ delivery, and then applies the Block 3B.2 migration. It validates historical
 defaults, attempt defaults, foreign keys, cascade behavior and per-delivery
 attempt uniqueness.
 
-A third isolated upgrade check applies every migration through the approved
-Block 3B.2 baseline, inserts compatible existing data, applies the Block 4A
-migration and validates the additive operation table, nullable delivery
-reference, unique decision, defaults and foreign keys. No migration is applied
-to staging.
+A third isolated upgrade check validates the additive Block 4A operation
+schema. A fourth validates the additive Block 4B recovery fields and attempt
+history over the approved predecessor. Block 5A adds no schema or migration.
+No migration is applied to staging.
 
 The runner fails closed if either URL is non-loopback, if a database name is
-outside the harness namespace, if the approved Block 4A baseline is not an
-ancestor of `HEAD`, or if production source, schema or migration changes exceed
-the explicit Block 4A allowlist. Teardown removes only containers created by
-that runner invocation.
+outside the harness namespace, if the approved Block 4B baseline is not an
+ancestor of `HEAD`, or if production source changes exceed the explicit Block
+5A allowlist. Schema and migration changes are not in that allowlist. Teardown
+removes only containers created by that runner invocation.
 
 ## Stateful boundaries
 
@@ -82,19 +82,25 @@ separately. Responses are configurable per category. Both fakes listen only on
 
 ## Executable coverage
 
-The production-entrypoint suite currently declares 32 Node tests:
+The production-entrypoint suite currently declares 34 Node tests:
 
-- 27 executable scenarios;
-- four functional specifications marked `test.todo`;
-- one separate `test.todo` for automatic recovery of partial handoffs in
-  Block 4B.
+- 31 executable scenarios;
+- three functional specifications marked `test.todo`.
 
-Thirteen executable scenarios retain the non-handoff controls from Blocks
-0–3B.2. Fourteen scenarios exercise operational handoff: existing assignee,
-existing team, unresolved destination, 4xx, 5xx without/with remote effect,
-timeout without/with effect, confirmation outbound failure, duplicate after
-completion, duplicate while partial, concurrent reset, post-handoff inbound and
-sanitization.
+Sixteen executable scenarios retain the non-handoff controls and include three
+new Block 5A cases. Two send the explicit, self-contained question
+`Qual o valor para consertar minha placa-mãe?` with the official price placed
+first after character 250 and then after character 800. Both require the same
+single deterministic authority, zero final generation and one acknowledged
+outbound even though the first 250-character diagnostic preview does not
+contain the price. The third proves that an open provider path receives a
+bounded, offset-traceable excerpt around the relevant fact instead of the
+complete distant-prefix chunk.
+
+The remaining fifteen scenarios exercise operational handoff and its partial
+recovery invariants already approved through Block 4B. They include existing
+assignee/team, unresolved destination, remote ambiguity, confirmation failure,
+duplicate, concurrent reset, post-handoff inbound and sanitization.
 
 A separate seven-test unit suite validates deterministic operation identity,
 destination precedence, remote-state parsing and verification, sanitization,
@@ -102,8 +108,11 @@ decision immutability and manifest summary. Runtime V2 OFF remains a
 transversal invariant asserted inside every executable HTTP scenario, not an
 additional executable scenario.
 
-The final Block 4A gate executed all 32 declarations: 27 passed, none failed,
-and five remained `todo` by design.
+The completed Block 5A gate executed all 34 declarations: 31 passed, none
+failed and three remained `test.todo`. The related regression suite passed all
+310 tests. The fresh artifact set used by that gate had SHA-256
+`abd659d950f5f2e3620d44d493424477c83de23c6d5e96c3d79d65b2041f6ef0`
+and timestamp `2026-07-27T13:23:49.942Z`.
 
 A separate integration-with-database recovery suite covers the coordinator
 through real Prisma persistence and the fake HTTP boundary. It exercises
@@ -129,6 +138,13 @@ only a single-block payload whose persisted terminal content is sufficient to
 rebuild the existing Chatwoot text request; older or split payload contracts
 remain visible but blocked from automatic recovery.
 
+Runtime V1 has no knowledge/RAG result cache in this baseline. Block 5A does
+not create one: it reuses the existing shared `CacheService` only for the
+query-vector optimization, while selected canonical chunks are reloaded from
+PostgreSQL on both cache miss and hit. The database-backed retrieval test proves
+that both paths produce the same content hash and authority. Embeddings remain
+ranking inputs and are never treated as textual evidence.
+
 The harness does not reproduce every possible production condition. It
 validates the named controls through the production bootstrap and central
 services while Chatwoot and the provider remain fake HTTP boundaries.
@@ -141,16 +157,15 @@ absence from a paginated response is deliberately inconclusive and never
 authorizes a retry. The repository provides no proven remote idempotency-key
 contract or conclusive absence query.
 
-No worker, cron, interval, startup recovery, endpoint or administrative route
-is created or activated. The coordinator is directly callable in controlled
-tests and by future internal scheduling only. Consequently this block proves
-recovery semantics without enabling recovery in staging or production.
+The Block 4B handoff recovery runner exists but remains OFF by default and is
+also blocked from automatic execution in staging and production. Block 5A does
+not change that lifecycle, add an endpoint or activate recovery remotely.
 
 Operational handoff resolves only an assignee already present or, if absent, a
 team already present. The harness does not treat a bare inbox as a proven human
 queue and does not create or change assignment, team, labels or status. Partial
-handoff operations remain locally blocked and require Block 4B reconciliation;
-no automatic handoff coordinator is added here.
+handoff operations remain locally blocked and are handled only by the approved
+Block 4B recovery contract. Block 5A does not change that coordinator.
 
 ## Lifecycle and build evidence
 
@@ -171,28 +186,44 @@ The runner:
 9. closes test clients and fakes, verifies their ports are closed, and removes
    the two owned containers.
 
-The accepted fresh build recorded the combined V1 artifact-set SHA-256
-`56c4a24b720184b7e843fb4d84c107a48935d9f091d8848d9d6c5c73cd4696af`
-at `2026-07-25T19:12:30.876Z`; the individual `dist/main.js` SHA-256 was
-`3b6f23e68dbc6103c45b3949ad8206e8e90e11dd8e71368be9c341a76ac0c4df`.
-The related regression gate passed 254 of 254 tests, and the focused
-operational-handoff unit suite passed 7 of 7.
+Fresh-build hashes and final runner counts are recorded for each completed
+block in its report. The Block 5A gate used the artifact hash and timestamp
+recorded above; an older `dist` artifact or historical hash is not accepted as
+evidence for these tests.
 
 ## Visible future gaps
 
-Four functional `test.todo` specifications intentionally remain non-blocking:
+Three functional `test.todo` specifications intentionally remain non-blocking:
 
 1. typo-tolerant deterministic BusinessHours;
 2. multi-turn price continuity from formatting to motherboard repair;
-3. full evidence beyond character 250;
-4. useful and commercially complete handling of a slow computer.
+3. useful and commercially complete handling of a slow computer.
 
 They state the future contract and never assert the currently incorrect
 response as accepted behavior.
 
-The former handoff gap is now executable. A fifth `test.todo`, explicitly
-scoped to Block 4B, records that partial handoff operations still need automatic
-recovery and reconciliation. It is not counted as a functional-response gap.
+The former evidence-truncation specification is now represented by two
+executable HTTP scenarios, after characters 250 and 800. Operational handoff
+and its recovery are also executable; neither remains as a `test.todo`.
+
+## Block 5A evidence contract
+
+The canonical `AssistantKnowledgeChunk.content` remains the original factual
+source. Runtime-selected factual evidence may refer to that content while the
+turn is executing, but the harness requires the runtime log and turn manifest
+to persist only technical IDs, hashes, lengths, offsets, coverage and sanitized
+authority fields.
+
+The diagnostic preview remains deliberately short and does not contain the
+motherboard price in either Block 5A fixture. A deterministic response with the
+official `placa_mae`, BRL 395 and `starting_at` authority therefore proves that
+the first 250 characters did not govern factual resolution. Provider evidence
+is a separate, bounded excerpt; the fake records its request so related tests
+can verify size and content without adding provider calls.
+
+The explicit motherboard controls do not exercise continuity. Each inbound
+contains its own price intent and service. The separate `E para...` specification
+remains `todo` for Block 5B.
 
 ## Current delivery contract
 

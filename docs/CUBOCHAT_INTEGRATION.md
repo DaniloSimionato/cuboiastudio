@@ -88,6 +88,20 @@ mesma operacao, sem criar nova decisao:
 6. cria ou reutiliza uma unica confirmacao por decisao/ordinal;
 7. entrega ou reconcilia a confirmacao pelo ledger outbound existente.
 
+Quando o turno usa knowledge, o Runtime V1 segue outra separacao obrigatoria:
+
+1. recupera o `AssistantKnowledgeChunk.content` integral do PostgreSQL;
+2. seleciona chunks pelo ranking e scope atuais;
+3. cria um artefato factual efemero com hash, tamanho e score;
+4. extrai autoridades e spans sobre o conteudo integral;
+5. constroi excerpts limitados ao redor dos anchors relevantes;
+6. envia somente esses excerpts ao provider, quando ele e permitido;
+7. registra no manifesto apenas IDs, hashes, tamanhos, offsets, coverage e
+   campos comerciais sanitizados.
+
+O preview de 250 caracteres continua util para diagnostico, mas nao pode ser
+usado como evidencia, autoridade, guard ou unico contexto factual do provider.
+
 ## 4. Identificadores sanitizados de exemplo
 
 Use identificadores ficticios na documentacao e em fixtures:
@@ -289,6 +303,13 @@ Campos uteis para rastrear:
 - `handoff.recovery.attemptNumber`
 - `handoff.recovery.leaseOwner`
 - `handoff.recovery.nextEligibleAt`
+- `evidence.schemaVersion`
+- `evidence.items[].contentHash`
+- `evidence.items[].contentLength`
+- `evidence.items[].factualSpans`
+- `evidence.provider.totalExcerptChars`
+- `evidence.provider.excerpts[].spans`
+- `evidence.authority.selected`
 - `status` do outbound
 
 ## 13. Contrato outbound correto
@@ -521,6 +542,24 @@ Regras importantes:
 - o caminho de handoff acionado por flow permanece separado e nao deve ser
   confundido com o contrato explicito do Bloco 4A
 
+### Evidencia factual, excerpt e preview
+
+A fonte original e `AssistantKnowledgeChunk.content`. Durante um turno
+selecionado, `FactualEvidenceArtifact` conserva acesso efemero ao texto
+integral; `ProviderEvidenceExcerpt` leva somente spans limitados ao provider; e
+`EvidencePreview` existe apenas para observabilidade.
+
+O budget padrao do provider e:
+
+- no maximo 5 chunks;
+- no maximo 1.600 caracteres por excerpt;
+- no maximo 4.800 caracteres somados.
+
+Cache de vetor da query nao substitui texto factual. Em cache hit, os chunks
+canonicos continuam sendo lidos do PostgreSQL. Nenhuma dessas representacoes
+autoriza persistir knowledge integral no manifesto, runtime log, mensagem,
+delivery ou operacao de handoff.
+
 ## 17. Troubleshooting
 
 ### EADDRINUSE na porta 3001
@@ -687,3 +726,4 @@ Nao registrar:
 - relatorio Bloco 3B.2: [BLOCK3B2_OUTBOUND_RECOVERY_REPORT.md](../apps/api/test/BLOCK3B2_OUTBOUND_RECOVERY_REPORT.md)
 - relatorio Bloco 4A: [BLOCK4A_OPERATIONAL_HANDOFF_REPORT.md](../apps/api/test/BLOCK4A_OPERATIONAL_HANDOFF_REPORT.md)
 - relatorio Bloco 4B: [BLOCK4B_HANDOFF_RECOVERY_REPORT.md](../apps/api/test/BLOCK4B_HANDOFF_RECOVERY_REPORT.md)
+- relatorio Bloco 5A: [BLOCK5A_INTEGRAL_EVIDENCE_REPORT.md](../apps/api/test/BLOCK5A_INTEGRAL_EVIDENCE_REPORT.md)

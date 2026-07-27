@@ -515,6 +515,225 @@ function assertExternalCallSummary(expected) {
   return summary;
 }
 
+async function assertExplicitMotherboardAuthorityResponse(
+  scope,
+  {
+    inboundContent,
+    messageId,
+    minimumFactPosition,
+    maximumFactPosition = null,
+  },
+) {
+  const canonicalChunk = await prisma.assistantKnowledgeChunk.findUniqueOrThrow({
+    where: { id: scope.motherboardChunkId },
+  });
+  const factPosition = canonicalChunk.content.indexOf("R$ 395,00");
+  assert.equal(factPosition, scope.motherboardAuthority.factPosition);
+  assert.ok(
+    factPosition > minimumFactPosition,
+    `motherboard fact must be beyond character ${minimumFactPosition}`,
+  );
+  if (maximumFactPosition !== null) {
+    assert.ok(
+      factPosition < maximumFactPosition,
+      `motherboard fact must remain before character ${maximumFactPosition}`,
+    );
+  }
+  const diagnosticPreview =
+    canonicalChunk.content.substring(0, 250) +
+    (canonicalChunk.content.length > 250 ? "..." : "");
+  assert.equal(diagnosticPreview.length, 253);
+  assert.doesNotMatch(diagnosticPreview, /R\$\s*395,00/);
+
+  const result = await postWebhook(scope, {
+    content: inboundContent,
+    messageId,
+  });
+  assert.equal(result.response.status, 201);
+  assert.equal(result.body?.ok, true);
+  assert.equal(result.body?.source, "chatwoot");
+
+  const conversation = await prisma.assistantConversation.findFirstOrThrow({
+    where: {
+      companyId: scope.companyId,
+      externalConversationId: scope.externalConversationId,
+    },
+  });
+  const messages = await prisma.assistantConversationMessage.findMany({
+    where: {
+      companyId: scope.companyId,
+      conversationId: conversation.id,
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  const inboundMessages = messages.filter((message) => message.role === "user");
+  const assistantMessages = messages.filter((message) => message.role === "assistant");
+  assert.equal(inboundMessages.length, 1);
+  assert.equal(inboundMessages[0].externalMessageId, messageId);
+  assert.equal(assistantMessages.length, 1);
+  assert.equal(
+    assistantMessages[0].content,
+    "O reparo de placa-mãe custa a partir de R$ 395,00.",
+  );
+
+  assert.equal(provider.calls("embedding").length, 1);
+  assert.equal(provider.calls("intent_classification").length, 0);
+  assert.equal(provider.calls("final_generation").length, 0);
+  assert.equal(provider.calls("memory_extraction").length, 0);
+  assert.equal(provider.toolCallRequestCount(), 0);
+  assert.equal(provider.toolCallReturnCount(), 0);
+
+  const outbounds = chatwoot.calls("chatwoot_outbound");
+  assert.equal(outbounds.length, 1);
+  assert.equal(
+    outbounds[0].path,
+    `/api/v1/accounts/${scope.accountId}/conversations/${scope.externalConversationId}/messages`,
+  );
+  assert.equal(
+    outbounds[0].body?.content,
+    "O reparo de placa-mãe custa a partir de R$ 395,00.",
+  );
+  const returnedExternalId = outbounds[0].response?.body?.id;
+  assert.ok(returnedExternalId);
+  assert.equal(assistantMessages[0].externalMessageId, returnedExternalId);
+
+  const runtimeLogs = await prisma.assistantRuntimeLog.findMany({
+    where: {
+      companyId: scope.companyId,
+      conversationId: conversation.id,
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  assert.equal(runtimeLogs.length, 1);
+  const metadata = metadataOf(runtimeLogs[0]);
+  assert.equal(metadata.responseStrategy, "DETERMINISTIC_PRICE_AUTHORITY");
+  assert.equal(metadata.providerCount, 0);
+  assert.deepEqual(
+    metadata.contextManifest?.priceAuthorityGuardTelemetry?.eligibleAuthorities,
+    [
+      {
+        serviceKey: "placa_mae",
+        currency: "BRL",
+        amount: 395,
+        qualifier: "starting_at",
+        evidenceCount: 1,
+      },
+    ],
+  );
+  assert.equal(
+    metadata.contextManifest?.priceAuthorityGuardTelemetry?.eligibleAuthorityCount,
+    1,
+  );
+  assert.equal(
+    metadata.contextManifest?.priceAuthorityGuardTelemetry?.overallDecision,
+    "AUTHORIZED",
+  );
+
+  const manifest = turnManifestOf(runtimeLogs[0]);
+  assertV1TurnManifest(manifest, scope);
+  assertSealedV1Decision(manifest, {
+    terminalPath: "DETERMINISTIC_PRICE_AUTHORITY",
+    decisionType: "DETERMINISTIC_RESPONSE",
+  });
+  assert.equal(manifest.provider.finalGeneration.observation, "OBSERVED");
+  assert.equal(manifest.provider.finalGeneration.count, 0);
+  assert.equal(manifest.routing.candidateAuthorityCount, 2);
+  assert.equal(manifest.routing.eligibleAuthorityCount, 1);
+  assert.deepEqual(manifest.routing.selectedAuthority, {
+    id: scope.motherboardChunkId,
+    serviceKey: "placa_mae",
+    currency: "BRL",
+    amount: 395,
+    qualifier: "starting_at",
+  });
+  assert.equal(manifest.evidence.schemaVersion, "knowledge-evidence-v1");
+  assert.equal(manifest.evidence.queryEmbeddingCacheStatus, "MISS");
+  assert.equal(manifest.evidence.authority.candidateCount, 2);
+  assert.equal(manifest.evidence.authority.eligibleCount, 1);
+  assert.deepEqual(manifest.evidence.authority.selected, {
+    chunkId: scope.motherboardChunkId,
+    serviceKey: "placa_mae",
+    currency: "BRL",
+    amount: 395,
+    qualifier: "starting_at",
+  });
+  const motherboardEvidence = manifest.evidence.items.find(
+    (item) => item.chunkId === scope.motherboardChunkId,
+  );
+  assert.ok(motherboardEvidence);
+  assert.match(motherboardEvidence.contentHash, /^[a-f0-9]{64}$/u);
+  assert.equal(motherboardEvidence.contentLength, canonicalChunk.content.length);
+  assert.equal(motherboardEvidence.fullContentAvailable, true);
+  assert.equal(motherboardEvidence.previewLength, 253);
+  assert.equal(motherboardEvidence.previewOriginalLength, canonicalChunk.content.length);
+  assert.equal(motherboardEvidence.previewTruncated, true);
+  assert.equal(motherboardEvidence.factualSpans.length, 1);
+  assert.ok(motherboardEvidence.factualSpans[0].startOffset <= factPosition);
+  assert.ok(
+    motherboardEvidence.factualSpans[0].endOffset >=
+      factPosition + "R$ 395,00".length,
+  );
+  assert.ok(manifest.evidence.provider.totalExcerptChars <= 4_800);
+  assert.ok(
+    manifest.evidence.provider.excerpts.every(
+      (excerpt) => excerpt.excerptLength <= manifest.evidence.provider.maxCharsPerExcerpt,
+    ),
+  );
+  const motherboardExcerpt = manifest.evidence.provider.excerpts.find(
+    (excerpt) => excerpt.chunkId === scope.motherboardChunkId,
+  );
+  assert.ok(motherboardExcerpt);
+  assert.ok(motherboardExcerpt.spans.length >= 1);
+  assert.ok(
+    motherboardExcerpt.spans.some(
+      (span) =>
+        span.sourceStartOffset <= factPosition &&
+        span.sourceEndOffset >= factPosition + "R$ 395,00".length,
+    ),
+  );
+  assert.equal(motherboardExcerpt.factualCoverageStatus, "COMPLETE");
+  assert.equal(manifest.outbound.result, "ACKNOWLEDGED");
+  assert.equal(manifest.outbound.attemptCount, 1);
+  assertControlTrace(manifest, {
+    requiredCheckpoints: ["ADMISSION", "PRE_SEAL", "PRE_EFFECTS", "PRE_OUTBOUND"],
+  });
+  assert.equal(
+    manifest.control.checkpoints.some((record) => record.checkpoint === "PRE_PROVIDER"),
+    false,
+  );
+
+  const deliveries = await outboundDeliveriesFor(scope);
+  assert.equal(deliveries.length, 1);
+  assertAcknowledgedDelivery(deliveries[0], manifest, returnedExternalId);
+  assert.equal(inboundMessages[0].externalPayload?.turnExecutionId, manifest.turnExecutionId);
+  assert.equal(inboundMessages[0].externalPayload?.decisionId, manifest.decisionId);
+  assert.equal(
+    assistantMessages[0].externalPayload?.turnExecutionId,
+    manifest.turnExecutionId,
+  );
+  assert.equal(assistantMessages[0].externalPayload?.decisionId, manifest.decisionId);
+
+  const serializedAudit = JSON.stringify({ metadata, manifest });
+  assert.equal(serializedAudit.includes(canonicalChunk.content), false);
+  assert.doesNotMatch(
+    serializedAudit,
+    /Contexto técnico sem valor comercial confirmado neste trecho\.(?: Contexto técnico sem valor comercial confirmado neste trecho\.){2}/,
+  );
+  assertSanitizedTurnManifest(manifest, { inboundContent });
+  await assertRuntimeV2Absent(scope);
+  assertExternalCallSummary({
+    embedding: 1,
+    intentClassification: 0,
+    finalGeneration: 0,
+    memoryExtraction: 0,
+    toolCapableGeneration: 0,
+    toolCallsReturned: 0,
+    chatwootReads: 0,
+    chatwootMutations: 0,
+    outbound: 1,
+  });
+}
+
 before(async () => {
   prisma = new PrismaClient({
     datasources: {
@@ -2592,8 +2811,132 @@ test.todo(
 test.todo(
   "Gap 2 — “E para consertar minha placa mae?” deverá herdar pricing, substituir o serviço ativo e usar BRL 395 starting_at",
 );
-test.todo(
-  "Gap 3 — autoridade factual além do caractere 250 deverá permanecer disponível para resolução e guards",
+test(
+  "5A-A — preço explícito de placa-mãe após o caractere 250 usa evidência integral e zero geração final",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "bq",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+      motherboardAuthorityPlacement: "AFTER_250",
+    });
+    assert.equal(scope.motherboardAuthority.placement, "AFTER_250");
+    await assertExplicitMotherboardAuthorityResponse(scope, {
+      inboundContent: "Qual o valor para consertar minha placa-mãe?",
+      messageId: "block5a-bq-explicit-motherboard-after-250",
+      minimumFactPosition: 250,
+      maximumFactPosition: 800,
+    });
+  },
+);
+test(
+  "5A-B — preço explícito de placa-mãe após o caractere 800 preserva a mesma autoridade",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "br",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+      motherboardAuthorityPlacement: "AFTER_800",
+    });
+    assert.equal(scope.motherboardAuthority.placement, "AFTER_800");
+    await assertExplicitMotherboardAuthorityResponse(scope, {
+      inboundContent: "Qual o valor para consertar minha placa-mãe?",
+      messageId: "block5a-br-explicit-motherboard-after-800",
+      minimumFactPosition: 800,
+    });
+  },
+);
+test(
+  "5A-F — provider recebe somente excerpt relevante, limitado e rastreável",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "bs",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+      motherboardAuthorityPlacement: "AFTER_800",
+    });
+    provider.setDefault("final_generation", {
+      content: "Sim, fazemos reparo de placa-mãe. Posso ajudar a encaminhar uma avaliação.",
+    });
+    const inboundContent = "Vocês fazem reparo de placa-mãe?";
+    const result = await postWebhook(scope, {
+      content: inboundContent,
+      messageId: "block5a-bs-provider-evidence-excerpt",
+    });
+    assert.equal(result.response.status, 201);
+    assert.equal(result.body?.ok, true);
+
+    const finalCalls = provider.calls("final_generation");
+    assert.equal(finalCalls.length, 1);
+    const providerRequest = JSON.stringify(finalCalls[0].body);
+    const canonicalChunk = await prisma.assistantKnowledgeChunk.findUniqueOrThrow({
+      where: { id: scope.motherboardChunkId },
+    });
+    assert.match(providerRequest, /a partir de R\$ 395,00/u);
+    assert.equal(providerRequest.includes(canonicalChunk.content), false);
+    assert.doesNotMatch(
+      providerRequest,
+      /Contexto técnico sem valor comercial confirmado neste trecho\.(?: Contexto técnico sem valor comercial confirmado neste trecho\.){8}/,
+    );
+
+    const runtimeLog = await prisma.assistantRuntimeLog.findFirstOrThrow({
+      where: { companyId: scope.companyId },
+      orderBy: { createdAt: "desc" },
+    });
+    const manifest = turnManifestOf(runtimeLog);
+    assertV1TurnManifest(manifest, scope);
+    assertSealedV1Decision(manifest, {
+      terminalPath: "PROVIDER_STANDARD",
+      decisionType: "PROVIDER_RESPONSE",
+    });
+    assert.equal(manifest.provider.finalGeneration.count, 1);
+    assert.equal(manifest.evidence.schemaVersion, "knowledge-evidence-v1");
+    assert.ok(manifest.evidence.provider.totalExcerptChars <= 4_800);
+    const excerpt = manifest.evidence.provider.excerpts.find(
+      (candidate) => candidate.chunkId === scope.motherboardChunkId,
+    );
+    assert.ok(excerpt);
+    assert.ok(excerpt.startOffset > 250);
+    assert.ok(excerpt.excerptLength <= 1_600);
+    assert.equal(excerpt.factualCoverageStatus, "COMPLETE");
+    const reconstructedExcerpt = excerpt.spans
+      .map((span) =>
+        canonicalChunk.content.slice(span.sourceStartOffset, span.sourceEndOffset),
+      )
+      .join("\n…\n");
+    assert.equal(reconstructedExcerpt.length, excerpt.excerptLength);
+    assert.ok(providerRequest.includes(reconstructedExcerpt));
+
+    const conversation = await prisma.assistantConversation.findFirstOrThrow({
+      where: {
+        companyId: scope.companyId,
+        externalConversationId: scope.externalConversationId,
+      },
+    });
+    const assistantMessages = await prisma.assistantConversationMessage.findMany({
+      where: {
+        companyId: scope.companyId,
+        conversationId: conversation.id,
+        role: "assistant",
+      },
+    });
+    assert.equal(assistantMessages.length, 1);
+    assert.equal(
+      assistantMessages[0].content,
+      "Sim, fazemos reparo de placa-mãe. Posso ajudar a encaminhar uma avaliação.",
+    );
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 1);
+    assert.equal(provider.calls("embedding").length, 1);
+    assert.equal(provider.calls("memory_extraction").length, 0);
+    assert.equal(provider.toolCallRequestCount(), 0);
+    assert.equal(provider.toolCallReturnCount(), 0);
+    assertSanitizedTurnManifest(manifest, { inboundContent });
+    assert.equal(JSON.stringify(manifest).includes(canonicalChunk.content), false);
+    await assertRuntimeV2Absent(scope);
+  },
 );
 test.todo(
   "Gap 4 — computador lento deverá qualificar ou orientar próximo passo sem diagnóstico factual ou resposta puramente genérica",

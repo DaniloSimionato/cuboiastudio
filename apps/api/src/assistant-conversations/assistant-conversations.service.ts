@@ -58,6 +58,15 @@ import { ContactMemoriesService } from "../contact-memories/contact-memories.ser
 import { ContactMemoriesExtractionService } from "../contact-memories/contact-memories-extraction.service";
 import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
 import {
+  buildFactualEvidenceArtifact,
+  buildProviderEvidenceAnchorsFromText,
+  packProviderEvidenceExcerpts,
+  type EvidencePreview,
+  type FactualEvidenceArtifact,
+  type ProviderEvidenceExcerpt,
+  type ProviderEvidencePack,
+} from "../assistant-knowledge/knowledge-evidence";
+import {
   isMultiNeedTriageMessage,
   PROMPT_COMPILER_VERSION,
   PromptCompilerService,
@@ -174,6 +183,7 @@ import {
   finalizeTurnExecutionManifest,
   withTurnExecutionControl,
   withTurnExecutionDecision,
+  withTurnExecutionEvidence,
   withTurnExecutionHandoff,
   withTurnExecutionOutbound,
   withTurnExecutionOutboundDeliveries,
@@ -7897,7 +7907,7 @@ export class AssistantConversationsService {
       },
       quotedMessagePresent: false,
     });
-    const turnExecutionManifestBase = this.buildTurnExecutionManifest({
+    let turnExecutionManifestBase = this.buildTurnExecutionManifest({
       companyId: input.tenant.companyId,
       assistantId: input.assistantId,
       source,
@@ -8361,6 +8371,21 @@ export class AssistantConversationsService {
       ragAuthorityEligible: true;
       priceAuthorities?: RagPriceAuthority[];
     }[] = [];
+    let factualEvidenceArtifacts: FactualEvidenceArtifact[] = [];
+    let evidencePreviews: EvidencePreview[] = [];
+    let providerEvidenceItems: Array<{
+      id: string;
+      title: string;
+      evidence: ProviderEvidenceExcerpt;
+    }> = [];
+    let deterministicFactualKnowledgeItems: {
+      id: string;
+      knowledgeItemId: string;
+      title: string;
+      content: string;
+      ragAuthorityEligible: true;
+    }[] = [];
+    let providerEvidencePack: ProviderEvidencePack | null = null;
     let eligiblePriceAuthorities: EligiblePriceAuthority[] = [];
     const ragThresholdConfig = resolveAssistantKnowledgeScoreThreshold({
       assistantId: input.assistantId,
@@ -8397,15 +8422,16 @@ export class AssistantConversationsService {
     });
 
     if (assistant.ragEnabled && this.assistantKnowledgeRetrievalService) {
-      const searchResult = await this.assistantKnowledgeRetrievalService.searchRelevantKnowledge({
-        tenant: input.tenant,
-        assistantId: input.assistantId,
-        query: interpretedMessage,
-        topK: knowledgeLimit,
-        ...(knowledgeScopeTagFilterEnabled && !flowKnowledgeScope.knowledgeScopeMissing
-          ? { knowledgeScopeTags: flowKnowledgeScope.scopeTags }
-          : {}),
-      });
+      const searchResult =
+        await this.assistantKnowledgeRetrievalService.searchRelevantKnowledgeForRuntime({
+          tenant: input.tenant,
+          assistantId: input.assistantId,
+          query: interpretedMessage,
+          topK: knowledgeLimit,
+          ...(knowledgeScopeTagFilterEnabled && !flowKnowledgeScope.knowledgeScopeMissing
+            ? { knowledgeScopeTags: flowKnowledgeScope.scopeTags }
+            : {}),
+        });
 
       const knowledgeSelection = selectRuntimeKnowledgeItems({
         ragEnabled: true,
@@ -8432,23 +8458,60 @@ export class AssistantConversationsService {
         selectionReason:
           knowledgeSelection.items.length > 0 ? "score_at_or_above_threshold" : "no_valid_results",
         warning: searchResult.warning,
-        usedKnowledge: searchResult.results.map((r) => ({
-          knowledgeId: r.knowledgeId,
-          title: r.knowledgeTitle,
-          chunkId: r.chunkId,
-          score: r.score,
+        queryEmbeddingCacheStatus: searchResult.queryEmbeddingCacheStatus,
+        usedKnowledge: searchResult.results.map((result) => ({
+          knowledgeId: result.artifact.knowledgeId,
+          title: result.artifact.knowledgeTitle,
+          chunkId: result.artifact.chunkId,
+          score: result.artifact.rankingScore,
           reason: "score_at_or_above_threshold",
         })),
       };
 
       const rawPriceAuthorities = knowledgeSelection.items.flatMap((item) =>
-        extractRagPriceAuthorities({
-          chunkId: item.id,
-          knowledgeItemId: item.knowledgeItemId,
-          title: item.title,
-          content: item.content,
-        }),
+        extractRagPriceAuthorities(item.factualEvidence),
       );
+      factualEvidenceArtifacts = knowledgeSelection.items.map((item) => {
+        const artifactAuthorities = rawPriceAuthorities.filter(
+          (authority) => authority.chunkId === item.factualEvidence.chunkId,
+        );
+        return buildFactualEvidenceArtifact({
+          chunkId: item.factualEvidence.chunkId,
+          knowledgeId: item.factualEvidence.knowledgeId,
+          knowledgeTitle: item.factualEvidence.knowledgeTitle,
+          canonicalContent: item.factualEvidence.canonicalContent,
+          rankingScore: item.factualEvidence.rankingScore,
+          selectionReason: item.factualEvidence.selectionReason,
+          sourceType: item.factualEvidence.sourceType,
+          factualSpans: artifactAuthorities.flatMap((authority) =>
+            Number.isSafeInteger(authority.evidenceStartOffset) &&
+            Number.isSafeInteger(authority.evidenceEndOffset) &&
+            Number(authority.evidenceStartOffset) >= 0 &&
+            Number(authority.evidenceEndOffset) >
+              Number(authority.evidenceStartOffset)
+              ? [
+                  {
+                    startOffset: Number(authority.evidenceStartOffset),
+                    endOffset: Number(authority.evidenceEndOffset),
+                    reason: "OFFICIAL_PRICE_AUTHORITY",
+                  },
+                ]
+              : [],
+          ),
+          authorityCandidates: artifactAuthorities.map((authority) => ({
+            authorityType: "PRICE",
+            candidateId: [
+              authority.chunkId,
+              authority.serviceKey,
+              authority.evidenceStartOffset ?? "unknown",
+            ].join(":"),
+            serviceKey: authority.serviceKey,
+            currency: authority.currency,
+            amount: authority.amount,
+            qualifier: authority.qualifier,
+          })),
+        });
+      });
       const filteredPriceAuthorities = filterEligibleRagPriceAuthorities({
         authorities: rawPriceAuthorities,
         currentMessage: customerIntentText,
@@ -8456,7 +8519,61 @@ export class AssistantConversationsService {
       eligiblePriceAuthorities = deduplicateEligibleRagPriceAuthorities(filteredPriceAuthorities);
       const ambiguousAuthorityDetected =
         hasConflictingEligibleRagPriceAuthorities(eligiblePriceAuthorities);
-      knowledgeItems = knowledgeSelection.items;
+      evidencePreviews = knowledgeSelection.items.map((item) => item.preview);
+      const authorityAnchorsByChunkId = Object.fromEntries(
+        factualEvidenceArtifacts.map((artifact) => [
+          artifact.chunkId,
+          rawPriceAuthorities
+            .filter((authority) => authority.chunkId === artifact.chunkId)
+            .flatMap((authority) =>
+              buildProviderEvidenceAnchorsFromText(
+                authority.sourceText,
+                "AUTHORITY_SOURCE",
+              ),
+            ),
+        ]),
+      );
+      providerEvidencePack = packProviderEvidenceExcerpts({
+        artifacts: factualEvidenceArtifacts,
+        sharedAnchors: buildProviderEvidenceAnchorsFromText(
+          customerIntentText,
+          "CURRENT_TURN",
+        ),
+        anchorsByChunkId: authorityAnchorsByChunkId,
+      });
+      const selectedKnowledgeByChunkId = new Map(
+        knowledgeSelection.items.map((item) => [item.id, item]),
+      );
+      providerEvidenceItems = providerEvidencePack.excerpts.flatMap((excerpt) => {
+        const selected = selectedKnowledgeByChunkId.get(excerpt.chunkId);
+        return selected
+          ? [{ id: selected.id, title: selected.title, evidence: excerpt }]
+          : [];
+      });
+      deterministicFactualKnowledgeItems = factualEvidenceArtifacts.flatMap((artifact) => {
+        const factualContent = artifact.factualSpans
+          .map((span) => span.spanText)
+          .join(" | ")
+          .trim();
+        return factualContent
+          ? [
+              {
+                id: artifact.chunkId,
+                knowledgeItemId: artifact.knowledgeId,
+                title: artifact.knowledgeTitle,
+                content: factualContent,
+                ragAuthorityEligible: true as const,
+              },
+            ]
+          : [];
+      });
+      knowledgeItems = providerEvidenceItems.map((item) => ({
+        id: item.id,
+        knowledgeItemId: item.evidence.knowledgeId,
+        title: item.title,
+        content: item.evidence.excerptText,
+        ragAuthorityEligible: true as const,
+      }));
       if (ambiguousAuthorityDetected) eligiblePriceAuthorities = [];
       ragLogData.ambiguousAuthorityDetected = ambiguousAuthorityDetected;
       ragLogData.rawPriceAuthorityCount = rawPriceAuthorities.length;
@@ -8473,7 +8590,14 @@ export class AssistantConversationsService {
           searchResult.results.length > 0 ? "EXECUTED_WITH_RESULTS" : "EXECUTED_EMPTY",
         threshold: searchResult.scoreThreshold,
         thresholdSource: searchResult.scoreThresholdSource,
-        results: searchResult.results,
+        results: searchResult.results.map((result) => ({
+          knowledgeId: result.artifact.knowledgeId,
+          knowledgeTitle: result.artifact.knowledgeTitle,
+          chunkId: result.artifact.chunkId,
+          contentPreview: result.preview.previewText,
+          score: result.artifact.rankingScore,
+          metadata: result.metadata,
+        })),
       });
 
       this.logger.log({
@@ -8484,7 +8608,9 @@ export class AssistantConversationsService {
         candidateCount: searchResult.scoredChunkCount,
         acceptedCount: searchResult.results.length,
         topScore: searchResult.scoredScoreRange?.max ?? null,
-        knowledgeChunkIds: searchResult.results.map((result) => result.chunkId),
+        knowledgeChunkIds: searchResult.results.map(
+          (result) => result.artifact.chunkId,
+        ),
       });
     } else if (assistant.ragEnabled) {
       ragLogData = {
@@ -8493,6 +8619,19 @@ export class AssistantConversationsService {
         warning: "RAG retrieval service is unavailable.",
       };
     }
+
+    turnExecutionManifestBase = withTurnExecutionEvidence({
+      manifest: turnExecutionManifestBase,
+      artifacts: factualEvidenceArtifacts,
+      previews: evidencePreviews,
+      providerPack: providerEvidencePack,
+      queryEmbeddingCacheStatus:
+        ragLogData.queryEmbeddingCacheStatus ??
+        (assistant.ragEnabled ? "UNAVAILABLE" : "NOT_EXECUTED"),
+      candidateAuthorityCount: ragLogData.rawPriceAuthorityCount ?? 0,
+      eligibleAuthorityCount: eligiblePriceAuthorities.length,
+      selectedAuthority: null,
+    });
 
     const activeSecurityRules: AssistantSecurityRuleItem[] = this.assistantSecurityRulesService
       ? await this.assistantSecurityRulesService.findActiveForRuntime({
@@ -8938,7 +9077,10 @@ export class AssistantConversationsService {
       question: interpretedMessage,
       assistantName: assistant.name,
       instructions: effectiveInstructions,
-      knowledgeItems,
+      // Deterministic fallback may use only selected factual spans derived from
+      // canonical evidence. Provider transport excerpts are never authoritative
+      // inputs to this path.
+      knowledgeItems: deterministicFactualKnowledgeItems,
       officialBusinessContext: v1OfficialBusinessContext,
       allowBusinessHours: !directBusinessHoursBindingActive,
       priceAuthorityContext: { eligiblePriceAuthorities },
@@ -9392,7 +9534,11 @@ export class AssistantConversationsService {
               behavior: assistant.behavior,
               flow: selectedFlow,
               securityRules: activeSecurityRules,
-              knowledgeItems,
+              providerEvidenceItems,
+              // The active V1 path uses only typed provider evidence. The
+              // untyped compatibility input remains reserved for inactive
+              // legacy callers and Runtime V2 (which is OFF).
+              knowledgeItems: [],
               historyMessages: priorHistory,
               currentMessage: customerIntentText,
               officialBusinessContext: v1OfficialBusinessContext,
@@ -10387,6 +10533,26 @@ export class AssistantConversationsService {
           qualifier: deterministicPriceResponse.authority.qualifier,
         }
       : null;
+    turnExecutionManifestBase = withTurnExecutionEvidence({
+      manifest: turnExecutionManifestBase,
+      artifacts: factualEvidenceArtifacts,
+      previews: evidencePreviews,
+      providerPack: providerEvidencePack,
+      queryEmbeddingCacheStatus:
+        ragLogData.queryEmbeddingCacheStatus ??
+        (assistant.ragEnabled ? "UNAVAILABLE" : "NOT_EXECUTED"),
+      candidateAuthorityCount: ragLogData.rawPriceAuthorityCount ?? 0,
+      eligibleAuthorityCount: eligiblePriceAuthorities.length,
+      selectedAuthority: selectedAuthority
+        ? {
+            chunkId: selectedAuthority.id,
+            serviceKey: selectedAuthority.serviceKey,
+            currency: selectedAuthority.currency,
+            amount: selectedAuthority.amount,
+            qualifier: selectedAuthority.qualifier,
+          }
+        : null,
+    });
     const terminalPath = this.resolveTurnExecutionTerminalPath({
       deterministicPrice: Boolean(deterministicPriceResponse),
       runtimeMode: runtime.mode,

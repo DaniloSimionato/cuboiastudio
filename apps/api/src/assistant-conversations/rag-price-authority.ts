@@ -1,3 +1,8 @@
+import {
+  isFactualEvidenceArtifact,
+  type FactualEvidenceArtifact,
+} from "../assistant-knowledge/knowledge-evidence";
+
 export type RagPriceServiceKey =
   | "formatacao"
   | "placa_mae"
@@ -39,6 +44,8 @@ export type RagPriceAuthority = {
   currency: "BRL";
   qualifier: PriceAuthorityQualifier;
   sourceText: string;
+  evidenceStartOffset?: number;
+  evidenceEndOffset?: number;
   sourceChunkIds: string[];
   sourceKnowledgeIds: string[];
   evidenceCount: number;
@@ -64,13 +71,6 @@ export type ExtractedPriceClaim = {
   qualifier: PriceAuthorityQualifier | null;
   index: number;
   excerpt: string;
-};
-
-type RagPriceAuthorityInput = {
-  chunkId: string;
-  knowledgeItemId: string;
-  title: string;
-  content: string;
 };
 
 const STOP_WORDS = new Set([
@@ -116,45 +116,117 @@ export function priceAmountInMinorUnits(amount: number): number | null {
   return Math.round(amount * 100);
 }
 
-function priceContextAt(text: string, position: number): string {
-  const separators = [".", ";", "\n", "•"];
-  const start = Math.max(
-    ...separators.map((separator) => text.lastIndexOf(separator, position) + 1),
-  );
-  const ends = separators
-    .map((separator) => text.indexOf(separator, position))
-    .filter((index) => index !== -1);
-  const end = ends.length > 0 ? Math.min(...ends) + 1 : text.length;
-  return text.slice(start, end).replace(/\s+/g, " ").trim().slice(0, 320);
+type PriceContextSpan = {
+  text: string;
+  startOffset: number;
+  endOffset: number;
+};
+
+type ServiceAnchor = {
+  serviceKey: RagPriceServiceKey;
+  startOffset: number;
+  endOffset: number;
+};
+
+function priceSentenceBounds(
+  text: string,
+  position: number,
+): { startOffset: number; endOffset: number } {
+  const isBoundaryAt = (index: number): boolean => {
+    const character = text[index];
+    if (![".", ";", "\n", "•"].includes(character)) return false;
+    if (
+      character === "." &&
+      /\d/u.test(text[index - 1] ?? "") &&
+      /\d/u.test(text[index + 1] ?? "")
+    ) {
+      return false;
+    }
+    return true;
+  };
+
+  let startOffset = 0;
+  for (let index = Math.min(position - 1, text.length - 1); index >= 0; index -= 1) {
+    if (!isBoundaryAt(index)) continue;
+    startOffset = index + 1;
+    break;
+  }
+
+  let endOffset = text.length;
+  for (let index = Math.max(0, position); index < text.length; index += 1) {
+    if (!isBoundaryAt(index)) continue;
+    endOffset = index + 1;
+    break;
+  }
+
+  return {
+    startOffset,
+    endOffset,
+  };
 }
 
-function priceServiceKey(sourceText: string): RagPriceServiceKey {
-  const source = normalize(sourceText);
-  const matches = PRICE_SERVICE_PATTERNS.filter(([, pattern]) => pattern.test(source));
-  return matches.length === 1 ? matches[0][0] : "unknown";
+function serviceAnchorBeforePosition(
+  text: string,
+  sentenceStartOffset: number,
+  position: number,
+): ServiceAnchor | null {
+  const beforePrice = normalize(text.slice(sentenceStartOffset, position));
+  const matches = PRICE_SERVICE_PATTERNS.flatMap(([serviceKey, pattern]) => {
+    const globalPattern = new RegExp(pattern.source, `${pattern.flags}g`);
+    return Array.from(beforePrice.matchAll(globalPattern)).map((match) => ({
+      serviceKey,
+      startOffset: sentenceStartOffset + (match.index ?? -1),
+      endOffset: sentenceStartOffset + (match.index ?? -1) + match[0].length,
+    }));
+  }).filter((match) => match.startOffset >= sentenceStartOffset);
+
+  if (matches.length === 0) return null;
+  matches.sort(
+    (left, right) =>
+      right.startOffset - left.startOffset ||
+      right.endOffset - left.endOffset ||
+      RAG_PRICE_SERVICE_ORDER.indexOf(left.serviceKey) -
+        RAG_PRICE_SERVICE_ORDER.indexOf(right.serviceKey),
+  );
+  const best = matches[0];
+  return matches.filter(
+    (match) =>
+      match.startOffset === best.startOffset && match.endOffset === best.endOffset,
+  ).length === 1
+    ? best
+    : null;
+}
+
+function priceContextAt(
+  text: string,
+  position: number,
+  matchLength = 0,
+): PriceContextSpan {
+  const sentence = priceSentenceBounds(text, position);
+  const serviceAnchor = serviceAnchorBeforePosition(text, sentence.startOffset, position);
+  let startOffset = serviceAnchor
+    ? Math.max(sentence.startOffset, serviceAnchor.startOffset - 80)
+    : Math.max(sentence.startOffset, position - 160);
+  let endOffset = Math.min(
+    sentence.endOffset,
+    position + Math.max(1, matchLength) + 160,
+  );
+
+  while (startOffset < endOffset && /\s/u.test(text[startOffset])) startOffset += 1;
+  while (endOffset > startOffset && /\s/u.test(text[endOffset - 1])) endOffset -= 1;
+
+  return {
+    text: text.slice(startOffset, endOffset),
+    startOffset,
+    endOffset,
+  };
 }
 
 function priceServiceKeyBeforePosition(text: string, position: number): RagPriceServiceKey {
-  const sentenceStart = Math.max(
-    text.lastIndexOf(".", position),
-    text.lastIndexOf(";", position),
-    text.lastIndexOf("\n", position),
+  const sentence = priceSentenceBounds(text, position);
+  return (
+    serviceAnchorBeforePosition(text, sentence.startOffset, position)?.serviceKey ?? "unknown"
   );
-  const beforePrice = normalize(text.slice(sentenceStart + 1, position));
-  const matches = PRICE_SERVICE_PATTERNS.flatMap(([serviceKey, pattern]) => {
-    const globalPattern = new RegExp(pattern.source, "gu");
-    return Array.from(beforePrice.matchAll(globalPattern)).map((match) => ({
-      serviceKey,
-      index: match.index ?? -1,
-    }));
-  }).filter((match) => match.index >= 0);
-
-  if (matches.length === 0) return "unknown";
-  matches.sort((left, right) => right.index - left.index);
-  const best = matches[0];
-  return matches.filter((match) => match.index === best.index).length === 1
-    ? best.serviceKey
-    : "unknown";
 }
 
 function claimQualifier(text: string, position: number): PriceAuthorityQualifier | null {
@@ -173,7 +245,7 @@ export function extractPriceClaims(answer: string): ExtractedPriceClaim[] {
   ).flatMap((match) => {
     const amount = parseBrlAmount(match[1] ?? match[2]);
     if (amount === null || match.index === undefined) return [];
-    const excerpt = priceContextAt(answer, match.index);
+    const excerpt = priceContextAt(answer, match.index, match[0].length).text;
     return [
       {
         serviceKey: priceServiceKeyBeforePosition(answer, match.index),
@@ -211,9 +283,16 @@ function serviceLabel(title: string, sourceText: string): string {
   );
 }
 
-export function extractRagPriceAuthorities(input: RagPriceAuthorityInput): RagPriceAuthority[] {
+export function extractRagPriceAuthorities(input: FactualEvidenceArtifact): RagPriceAuthority[] {
+  if (!isFactualEvidenceArtifact(input)) {
+    throw new TypeError(
+      "RAG price authority extraction requires a canonical factual evidence artifact",
+    );
+  }
+
+  const canonicalContent = input.canonicalContent;
   const matches = Array.from(
-    input.content.matchAll(
+    canonicalContent.matchAll(
       /(?:a\s+partir\s+de|valor\s+inicial)[^R]{0,80}R\$\s*([\d.]+(?:,\d{2})?)/giu,
     ),
   );
@@ -222,10 +301,11 @@ export function extractRagPriceAuthorities(input: RagPriceAuthorityInput): RagPr
     const amount = parseBrlAmount(match[1]);
     if (amount === null || match.index === undefined) return [];
 
-    const sourceText = priceContextAt(input.content, match.index);
-    const service = serviceLabel(input.title, sourceText);
-    const terms = serviceTerms(input.title, sourceText);
-    const serviceKey = priceServiceKey(sourceText);
+    const evidenceSpan = priceContextAt(canonicalContent, match.index, match[0].length);
+    const sourceText = evidenceSpan.text;
+    const service = serviceLabel(input.knowledgeTitle, sourceText);
+    const terms = serviceTerms(input.knowledgeTitle, sourceText);
+    const serviceKey = priceServiceKeyBeforePosition(canonicalContent, match.index);
     if (terms.length === 0 || serviceKey === "unknown") return [];
 
     return [
@@ -233,7 +313,7 @@ export function extractRagPriceAuthorities(input: RagPriceAuthorityInput): RagPr
         authorityType: "price" as const,
         source: "rag" as const,
         chunkId: input.chunkId,
-        knowledgeItemId: input.knowledgeItemId,
+        knowledgeItemId: input.knowledgeId,
         service,
         serviceKey,
         serviceTerms: terms,
@@ -241,8 +321,10 @@ export function extractRagPriceAuthorities(input: RagPriceAuthorityInput): RagPr
         currency: "BRL" as const,
         qualifier: "starting_at" as const,
         sourceText,
+        evidenceStartOffset: evidenceSpan.startOffset,
+        evidenceEndOffset: evidenceSpan.endOffset,
         sourceChunkIds: [input.chunkId],
-        sourceKnowledgeIds: [input.knowledgeItemId],
+        sourceKnowledgeIds: [input.knowledgeId],
         evidenceCount: 1,
       },
     ];
@@ -252,6 +334,13 @@ export function extractRagPriceAuthorities(input: RagPriceAuthorityInput): RagPr
 export function isRagPriceAuthority(value: unknown): value is RagPriceAuthority {
   if (!value || typeof value !== "object") return false;
   const item = value as Partial<RagPriceAuthority>;
+  const hasNoEvidenceOffsets =
+    item.evidenceStartOffset === undefined && item.evidenceEndOffset === undefined;
+  const hasValidEvidenceOffsets =
+    Number.isSafeInteger(item.evidenceStartOffset) &&
+    Number.isSafeInteger(item.evidenceEndOffset) &&
+    Number(item.evidenceStartOffset) >= 0 &&
+    Number(item.evidenceEndOffset) > Number(item.evidenceStartOffset);
   return (
     item.authorityType === "price" &&
     item.source === "rag" &&
@@ -275,6 +364,7 @@ export function isRagPriceAuthority(value: unknown): value is RagPriceAuthority 
     item.currency === "BRL" &&
     item.qualifier === "starting_at" &&
     typeof item.sourceText === "string" &&
+    (hasNoEvidenceOffsets || hasValidEvidenceOffsets) &&
     Array.isArray(item.sourceChunkIds) &&
     item.sourceChunkIds.every((chunkId) => typeof chunkId === "string") &&
     Array.isArray(item.sourceKnowledgeIds) &&

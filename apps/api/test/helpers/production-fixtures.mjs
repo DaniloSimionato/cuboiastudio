@@ -102,12 +102,23 @@ export const OFFICIAL_WEEKLY_SCHEDULE = Object.freeze({
 export const FORMATTING_AUTHORITY_TEXT =
   "A formatação custa a partir de R$ 1.950,00.";
 
-const MOTHERBOARD_PREFIX = "Contexto técnico sem valor comercial confirmado neste trecho. ".repeat(16);
+const MOTHERBOARD_CONTEXT_PREFIX =
+  "Contexto técnico sem valor comercial confirmado neste trecho. ";
+export const MOTHERBOARD_AUTHORITY_AFTER_250_TEXT =
+  `${MOTHERBOARD_CONTEXT_PREFIX.repeat(4)}O reparo de placa-mãe custa a partir de R$ 395,00.`;
+const MOTHERBOARD_PREFIX = MOTHERBOARD_CONTEXT_PREFIX.repeat(16);
 export const MOTHERBOARD_AUTHORITY_TEXT =
   `${MOTHERBOARD_PREFIX}O reparo de placa-mãe custa a partir de R$ 395,00.`;
 
-if (MOTHERBOARD_AUTHORITY_TEXT.indexOf("R$ 395,00") <= 250) {
-  throw new Error("Motherboard authority fixture must remain beyond character 250");
+const motherboardAfter250Position =
+  MOTHERBOARD_AUTHORITY_AFTER_250_TEXT.indexOf("R$ 395,00");
+if (motherboardAfter250Position <= 250 || motherboardAfter250Position >= 800) {
+  throw new Error(
+    "Motherboard after-250 authority fixture must remain after character 250 and before 800",
+  );
+}
+if (MOTHERBOARD_AUTHORITY_TEXT.indexOf("R$ 395,00") <= 800) {
+  throw new Error("Motherboard authority fixture must remain beyond character 800");
 }
 
 function encryptTestSecret(value) {
@@ -152,9 +163,19 @@ export async function seedProductionHttpFixture(
     precreateConversation = false,
     contextVersion = 1,
     includeOldHistory = false,
+    motherboardAuthorityPlacement = "AFTER_800",
   },
 ) {
   const ids = fixtureIds(label);
+  if (!["AFTER_250", "AFTER_800"].includes(motherboardAuthorityPlacement)) {
+    throw new Error(
+      `Unknown motherboard authority placement: ${motherboardAuthorityPlacement}`,
+    );
+  }
+  const motherboardAuthorityText =
+    motherboardAuthorityPlacement === "AFTER_250"
+      ? MOTHERBOARD_AUTHORITY_AFTER_250_TEXT
+      : MOTHERBOARD_AUTHORITY_TEXT;
   const providerSecret = encryptTestSecret(TEST_PROVIDER_TOKEN);
   const chatwootSecret = encryptTestSecret(TEST_CHATWOOT_TOKEN);
   const webhookSecret = encryptTestSecret(TEST_WEBHOOK_SECRET);
@@ -272,7 +293,7 @@ export async function seedProductionHttpFixture(
       assistantId: ids.assistantId,
       companyId: ids.companyId,
       title: "Autoridades comerciais oficiais",
-      content: `${FORMATTING_AUTHORITY_TEXT}\n\n${MOTHERBOARD_AUTHORITY_TEXT}`,
+      content: `${FORMATTING_AUTHORITY_TEXT}\n\n${motherboardAuthorityText}`,
       status: "ACTIVE",
       processingStatus: "READY",
       chunkCount: 2,
@@ -305,7 +326,7 @@ export async function seedProductionHttpFixture(
         assistantId: ids.assistantId,
         knowledgeId: ids.knowledgeId,
         chunkIndex: 1,
-        content: MOTHERBOARD_AUTHORITY_TEXT,
+        content: motherboardAuthorityText,
         embedding: [1, 0, 0],
         embeddingModel: "block0-fake-embedding",
         embeddingDimension: 3,
@@ -408,7 +429,8 @@ export async function seedProductionHttpFixture(
       currency: "BRL",
       amount: 395,
       qualifier: "starting_at",
-      factPosition: MOTHERBOARD_AUTHORITY_TEXT.indexOf("R$ 395,00"),
+      factPosition: motherboardAuthorityText.indexOf("R$ 395,00"),
+      placement: motherboardAuthorityPlacement,
     },
   };
 }

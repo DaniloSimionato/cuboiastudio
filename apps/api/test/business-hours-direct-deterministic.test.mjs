@@ -13,7 +13,34 @@ import { AssistantConversationsService } from "../dist/assistant-conversations/a
 import { deriveHumanHandoffSignal } from "../dist/runtime-v2/turn-understanding.js";
 import { IntentRouterService } from "../dist/intent-router/intent-router.service.js";
 import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
+import {
+  buildFactualEvidenceArtifact,
+  createCanonicalKnowledgeContent,
+  createEvidencePreview,
+} from "../dist/assistant-knowledge/knowledge-evidence.js";
 import { createStatefulChatwootFake } from "./helpers/stateful-http-fakes.mjs";
+
+function runtimeKnowledgeItem({
+  knowledgeId,
+  knowledgeTitle,
+  chunkId,
+  content,
+  score,
+}) {
+  const canonicalContent = createCanonicalKnowledgeContent(content);
+  return {
+    artifact: buildFactualEvidenceArtifact({
+      chunkId,
+      knowledgeId,
+      knowledgeTitle,
+      canonicalContent,
+      rankingScore: score,
+      selectionReason: "score_at_or_above_threshold",
+    }),
+    preview: createEvidencePreview({ chunkId, canonicalContent, maxLength: 250 }),
+    chunkIndex: 0,
+  };
+}
 
 const positives = [
   ["Qual o horário de atendimento?", "WEEKLY_SUMMARY"],
@@ -450,7 +477,7 @@ function createTriagePreemptionService(prisma, cache) {
     },
   };
   const retrieval = {
-    searchRelevantKnowledge: async ({ query }) => {
+    searchRelevantKnowledgeForRuntime: async ({ query }) => {
       ragCalls.push(query);
       return {
         totalChunksScanned: 2,
@@ -461,13 +488,13 @@ function createTriagePreemptionService(prisma, cache) {
         warning: null,
         results: /quanto|preco|preço|format/i.test(query)
           ? [
-              {
+              runtimeKnowledgeItem({
                 knowledgeId: "formatting-knowledge",
                 knowledgeTitle: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
                 chunkId: "formatting-price-chunk",
                 score: 0.92,
-                contentPreview: "Formatação básica padrão: a partir de R$ 195,00.",
-              },
+                content: "Formatação básica padrão: a partir de R$ 195,00.",
+              }),
             ]
           : [],
       };

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PrismaClient } from "@prisma/client";
 import { AssistantKnowledgeRetrievalService } from "../dist/assistant-knowledge/assistant-knowledge-retrieval.service.js";
+import { extractRagPriceAuthorities } from "../dist/assistant-conversations/rag-price-authority.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -21,6 +22,10 @@ test.after(async () => {
 });
 
 test("PostgreSQL: retrieval escopado não consulta conhecimento de outra base", async () => {
+  const integralFormattingAuthority =
+    `${"Contexto técnico sem preço aplicável neste trecho. ".repeat(20)}` +
+    "A formatação custa a partir de R$ 1.950,00.";
+  assert.ok(integralFormattingAuthority.indexOf("R$ 1.950,00") > 800);
   const company = await prisma.company.create({ data: { name: "Flow scope test" } });
   const assistant = await prisma.assistant.create({
     data: { companyId: company.id, name: "Flow scope assistant", ragEnabled: true },
@@ -98,7 +103,7 @@ test("PostgreSQL: retrieval escopado não consulta conhecimento de outra base", 
         assistantId: assistant.id,
         knowledgeId: formatting.id,
         chunkIndex: 0,
-        content: "A formatação custa a partir de R$ 1.950,00.",
+        content: integralFormattingAuthority,
         embedding: [1, 0],
         embeddingModel: "test-embedding",
         embeddingDimension: 2,
@@ -162,16 +167,33 @@ test("PostgreSQL: retrieval escopado não consulta conhecimento de outra base", 
     ],
   });
 
-  const retrieval = new AssistantKnowledgeRetrievalService(prisma, {
-    generateEmbedding: async () => ({ embedding: [1, 0] }),
-  });
-  const result = await retrieval.searchRelevantKnowledge({
+  let embeddingCallCount = 0;
+  const embeddingCache = new Map();
+  const retrieval = new AssistantKnowledgeRetrievalService(
+    prisma,
+    {
+      generateEmbedding: async () => {
+        embeddingCallCount += 1;
+        return { embedding: [1, 0] };
+      },
+    },
+    {
+      get: async (key) => embeddingCache.get(key) ?? null,
+      set: async (key, value) => {
+        embeddingCache.set(key, value);
+      },
+    },
+  );
+  const searchInput = {
     tenant: { companyId: company.id },
     assistantId: assistant.id,
     query: "Qual o valor para formatar um PC?",
     knowledgeScopeTags: ["formatacao"],
     scoreThreshold: 0.55,
-  });
+  };
+  const cacheMiss = await retrieval.searchRelevantKnowledgeForRuntime(searchInput);
+  const cacheHit = await retrieval.searchRelevantKnowledgeForRuntime(searchInput);
+  const result = await retrieval.searchRelevantKnowledge(searchInput);
 
   assert.equal(result.knowledgeScopeApplied, true);
   assert.deepEqual(result.allowedKnowledgeTags, ["formatacao"]);
@@ -179,6 +201,36 @@ test("PostgreSQL: retrieval escopado não consulta conhecimento de outra base", 
   assert.equal(result.results.length, 1);
   assert.equal(result.results[0].knowledgeId, formatting.id);
   assert.doesNotMatch(result.results[0].contentPreview, /R\$ 195,00/);
+  assert.doesNotMatch(result.results[0].contentPreview, /R\$ 1\.950,00/);
+  assert.doesNotMatch(JSON.stringify(result), /R\$ 1\.950,00/);
+  assert.equal("artifact" in result.results[0], false);
+  assert.equal("canonicalContent" in result.results[0], false);
+
+  assert.equal(cacheMiss.queryEmbeddingCacheStatus, "MISS");
+  assert.equal(cacheHit.queryEmbeddingCacheStatus, "HIT");
+  assert.equal(result.queryEmbeddingCacheStatus, "HIT");
+  assert.equal(embeddingCallCount, 1);
+  assert.equal(cacheMiss.results[0].artifact.canonicalContent, integralFormattingAuthority);
+  assert.equal(cacheHit.results[0].artifact.contentHash, cacheMiss.results[0].artifact.contentHash);
+  assert.equal(cacheHit.results[0].preview.previewText.includes("R$ 1.950,00"), false);
+  assert.deepEqual(
+    extractRagPriceAuthorities(cacheMiss.results[0].artifact).map((authority) => [
+      authority.serviceKey,
+      authority.currency,
+      authority.amount,
+      authority.qualifier,
+    ]),
+    [["formatacao", "BRL", 1950, "starting_at"]],
+  );
+  assert.deepEqual(
+    extractRagPriceAuthorities(cacheHit.results[0].artifact).map((authority) => [
+      authority.serviceKey,
+      authority.currency,
+      authority.amount,
+      authority.qualifier,
+    ]),
+    [["formatacao", "BRL", 1950, "starting_at"]],
+  );
 
   const noMatch = await retrieval.searchRelevantKnowledge({
     tenant: { companyId: company.id },

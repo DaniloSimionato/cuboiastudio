@@ -17,6 +17,32 @@ import {
 } from "../dist/runtime-v2/index.js";
 import { RuntimeV2ShadowIntegrationService } from "../dist/runtime-v2/runtime-v2-shadow-integration.service.js";
 import { hashCanonicalInboundMessageContent } from "../dist/inbound/canonical-inbound-message.js";
+import {
+  buildFactualEvidenceArtifact,
+  createCanonicalKnowledgeContent,
+  createEvidencePreview,
+} from "../dist/assistant-knowledge/knowledge-evidence.js";
+
+function runtimeKnowledgeResultItem(input) {
+  const canonicalContent = createCanonicalKnowledgeContent(input.canonicalContent);
+  return {
+    artifact: buildFactualEvidenceArtifact({
+      chunkId: input.chunkId,
+      knowledgeId: input.knowledgeId,
+      knowledgeTitle: input.knowledgeTitle,
+      canonicalContent,
+      rankingScore: input.score ?? 0,
+      selectionReason: "score_at_or_above_threshold",
+    }),
+    preview: createEvidencePreview({
+      chunkId: input.chunkId,
+      canonicalContent,
+      maxLength: 250,
+    }),
+    chunkIndex: input.chunkIndex ?? 0,
+    ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+  };
+}
 
 function createMessageCreatedPayload(overrides = {}) {
   return {
@@ -941,12 +967,17 @@ function createAssistantServiceDeps(overrides = {}) {
   };
 
   const knowledgeRetrievalService = {
-    searchRelevantKnowledge: async () =>
-      overrides.knowledgeRetrievalResult ?? {
+    searchRelevantKnowledgeForRuntime: async () => {
+      const configured = overrides.knowledgeRetrievalResult ?? {
         totalChunksScanned: 0,
         warning: null,
         results: [],
-      },
+      };
+      return {
+        ...configured,
+        results: configured.results.map(runtimeKnowledgeResultItem),
+      };
+    },
   };
 
   const promptCompilerService = overrides.promptCompilerService ?? {
@@ -2242,14 +2273,14 @@ test("pergunta explícita com autoridade única responde deterministicamente sem
           knowledgeId: "knowledge-format",
           knowledgeTitle: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
           chunkId,
-          contentPreview: "A formatação custa a partir de R$ 1.950,00.",
+          canonicalContent: "A formatação custa a partir de R$ 1.950,00.",
           score: 0.8,
         })),
         {
           knowledgeId: "knowledge-format",
           knowledgeTitle: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
           chunkId: "motherboard",
-          contentPreview: "O reparo de placa-mãe custa a partir de R$ 395,00.",
+          canonicalContent: "O reparo de placa-mãe custa a partir de R$ 395,00.",
           score: 0.75,
         },
       ],

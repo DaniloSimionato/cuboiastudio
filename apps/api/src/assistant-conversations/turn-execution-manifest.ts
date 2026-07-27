@@ -12,6 +12,12 @@ import type {
   OutboundRecoveryEligibility,
   OutboundRetrySafety,
 } from "./outbound-delivery";
+import {
+  KNOWLEDGE_EVIDENCE_SCHEMA_VERSION,
+  type EvidencePreview,
+  type FactualEvidenceArtifact,
+  type ProviderEvidencePack,
+} from "../assistant-knowledge/knowledge-evidence";
 
 export const TURN_EXECUTION_MANIFEST_VERSION = "TURN_EXECUTION_MANIFEST_V1";
 export const V1_COMPATIBILITY_POLICY = "V1_COMPATIBILITY_POLICY";
@@ -25,6 +31,68 @@ export type TurnExecutionOutboundResult =
   | "ACKNOWLEDGED"
   | "FAILED"
   | "UNKNOWN";
+
+export type TurnExecutionEvidenceSummary = {
+  schemaVersion: typeof KNOWLEDGE_EVIDENCE_SCHEMA_VERSION;
+  queryEmbeddingCacheStatus: "HIT" | "MISS" | "UNAVAILABLE" | "NOT_EXECUTED";
+  items: Array<{
+    chunkId: string;
+    knowledgeId: string;
+    contentHash: string;
+    contentLength: number;
+    rankingScore: number;
+    selectionReason: string;
+    fullContentAvailable: boolean;
+    previewLength: number;
+    previewOriginalLength: number;
+    previewTruncated: boolean;
+    factualSpans: Array<{
+      startOffset: number;
+      endOffset: number;
+      reason: string;
+      anchorIds: string[];
+    }>;
+  }>;
+  provider: {
+    maxChunks: number;
+    maxCharsPerExcerpt: number;
+    maxTotalChars: number;
+    totalExcerptChars: number;
+    factualCoverageStatus: "COMPLETE" | "PARTIAL" | "NONE";
+    excerpts: Array<{
+      chunkId: string;
+      knowledgeId: string;
+      excerptLength: number;
+      startOffset: number;
+      endOffset: number;
+      truncationStatus: string;
+      factualCoverageStatus: "COMPLETE" | "PARTIAL" | "NONE";
+      selectionAnchors: Array<{
+        id: string;
+        kind: string;
+        sourceStartOffset: number;
+        sourceEndOffset: number;
+      }>;
+      spans: Array<{
+        sourceStartOffset: number;
+        sourceEndOffset: number;
+        excerptStartOffset: number;
+        excerptEndOffset: number;
+      }>;
+    }>;
+  };
+  authority: {
+    candidateCount: number;
+    eligibleCount: number;
+    selected: {
+      chunkId: string;
+      serviceKey: string;
+      currency: string;
+      amount: number;
+      qualifier: string;
+    } | null;
+  };
+};
 
 export type TurnExecutionTerminalPath =
   | "PROVIDER_STANDARD"
@@ -172,6 +240,7 @@ export type TurnExecutionManifest = {
       qualifier: string;
     } | null;
   };
+  evidence: TurnExecutionEvidenceSummary;
   terminal: {
     path: TurnExecutionTerminalPath;
     reasonCode: string;
@@ -333,6 +402,24 @@ export function createTurnExecutionManifest(input: {
       eligibleAuthorityCount: null,
       selectedAuthority: null,
     },
+    evidence: {
+      schemaVersion: KNOWLEDGE_EVIDENCE_SCHEMA_VERSION,
+      queryEmbeddingCacheStatus: "NOT_EXECUTED",
+      items: [],
+      provider: {
+        maxChunks: 0,
+        maxCharsPerExcerpt: 0,
+        maxTotalChars: 0,
+        totalExcerptChars: 0,
+        factualCoverageStatus: "NONE",
+        excerpts: [],
+      },
+      authority: {
+        candidateCount: 0,
+        eligibleCount: 0,
+        selected: null,
+      },
+    },
     terminal: null,
     provider: {
       finalGeneration: { observation: "NOT_OBSERVED", count: null },
@@ -492,6 +579,92 @@ export function withTurnExecutionDecision(
     decisionPlannedBlockCount: decision.plannedBlockCount,
     decisionStateEffect: decision.stateEffect,
     decisionOutboundIntended: decision.outboundIntended,
+  };
+}
+
+export function withTurnExecutionEvidence(input: {
+  manifest: TurnExecutionManifest;
+  artifacts: readonly FactualEvidenceArtifact[];
+  previews: readonly EvidencePreview[];
+  providerPack: ProviderEvidencePack | null;
+  queryEmbeddingCacheStatus: TurnExecutionEvidenceSummary["queryEmbeddingCacheStatus"];
+  candidateAuthorityCount: number;
+  eligibleAuthorityCount: number;
+  selectedAuthority: TurnExecutionEvidenceSummary["authority"]["selected"];
+}): TurnExecutionManifest {
+  const previewsByChunkId = new Map(
+    input.previews.map((preview) => [preview.chunkId, preview]),
+  );
+  const providerPack = input.providerPack;
+  return {
+    ...input.manifest,
+    evidence: {
+      schemaVersion: KNOWLEDGE_EVIDENCE_SCHEMA_VERSION,
+      queryEmbeddingCacheStatus: input.queryEmbeddingCacheStatus,
+      items: input.artifacts.map((artifact) => {
+        const preview = previewsByChunkId.get(artifact.chunkId);
+        return {
+          chunkId: artifact.chunkId,
+          knowledgeId: artifact.knowledgeId,
+          contentHash: artifact.contentHash,
+          contentLength: artifact.contentLength,
+          rankingScore: artifact.rankingScore,
+          selectionReason: artifact.selectionReason,
+          fullContentAvailable: artifact.fullContentAvailability === "AVAILABLE",
+          previewLength: preview?.previewLength ?? 0,
+          previewOriginalLength: preview?.originalLength ?? artifact.contentLength,
+          previewTruncated: preview?.truncated ?? false,
+          factualSpans: artifact.factualSpans.map((span) => ({
+            startOffset: span.startOffset,
+            endOffset: span.endOffset,
+            reason: span.reason,
+            anchorIds: [...span.anchorIds],
+          })),
+        };
+      }),
+      provider: providerPack
+        ? {
+            maxChunks: providerPack.budget.maxChunks,
+            maxCharsPerExcerpt: providerPack.budget.maxCharsPerExcerpt,
+            maxTotalChars: providerPack.budget.maxTotalChars,
+            totalExcerptChars: providerPack.totalExcerptChars,
+            factualCoverageStatus: providerPack.factualCoverageStatus,
+            excerpts: providerPack.excerpts.map((excerpt) => ({
+              chunkId: excerpt.chunkId,
+              knowledgeId: excerpt.knowledgeId,
+              excerptLength: excerpt.excerptText.length,
+              startOffset: excerpt.startOffset,
+              endOffset: excerpt.endOffset,
+              truncationStatus: excerpt.truncationStatus,
+              factualCoverageStatus: excerpt.factualCoverageStatus,
+              selectionAnchors: excerpt.selectionAnchors.map((anchor) => ({
+                id: anchor.id,
+                kind: anchor.kind,
+                sourceStartOffset: anchor.sourceStartOffset,
+                sourceEndOffset: anchor.sourceEndOffset,
+              })),
+              spans: excerpt.spans.map((span) => ({
+                sourceStartOffset: span.sourceStartOffset,
+                sourceEndOffset: span.sourceEndOffset,
+                excerptStartOffset: span.excerptStartOffset,
+                excerptEndOffset: span.excerptEndOffset,
+              })),
+            })),
+          }
+        : {
+            maxChunks: 0,
+            maxCharsPerExcerpt: 0,
+            maxTotalChars: 0,
+            totalExcerptChars: 0,
+            factualCoverageStatus: "NONE",
+            excerpts: [],
+          },
+      authority: {
+        candidateCount: Math.max(0, input.candidateAuthorityCount),
+        eligibleCount: Math.max(0, input.eligibleAuthorityCount),
+        selected: input.selectedAuthority ? { ...input.selectedAuthority } : null,
+      },
+    },
   };
 }
 

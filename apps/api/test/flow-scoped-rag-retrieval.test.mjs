@@ -10,6 +10,10 @@ import {
   normalizeKnowledgeScopeTag,
 } from "../dist/assistant-knowledge/knowledge-scope-tags.js";
 import {
+  buildFactualEvidenceArtifact,
+  createCanonicalKnowledgeContent,
+} from "../dist/assistant-knowledge/knowledge-evidence.js";
+import {
   deduplicateEligibleRagPriceAuthorities,
   extractRagPriceAuthorities,
   filterEligibleRagPriceAuthorities,
@@ -70,6 +74,17 @@ function scopedPrisma() {
         ),
     },
   };
+}
+
+function factualEvidenceForChunk(chunk) {
+  return buildFactualEvidenceArtifact({
+    chunkId: chunk.id,
+    knowledgeId: chunk.knowledgeId,
+    knowledgeTitle: chunk.knowledge.title,
+    canonicalContent: createCanonicalKnowledgeContent(chunk.content),
+    rankingScore: 1,
+    selectionReason: "TEST_SELECTED",
+  });
 }
 
 function authorityGuard(question, answer, eligiblePriceAuthorities, sources = []) {
@@ -349,12 +364,9 @@ test("flow de equipamento específico vence referências colaterais de visita, v
 test("pipeline retrieval → autoridades → guard só permite o preço do domínio escopado", () => {
   const question = "Qual o valor para formatar um PC?";
   const selected = [formatChunk].map((chunk) => {
-    const priceAuthorities = extractRagPriceAuthorities({
-      chunkId: chunk.id,
-      knowledgeItemId: chunk.knowledgeId,
-      title: chunk.knowledge.title,
-      content: chunk.content,
-    }).filter((authority) =>
+    const priceAuthorities = extractRagPriceAuthorities(
+      factualEvidenceForChunk(chunk),
+    ).filter((authority) =>
       isRagPriceAuthorityCompatibleWithMessage({ authority, currentMessage: question }),
     );
     return {
@@ -407,12 +419,7 @@ test("autoridades de montagem e placa-mãe são excluídas para uma consulta de 
     },
   ];
   const authorities = unrelated.flatMap((chunk) =>
-    extractRagPriceAuthorities({
-      chunkId: chunk.id,
-      knowledgeItemId: chunk.knowledgeId,
-      title: chunk.knowledge.title,
-      content: chunk.content,
-    }).filter((authority) =>
+    extractRagPriceAuthorities(factualEvidenceForChunk(chunk)).filter((authority) =>
       isRagPriceAuthorityCompatibleWithMessage({ authority, currentMessage: question }),
     ),
   );

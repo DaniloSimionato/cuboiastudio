@@ -401,7 +401,11 @@ function createServices(state, options = {}) {
   };
 
   const assistantKnowledgeRetrievalService = {
-    searchRelevantKnowledge: async () => ({ totalChunksScanned: 0, warning: null, results: [] }),
+    searchRelevantKnowledgeForRuntime: async () => ({
+      totalChunksScanned: 0,
+      warning: null,
+      results: [],
+    }),
   };
 
   const promptCompilerService = new PromptCompilerService();

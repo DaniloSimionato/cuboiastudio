@@ -14,6 +14,34 @@ import { CreateAssistantDto } from "../dist/assistants/dto/create-assistant.dto.
 import { UpdateAssistantDto } from "../dist/assistants/dto/update-assistant.dto.js";
 import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
 import { ChatwootWebhookService } from "../dist/chatwoot/chatwoot-webhook.service.js";
+import {
+  buildFactualEvidenceArtifact,
+  createCanonicalKnowledgeContent,
+  createEvidencePreview,
+} from "../dist/assistant-knowledge/knowledge-evidence.js";
+
+function runtimeKnowledgeItem({
+  knowledgeId,
+  knowledgeTitle,
+  chunkId,
+  canonicalText,
+  score = 0.9,
+  chunkIndex = 0,
+}) {
+  const canonicalContent = createCanonicalKnowledgeContent(canonicalText);
+  return {
+    artifact: buildFactualEvidenceArtifact({
+      chunkId,
+      knowledgeId,
+      knowledgeTitle,
+      canonicalContent,
+      rankingScore: score,
+      selectionReason: "score_at_or_above_threshold",
+    }),
+    preview: createEvidencePreview({ chunkId, canonicalContent, maxLength: 250 }),
+    chunkIndex,
+  };
+}
 
 function createAuth(companyId) {
   return {
@@ -671,27 +699,29 @@ test("Caminho Chatwoot usa buffer, behavior, RAG factual e política conversacio
     } = createConversationsService(prisma, {
       answer,
       knowledgeRetrievalService: {
-        searchRelevantKnowledge: async ({ topK }) => {
+        searchRelevantKnowledgeForRuntime: async ({ topK }) => {
           ragCalls.push({ topK });
           const results = [
-            {
+            runtimeKnowledgeItem({
               knowledgeId: "knowledge-1",
               knowledgeTitle: "Serviços de computador",
               chunkId: "chunk-format",
-              contentPreview: "Formatação do computador: serviço disponível.",
-            },
-            {
+              canonicalText: "Formatação do computador: serviço disponível.",
+            }),
+            runtimeKnowledgeItem({
               knowledgeId: "knowledge-1",
               knowledgeTitle: "Serviços de computador",
               chunkId: "chunk-memory",
-              contentPreview: "Aumento de memória RAM: verificar compatibilidade.",
-            },
-            {
+              canonicalText: "Aumento de memória RAM: verificar compatibilidade.",
+              chunkIndex: 1,
+            }),
+            runtimeKnowledgeItem({
               knowledgeId: "knowledge-1",
               knowledgeTitle: "Serviços de computador",
               chunkId: "chunk-ssd",
-              contentPreview: "Instalação de SSD: verificar modelo e capacidade.",
-            },
+              canonicalText: "Instalação de SSD: verificar modelo e capacidade.",
+              chunkIndex: 2,
+            }),
           ].slice(0, topK);
           return {
             totalChunksScanned: 3,

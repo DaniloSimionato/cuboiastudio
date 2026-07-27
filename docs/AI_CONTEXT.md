@@ -74,9 +74,9 @@ provider para respostas abertas. Knowledge scopes, filtro por tags, flow
 routing, RAG, autoridades comerciais, guards de preco e isolamento por
 `currentContextVersion` continuam ativos.
 
-Os blocos de estabilizacao arquitetural foram concluidos ate o Bloco 4A. O
-Bloco 4B esta implementado neste worktree e permanece sujeito ao gate final
-registrado em seu relatorio:
+Os blocos de estabilizacao arquitetural foram concluidos ate o Bloco 5A. A
+preservacao de evidencia factual integral no Runtime V1 foi validada localmente
+pelo harness real:
 
 - Bloco 0: harness HTTP pelo mesmo `AppModule`, bootstrap e webhook da producao;
 - Bloco 1: `turnExecutionId`, policy version e manifesto sanitizado;
@@ -87,7 +87,9 @@ registrado em seu relatorio:
 - Bloco 4A: handoff humano operacional fail-closed, com operacao persistida,
   bloqueio local por CAS, mutacao e verificacao remotas antes da confirmacao;
 - Bloco 4B: recovery de operacoes parciais de handoff com safety separado,
-  attempts duraveis, lease, GET-first e confirmacao idempotente pelo ledger.
+  attempts duraveis, lease, GET-first e confirmacao idempotente pelo ledger;
+- Bloco 5A: contratos separados para conteudo canonico, artefato factual,
+  excerpt limitado do provider e preview exclusivamente observacional.
 
 No handoff explicito, o Runtime V1 nao trata mais o texto de transferencia como
 prova da operacao. A sequencia e:
@@ -120,6 +122,15 @@ aceita apenas evidencia positiva por external message ID ou pela referencia
 tecnica exata preservada em `content_attributes`; ausencia em lista paginada e
 inconclusiva.
 
+Knowledge selecionado pelo Runtime V1 agora preserva o
+`AssistantKnowledgeChunk.content` integral em um artefato factual efemero.
+Authority Resolver e guards consomem o artefato ou a autoridade estruturada,
+nunca o preview. O provider recebe somente excerpts limitados, construidos
+depois da extracao factual, com offsets, anchors, coverage e budget
+rastreaveis. O preview de 250 caracteres continua disponivel para diagnostico,
+mas nao concede autoridade. Manifesto e logs guardam apenas IDs, hashes,
+tamanhos, offsets, coverage e campos comerciais sanitizados.
+
 O plano tecnico do "cerebro" da IA esta sendo documentado em `docs/AI_RUNTIME_PLAN.md` para separar com clareza provider, prompt, runtime, logs, knowledge, tools e canais.
 
 AI-001 agora criou a primeira camada backend-only de provider real com diagnostico seguro, e AI-003 passou a ligar o runtime de conversa ao provider quando a configuracao permite, mantendo fallback deterministico.
@@ -144,6 +155,7 @@ Documentos operacionais atuais:
 - `apps/api/test/BLOCK3B2_OUTBOUND_RECOVERY_REPORT.md`;
 - `apps/api/test/BLOCK4A_OPERATIONAL_HANDOFF_REPORT.md`;
 - `apps/api/test/BLOCK4B_HANDOFF_RECOVERY_REPORT.md`;
+- `apps/api/test/BLOCK5A_INTEGRAL_EVIDENCE_REPORT.md`;
 - `docs/CUBOCHAT_INTEGRATION.md`.
 
 ## 4. Objetivo do MVP
@@ -198,23 +210,21 @@ forte, mas ainda conserva limitacoes funcionais conhecidas:
 - erro ortografico `atendiemnto` ainda pode escapar de BusinessHours direto;
 - continuidade eliptica de preco ainda nao troca corretamente para
   `placa_mae`;
-- evidencia relevante alem do preview de 250 caracteres ainda pode ser perdida;
 - resposta tecnica sobre computador lento ainda pode ficar generica;
 - divergencia remota de pausa sem atualizacao local ainda nao e detectada;
 - recovery outbound nao possui um scheduler independente;
 - o runner de handoff permanece desabilitado por padrao e proibido em
   staging/producao neste bloco.
 
-Os quatro primeiros gaps funcionais permanecem visiveis como especificacoes
-`test.todo`. A especificacao de recovery de handoff deixou de ser `todo` e
-passou a possuir cobertura executavel separada; isso nao altera os quatro gaps
-de qualidade de atendimento.
+Os tres gaps funcionais permanecem visiveis como especificacoes `test.todo`.
+A perda de evidencia depois dos caracteres 250 e 800 deixou de ser `todo` e
+passou a possuir cobertura HTTP executavel, sem implementar continuidade.
 
-O gate final do Bloco 4A passou 27 cenarios HTTP executaveis, manteve 5
-especificacoes `todo`, passou 254 testes relacionados e 7 testes unitarios do
-contrato operacional. Os resultados finais do Bloco 4B devem ser consultados
-em `BLOCK4B_HANDOFF_RECOVERY_REPORT.md` depois da conclusao do gate. Runtime V2
-permanece OFF.
+O gate final do Bloco 5A passou 31 cenarios HTTP executaveis, manteve 3
+especificacoes `todo` e passou 310 testes relacionados. O conjunto fresco de
+artefatos V1 possui SHA-256
+`abd659d950f5f2e3620d44d493424477c83de23c6d5e96c3d79d65b2041f6ef0`.
+Runtime V2 permanece OFF.
 
 ## 7. Como queremos que funcione
 

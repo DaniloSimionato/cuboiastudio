@@ -13,6 +13,11 @@ import { buildDeterministicAssistantResponse } from "./assistant-runtime";
 import { AiService } from "../ai/ai.service";
 import { AssistantKnowledgeRetrievalService } from "../assistant-knowledge/assistant-knowledge-retrieval.service";
 import {
+  buildProviderEvidenceAnchorsFromText,
+  packProviderEvidenceExcerpts,
+} from "../assistant-knowledge/knowledge-evidence";
+import { extractRagPriceAuthorities } from "../assistant-conversations/rag-price-authority";
+import {
   isMultiNeedTriageMessage,
   PromptCompilerService,
 } from "../prompt-compiler/prompt-compiler.service";
@@ -1095,7 +1100,7 @@ export class AssistantsService {
 
       // 2. Buscar RAG Chunks
       const knowledgeLimit = isMultiNeedTriageMessage(input.dto.question) ? 2 : 5;
-      const ragSearch = await this.retrievalService.searchRelevantKnowledge({
+      const ragSearch = await this.retrievalService.searchRelevantKnowledgeForRuntime({
         assistantId: assistant.id,
         companyId: input.tenant.companyId,
         query: input.dto.question,
@@ -1109,7 +1114,17 @@ export class AssistantsService {
       const usedKnowledge: any[] = [];
 
       if (ragSearch.results.length > 0) {
-        usedKnowledge.push(...ragSearch.results);
+        usedKnowledge.push(
+          ...ragSearch.results.map((result) => ({
+            knowledgeId: result.artifact.knowledgeId,
+            knowledgeTitle: result.artifact.knowledgeTitle,
+            chunkId: result.artifact.chunkId,
+            chunkIndex: result.chunkIndex,
+            contentPreview: result.preview.previewText,
+            score: result.artifact.rankingScore,
+            ...(result.metadata !== undefined ? { metadata: result.metadata } : {}),
+          })),
+        );
       }
 
       // 4. Chamar LLM Real (apenas se Provider configurado)
@@ -1141,13 +1156,45 @@ export class AssistantsService {
             weeklySchedule: assistant.weeklySchedule,
             aiAlwaysAvailable: assistant.aiAlwaysAvailable,
           });
+          const artifacts = ragSearch.results.map((result) => result.artifact);
+          const authorities = artifacts.flatMap((artifact) =>
+            extractRagPriceAuthorities(artifact),
+          );
+          const evidencePack = packProviderEvidenceExcerpts({
+            artifacts,
+            sharedAnchors: buildProviderEvidenceAnchorsFromText(
+              input.dto.question,
+              "CURRENT_TURN",
+            ),
+            anchorsByChunkId: Object.fromEntries(
+              artifacts.map((artifact) => [
+                artifact.chunkId,
+                authorities
+                  .filter((authority) => authority.chunkId === artifact.chunkId)
+                  .flatMap((authority) =>
+                    buildProviderEvidenceAnchorsFromText(
+                      authority.sourceText,
+                      "AUTHORITY_SOURCE",
+                    ),
+                  ),
+              ]),
+            ),
+          });
+          const titleByChunkId = new Map(
+            ragSearch.results.map((result) => [
+              result.artifact.chunkId,
+              result.artifact.knowledgeTitle,
+            ]),
+          );
           const promptMessages = this.promptCompilerService.compile({
             assistant,
             behavior: assistant.behavior,
-            knowledgeItems: ragSearch.results.map((result) => ({
-              title: result.knowledgeTitle,
-              content: result.contentPreview,
+            providerEvidenceItems: evidencePack.excerpts.map((evidence) => ({
+              id: evidence.chunkId,
+              title: titleByChunkId.get(evidence.chunkId) ?? "Conhecimento oficial",
+              evidence,
             })),
+            knowledgeItems: [],
             historyMessages: [],
             currentMessage: input.dto.question,
             officialBusinessContext: officialContext,

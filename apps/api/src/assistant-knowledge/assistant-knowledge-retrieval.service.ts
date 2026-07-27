@@ -3,9 +3,12 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  Optional,
 } from "@nestjs/common";
+import { createHash } from "node:crypto";
 import { PrismaService } from "../database/prisma.service";
 import { AiService } from "../ai/ai.service";
+import { CacheService } from "../cache/cache.service";
 import { type AuthenticatedUser, type RequestTenant } from "../auth/auth.types";
 import { Status } from "@prisma/client";
 import {
@@ -13,6 +16,19 @@ import {
   type RagScoreThresholdSource,
 } from "../assistant-conversations/runtime-context-manifest";
 import { knowledgeScopeTagsMatch, normalizeKnowledgeScopeTags } from "./knowledge-scope-tags";
+import {
+  buildFactualEvidenceArtifact,
+  createCanonicalKnowledgeContent,
+  createEvidencePreview,
+  type EvidencePreview,
+  type FactualEvidenceArtifact,
+} from "./knowledge-evidence";
+
+const KNOWLEDGE_QUERY_EMBEDDING_CACHE_VERSION = "knowledge-query-embedding-v1";
+const KNOWLEDGE_QUERY_EMBEDDING_MODEL = "text-embedding-3-small";
+const KNOWLEDGE_QUERY_EMBEDDING_CACHE_TTL_SECONDS = 3_600;
+
+export type KnowledgeQueryEmbeddingCacheStatus = "HIT" | "MISS" | "UNAVAILABLE";
 
 export interface AssistantKnowledgeSearchInput {
   companyId?: string;
@@ -47,6 +63,7 @@ export interface AssistantKnowledgeSearchResult {
   knowledgeScopeNoMatch: boolean;
   scopedCandidateCount: number;
   rejectedOutOfScopeChunkCount: number;
+  queryEmbeddingCacheStatus: KnowledgeQueryEmbeddingCacheStatus;
   results: Array<{
     knowledgeId: string;
     knowledgeTitle: string;
@@ -57,6 +74,18 @@ export interface AssistantKnowledgeSearchResult {
     metadata?: unknown;
   }>;
   warning?: string;
+}
+
+export type AssistantKnowledgeRuntimeSearchItem = {
+  artifact: FactualEvidenceArtifact;
+  preview: EvidencePreview;
+  chunkIndex: number;
+  metadata?: unknown;
+};
+
+export interface AssistantKnowledgeRuntimeSearchResult
+  extends Omit<AssistantKnowledgeSearchResult, "results"> {
+  results: AssistantKnowledgeRuntimeSearchItem[];
 }
 
 function cosineSimilarity(vecA: number[], vecB: number[]): number {
@@ -81,11 +110,35 @@ export class AssistantKnowledgeRetrievalService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiService: AiService,
+    @Optional() private readonly cacheService?: CacheService,
   ) {}
 
   async searchRelevantKnowledge(
     input: AssistantKnowledgeSearchInput,
   ): Promise<AssistantKnowledgeSearchResult> {
+    const runtimeResult = await this.searchRelevantKnowledgeForRuntime(input);
+    return {
+      ...runtimeResult,
+      results: runtimeResult.results.map((result) => ({
+        knowledgeId: result.artifact.knowledgeId,
+        knowledgeTitle: result.artifact.knowledgeTitle,
+        chunkId: result.artifact.chunkId,
+        chunkIndex: result.chunkIndex,
+        contentPreview: result.preview.previewText,
+        score: result.artifact.rankingScore,
+        ...(result.metadata !== undefined ? { metadata: result.metadata } : {}),
+      })),
+    };
+  }
+
+  /**
+   * Internal runtime contract. Canonical content is intentionally available
+   * only through typed factual artifacts and must never be serialized by the
+   * public controller.
+   */
+  async searchRelevantKnowledgeForRuntime(
+    input: AssistantKnowledgeSearchInput,
+  ): Promise<AssistantKnowledgeRuntimeSearchResult> {
     if (input.user && input.user.companyId !== input.tenant.companyId) {
       throw new ForbiddenException("Tenant context does not match the authenticated user.");
     }
@@ -222,6 +275,7 @@ export class AssistantKnowledgeRetrievalService {
         knowledgeScopeNoMatch,
         scopedCandidateCount: 0,
         rejectedOutOfScopeChunkCount,
+        queryEmbeddingCacheStatus: this.cacheService ? "MISS" : "UNAVAILABLE",
         results: [],
         warning: knowledgeScopeApplied
           ? "Nenhum conhecimento ativo e preparado (READY) corresponde às tags do escopo selecionado."
@@ -230,11 +284,51 @@ export class AssistantKnowledgeRetrievalService {
     }
 
     // 2. Generate embedding for the query
-    const queryEmbeddingResult = await this.aiService.generateEmbedding({
-      companyId: input.tenant.companyId,
-      text: trimmedQuery,
-    });
-    const queryVector = queryEmbeddingResult.embedding;
+    const embeddingCacheKey = [
+      KNOWLEDGE_QUERY_EMBEDDING_CACHE_VERSION,
+      input.tenant.companyId,
+      input.assistantId,
+      KNOWLEDGE_QUERY_EMBEDDING_MODEL,
+      createHash("sha256").update(trimmedQuery.toLocaleLowerCase("pt-BR")).digest("hex"),
+    ].join(":");
+    let queryVector: number[] | null = null;
+    let queryEmbeddingCacheStatus: KnowledgeQueryEmbeddingCacheStatus = this.cacheService
+      ? "MISS"
+      : "UNAVAILABLE";
+    if (this.cacheService) {
+      try {
+        const cached = await this.cacheService.get<unknown>(embeddingCacheKey);
+        if (
+          Array.isArray(cached) &&
+          cached.length > 0 &&
+          cached.every((value) => typeof value === "number" && Number.isFinite(value))
+        ) {
+          queryVector = cached;
+          queryEmbeddingCacheStatus = "HIT";
+        }
+      } catch {
+        queryEmbeddingCacheStatus = "MISS";
+      }
+    }
+    if (!queryVector) {
+      const queryEmbeddingResult = await this.aiService.generateEmbedding({
+        companyId: input.tenant.companyId,
+        text: trimmedQuery,
+        model: KNOWLEDGE_QUERY_EMBEDDING_MODEL,
+      });
+      queryVector = queryEmbeddingResult.embedding;
+      if (this.cacheService) {
+        try {
+          await this.cacheService.set(
+            embeddingCacheKey,
+            queryVector,
+            KNOWLEDGE_QUERY_EMBEDDING_CACHE_TTL_SECONDS,
+          );
+        } catch {
+          // Cache is an optimization only. Canonical evidence still comes from PostgreSQL.
+        }
+      }
+    }
 
     // 3. Calculate similarities
     const scoredChunks = scopedChunks
@@ -298,17 +392,29 @@ export class AssistantKnowledgeRetrievalService {
       knowledgeScopeNoMatch,
       scopedCandidateCount: scopedChunks.length,
       rejectedOutOfScopeChunkCount,
-      results: topResults.map((res) => ({
-        knowledgeId: res.chunk.knowledgeId,
-        knowledgeTitle: res.chunk.knowledge.title,
-        chunkId: res.chunk.id,
-        chunkIndex: res.chunk.chunkIndex,
-        // Preview de até 250 chars para não saturar resposta JSON (o frontend é só p/ debug)
-        contentPreview:
-          res.chunk.content.substring(0, 250) + (res.chunk.content.length > 250 ? "..." : ""),
-        score: Number(res.score.toFixed(4)),
-        metadata: res.chunk.knowledge.metadata ?? undefined,
-      })),
+      queryEmbeddingCacheStatus,
+      results: topResults.map((res) => {
+        const canonicalContent = createCanonicalKnowledgeContent(res.chunk.content);
+        const artifact = buildFactualEvidenceArtifact({
+          chunkId: res.chunk.id,
+          knowledgeId: res.chunk.knowledgeId,
+          knowledgeTitle: res.chunk.knowledge.title,
+          canonicalContent,
+          rankingScore: Number(res.score.toFixed(4)),
+          selectionReason: "score_at_or_above_threshold",
+          sourceType: "KNOWLEDGE_CHUNK",
+        });
+        return {
+          artifact,
+          preview: createEvidencePreview({
+            chunkId: res.chunk.id,
+            canonicalContent,
+            maxLength: 250,
+          }),
+          chunkIndex: res.chunk.chunkIndex,
+          metadata: res.chunk.knowledge.metadata ?? undefined,
+        };
+      }),
     };
   }
 }

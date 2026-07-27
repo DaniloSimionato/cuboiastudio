@@ -4,6 +4,10 @@ import { Assistant, AssistantBehavior, AssistantFlow } from "@prisma/client";
 import type { OfficialBusinessContext } from "../assistants/official-business-context";
 import { MAX_HISTORY_MESSAGE_LENGTH } from "../assistant-conversations/conversation-history-format";
 import type { MultiIntentTurn } from "../intent-router/intent-routing";
+import {
+  isProviderEvidenceExcerpt,
+  type ProviderEvidenceExcerpt,
+} from "../assistant-knowledge/knowledge-evidence";
 
 const MAX_PROMPT_TEXT_LENGTH = 10000;
 const MAX_TRIAGE_HISTORY_MESSAGES = 12;
@@ -268,6 +272,19 @@ export type PromptCompilerInput = {
     ruleType: string;
     instruction: string;
   }>;
+  /**
+   * Bounded, traceable factual transport used by the active V1 runtime.
+   * When present it has precedence over the legacy generic knowledge input.
+   */
+  providerEvidenceItems?: Array<{
+    id?: string;
+    title: string;
+    evidence: ProviderEvidenceExcerpt;
+  }>;
+  /**
+   * Compatibility-only input retained for callers that do not yet participate
+   * in the V1 factual evidence contract (notably Runtime V2, which is OFF).
+   */
   knowledgeItems: { id?: string; title: string; content: string }[];
   historyMessages: any[];
   currentMessage: string;
@@ -527,6 +544,7 @@ export class PromptCompilerService {
       behavior,
       flow,
       securityRules = [],
+      providerEvidenceItems = [],
       knowledgeItems,
       historyMessages,
       currentMessage,
@@ -770,14 +788,30 @@ export class PromptCompilerService {
       messages.push({ role: "system", content: domainKnowledgeUseBlock });
     }
 
+    const boundedProviderKnowledge =
+      providerEvidenceItems.length > 0
+        ? providerEvidenceItems.map((item) => {
+            if (!isProviderEvidenceExcerpt(item.evidence)) {
+              throw new TypeError(
+                "Prompt factual evidence must be a bounded provider evidence excerpt",
+              );
+            }
+            return {
+              id: item.id,
+              title: item.title,
+              content: item.evidence.excerptText,
+            };
+          })
+        : knowledgeItems;
+
     // 7. Knowledge supplies facts, never the response format or tone.
-    if (knowledgeItems.length > 0) {
+    if (boundedProviderKnowledge.length > 0) {
       messages.push({
         role: "system",
         content: [
           "BASE DE CONHECIMENTO RELEVANTE (use como fonte de fatos, não como modelo de estilo):",
           "Selecione somente o trecho necessário, reescreva em linguagem natural conforme o comportamento configurado e não copie títulos, listas ou formalidade do material sem necessidade.",
-          ...knowledgeItems.map(
+          ...boundedProviderKnowledge.map(
             (item, index) =>
               `${index + 1}. Título: ${item.title}\nConteúdo factual: ${truncateText(item.content, MAX_PROMPT_TEXT_LENGTH)}`,
           ),

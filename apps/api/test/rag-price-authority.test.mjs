@@ -5,6 +5,12 @@ import { validateV1AnswerAuthority } from "../dist/assistant-conversations/runti
 import { selectRuntimeKnowledgeItems } from "../dist/assistant-conversations/runtime-context-manifest.js";
 import { PromptCompilerService } from "../dist/prompt-compiler/prompt-compiler.service.js";
 import {
+  buildFactualEvidenceArtifact,
+  buildProviderEvidenceExcerpt,
+  createCanonicalKnowledgeContent,
+  createEvidencePreview,
+} from "../dist/assistant-knowledge/knowledge-evidence.js";
+import {
   extractRagPriceAuthorities,
   filterEligibleRagPriceAuthorities,
   deduplicateEligibleRagPriceAuthorities,
@@ -17,42 +23,80 @@ const priceChunk = {
   knowledgeId: "cmre9yg2f000do701wvxe30lq",
   knowledgeTitle: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
   chunkId: "cmrea0w390010o701k3n4y6v0",
+  content:
+    "A formatação básica padrão, incluindo instalação do Windows, tem valor a partir de R$ 195,00. O orçamento final depende da avaliação técnica.",
   contentPreview:
     "A formatação básica padrão, incluindo instalação do Windows, tem valor a partir de R$ 195,00. O orçamento final depende da avaliação técnica.",
   score: 0.5534,
 };
+
+function factualEvidence({
+  chunkId,
+  knowledgeItemId,
+  title,
+  content,
+  score = 0.8,
+}) {
+  return buildFactualEvidenceArtifact({
+    chunkId,
+    knowledgeId: knowledgeItemId,
+    knowledgeTitle: title,
+    canonicalContent: createCanonicalKnowledgeContent(content),
+    rankingScore: score,
+    selectionReason: "unit_test_selected",
+  });
+}
 
 function officialContext() {
   return { businessHours: {}, timezone: "America/Campo_Grande" };
 }
 
 function selectedRagContext(question = "Quanto sai para formatar?") {
+  const artifact = factualEvidence({
+    chunkId: priceChunk.chunkId,
+    knowledgeItemId: priceChunk.knowledgeId,
+    title: priceChunk.knowledgeTitle,
+    content: priceChunk.content,
+    score: priceChunk.score,
+  });
+  const preview = createEvidencePreview({
+    chunkId: priceChunk.chunkId,
+    canonicalContent: artifact.canonicalContent,
+  });
   const selection = selectRuntimeKnowledgeItems({
     ragEnabled: true,
     threshold: 0.55,
-    results: [priceChunk],
+    results: [{ artifact, preview }],
   });
   const eligiblePriceAuthorities = deduplicateEligibleRagPriceAuthorities(
     filterEligibleRagPriceAuthorities({
       authorities: selection.items.flatMap((item) =>
-        extractRagPriceAuthorities({
-          chunkId: item.id,
-          knowledgeItemId: item.knowledgeItemId ?? item.id,
-          title: item.title,
-          content: item.content,
-        }),
+        extractRagPriceAuthorities(item.factualEvidence),
       ),
       currentMessage: question,
     }),
   );
+  const providerEvidenceItems = selection.items.map((item) => ({
+    id: item.id,
+    title: item.title,
+    evidence: buildProviderEvidenceExcerpt({
+      artifact: item.factualEvidence,
+    }),
+  }));
+  const boundedKnowledgeItems = providerEvidenceItems.map((item) => ({
+    id: item.id,
+    title: item.title,
+    content: item.evidence.excerptText,
+  }));
   const deterministic = buildDeterministicAssistantResponse({
     question,
-    knowledgeItems: selection.items,
+    knowledgeItems: boundedKnowledgeItems,
     priceAuthorityContext: { eligiblePriceAuthorities },
   });
   const prompt = new PromptCompilerService().compile({
     assistant: { name: "Assistente" },
-    knowledgeItems: selection.items,
+    providerEvidenceItems,
+    knowledgeItems: boundedKnowledgeItems,
     historyMessages: [],
     currentMessage: question,
   });
@@ -90,6 +134,116 @@ test("RAG selecionado cria contrato de preço e o mesmo item entra no prompt", (
     prompt.map((message) => String(message.content)).join("\n"),
     /a partir de R\$ 195,00/i,
   );
+});
+
+test("extração de autoridade aceita somente evidência factual canônica", () => {
+  const canonicalContent = createCanonicalKnowledgeContent(
+    "Formatação de computador tem valor inicial de R$ 1.950,00.",
+  );
+  const preview = createEvidencePreview({
+    chunkId: "preview-only",
+    canonicalContent,
+    maxLength: 24,
+  });
+
+  assert.throws(
+    () =>
+      extractRagPriceAuthorities({
+        chunkId: "legacy-generic-content",
+        knowledgeItemId: "legacy-knowledge",
+        title: "Conteúdo genérico",
+        content: canonicalContent,
+      }),
+    /canonical factual evidence artifact/i,
+  );
+  assert.throws(
+    () => extractRagPriceAuthorities(preview),
+    /canonical factual evidence artifact/i,
+  );
+});
+
+test("autoridade após caractere 800 usa conteúdo integral e span factual rastreável", () => {
+  const filler = "detalhes técnicos documentais sem autoridade comercial ".repeat(18);
+  const content =
+    `O reparo de placa-mãe ${filler}` +
+    "tem valor inicial de R$ 395,00. O diagnóstico final depende da avaliação.";
+  assert.ok(content.indexOf("R$ 395,00") > 800);
+
+  const [authority] = extractRagPriceAuthorities(
+    factualEvidence({
+      chunkId: "motherboard-after-800",
+      knowledgeItemId: "knowledge-motherboard",
+      title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
+      content,
+    }),
+  );
+
+  assert.ok(authority);
+  assert.equal(authority.serviceKey, "placa_mae");
+  assert.equal(authority.amount, 395);
+  assert.equal(authority.currency, "BRL");
+  assert.equal(authority.qualifier, "starting_at");
+  assert.match(authority.sourceText, /placa-mãe/iu);
+  assert.match(authority.sourceText, /valor inicial de R\$ 395,00/iu);
+  assert.equal(
+    content.slice(authority.evidenceStartOffset, authority.evidenceEndOffset),
+    authority.sourceText,
+  );
+  assert.ok(authority.evidenceStartOffset < content.indexOf("R$ 395,00"));
+  assert.ok(authority.evidenceEndOffset > content.indexOf("R$ 395,00"));
+});
+
+test("autoridade integral governa a decisão mesmo quando o excerpt do provider omite o fato", () => {
+  const content = createCanonicalKnowledgeContent(
+    `Contexto técnico sem preço. ${"x".repeat(900)} O reparo de placa-mãe tem valor inicial de R$ 395,00.`,
+  );
+  const artifact = buildFactualEvidenceArtifact({
+    chunkId: "chunk-authority-outside-provider-excerpt",
+    knowledgeId: "knowledge-authority-outside-provider-excerpt",
+    knowledgeTitle: "Serviços oficiais",
+    canonicalContent: content,
+    rankingScore: 0.99,
+    selectionReason: "RAG_SELECTED",
+  });
+  const providerExcerpt = buildProviderEvidenceExcerpt({
+    artifact,
+    anchors: [
+      {
+        id: "unrelated-start-anchor",
+        value: "Contexto técnico",
+        kind: "CURRENT_TURN_TERM",
+        priority: 100,
+      },
+    ],
+    budget: {
+      maxChunks: 1,
+      maxCharsPerExcerpt: 120,
+      maxTotalChars: 120,
+      maxSpansPerChunk: 1,
+      contextCharsBefore: 0,
+      contextCharsAfter: 40,
+      mergeGapChars: 0,
+    },
+  });
+  assert.doesNotMatch(providerExcerpt.excerptText, /R\$\s*395,00/u);
+
+  const authorities = deduplicateEligibleRagPriceAuthorities(
+    filterEligibleRagPriceAuthorities({
+      authorities: extractRagPriceAuthorities(artifact),
+      currentMessage: "Qual o valor para consertar minha placa-mãe?",
+    }),
+  );
+  const decision = resolveDeterministicPriceResponse({
+    isExplicitPriceQuery: true,
+    currentMessage: "Qual o valor para consertar minha placa-mãe?",
+    eligiblePriceAuthorities: authorities,
+  });
+
+  assert.ok(decision);
+  assert.equal(decision.serviceKey, "placa_mae");
+  assert.equal(decision.authority.amount, 395);
+  assert.equal(decision.authority.qualifier, "starting_at");
+  assert.equal(decision.answer, "O reparo de placa-mãe custa a partir de R$ 395,00.");
 });
 
 test("provider mockado preserva somente preços RAG compatíveis e qualificados", () => {
@@ -170,13 +324,15 @@ test("texto do cliente e histórico não criam autoridade de preço", () => {
 });
 
 test("autoridades de preço elegíveis são filtradas pelo serviço solicitado", () => {
-  const authorities = extractRagPriceAuthorities({
-    chunkId: "mixed-prices",
-    knowledgeItemId: "knowledge-format",
-    title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
-    content:
-      "Formatação de computador tem valor inicial de R$ 1.950,00. Reparo de placa-mãe tem valor inicial de R$ 395,00. Remoção de vírus exige avaliação técnica.",
-  });
+  const authorities = extractRagPriceAuthorities(
+    factualEvidence({
+      chunkId: "mixed-prices",
+      knowledgeItemId: "knowledge-format",
+      title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
+      content:
+        "Formatação de computador tem valor inicial de R$ 1.950,00. Reparo de placa-mãe tem valor inicial de R$ 395,00. Remoção de vírus exige avaliação técnica.",
+    }),
+  );
   assert.deepEqual(
     authorities.map((authority) => [authority.serviceKey, authority.amount]),
     [
@@ -184,6 +340,7 @@ test("autoridades de preço elegíveis são filtradas pelo serviço solicitado",
       ["placa_mae", 395],
     ],
   );
+  assert.match(authorities[0].sourceText, /R\$ 1\.950,00/iu);
 
   const cases = [
     ["Qual o valor para formatar um PC?", ["formatacao"], [1950]],
@@ -270,20 +427,24 @@ test("resposta determinística de preço recusa serviço ausente, múltiplo ou a
 });
 
 test("autoridades elegíveis idênticas agregam proveniência sem esconder conflitos reais", () => {
-  const formatting = extractRagPriceAuthorities({
-    chunkId: "format-a",
-    knowledgeItemId: "knowledge-format",
-    title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
-    content: "Formatação de computador tem valor inicial de R$ 1.950,00.",
-  })[0];
+  const formatting = extractRagPriceAuthorities(
+    factualEvidence({
+      chunkId: "format-a",
+      knowledgeItemId: "knowledge-format",
+      title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
+      content: "Formatação de computador tem valor inicial de R$ 1.950,00.",
+    }),
+  )[0];
   const formattingDuplicateA = { ...formatting, chunkId: "format-b", sourceChunkIds: ["format-b"] };
   const formattingDuplicateB = { ...formatting, chunkId: "format-c", sourceChunkIds: ["format-c"] };
-  const motherboard = extractRagPriceAuthorities({
-    chunkId: "motherboard-a",
-    knowledgeItemId: "knowledge-format",
-    title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
-    content: "Reparo de placa-mãe tem valor inicial de R$ 395,00.",
-  })[0];
+  const motherboard = extractRagPriceAuthorities(
+    factualEvidence({
+      chunkId: "motherboard-a",
+      knowledgeItemId: "knowledge-format",
+      title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
+      content: "Reparo de placa-mãe tem valor inicial de R$ 395,00.",
+    }),
+  )[0];
 
   const formattingOnly = deduplicateEligibleRagPriceAuthorities(
     filterEligibleRagPriceAuthorities({
@@ -325,13 +486,15 @@ test("autoridades elegíveis idênticas agregam proveniência sem esconder confl
 });
 
 test("guard valida cada claim contra a autoridade elegível canônica e falha fechado", () => {
-  const authorities = extractRagPriceAuthorities({
-    chunkId: "mixed-price-chunk",
-    knowledgeItemId: "knowledge-format",
-    title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
-    content:
-      "A formatação custa a partir de R$ 1.950,00. O reparo de placa-mãe custa a partir de R$ 395,00.",
-  });
+  const authorities = extractRagPriceAuthorities(
+    factualEvidence({
+      chunkId: "mixed-price-chunk",
+      knowledgeItemId: "knowledge-format",
+      title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
+      content:
+        "A formatação custa a partir de R$ 1.950,00. O reparo de placa-mãe custa a partir de R$ 395,00.",
+    }),
+  );
   const formatting = {
     ...authorities.find((authority) => authority.serviceKey === "formatacao"),
     evidenceCount: 3,

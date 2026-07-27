@@ -466,7 +466,7 @@ function createDummyInterpreter() {
 
 function createDummyKnowledgeRetrieval() {
   return {
-    searchRelevantKnowledge: async () => ({
+    searchRelevantKnowledgeForRuntime: async () => ({
       totalChunksScanned: 0,
       warning: null,
       results: [],

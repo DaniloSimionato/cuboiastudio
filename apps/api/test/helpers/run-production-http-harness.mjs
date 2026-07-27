@@ -5,19 +5,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertIsolatedServiceUrls } from "./production-app-process.mjs";
 
-const BASELINE_COMMIT = "670bb08cb97d386629f6fc71623018362be0992f";
-const ALLOWED_BLOCK4B_RUNTIME_PATHS = new Set([
-  "apps/api/prisma/schema.prisma",
-  "apps/api/prisma/migrations/20260725230000_add_handoff_recovery_safety/migration.sql",
-  "apps/api/src/config/env.ts",
-  "apps/api/src/assistant-conversations/assistant-conversations.module.ts",
+const BASELINE_COMMIT = "59dd68d574560ca208615a4a8edbadf90fc3c58b";
+const ALLOWED_BLOCK5A_RUNTIME_PATHS = new Set([
+  "apps/api/src/assistant-knowledge/assistant-knowledge-retrieval.service.ts",
+  "apps/api/src/assistant-knowledge/knowledge-evidence.ts",
   "apps/api/src/assistant-conversations/assistant-conversations.service.ts",
-  "apps/api/src/assistant-conversations/handoff-recovery-coordinator.ts",
-  "apps/api/src/assistant-conversations/handoff-recovery-runner.ts",
-  "apps/api/src/assistant-conversations/handoff-recovery.ts",
-  "apps/api/src/assistant-conversations/operational-handoff.ts",
-  "apps/api/src/assistant-conversations/outbound-recovery-coordinator.ts",
+  "apps/api/src/assistant-conversations/rag-price-authority.ts",
+  "apps/api/src/assistant-conversations/runtime-authority-guard.ts",
+  "apps/api/src/assistant-conversations/runtime-context-manifest.ts",
   "apps/api/src/assistant-conversations/turn-execution-manifest.ts",
+  "apps/api/src/assistants/assistants.service.ts",
+  "apps/api/src/prompt-compiler/prompt-compiler.service.ts",
 ]);
 const helperDirectory = path.dirname(fileURLToPath(import.meta.url));
 const apiDirectory = path.resolve(helperDirectory, "../..");
@@ -29,7 +27,11 @@ const handoffRecoveryMigration = "20260725230000_add_handoff_recovery_safety";
 const relatedRegressionTests = [
   "test/chatwoot-webhook-and-runtime.test.mjs",
   "test/canonical-inbound-message.test.mjs",
+  "test/flow-scoped-rag-retrieval.test.mjs",
+  "test/flow-scoped-rag-retrieval-postgres.test.mjs",
+  "test/integral-knowledge-evidence.test.mjs",
   "test/rag-price-authority.test.mjs",
+  "test/assistant-behavior-prompt.test.mjs",
   "test/business-hours-direct-deterministic.test.mjs",
   "test/official-business-context.test.mjs",
   "test/conversation-reset.test.mjs",
@@ -285,11 +287,11 @@ async function assertBaselineAndScope() {
     .map((entry) => entry.trim())
     .filter(Boolean);
   const disallowedChanges = protectedChanges.filter(
-    (entry) => !ALLOWED_BLOCK4B_RUNTIME_PATHS.has(entry),
+    (entry) => !ALLOWED_BLOCK5A_RUNTIME_PATHS.has(entry),
   );
   if (disallowedChanges.length > 0) {
     throw new Error(
-      `Harness refuses production source, schema or migration changes outside Block 4B:\n${disallowedChanges.join("\n")}`,
+      `Harness refuses production source, schema or migration changes outside Block 5A:\n${disallowedChanges.join("\n")}`,
     );
   }
   const prismaBinary = path.join(apiDirectory, "node_modules/.bin/prisma");
@@ -324,6 +326,8 @@ async function buildFresh(environment) {
   const artifactPaths = [
     path.join(apiDirectory, "dist/main.js"),
     path.join(apiDirectory, "dist/app.module.js"),
+    path.join(apiDirectory, "dist/assistant-knowledge/assistant-knowledge-retrieval.service.js"),
+    path.join(apiDirectory, "dist/assistant-knowledge/knowledge-evidence.js"),
     path.join(apiDirectory, "dist/assistant-conversations/assistant-conversations.service.js"),
     path.join(apiDirectory, "dist/assistant-conversations/conversation-control-snapshot.js"),
     path.join(apiDirectory, "dist/assistant-conversations/outbound-delivery.js"),
@@ -332,8 +336,11 @@ async function buildFresh(environment) {
     path.join(apiDirectory, "dist/assistant-conversations/handoff-recovery-runner.js"),
     path.join(apiDirectory, "dist/assistant-conversations/handoff-recovery.js"),
     path.join(apiDirectory, "dist/assistant-conversations/operational-handoff.js"),
+    path.join(apiDirectory, "dist/assistant-conversations/rag-price-authority.js"),
+    path.join(apiDirectory, "dist/assistant-conversations/runtime-context-manifest.js"),
     path.join(apiDirectory, "dist/assistant-conversations/turn-execution-manifest.js"),
     path.join(apiDirectory, "dist/assistant-conversations/v1-turn-decision.js"),
+    path.join(apiDirectory, "dist/prompt-compiler/prompt-compiler.service.js"),
   ];
   const artifacts = await Promise.all(
     artifactPaths.map(async (artifactPath) => ({
