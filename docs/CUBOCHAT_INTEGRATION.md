@@ -76,6 +76,18 @@ Um 2xx da mutacao nao e suficiente. Falha, ambiguidade, destino ausente ou
 estado remoto contraditorio preservam o bloqueio local e nao produzem texto de
 sucesso.
 
+Quando o processo interrompe essa sequencia, o recovery de handoff continua a
+mesma operacao, sem criar nova decisao:
+
+1. revalida `contextVersion`, `controlRevision`, `aiActive=false` e
+   `pausedByHuman=true`;
+2. disputa um lease e registra a tentativa;
+3. executa GET antes de qualquer mutation recuperada;
+4. se o remoto ja estiver correto, avanca sem novo PUT;
+5. repete mutation somente com safety comprovada, budget e backoff validos;
+6. cria ou reutiliza uma unica confirmacao por decisao/ordinal;
+7. entrega ou reconcilia a confirmacao pelo ledger outbound existente.
+
 ## 4. Identificadores sanitizados de exemplo
 
 Use identificadores ficticios na documentacao e em fixtures:
@@ -273,6 +285,10 @@ Campos uteis para rastrear:
 - `controlRevision`
 - `currentContextVersion`
 - `retrySafety`
+- `handoff.recovery.safety`
+- `handoff.recovery.attemptNumber`
+- `handoff.recovery.leaseOwner`
+- `handoff.recovery.nextEligibleAt`
 - `status` do outbound
 
 ## 13. Contrato outbound correto
@@ -359,6 +375,11 @@ Ausencia em uma pagina de mensagens nao e conclusiva.
 O coordinator de recovery nao esta automaticamente ativo. Nao existe cron,
 worker, endpoint ou hook de startup para executa-lo.
 
+Essa observacao se refere ao recovery geral de outbound. O handoff possui um
+runner proprio no Bloco 4B, mas ele fica OFF por padrao e e bloqueado em
+staging/producao. Quando uma confirmacao de handoff ja possui delivery, o
+coordinator de handoff apenas delega ao recovery outbound existente.
+
 Validacao local principal:
 
 ```bash
@@ -418,12 +439,65 @@ Quando mutacao ou verificacao falham ou ficam ambiguas:
 - nenhuma confirmacao de sucesso e criada;
 - a operacao fica `RECONCILIATION_REQUIRED`;
 - duplicate do webhook apenas reutiliza a operacao;
-- nao existe recovery automatico de handoff neste bloco.
+- nenhuma mutation e repetida sem safety comprovada.
 
 Reset concorrente invalida a autorizacao pela mudanca de `contextVersion` e
 `controlRevision`, marca a operacao anterior como `SUPERSEDED` e impede
-confirmacao stale. O Bloco 4B permanece responsavel por recovery e
-reconciliacao automatizados das operacoes parciais.
+confirmacao stale.
+
+### 15.1 Recovery de operacoes parciais
+
+Status e safety sao dimensoes separadas. Os valores de safety sao:
+
+- `PROVEN_SAFE`;
+- `VERIFY_REMOTE_FIRST`;
+- `NOT_RETRYABLE`;
+- `UNKNOWN`.
+
+`AssistantHandoffAttempt` registra owner, ordinal, lease, entrada na fronteira,
+resultado da mutation, verificacao e erro sanitizado. Lease expirado antes da
+fronteira pode voltar a ser elegivel depois do backoff. Lease expirado depois
+da fronteira exige GET e reconciliacao; nunca autoriza PUT direto.
+
+Matriz resumida:
+
+- `REQUESTED`: somente CAS local original;
+- `LOCALLY_BLOCKED`: GET e primeira mutation ainda nao iniciada;
+- `REMOTE_PENDING`: GET primeiro;
+- `RECONCILIATION_REQUIRED`: GET primeiro e mutation apenas com
+  `PROVEN_SAFE`;
+- `REMOTE_CONFIRMED`: criar ou reutilizar confirmacao;
+- `CONFIRMATION_PENDING`: recovery somente do delivery;
+- `COMPLETED`, `FAILED_TERMINAL` e `SUPERSEDED`: no-op automatico.
+
+O GET precisa confirmar o mesmo scope externo. Assignee ou team alterado por
+uma intervencao humana pode ser aceito se ainda for um destino valido, a IA
+permanecer inativa e o status continuar compativel. Destino removido nao e
+recriado ou substituido por presuncao.
+
+A confirmacao e deterministica e idempotente. Mensagem, delivery e transicao
+para `CONFIRMATION_PENDING` sao protegidos por transacao e pela unicidade
+existente de decisao/ordinal. O coordinator nao chama provider e nao cria uma
+segunda decisao.
+
+### 15.2 Ativacao do runner
+
+Default:
+
+```env
+HANDOFF_RECOVERY_ENABLED=false
+```
+
+O runner periodico:
+
+- e registrado no lifecycle da aplicacao;
+- nao agenda trabalho com a flag OFF;
+- impede execucoes sobrepostas;
+- encerra timer e aguarda a execucao ativa no shutdown;
+- e bloqueado em `staging` e `production` mesmo com a flag ligada neste bloco.
+
+Nao existe endpoint publico para disparar recovery. Nenhuma configuracao real
+de ambiente foi alterada e esta documentacao nao representa ativacao ou deploy.
 
 ## 16. Pontos criticos de modelagem
 
@@ -441,6 +515,9 @@ Regras importantes:
 - Runtime V2 permanece OFF
 - handoff explicito usa `OPERATIONAL_HUMAN_HANDOFF`; somente operacao remota
   verificada pode produzir confirmacao de transferencia
+- recovery de handoff reutiliza a operacao e decisao originais; mutation
+  ambigua sempre passa por GET
+- `CONFIRMATION_PENDING` reutiliza o ledger outbound e nao repete a mutation
 - o caminho de handoff acionado por flow permanece separado e nao deve ser
   confundido com o contrato explicito do Bloco 4A
 
@@ -553,8 +630,19 @@ Validar:
 7. se a operacao foi `SUPERSEDED` por reset concorrente.
 
 Nao envie confirmacao manual automatizada nem reative a IA apenas porque a
-mutation retornou sucesso. O Bloco 4B devera fornecer recovery proprio para
-operacoes parciais.
+mutation retornou sucesso.
+
+Para recovery local controlado, valide:
+
+1. `recoverySafety`;
+2. `attemptOwner`, inicio e expiracao do lease;
+3. `boundaryStartedAt` da tentativa;
+4. `nextEligibleAt` e budget;
+5. resultado do GET de reconciliacao;
+6. se a confirmacao ja possui delivery;
+7. se a operacao foi `SUPERSEDED`.
+
+Com `VERIFY_REMOTE_FIRST` ou `UNKNOWN`, nao repita mutation manualmente.
 
 ## 18. Seguranca
 
@@ -598,3 +686,4 @@ Nao registrar:
 - harness HTTP: [README.production-http-harness.md](../apps/api/test/README.production-http-harness.md)
 - relatorio Bloco 3B.2: [BLOCK3B2_OUTBOUND_RECOVERY_REPORT.md](../apps/api/test/BLOCK3B2_OUTBOUND_RECOVERY_REPORT.md)
 - relatorio Bloco 4A: [BLOCK4A_OPERATIONAL_HANDOFF_REPORT.md](../apps/api/test/BLOCK4A_OPERATIONAL_HANDOFF_REPORT.md)
+- relatorio Bloco 4B: [BLOCK4B_HANDOFF_RECOVERY_REPORT.md](../apps/api/test/BLOCK4B_HANDOFF_RECOVERY_REPORT.md)

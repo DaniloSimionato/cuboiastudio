@@ -8,7 +8,7 @@ import {
   NotFoundException,
   Optional,
 } from "@nestjs/common";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ConversationChannelType, ConversationSource, Prisma, Status } from "@prisma/client";
 import type { AssistantFlow } from "@prisma/client";
 import type { AiResolvedRuntimeConfig } from "../ai/ai.types";
@@ -185,6 +185,7 @@ import {
 } from "./turn-execution-manifest";
 import {
   V1_OPERATIONAL_HANDOFF_EFFECT_SCHEMA_VERSION,
+  V1_TURN_DECISION_SCHEMA_VERSION,
   V1_TURN_DECISION_EXECUTOR_OWNER,
   V1TurnDecisionSealer,
   createV1TurnDecisionId,
@@ -236,6 +237,24 @@ import {
   type OperationalHandoffDestination,
   type OperationalHandoffStatus,
 } from "./operational-handoff";
+import {
+  HandoffRecoveryCoordinator,
+  type HandoffRecoveryOperation,
+  type HandoffRecoveryRunResult,
+  type HandoffRemoteMutationResult,
+} from "./handoff-recovery-coordinator";
+import {
+  classifyHandoffMutationFailure,
+  calculateHandoffRecoveryBackoff,
+  createOperationalHandoffConfirmationContract,
+  DEFAULT_HANDOFF_RECOVERY_LEASE_MS,
+  DEFAULT_HANDOFF_RECOVERY_MAX_ATTEMPTS,
+  evaluateHandoffRecoveryEligibility,
+  HANDOFF_ATTEMPT_SCHEMA_VERSION,
+  OPERATIONAL_HANDOFF_CONFIRMATION_TEXT,
+  type HandoffRecoveryAttemptResult,
+  type HandoffRecoverySafety,
+} from "./handoff-recovery";
 
 export type AssistantConversationListItem = {
   id: string;
@@ -739,6 +758,9 @@ const assistantHandoffOperationSafeSelect = {
   conversationId: true,
   turnExecutionId: true,
   decisionId: true,
+  userMessageId: true,
+  runtimeLogId: true,
+  confirmationMessageId: true,
   contextVersion: true,
   idempotencyKey: true,
   policyVersion: true,
@@ -763,7 +785,22 @@ const assistantHandoffOperationSafeSelect = {
   verifiedAt: true,
   status: true,
   attemptCount: true,
+  maxAttempts: true,
+  recoverySchemaVersion: true,
+  recoverySafety: true,
+  attemptOwner: true,
+  claimStartedAt: true,
+  claimExpiresAt: true,
+  nextEligibleAt: true,
+  remoteBoundaryStartedAt: true,
   lastAttemptAt: true,
+  reconciliationStatus: true,
+  reconciliationEvidenceType: true,
+  reconciledAt: true,
+  recoveryBlockedReason: true,
+  externalInterventionObserved: true,
+  externalInterventionAt: true,
+  confirmationContractVersion: true,
   localBlockedAt: true,
   remoteMutationResult: true,
   remoteMutationErrorCode: true,
@@ -1522,7 +1559,7 @@ export class AssistantConversationsService {
     // The existing signal remains in the same position. The sealed decision now
     // declares an operational effect; its text is only a candidate confirmation
     // until local blocking and remote verification have both succeeded.
-    const answer = "Transferindo para um atendente...";
+    const answer = OPERATIONAL_HANDOFF_CONFIRMATION_TEXT;
     const metadata = {
       route: "EXPLICIT_HUMAN_HANDOFF",
       strategy: "FLOW_BYPASS",
@@ -2154,6 +2191,36 @@ export class AssistantConversationsService {
               ? "PENDING"
               : "NOT_AUTHORIZED"),
       },
+      recovery: {
+        schemaVersion: operation.recoverySchemaVersion,
+        attemptSchemaVersion: HANDOFF_ATTEMPT_SCHEMA_VERSION,
+        attemptNumber: operation.attemptCount,
+        leaseOwner: HandoffRecoveryCoordinator.manifestOwnerFingerprint(
+          operation.attemptOwner,
+        ),
+        leaseStartedAt: operation.claimStartedAt?.toISOString() ?? null,
+        leaseExpiresAt: operation.claimExpiresAt?.toISOString() ?? null,
+        safety: operation.recoverySafety as HandoffRecoverySafety,
+        eligibility: evaluateHandoffRecoveryEligibility({
+          status: operation.status,
+          recoverySafety: operation.recoverySafety,
+          attemptCount: operation.attemptCount,
+          maxAttempts: operation.maxAttempts,
+          attemptOwner: operation.attemptOwner,
+          claimExpiresAt: operation.claimExpiresAt,
+          nextEligibleAt: operation.nextEligibleAt,
+          now: new Date(),
+        }),
+        nextEligibleAt: operation.nextEligibleAt?.toISOString() ?? null,
+        reconciliationStatus: operation.reconciliationStatus,
+        reconciliationEvidenceType: operation.reconciliationEvidenceType,
+        externalInterventionObserved: operation.externalInterventionObserved,
+        confirmationCreatedOrReused: Boolean(input.confirmationDeliveryId),
+        deliveryId: input.confirmationDeliveryId ?? null,
+        result: operation.status,
+        blockingReason:
+          operation.recoveryBlockedReason ?? operation.errorCode,
+      },
       blockingReason:
         operation.status === "RECONCILIATION_REQUIRED" ||
         operation.status === "FAILED_TERMINAL" ||
@@ -2211,20 +2278,31 @@ export class AssistantConversationsService {
   private async mutateOperationalHandoffRemoteState(input: {
     url: string;
     apiAccessToken: string;
-  }): Promise<{
-    result: "ACKNOWLEDGED" | "FAILED" | "AMBIGUOUS";
-    errorCode: string | null;
-    httpStatus: number | null;
-  }> {
+    onBoundaryStart?: () => Promise<void>;
+  }): Promise<HandoffRemoteMutationResult> {
     let serializedBody: string;
     try {
       serializedBody = JSON.stringify({ ai_active: false });
     } catch (error) {
       return {
         result: "FAILED",
+        safety: "PROVEN_SAFE",
         errorCode: sanitizeOperationalHandoffErrorCode(
           error,
           "CHATWOOT_HANDOFF_MUTATION_SERIALIZATION_FAILED",
+        ),
+        httpStatus: null,
+      };
+    }
+    try {
+      await input.onBoundaryStart?.();
+    } catch (error) {
+      return {
+        result: "FAILED",
+        safety: "PROVEN_SAFE",
+        errorCode: sanitizeOperationalHandoffErrorCode(
+          error,
+          "CHATWOOT_HANDOFF_MUTATION_BOUNDARY_NOT_RECORDED",
         ),
         httpStatus: null,
       };
@@ -2239,16 +2317,39 @@ export class AssistantConversationsService {
         body: serializedBody,
         signal: AbortSignal.timeout(OPERATIONAL_HANDOFF_HTTP_TIMEOUT_MS),
       });
+      const failure = response.ok
+        ? null
+        : classifyHandoffMutationFailure({
+            kind: "HTTP",
+            boundaryStarted: true,
+            httpStatus: response.status,
+            errorCode: `HTTP_${response.status}`,
+          });
       return response.ok
-        ? { result: "ACKNOWLEDGED", errorCode: null, httpStatus: response.status }
+        ? {
+            result: "ACKNOWLEDGED",
+            safety: "VERIFY_REMOTE_FIRST",
+            errorCode: null,
+            httpStatus: response.status,
+          }
         : {
             result: "FAILED",
+            safety: failure!.recoverySafety,
             errorCode: `CHATWOOT_HANDOFF_MUTATION_HTTP_${response.status}`,
             httpStatus: response.status,
           };
     } catch (error) {
+      const failure = classifyHandoffMutationFailure({
+        kind: "TRANSPORT",
+        boundaryStarted: true,
+        errorCode: sanitizeOperationalHandoffErrorCode(
+          error,
+          "CHATWOOT_HANDOFF_MUTATION_TRANSPORT_ERROR",
+        ),
+      });
       return {
         result: "AMBIGUOUS",
+        safety: failure.recoverySafety,
         errorCode: sanitizeOperationalHandoffErrorCode(
           error,
           "CHATWOOT_HANDOFF_MUTATION_TRANSPORT_ERROR",
@@ -2256,6 +2357,213 @@ export class AssistantConversationsService {
         httpStatus: null,
       };
     }
+  }
+
+  private async claimInitialOperationalHandoffMutation(input: {
+    operation: AssistantHandoffOperationSafeRecord;
+    destination: Exclude<OperationalHandoffDestination, { resolution: "UNRESOLVED" }>;
+    contextVersion: number;
+    controlRevision: number;
+  }): Promise<{
+    operation: AssistantHandoffOperationSafeRecord;
+    attemptId: string;
+    claimToken: string;
+  }> {
+    const claimToken = randomUUID();
+    const claimedAt = new Date();
+    const claimExpiresAt = new Date(
+      claimedAt.getTime() + DEFAULT_HANDOFF_RECOVERY_LEASE_MS,
+    );
+    const attemptNumber = input.operation.attemptCount + 1;
+    const attempt = await this.prisma.$transaction(async (tx) => {
+      const transition = await tx.assistantHandoffOperation.updateMany({
+        where: {
+          id: input.operation.id,
+          status: "LOCALLY_BLOCKED",
+          contextVersion: input.contextVersion,
+          postBlockControlRevision: input.controlRevision,
+          attemptCount: input.operation.attemptCount,
+          attemptOwner: null,
+        },
+        data: {
+          status: "REMOTE_PENDING",
+          destinationType: input.destination.type,
+          destinationResolution: input.destination.resolution,
+          destinationAssigneeId: input.destination.assigneeId,
+          destinationTeamId: input.destination.teamId,
+          destinationInboxId: input.destination.inboxId,
+          attemptCount: { increment: 1 },
+          attemptOwner: claimToken,
+          claimStartedAt: claimedAt,
+          claimExpiresAt,
+          lastAttemptAt: claimedAt,
+          recoverySafety: "PROVEN_SAFE",
+          recoveryBlockedReason: null,
+          errorClass: null,
+          errorCode: null,
+        },
+      });
+      if (transition.count !== 1) {
+        throw new Error("OPERATIONAL_HANDOFF_REMOTE_PENDING_TRANSITION_REJECTED");
+      }
+      return tx.assistantHandoffAttempt.create({
+        data: {
+          operationId: input.operation.id,
+          attemptNumber,
+          owner: claimToken,
+          startedAt: claimedAt,
+          leaseExpiresAt: claimExpiresAt,
+          result: "CLAIMED",
+          recoverySafety: "PROVEN_SAFE",
+        },
+        select: { id: true },
+      });
+    });
+    return {
+      operation: await this.prisma.assistantHandoffOperation.findUniqueOrThrow({
+        where: { id: input.operation.id },
+        select: assistantHandoffOperationSafeSelect,
+      }),
+      attemptId: attempt.id,
+      claimToken,
+    };
+  }
+
+  private async markInitialOperationalHandoffBoundary(input: {
+    operationId: string;
+    attemptId: string;
+    claimToken: string;
+  }): Promise<void> {
+    const boundaryStartedAt = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      const operationRecord = await tx.assistantHandoffOperation.findUniqueOrThrow({
+        where: { id: input.operationId },
+        select: {
+          conversationId: true,
+          contextVersion: true,
+          postBlockControlRevision: true,
+          status: true,
+          attemptOwner: true,
+          claimExpiresAt: true,
+        },
+      });
+      await tx.$queryRaw`
+        SELECT id
+        FROM "assistant_conversations"
+        WHERE id = ${operationRecord.conversationId}
+        FOR UPDATE
+      `;
+      const control = await tx.assistantConversation.findUniqueOrThrow({
+        where: { id: operationRecord.conversationId },
+        select: {
+          currentContextVersion: true,
+          controlRevision: true,
+          aiActive: true,
+          pausedByHuman: true,
+        },
+      });
+      if (
+        operationRecord.status !== "REMOTE_PENDING" ||
+        operationRecord.attemptOwner !== input.claimToken ||
+        !operationRecord.claimExpiresAt ||
+        operationRecord.claimExpiresAt <= boundaryStartedAt ||
+        operationRecord.postBlockControlRevision === null ||
+        control.currentContextVersion !== operationRecord.contextVersion ||
+        control.controlRevision !== operationRecord.postBlockControlRevision ||
+        control.aiActive !== false ||
+        control.pausedByHuman !== true
+      ) {
+        throw new Error("OPERATIONAL_HANDOFF_MUTATION_BOUNDARY_NOT_AUTHORIZED");
+      }
+      const attempt = await tx.assistantHandoffAttempt.updateMany({
+        where: {
+          id: input.attemptId,
+          operationId: input.operationId,
+          owner: input.claimToken,
+          finishedAt: null,
+          boundaryStartedAt: null,
+          leaseExpiresAt: { gt: boundaryStartedAt },
+        },
+        data: {
+          boundaryStartedAt,
+          result: "REMOTE_BOUNDARY_STARTED",
+          recoverySafety: "VERIFY_REMOTE_FIRST",
+        },
+      });
+      const operation = await tx.assistantHandoffOperation.updateMany({
+        where: {
+          id: input.operationId,
+          attemptOwner: input.claimToken,
+          status: "REMOTE_PENDING",
+          claimExpiresAt: { gt: boundaryStartedAt },
+          contextVersion: operationRecord.contextVersion,
+          postBlockControlRevision: operationRecord.postBlockControlRevision,
+        },
+        data: {
+          remoteBoundaryStartedAt: boundaryStartedAt,
+          recoverySafety: "VERIFY_REMOTE_FIRST",
+        },
+      });
+      if (attempt.count !== 1 || operation.count !== 1) {
+        throw new Error("OPERATIONAL_HANDOFF_MUTATION_BOUNDARY_CLAIM_LOST");
+      }
+    });
+  }
+
+  private async finishInitialOperationalHandoffAttempt(input: {
+    operationId: string;
+    attemptId: string;
+    claimToken: string;
+    result: HandoffRecoveryAttemptResult;
+    safety: HandoffRecoverySafety;
+    mutationResult?: string | null;
+    verificationResult?: string | null;
+    httpStatus?: number | null;
+    observedStateFingerprint?: string | null;
+    errorClass?: string | null;
+    errorCode?: string | null;
+    nextEligibleAt?: Date | null;
+  }): Promise<void> {
+    const finishedAt = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      const attempt = await tx.assistantHandoffAttempt.updateMany({
+        where: {
+          id: input.attemptId,
+          operationId: input.operationId,
+          owner: input.claimToken,
+          finishedAt: null,
+        },
+        data: {
+          finishedAt,
+          result: input.result,
+          recoverySafety: input.safety,
+          mutationResult: input.mutationResult ?? null,
+          verificationResult: input.verificationResult ?? null,
+          httpStatus: input.httpStatus ?? null,
+          observedStateFingerprint: input.observedStateFingerprint ?? null,
+          errorClass: input.errorClass ?? null,
+          errorCode: input.errorCode ?? null,
+        },
+      });
+      const operation = await tx.assistantHandoffOperation.updateMany({
+        where: {
+          id: input.operationId,
+          attemptOwner: input.claimToken,
+        },
+        data: {
+          attemptOwner: null,
+          claimStartedAt: null,
+          claimExpiresAt: null,
+          recoverySafety: input.safety,
+          ...(input.nextEligibleAt !== undefined
+            ? { nextEligibleAt: input.nextEligibleAt }
+            : {}),
+        },
+      });
+      if (attempt.count !== 1 || operation.count !== 1) {
+        throw new Error("OPERATIONAL_HANDOFF_MUTATION_ATTEMPT_FINALIZATION_FAILED");
+      }
+    });
   }
 
   private async markOperationalHandoffPartial(input: {
@@ -2336,6 +2644,7 @@ export class AssistantConversationsService {
     decision: V1TurnDecision;
     assistant: AssistantConversationRuntimeAssistantRecord;
     conversation: AssistantConversationSafeRecord;
+    userMessage: AssistantConversationMessageSafeRecord;
     controlTrace: ConversationControlTrace;
     manifest: TurnExecutionManifest;
   }): Promise<{
@@ -2371,6 +2680,7 @@ export class AssistantConversationsService {
             conversationId: input.conversation.id,
             turnExecutionId: plan.turnExecutionId,
             decisionId: plan.decisionId,
+            userMessageId: input.userMessage.id,
             contextVersion: plan.contextVersion,
             idempotencyKey: plan.idempotencyKey,
             policyVersion: plan.policyVersion,
@@ -2379,6 +2689,8 @@ export class AssistantConversationsService {
             destinationInboxId: input.conversation.externalInboxId,
             desiredAiActive: false,
             status: "REQUESTED",
+            recoverySafety: "PROVEN_SAFE",
+            maxAttempts: DEFAULT_HANDOFF_RECOVERY_MAX_ATTEMPTS,
           },
           select: assistantHandoffOperationSafeSelect,
         });
@@ -2441,6 +2753,9 @@ export class AssistantConversationsService {
           status: "LOCALLY_BLOCKED",
           postBlockControlRevision: input.decision.control.expectedRevision + 1,
           localBlockedAt: blockAt,
+          recoverySafety: "PROVEN_SAFE",
+          nextEligibleAt: null,
+          recoveryBlockedReason: null,
           errorClass: null,
           errorCode: null,
         },
@@ -2692,35 +3007,13 @@ export class AssistantConversationsService {
         ),
       };
     }
-    const mutationAt = new Date();
-    const remotePendingTransition =
-      await this.prisma.assistantHandoffOperation.updateMany({
-      where: {
-        id: operation.id,
-        status: "LOCALLY_BLOCKED",
-        contextVersion: postBlockSnapshot.currentContextVersion,
-        postBlockControlRevision: postBlockSnapshot.controlRevision,
-      },
-      data: {
-        status: "REMOTE_PENDING",
-        destinationType: destination.type,
-        destinationResolution: destination.resolution,
-        destinationAssigneeId: destination.assigneeId,
-        destinationTeamId: destination.teamId,
-        destinationInboxId: destination.inboxId,
-        attemptCount: { increment: 1 },
-        lastAttemptAt: mutationAt,
-        errorClass: null,
-        errorCode: null,
-      },
+    const mutationClaim = await this.claimInitialOperationalHandoffMutation({
+      operation,
+      destination,
+      contextVersion: postBlockSnapshot.currentContextVersion,
+      controlRevision: postBlockSnapshot.controlRevision,
     });
-    if (remotePendingTransition.count !== 1) {
-      throw new Error("OPERATIONAL_HANDOFF_REMOTE_PENDING_TRANSITION_REJECTED");
-    }
-    operation = await this.prisma.assistantHandoffOperation.findUniqueOrThrow({
-      where: { id: operation.id },
-      select: assistantHandoffOperationSafeSelect,
-    });
+    operation = mutationClaim.operation;
     const remotePendingTransitionGuard = {
       expectedStatuses: ["REMOTE_PENDING"] as const,
       expectedContextVersion: postBlockSnapshot.currentContextVersion,
@@ -2729,6 +3022,12 @@ export class AssistantConversationsService {
     const mutation = await this.mutateOperationalHandoffRemoteState({
       url: remoteUrl,
       apiAccessToken: config.apiAccessToken,
+      onBoundaryStart: () =>
+        this.markInitialOperationalHandoffBoundary({
+          operationId: mutationClaim.operation.id,
+          attemptId: mutationClaim.attemptId,
+          claimToken: mutationClaim.claimToken,
+        }),
     });
     const mutationResultTransition =
       await this.prisma.assistantHandoffOperation.updateMany({
@@ -2737,10 +3036,13 @@ export class AssistantConversationsService {
         status: "REMOTE_PENDING",
         contextVersion: postBlockSnapshot.currentContextVersion,
         postBlockControlRevision: postBlockSnapshot.controlRevision,
+        attemptOwner: mutationClaim.claimToken,
+        claimExpiresAt: { gt: new Date() },
       },
       data: {
         remoteMutationResult: mutation.result,
         remoteMutationErrorCode: mutation.errorCode,
+        recoverySafety: mutation.safety,
         errorClass: mutation.errorCode ? "CHATWOOT_HANDOFF_MUTATION" : null,
         errorCode: mutation.errorCode,
       },
@@ -2748,6 +3050,14 @@ export class AssistantConversationsService {
     if (mutationResultTransition.count !== 1) {
       throw new Error("OPERATIONAL_HANDOFF_MUTATION_RESULT_TRANSITION_REJECTED");
     }
+    const initialMutationBackoff =
+      mutation.safety === "PROVEN_SAFE"
+        ? calculateHandoffRecoveryBackoff({
+            operationId: operation.id,
+            attemptNumber: Math.max(operation.attemptCount, 1),
+            now: new Date(),
+          })
+        : null;
 
     const verificationRead = await this.readOperationalHandoffRemoteState({
       url: remoteUrl,
@@ -2763,6 +3073,20 @@ export class AssistantConversationsService {
       });
     } catch (error) {
       if (!isConversationControlSnapshotStaleError(error)) throw error;
+      await this.finishInitialOperationalHandoffAttempt({
+        operationId: operation.id,
+        attemptId: mutationClaim.attemptId,
+        claimToken: mutationClaim.claimToken,
+        result: "SUPERSEDED",
+        safety: "NOT_RETRYABLE",
+        mutationResult: mutation.result,
+        verificationResult: "NOT_ATTEMPTED",
+        httpStatus: mutation.httpStatus,
+        errorClass: "CONTROL_STATE_STALE",
+        errorCode:
+          error.record.blockingReason ??
+          "OPERATIONAL_HANDOFF_CONTROL_STATE_STALE_POST_MUTATION",
+      });
       operation = await this.markOperationalHandoffPartial({
         operationId: operation.id,
         status: "SUPERSEDED",
@@ -2785,8 +3109,23 @@ export class AssistantConversationsService {
       };
     }
     if (!verificationRead.ok) {
+      const terminalMutationFailure = mutation.safety === "NOT_RETRYABLE";
+      await this.finishInitialOperationalHandoffAttempt({
+        operationId: operation.id,
+        attemptId: mutationClaim.attemptId,
+        claimToken: mutationClaim.claimToken,
+        result: terminalMutationFailure ? "FAILED_TERMINAL" : "VERIFICATION_FAILED",
+        safety: mutation.safety,
+        mutationResult: mutation.result,
+        verificationResult: "FAILED",
+        httpStatus: mutation.httpStatus,
+        errorClass: "CHATWOOT_HANDOFF_VERIFICATION",
+        errorCode: verificationRead.errorCode,
+        nextEligibleAt: initialMutationBackoff?.nextEligibleAt ?? null,
+      });
       operation = await this.markOperationalHandoffPartial({
         operationId: operation.id,
+        status: terminalMutationFailure ? "FAILED_TERMINAL" : undefined,
         ...remotePendingTransitionGuard,
         errorClass: "CHATWOOT_HANDOFF_VERIFICATION",
         errorCode: verificationRead.errorCode,
@@ -2812,8 +3151,24 @@ export class AssistantConversationsService {
       expectedInboxId: inboxId,
     });
     if (!verification.verified) {
+      const terminalMutationFailure = mutation.safety === "NOT_RETRYABLE";
+      await this.finishInitialOperationalHandoffAttempt({
+        operationId: operation.id,
+        attemptId: mutationClaim.attemptId,
+        claimToken: mutationClaim.claimToken,
+        result: terminalMutationFailure ? "FAILED_TERMINAL" : "REMOTE_NOT_CONFIRMED",
+        safety: mutation.safety,
+        mutationResult: mutation.result,
+        verificationResult: verification.reasonCode,
+        httpStatus: mutation.httpStatus,
+        observedStateFingerprint: verification.state.stateFingerprint,
+        errorClass: "CHATWOOT_HANDOFF_VERIFICATION",
+        errorCode: verification.reasonCode,
+        nextEligibleAt: initialMutationBackoff?.nextEligibleAt ?? null,
+      });
       operation = await this.markOperationalHandoffPartial({
         operationId: operation.id,
+        status: terminalMutationFailure ? "FAILED_TERMINAL" : undefined,
         ...remotePendingTransitionGuard,
         errorClass: "CHATWOOT_HANDOFF_VERIFICATION",
         errorCode: verification.reasonCode,
@@ -2832,35 +3187,99 @@ export class AssistantConversationsService {
         ),
       };
     }
-    const remoteConfirmedTransition =
-      await this.prisma.assistantHandoffOperation.updateMany({
-      where: {
-        id: operation.id,
-        status: "REMOTE_PENDING",
-        contextVersion: postBlockSnapshot.currentContextVersion,
-        postBlockControlRevision: postBlockSnapshot.controlRevision,
-      },
-      data: {
-        status: "REMOTE_CONFIRMED",
-        observedAiActive: verification.state.aiActive,
-        observedStatus: verification.state.status,
-        observedAssigneeId: verification.state.assigneeId,
-        observedTeamId: verification.state.teamId,
-        observedAccountId: verification.state.accountId,
-        observedInboxId: verification.state.inboxId,
-        observedConversationId: verification.state.conversationId,
-        remoteStateFingerprint: verification.state.stateFingerprint,
-        verifiedAt: new Date(verification.state.observedAt),
-        remoteVerificationResult: "CONFIRMED",
-        remoteVerificationErrorCode: null,
-        confirmationAuthorizedAt: new Date(),
-        errorClass: null,
-        errorCode: null,
-      },
+    const remotePendingOperation = operation;
+    const remoteConfirmedAt = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`
+        SELECT id
+        FROM "assistant_conversations"
+        WHERE id = ${remotePendingOperation.conversationId}
+        FOR UPDATE
+      `;
+      const [control, currentOperation] = await Promise.all([
+        tx.assistantConversation.findUniqueOrThrow({
+          where: { id: remotePendingOperation.conversationId },
+          select: {
+            currentContextVersion: true,
+            controlRevision: true,
+            aiActive: true,
+            pausedByHuman: true,
+          },
+        }),
+        tx.assistantHandoffOperation.findUniqueOrThrow({
+          where: { id: remotePendingOperation.id },
+          select: {
+            status: true,
+            contextVersion: true,
+            postBlockControlRevision: true,
+            attemptOwner: true,
+            claimExpiresAt: true,
+          },
+        }),
+      ]);
+      if (
+        currentOperation.status !== "REMOTE_PENDING" ||
+        currentOperation.contextVersion !== postBlockSnapshot.currentContextVersion ||
+        currentOperation.postBlockControlRevision !== postBlockSnapshot.controlRevision ||
+        currentOperation.attemptOwner !== mutationClaim.claimToken ||
+        !currentOperation.claimExpiresAt ||
+        currentOperation.claimExpiresAt <= remoteConfirmedAt ||
+        control.currentContextVersion !== currentOperation.contextVersion ||
+        control.controlRevision !== currentOperation.postBlockControlRevision ||
+        control.aiActive !== false ||
+        control.pausedByHuman !== true
+      ) {
+        throw new Error("OPERATIONAL_HANDOFF_REMOTE_CONFIRMED_TRANSITION_REJECTED");
+      }
+      const remoteConfirmedTransition =
+        await tx.assistantHandoffOperation.updateMany({
+          where: {
+            id: remotePendingOperation.id,
+            status: "REMOTE_PENDING",
+            contextVersion: postBlockSnapshot.currentContextVersion,
+            postBlockControlRevision: postBlockSnapshot.controlRevision,
+            attemptOwner: mutationClaim.claimToken,
+            claimExpiresAt: { gt: remoteConfirmedAt },
+          },
+          data: {
+            status: "REMOTE_CONFIRMED",
+            observedAiActive: verification.state.aiActive,
+            observedStatus: verification.state.status,
+            observedAssigneeId: verification.state.assigneeId,
+            observedTeamId: verification.state.teamId,
+            observedAccountId: verification.state.accountId,
+            observedInboxId: verification.state.inboxId,
+            observedConversationId: verification.state.conversationId,
+            remoteStateFingerprint: verification.state.stateFingerprint,
+            verifiedAt: new Date(verification.state.observedAt),
+            remoteVerificationResult: "CONFIRMED",
+            remoteVerificationErrorCode: null,
+            confirmationAuthorizedAt: remoteConfirmedAt,
+            recoverySafety: "NOT_RETRYABLE",
+            nextEligibleAt: null,
+            reconciliationStatus: "REMOTE_CONFIRMED",
+            reconciliationEvidenceType: "CHATWOOT_CONVERSATION_READ",
+            reconciledAt: remoteConfirmedAt,
+            recoveryBlockedReason: null,
+            errorClass: null,
+            errorCode: null,
+          },
+        });
+      if (remoteConfirmedTransition.count !== 1) {
+        throw new Error("OPERATIONAL_HANDOFF_REMOTE_CONFIRMED_TRANSITION_REJECTED");
+      }
     });
-    if (remoteConfirmedTransition.count !== 1) {
-      throw new Error("OPERATIONAL_HANDOFF_REMOTE_CONFIRMED_TRANSITION_REJECTED");
-    }
+    await this.finishInitialOperationalHandoffAttempt({
+      operationId: operation.id,
+      attemptId: mutationClaim.attemptId,
+      claimToken: mutationClaim.claimToken,
+      result: "REMOTE_CONFIRMED",
+      safety: "NOT_RETRYABLE",
+      mutationResult: mutation.result,
+      verificationResult: "CONFIRMED",
+      httpStatus: mutation.httpStatus,
+      observedStateFingerprint: verification.state.stateFingerprint,
+    });
     operation = await this.prisma.assistantHandoffOperation.findUniqueOrThrow({
       where: { id: operation.id },
       select: assistantHandoffOperationSafeSelect,
@@ -3062,7 +3481,7 @@ export class AssistantConversationsService {
           }),
         },
       });
-      return tx.assistantRuntimeLog.create({
+      const runtimeLog = await tx.assistantRuntimeLog.create({
         data: {
           ...(input.runtimeLogData ?? {}),
           companyId: input.conversation.companyId,
@@ -3093,6 +3512,7 @@ export class AssistantConversationsService {
         } as Prisma.AssistantRuntimeLogUncheckedCreateInput,
         select: { id: true },
       });
+      return runtimeLog;
     });
     return { runtimeLogId: runtimeLog.id, manifest };
   }
@@ -3163,7 +3583,7 @@ export class AssistantConversationsService {
           }),
         },
       });
-      return tx.assistantRuntimeLog.create({
+      const runtimeLog = await tx.assistantRuntimeLog.create({
         data: {
           ...input.runtimeLogData,
           companyId: input.conversation.companyId,
@@ -3196,6 +3616,17 @@ export class AssistantConversationsService {
         } as Prisma.AssistantRuntimeLogUncheckedCreateInput,
         select: { id: true },
       });
+      await tx.assistantHandoffOperation.updateMany({
+        where: {
+          id: input.operation.id,
+          runtimeLogId: null,
+        },
+        data: {
+          userMessageId: input.userMessage.id,
+          runtimeLogId: runtimeLog.id,
+        },
+      });
+      return runtimeLog;
     });
     return { runtimeLogId: runtimeLog.id, manifest };
   }
@@ -3510,11 +3941,725 @@ export class AssistantConversationsService {
     });
   }
 
+  private async ensureOperationalHandoffRecoveryConfirmation(
+    recoveryOperation: HandoffRecoveryOperation,
+  ): Promise<{
+    deliveryId: string | null;
+    created: boolean;
+    reused: boolean;
+    status: string;
+  }> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`
+        SELECT id
+        FROM "assistant_conversations"
+        WHERE id = ${recoveryOperation.conversationId}
+        FOR UPDATE
+      `;
+      let operation = await tx.assistantHandoffOperation.findUniqueOrThrow({
+        where: { id: recoveryOperation.id },
+        select: assistantHandoffOperationSafeSelect,
+      });
+      const conversation = await tx.assistantConversation.findUniqueOrThrow({
+        where: { id: operation.conversationId },
+        select: {
+          id: true,
+          companyId: true,
+          assistantId: true,
+          externalAccountId: true,
+          externalConversationId: true,
+          externalInboxId: true,
+          currentContextVersion: true,
+          controlRevision: true,
+          aiActive: true,
+          pausedByHuman: true,
+        },
+      });
+      const destinationVerified =
+        operation.destinationResolution === "RESOLVED" &&
+        ((operation.destinationType === "EXISTING_ASSIGNEE" &&
+          operation.destinationAssigneeId !== null &&
+          operation.observedAssigneeId === operation.destinationAssigneeId) ||
+          (operation.destinationType === "EXISTING_TEAM" &&
+            operation.destinationTeamId !== null &&
+            operation.observedTeamId === operation.destinationTeamId));
+      const controlAndRemoteVerified =
+        operation.companyId === conversation.companyId &&
+        operation.assistantId === conversation.assistantId &&
+        operation.contextVersion === conversation.currentContextVersion &&
+        operation.postBlockControlRevision !== null &&
+        operation.postBlockControlRevision === conversation.controlRevision &&
+        conversation.aiActive === false &&
+        conversation.pausedByHuman === true &&
+        operation.remoteVerificationResult === "CONFIRMED" &&
+        operation.confirmationAuthorizedAt !== null &&
+        operation.observedAiActive === false &&
+        (operation.observedStatus === "open" || operation.observedStatus === "pending") &&
+        operation.observedAccountId === conversation.externalAccountId &&
+        operation.observedInboxId === conversation.externalInboxId &&
+        operation.observedConversationId === conversation.externalConversationId &&
+        operation.destinationInboxId === conversation.externalInboxId &&
+        destinationVerified;
+      if (
+        !controlAndRemoteVerified ||
+        !["REMOTE_CONFIRMED", "CONFIRMATION_PENDING"].includes(operation.status)
+      ) {
+        throw new Error("HANDOFF_RECOVERY_CONFIRMATION_CONTROL_NOT_AUTHORIZED");
+      }
+
+      const existingDelivery = await tx.assistantOutboundDelivery.findFirst({
+        where: {
+          decisionId: operation.decisionId,
+          blockOrdinal: 1,
+        },
+        select: assistantOutboundDeliverySafeSelect,
+      });
+      if (existingDelivery) {
+        if (
+          existingDelivery.handoffOperationId !== operation.id ||
+          existingDelivery.handoff !== true ||
+          existingDelivery.expectedContextVersion !== operation.contextVersion ||
+          existingDelivery.expectedControlRevision !==
+            operation.postBlockControlRevision
+        ) {
+          throw new Error("HANDOFF_RECOVERY_CONFIRMATION_DELIVERY_MISMATCH");
+        }
+        const existingMessage = await tx.assistantConversationMessage.findUnique({
+          where: { id: existingDelivery.assistantMessageId },
+          select: { id: true },
+        });
+        if (!existingMessage) {
+          throw new Error("HANDOFF_RECOVERY_CONFIRMATION_MESSAGE_MISSING");
+        }
+        if (operation.status === "REMOTE_CONFIRMED") {
+          await tx.assistantHandoffOperation.updateMany({
+            where: {
+              id: operation.id,
+              status: "REMOTE_CONFIRMED",
+              contextVersion: conversation.currentContextVersion,
+              postBlockControlRevision: conversation.controlRevision,
+            },
+            data: {
+              status: "CONFIRMATION_PENDING",
+              confirmationMessageId: existingMessage.id,
+              confirmationDeliveryCreatedAt:
+                operation.confirmationDeliveryCreatedAt ?? new Date(),
+              recoveryBlockedReason: null,
+              errorClass: null,
+              errorCode: null,
+            },
+          });
+        }
+        return {
+          deliveryId: existingDelivery.id,
+          created: false,
+          reused: true,
+          status: existingDelivery.status,
+        };
+      }
+
+      if (!operation.userMessageId) {
+        throw new Error("HANDOFF_RECOVERY_USER_MESSAGE_REFERENCE_MISSING");
+      }
+      const userMessage = await tx.assistantConversationMessage.findUnique({
+        where: { id: operation.userMessageId },
+        select: {
+          id: true,
+          role: true,
+          source: true,
+          externalMessageId: true,
+          content: true,
+          contextVersion: true,
+        },
+      });
+      if (
+        !userMessage ||
+        userMessage.role !== "user" ||
+        userMessage.contextVersion !== operation.contextVersion
+      ) {
+        throw new Error("HANDOFF_RECOVERY_USER_MESSAGE_REFERENCE_INVALID");
+      }
+      const confirmation = createOperationalHandoffConfirmationContract({
+        turnExecutionId: operation.turnExecutionId,
+        decisionId: operation.decisionId,
+        contextVersion: operation.contextVersion,
+      });
+      const assistantMessage = await tx.assistantConversationMessage.create({
+        data: {
+          companyId: operation.companyId,
+          assistantId: operation.assistantId,
+          conversationId: operation.conversationId,
+          role: "assistant",
+          content: confirmation.content,
+          source: "chatwoot",
+          mode: "explicit-human-handoff",
+          contextVersion: operation.contextVersion,
+          sources: Prisma.JsonNull,
+          externalPayload: this.toSerializableJsonValue({
+            turnExecutionId: operation.turnExecutionId,
+            decisionId: operation.decisionId,
+            handoffOperationId: operation.id,
+          }),
+        },
+        select: assistantConversationMessageSafeSelect,
+      });
+      const deliveryPlan = createOutboundDeliveryPlan({
+        turnExecutionId: operation.turnExecutionId,
+        decisionId: operation.decisionId,
+        blockOrdinal: confirmation.blockOrdinal,
+        expectedContextVersion: operation.contextVersion,
+        expectedControlRevision: operation.postBlockControlRevision!,
+        sender: "CHATWOOT_V1",
+        content: confirmation.content,
+      });
+      const delivery = await tx.assistantOutboundDelivery.create({
+        data: {
+          companyId: operation.companyId,
+          assistantId: operation.assistantId,
+          conversationId: operation.conversationId,
+          assistantMessageId: assistantMessage.id,
+          turnExecutionId: deliveryPlan.turnExecutionId,
+          decisionId: deliveryPlan.decisionId,
+          blockOrdinal: deliveryPlan.blockOrdinal,
+          idempotencyKey: deliveryPlan.idempotencyKey,
+          policyVersion: deliveryPlan.policyVersion,
+          expectedContextVersion: deliveryPlan.expectedContextVersion,
+          expectedControlRevision: deliveryPlan.expectedControlRevision,
+          sender: deliveryPlan.sender,
+          payloadHash: deliveryPlan.payloadHash,
+          payloadSize: deliveryPlan.payloadSize,
+          payloadContractVersion: OUTBOUND_RECOVERABLE_PAYLOAD_CONTRACT,
+          handoff: true,
+          handoffOperationId: operation.id,
+          status: "PENDING",
+          retrySafety: "UNKNOWN",
+          maxAttempts: DEFAULT_OUTBOUND_MAX_ATTEMPTS,
+        },
+        select: assistantOutboundDeliverySafeSelect,
+      });
+      const operationTransition = await tx.assistantHandoffOperation.updateMany({
+        where: {
+          id: operation.id,
+          status: "REMOTE_CONFIRMED",
+          contextVersion: conversation.currentContextVersion,
+          postBlockControlRevision: conversation.controlRevision,
+          confirmationMessageId: null,
+        },
+        data: {
+          status: "CONFIRMATION_PENDING",
+          confirmationMessageId: assistantMessage.id,
+          confirmationDeliveryCreatedAt: new Date(),
+          recoveryBlockedReason: null,
+          errorClass: null,
+          errorCode: null,
+        },
+      });
+      if (operationTransition.count !== 1) {
+        throw new Error("HANDOFF_RECOVERY_CONFIRMATION_CAS_REJECTED");
+      }
+      operation = await tx.assistantHandoffOperation.findUniqueOrThrow({
+        where: { id: operation.id },
+        select: assistantHandoffOperationSafeSelect,
+      });
+
+      let runtimeLog = operation.runtimeLogId
+        ? await tx.assistantRuntimeLog.findUnique({
+            where: { id: operation.runtimeLogId },
+            select: { id: true, metadata: true },
+          })
+        : null;
+      if (!runtimeLog) {
+        runtimeLog = await tx.assistantRuntimeLog.findFirst({
+          where: {
+            conversationId: operation.conversationId,
+            userMessageId: userMessage.id,
+          },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, metadata: true },
+        });
+      }
+      const existingMetadata =
+        runtimeLog?.metadata &&
+        typeof runtimeLog.metadata === "object" &&
+        !Array.isArray(runtimeLog.metadata)
+          ? (runtimeLog.metadata as Record<string, unknown>)
+          : {};
+      const existingManifest =
+        existingMetadata.turnExecutionManifest &&
+        typeof existingMetadata.turnExecutionManifest === "object" &&
+        !Array.isArray(existingMetadata.turnExecutionManifest)
+          ? (existingMetadata.turnExecutionManifest as TurnExecutionManifest)
+          : null;
+      let manifest =
+        existingManifest ??
+        createTurnExecutionManifest({
+          identity: {
+            companyId: operation.companyId,
+            assistantId: operation.assistantId,
+            source: userMessage.source ?? "chatwoot",
+            accountId: conversation.externalAccountId,
+            inboxId: conversation.externalInboxId,
+            externalConversationId: conversation.externalConversationId,
+            externalMessageId: userMessage.externalMessageId,
+            contextVersion: operation.contextVersion,
+            internalMessageId: userMessage.id,
+            internalConversationId: operation.conversationId,
+          },
+          aiActive: true,
+          pausedByHuman: false,
+          sessionState: "ACTIVE",
+          capturedAt: operation.createdAt.toISOString(),
+          fragmentCount: 1,
+          fragmentIdentityCoverage: "COMPLETE",
+          normalizedContentHash: createHash("sha256")
+            .update(userMessage.content)
+            .digest("hex"),
+          normalizedContentLength: userMessage.content.length,
+        });
+      if (manifest.turnExecutionId !== operation.turnExecutionId) {
+        throw new Error("HANDOFF_RECOVERY_TURN_IDENTITY_MISMATCH");
+      }
+      if (!manifest.terminal) {
+        manifest = finalizeLegacyNonProviderTurnExecutionManifest({
+          manifest,
+          terminal: {
+            path: "OPERATIONAL_HUMAN_HANDOFF",
+            reasonCode: "OPERATIONAL_HUMAN_HANDOFF",
+          },
+          primaryIntent: "human_handoff",
+          explicitRequests: ["human_handoff"],
+          outbound: { planned: true, sender: "CHATWOOT_V1" },
+        });
+      }
+      if (!manifest.decisionId) {
+        manifest = withTurnExecutionDecision(manifest, {
+          schemaVersion: V1_TURN_DECISION_SCHEMA_VERSION,
+          decisionId: operation.decisionId,
+          decisionOrdinal: 1,
+          decisionStatus: "SEALED",
+          decisionType: "OPERATIONAL_HANDOFF",
+          terminalReasonCode: "OPERATIONAL_HUMAN_HANDOFF",
+          executorOwner: V1_TURN_DECISION_EXECUTOR_OWNER,
+          executorExecutionCount: 1,
+          plannedBlockCount: 1,
+          stateEffect: "BLOCK_AI_AND_HANDOFF",
+          outboundIntended: true,
+        });
+      }
+      manifest = withTurnExecutionHandoff(
+        this.withOutboundDeliveryManifest(manifest, [delivery]),
+        this.toOperationalHandoffManifestSummary({
+          operation,
+          confirmationDeliveryId: delivery.id,
+          confirmationResult: "PENDING",
+        }),
+      );
+      manifest = withTurnExecutionOutbound(manifest, {
+        ...manifest.outbound,
+        planned: true,
+        attempted: false,
+        attemptCount: delivery.attemptCount,
+        sender: "CHATWOOT_V1",
+        externalMessageId: delivery.externalMessageId,
+        result: "NOT_ATTEMPTED",
+      });
+      const metadata = this.toSerializableJsonValue({
+        ...existingMetadata,
+        handoffRecoveryConfirmation: true,
+        handoffOperationId: operation.id,
+        turnExecutionManifest: manifest,
+      });
+      if (runtimeLog) {
+        await tx.assistantRuntimeLog.update({
+          where: { id: runtimeLog.id },
+          data: {
+            assistantMessageId: assistantMessage.id,
+            mode: "operational-human-handoff",
+            status: "SUCCESS",
+            provider: null,
+            model: null,
+            configurationSource: "verified-operational-handoff-recovery",
+            fallback: false,
+            fallbackReason: null,
+            outcome: "handoff",
+            handoffTriggered: true,
+            blockReason: null,
+            metadata,
+          },
+        });
+      } else {
+        runtimeLog = await tx.assistantRuntimeLog.create({
+          data: {
+            companyId: operation.companyId,
+            assistantId: operation.assistantId,
+            conversationId: operation.conversationId,
+            userMessageId: userMessage.id,
+            assistantMessageId: assistantMessage.id,
+            mode: "operational-human-handoff",
+            status: "SUCCESS",
+            provider: null,
+            model: null,
+            configurationSource: "verified-operational-handoff-recovery",
+            fallback: false,
+            outcome: "handoff",
+            knowledgeCount: 0,
+            historyMessagesUsed: 0,
+            historyLimit: 0,
+            handoffTriggered: true,
+            metadata,
+          },
+          select: { id: true, metadata: true },
+        });
+      }
+      await tx.assistantHandoffOperation.update({
+        where: { id: operation.id },
+        data: {
+          runtimeLogId: runtimeLog.id,
+          userMessageId: userMessage.id,
+          confirmationMessageId: assistantMessage.id,
+        },
+      });
+      return {
+        deliveryId: delivery.id,
+        created: true,
+        reused: false,
+        status: delivery.status,
+      };
+    });
+  }
+
   public async runOutboundRecoveryOnce(input: {
     deliveryIds?: string[];
     limit?: number;
   } = {}): Promise<OutboundRecoveryRunResult[]> {
     return this.createOutboundRecoveryCoordinator().runOnce(input);
+  }
+
+  private async resolveHandoffRecoveryRemoteEndpoint(
+    operation: Pick<HandoffRecoveryOperation, "companyId" | "assistantId"> & {
+      conversation: Pick<
+        HandoffRecoveryOperation["conversation"],
+        "externalAccountId" | "externalInboxId" | "externalConversationId"
+      >;
+    },
+  ): Promise<
+    | {
+        ok: true;
+        url: string;
+        apiAccessToken: string;
+        targetFingerprint: string;
+      }
+    | { ok: false; errorCode: string }
+  > {
+    const accountId = operation.conversation.externalAccountId?.trim() ?? "";
+    const inboxId = operation.conversation.externalInboxId?.trim() ?? "";
+    const externalConversationId =
+      operation.conversation.externalConversationId?.trim() ?? "";
+    if (!accountId || !inboxId || !externalConversationId) {
+      return { ok: false, errorCode: "CHATWOOT_HANDOFF_SCOPE_MISSING" };
+    }
+    const config =
+      await this.chatwootInboxConfigService.resolveActiveForAssistantConversation({
+        companyId: operation.companyId,
+        assistantId: operation.assistantId,
+        accountId,
+        inboxId,
+      });
+    if (
+      !config?.isActive ||
+      !config.apiAccessToken ||
+      !config.baseUrl?.trim() ||
+      config.accountId !== accountId ||
+      config.inboxId !== inboxId
+    ) {
+      return { ok: false, errorCode: "CHATWOOT_HANDOFF_CONFIG_UNAVAILABLE" };
+    }
+    const normalizedBaseUrl = config.baseUrl.trim().replace(/\/+$/, "");
+    const targetFingerprint = `handoff_target_${createHash("sha256")
+      .update(
+        JSON.stringify([
+          "CHATWOOT_HANDOFF_REMOTE_TARGET_V1",
+          operation.companyId,
+          operation.assistantId,
+          normalizedBaseUrl,
+          accountId,
+          inboxId,
+          externalConversationId,
+        ]),
+      )
+      .digest("hex")
+      .slice(0, 24)}`;
+    return {
+      ok: true,
+      url: `${normalizedBaseUrl}/api/v1/accounts/${encodeURIComponent(
+        accountId,
+      )}/conversations/${encodeURIComponent(externalConversationId)}`,
+      apiAccessToken: config.apiAccessToken,
+      targetFingerprint,
+    };
+  }
+
+  private async updateOperationalHandoffRecoveryManifest(
+    operationId: string,
+  ): Promise<void> {
+    const operationReference = await this.prisma.assistantHandoffOperation.findUnique({
+      where: { id: operationId },
+      select: {
+        runtimeLogId: true,
+        userMessageId: true,
+        conversationId: true,
+      },
+    });
+    if (
+      !operationReference ||
+      (!operationReference.runtimeLogId && !operationReference.userMessageId)
+    ) {
+      return;
+    }
+    const runtimeLogId =
+      operationReference.runtimeLogId ??
+      (
+        await this.prisma.assistantRuntimeLog.findFirst({
+          where: {
+            conversationId: operationReference.conversationId,
+            userMessageId: operationReference.userMessageId!,
+          },
+          orderBy: { createdAt: "desc" },
+          select: { id: true },
+        })
+      )?.id;
+    if (!runtimeLogId) return;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`
+        SELECT id
+        FROM "assistant_runtime_logs"
+        WHERE id = ${runtimeLogId}
+        FOR UPDATE
+      `;
+      const [operation, runtimeLog, latestAttempt, delivery] = await Promise.all([
+        tx.assistantHandoffOperation.findUnique({
+          where: { id: operationId },
+          select: assistantHandoffOperationSafeSelect,
+        }),
+        tx.assistantRuntimeLog.findUnique({
+          where: { id: runtimeLogId },
+          select: { id: true, userMessageId: true, metadata: true },
+        }),
+        tx.assistantHandoffAttempt.findFirst({
+          where: { operationId },
+          orderBy: { attemptNumber: "desc" },
+          select: { attemptNumber: true },
+        }),
+        tx.assistantOutboundDelivery.findFirst({
+          where: { handoffOperationId: operationId },
+          orderBy: [{ blockOrdinal: "asc" }, { createdAt: "asc" }],
+          select: assistantOutboundDeliverySafeSelect,
+        }),
+      ]);
+      if (
+        !operation ||
+        !runtimeLog ||
+        (operation.runtimeLogId && operation.runtimeLogId !== runtimeLog.id) ||
+        (!operation.runtimeLogId &&
+          (!operation.userMessageId ||
+            runtimeLog.userMessageId !== operation.userMessageId)) ||
+        !runtimeLog.metadata ||
+        typeof runtimeLog.metadata !== "object" ||
+        Array.isArray(runtimeLog.metadata)
+      ) {
+        return;
+      }
+      const metadata = runtimeLog.metadata as Record<string, any>;
+      const manifest = metadata.turnExecutionManifest;
+      if (
+        !manifest ||
+        typeof manifest !== "object" ||
+        Array.isArray(manifest) ||
+        manifest.turnExecutionId !== operation.turnExecutionId ||
+        manifest.decisionId !== operation.decisionId
+      ) {
+        return;
+      }
+      const handoffSummary = this.toOperationalHandoffManifestSummary({
+        operation,
+        confirmationDeliveryId: delivery?.id ?? null,
+        confirmationResult:
+          operation.status === "COMPLETED"
+            ? "ACKNOWLEDGED"
+            : operation.status === "CONFIRMATION_PENDING"
+              ? delivery &&
+                ["FAILED_RETRYABLE", "FAILED_TERMINAL", "UNCERTAIN"].includes(
+                  delivery.status,
+                )
+                ? "FAILED"
+                : "PENDING"
+              : "NOT_AUTHORIZED",
+      });
+      handoffSummary.recovery = {
+        schemaVersion: operation.recoverySchemaVersion,
+        attemptSchemaVersion: HANDOFF_ATTEMPT_SCHEMA_VERSION,
+        attemptNumber: latestAttempt?.attemptNumber ?? 0,
+        leaseOwner: HandoffRecoveryCoordinator.manifestOwnerFingerprint(
+          operation.attemptOwner,
+        ),
+        leaseStartedAt: operation.claimStartedAt?.toISOString() ?? null,
+        leaseExpiresAt: operation.claimExpiresAt?.toISOString() ?? null,
+        safety: operation.recoverySafety as HandoffRecoverySafety,
+        eligibility: evaluateHandoffRecoveryEligibility({
+          status: operation.status,
+          recoverySafety: operation.recoverySafety,
+          attemptCount: operation.attemptCount,
+          maxAttempts: operation.maxAttempts,
+          attemptOwner: operation.attemptOwner,
+          claimExpiresAt: operation.claimExpiresAt,
+          nextEligibleAt: operation.nextEligibleAt,
+          now: new Date(),
+        }),
+        nextEligibleAt: operation.nextEligibleAt?.toISOString() ?? null,
+        reconciliationStatus: operation.reconciliationStatus,
+        reconciliationEvidenceType: operation.reconciliationEvidenceType,
+        externalInterventionObserved: operation.externalInterventionObserved,
+        confirmationCreatedOrReused: Boolean(delivery),
+        deliveryId: delivery?.id ?? null,
+        result: operation.status,
+        blockingReason: operation.recoveryBlockedReason ?? operation.errorCode,
+      };
+      await tx.assistantRuntimeLog.update({
+        where: { id: runtimeLog.id },
+        data: {
+          metadata: this.toSerializableJsonValue({
+            ...metadata,
+            turnExecutionManifest: {
+              ...manifest,
+              handoff: handoffSummary,
+            },
+          }),
+        },
+      });
+    });
+  }
+
+  private createHandoffRecoveryCoordinator(): HandoffRecoveryCoordinator {
+    const readNumber = (name: string, fallback: number): number => {
+      const value = Number(process.env[name]);
+      return Number.isFinite(value) && value > 0 ? value : fallback;
+    };
+    return new HandoffRecoveryCoordinator({
+      prisma: this.prisma,
+      leaseMs: readNumber(
+        "HANDOFF_RECOVERY_LEASE_MS",
+        DEFAULT_HANDOFF_RECOVERY_LEASE_MS,
+      ),
+      maxMutationAttempts: readNumber(
+        "HANDOFF_RECOVERY_MAX_MUTATION_ATTEMPTS",
+        DEFAULT_HANDOFF_RECOVERY_MAX_ATTEMPTS,
+      ),
+      backoffScheduleMs: [
+        readNumber("HANDOFF_RECOVERY_BACKOFF_BASE_MS", 60_000),
+        readNumber("HANDOFF_RECOVERY_BACKOFF_BASE_MS", 60_000) * 5,
+        readNumber("HANDOFF_RECOVERY_BACKOFF_BASE_MS", 60_000) * 30,
+      ],
+      backoffCapMs: readNumber("HANDOFF_RECOVERY_BACKOFF_CAP_MS", 3_600_000),
+      jitterRatio: Math.max(
+        0,
+        Math.min(Number(process.env.HANDOFF_RECOVERY_JITTER_RATIO) || 0.1, 0.5),
+      ),
+      readRemote: async (operation) => {
+        const endpoint = await this.resolveHandoffRecoveryRemoteEndpoint(operation);
+        if (!endpoint.ok) {
+          return { ok: false, errorCode: endpoint.errorCode, httpStatus: null };
+        }
+        const result = await this.readOperationalHandoffRemoteState(endpoint);
+        return result.ok
+          ? { ...result, targetFingerprint: endpoint.targetFingerprint }
+          : result;
+      },
+      mutateRemote: async ({
+        operation,
+        expectedTargetFingerprint,
+        onBoundaryStart,
+      }) => {
+        try {
+          await onBoundaryStart();
+        } catch (error) {
+          return {
+            result: "FAILED",
+            safety: "PROVEN_SAFE",
+            errorCode: sanitizeOperationalHandoffErrorCode(
+              error,
+              "CHATWOOT_HANDOFF_MUTATION_BOUNDARY_NOT_RECORDED",
+            ),
+            httpStatus: null,
+          };
+        }
+        const currentTarget =
+          await this.prisma.assistantHandoffOperation.findUnique({
+            where: { id: operation.id },
+            select: {
+              companyId: true,
+              assistantId: true,
+              conversation: {
+                select: {
+                  externalAccountId: true,
+                  externalInboxId: true,
+                  externalConversationId: true,
+                },
+              },
+            },
+          });
+        if (!currentTarget) {
+          return {
+            result: "FAILED",
+            safety: "NOT_RETRYABLE",
+            errorCode: "CHATWOOT_HANDOFF_OPERATION_NOT_FOUND",
+            httpStatus: null,
+          };
+        }
+        const endpoint =
+          await this.resolveHandoffRecoveryRemoteEndpoint(currentTarget);
+        if (!endpoint.ok) {
+          return {
+            result: "FAILED",
+            safety: "PROVEN_SAFE",
+            errorCode: endpoint.errorCode,
+            httpStatus: null,
+          };
+        }
+        if (endpoint.targetFingerprint !== expectedTargetFingerprint) {
+          return {
+            result: "FAILED",
+            safety: "NOT_RETRYABLE",
+            errorCode: "CHATWOOT_HANDOFF_REMOTE_TARGET_CHANGED",
+            httpStatus: null,
+          };
+        }
+        return this.mutateOperationalHandoffRemoteState({
+          url: endpoint.url,
+          apiAccessToken: endpoint.apiAccessToken,
+        });
+      },
+      ensureConfirmation: (operation) =>
+        this.ensureOperationalHandoffRecoveryConfirmation(operation),
+      recoverConfirmation: async (deliveryId) => {
+        const [result] = await this.runOutboundRecoveryOnce({
+          deliveryIds: [deliveryId],
+          limit: 1,
+        });
+        if (!result) throw new Error("HANDOFF_CONFIRMATION_DELIVERY_NOT_FOUND");
+        return result;
+      },
+      updateManifest: (operationId) =>
+        this.updateOperationalHandoffRecoveryManifest(operationId),
+      logger: this.logger,
+    });
+  }
+
+  public async runHandoffRecoveryOnce(input: {
+    operationIds?: string[];
+    limit?: number;
+  } = {}): Promise<HandoffRecoveryRunResult[]> {
+    return this.createHandoffRecoveryCoordinator().runOnce(input);
   }
 
   private async reconcileChatwootOutboundDelivery(input: {
@@ -3689,6 +4834,7 @@ export class AssistantConversationsService {
         decision: input.decision,
         assistant: input.assistant,
         conversation: input.conversation,
+        userMessage: input.userMessage,
         controlTrace: input.controlTrace,
         manifest,
       });
@@ -3867,6 +5013,8 @@ export class AssistantConversationsService {
             },
             data: {
               status: "CONFIRMATION_PENDING",
+              userMessageId: input.userMessage.id,
+              confirmationMessageId: assistantMessage.id,
               confirmationDeliveryCreatedAt: new Date(),
               errorClass: null,
               errorCode: null,
@@ -3905,6 +5053,19 @@ export class AssistantConversationsService {
           select: { id: true },
         });
         runtimeLogId = runtimeLog.id;
+        if (operationalHandoffOperation) {
+          await tx.assistantHandoffOperation.updateMany({
+            where: {
+              id: operationalHandoffOperation.id,
+              runtimeLogId: null,
+            },
+            data: {
+              userMessageId: input.userMessage.id,
+              runtimeLogId,
+              confirmationMessageId: assistantMessage?.id ?? null,
+            },
+          });
+        }
       }
 
       if (input.touchConversationTitle) {

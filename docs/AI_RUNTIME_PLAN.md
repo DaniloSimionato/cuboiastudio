@@ -6,9 +6,11 @@ Este documento define a evolucao do runtime mantendo autoridade deterministica,
 seguranca de secrets e separacao clara entre provider, assistant, knowledge,
 pipeline, logs, tools, controle de conversa e canais.
 
-> Estado de referencia: Runtime V1 estabilizado ate o Bloco 4A. Runtime V2
-> permanece OFF. As secoes AI-000 a AI-007 abaixo registram marcos historicos e
-> nao substituem os contratos atuais dos relatorios de estabilizacao.
+> Estado de referencia: Runtime V1 instrumentado ate o Bloco 4B. O resultado do
+> gate final deste bloco deve ser conferido no relatorio correspondente.
+> Runtime V2 permanece OFF. As secoes AI-000 a AI-007 abaixo registram marcos
+> historicos e nao substituem os contratos atuais dos relatorios de
+> estabilizacao.
 
 ## 1. Estado atual
 
@@ -30,8 +32,9 @@ pipeline, logs, tools, controle de conversa e canais.
 - `UNCERTAIN` nunca e reenviado diretamente.
 - Reconciliacao pode restaurar ack por ID externo ou referencia tecnica remota
   exata, sem gerar nova decisao ou mensagem.
-- Recovery automatico nao esta ativado; nao existe scheduler, worker, endpoint
-  ou hook de startup para o coordinator.
+- Recovery outbound continua sem scheduler proprio. O recovery de handoff
+  possui coordinator e runner diretamente testaveis, mas o runner fica OFF por
+  padrao e e bloqueado em staging/producao neste bloco.
 - Pedido humano explicito produz uma decisao operacional e uma operacao
   persistida unica. O CAS local bloqueia a IA antes de qualquer mutacao
   Chatwoot.
@@ -39,7 +42,12 @@ pipeline, logs, tools, controle de conversa e canais.
   ai_active=false -> GET` comprovar a conversa, o estado remoto e um assignee
   ou team humano ja existente.
 - Falha ou ambiguidade remota mantem a IA local bloqueada, nao produz texto de
-  sucesso e exige reconciliacao futura do Bloco 4B.
+  sucesso e exige reconciliacao GET-first.
+- Operacoes parciais usam safety separado do status, attempt duravel, lease,
+  budget e backoff. Mutation ambigua nunca e repetida diretamente.
+- `REMOTE_CONFIRMED` sem confirmacao local cria ou reutiliza uma unica
+  mensagem e um unico delivery; `CONFIRMATION_PENDING` delega apenas ao recovery
+  outbound existente.
 - O smoke e o harness HTTP nao dependem de provider ou servico real.
 
 ## 2. Problema atual
@@ -57,9 +65,10 @@ Os principais limites ainda abertos sao:
 - consultas abertas podem resultar em respostas genericas;
 - PostgreSQL e a autoridade local, mas divergencia remota de pausa sem
   sincronizacao ainda nao e detectada;
-- recovery seguro existe, mas sua ativacao operacional permanece pendente;
-- operacoes de handoff parciais ainda dependem de reconciliacao manual; o
-  Bloco 4A nao ativa scheduler ou worker para elas;
+- recovery seguro existe, mas o runner de handoff permanece deliberadamente
+  desabilitado por padrao e bloqueado em staging/producao;
+- o coordinator nao transforma uma leitura inconclusiva em autorizacao de
+  mutation e pode manter operacoes para intervencao;
 - somente assignee ou team ja presentes na conversa constituem destino humano
   comprovado; inbox isolada nao e assumida como fila;
 - ausencia em lista paginada do Chatwoot nao prova ausencia do efeito remoto.
@@ -143,6 +152,22 @@ mesmo Runtime V1 e do mesmo executor:
 O Bloco 4A nao atribui assignee/team, nao muda labels/status e nao considera
 resposta 2xx da mutacao, isoladamente, como prova de handoff.
 
+O recovery do Bloco 4B continua a mesma operacao:
+
+1. carrega somente operacoes parciais e revalida o controle local;
+2. disputa lease e registra `AssistantHandoffAttempt`;
+3. executa GET antes de qualquer mutation recuperada;
+4. se o remoto ja estiver correto, persiste `REMOTE_CONFIRMED` sem PUT;
+5. repete PUT apenas com safety `PROVEN_SAFE`, budget e backoff validos;
+6. aceita mudanca externa de assignee/team somente quando o novo destino
+   continua humano e o scope permanece exato;
+7. cria ou reutiliza a confirmacao deterministica por decisao/ordinal;
+8. delega o envio ou reconciliacao ao ledger outbound existente.
+
+`REQUESTED` pode repetir somente o CAS local original. Reset ou mudanca de
+revisao produz `SUPERSEDED`; recovery nunca reativa a IA. Lease expirado depois
+da fronteira exige GET e nao volta diretamente a um estado de mutation.
+
 ### 4.4 Fallback deterministico
 
 O runtime deterministico deve continuar existindo para:
@@ -169,6 +194,8 @@ sanitizada:
 - delivery, attempt, lease, retry safety e reconciliacao;
 - operacao de handoff, resolucao sanitizada do destino, revisoes, mutacao,
   verificacao e referencia da confirmacao;
+- recovery de handoff, safety, elegibilidade, lease owner em fingerprint,
+  attempt, backoff, evidencia remota e intervencao externa observada;
 - resultado conhecido do outbound.
 
 O manifesto nao duplica mensagem, prompt completo, knowledge integral, token,
@@ -253,7 +280,8 @@ AI-004 FIX 2 melhorou o diagnostico seguro de `POST /settings/ai/test`: erros do
 AI-005 agora foi entregue como Runtime Pipeline v1: o Assistant ganhou `initialMessage`, a conversa nova pode iniciar com essa mensagem, o runtime retorna `outcome` e `summary`, e `/testes` mostra as 7 partes do assistente sem expor prompts completos gigantes nem secrets.
 AI-005 FIX estabilizou o laboratorio `/testes`: conversas sao sempre carregadas por assistant, `Conversation not found` vira orientacao amigavel, assistants tecnicos de smoke ficam ocultos na UI padrao, e o smoke inativa o assistant criado ao final.
 
-Sequencia de estabilizacao arquitetural concluida posteriormente:
+Sequencia de estabilizacao arquitetural concluida ate o Bloco 4A e
+implementada no worktree atual para o Bloco 4B:
 
 1. Fase 1 - auditoria forense read-only;
 2. Fase 2 - arquitetura incremental da politica de atendimento;
@@ -262,16 +290,17 @@ Sequencia de estabilizacao arquitetural concluida posteriormente:
 5. Bloco 2 - decisao terminal e executor unicos;
 6. Bloco 3A - `controlRevision`, snapshots e checkpoints CAS;
 7. Bloco 3B.1 - ledger duravel e ownership de tentativa;
-8. Bloco 3B.2 - recovery e reconciliacao segura.
-9. Bloco 4A - handoff humano operacional fail-closed.
+8. Bloco 3B.2 - recovery e reconciliacao segura;
+9. Bloco 4A - handoff humano operacional fail-closed;
+10. Bloco 4B - recovery e reconciliacao segura de handoff.
 
-O Bloco 4B permanece pendente e devera tratar recovery e reconciliacao de
-operacoes parciais de handoff. Runtime V2 nao deve ser ativado como atalho para
-as etapas seguintes.
+O Bloco 4B adiciona os contratos e testes de recovery. Seu runner permanece OFF
+por padrao e bloqueado em staging/producao; isso nao constitui ativacao remota.
+Runtime V2 nao deve ser ativado como atalho para as etapas seguintes.
 
-## 6. Variaveis de ambiente futuras
+## 6. Variaveis de ambiente
 
-Variaveis conceituais esperadas:
+Variaveis conceituais de IA e configuracoes atuais de recovery:
 
 ```env
 APP_ENCRYPTION_KEY=
@@ -280,6 +309,14 @@ AI_PROVIDER=openai
 AI_BASE_URL=
 AI_MODEL=
 AI_API_KEY=
+HANDOFF_RECOVERY_ENABLED=false
+HANDOFF_RECOVERY_INTERVAL_MS=60000
+HANDOFF_RECOVERY_BATCH_LIMIT=25
+HANDOFF_RECOVERY_LEASE_MS=60000
+HANDOFF_RECOVERY_MAX_MUTATION_ATTEMPTS=3
+HANDOFF_RECOVERY_BACKOFF_BASE_MS=60000
+HANDOFF_RECOVERY_BACKOFF_CAP_MS=3600000
+HANDOFF_RECOVERY_JITTER_RATIO=0.1
 ```
 
 Regras:
@@ -290,6 +327,11 @@ Regras:
 - `AI_API_KEY` vive apenas no backend
 - o frontend nunca recebe essa chave
 - o smoke nao pode depender de chave real
+- `HANDOFF_RECOVERY_ENABLED=false` e o default fail-closed
+- staging e producao bloqueiam a execucao automatica mesmo se a flag for
+  configurada incorretamente como `true` neste bloco
+- os valores de lease, budget e backoff sao operacionais e nao autorizam
+  mutation sem safety comprovada
 
 ## 7. Seguranca e secrets
 
@@ -331,7 +373,7 @@ O harness principal:
 - impede rede nao loopback;
 - encerra app, Prisma, Redis, fakes, portas e containers.
 
-Controles declarados no working tree do Bloco 4A:
+Controles historicos confirmados no Bloco 4A:
 
 - 27 cenarios HTTP executaveis, incluindo 14 caracterizacoes de handoff
   operacional e 13 controles anteriores;
@@ -346,16 +388,30 @@ Controles declarados no working tree do Bloco 4A:
 
 Gate final do Bloco 4A:
 
-- harness HTTP: 27 passed, 0 failed e 5 `todo`;
-- regressao relacionada: 254 passed e 0 failed;
-- contrato unitario de handoff: 7 passed e 0 failed;
+- harness HTTP: 28 passed, 0 failed e 4 `todo`;
+- regressao relacionada: 286 passed e 0 failed;
+- contratos de handoff recovery, runner e integracao: aprovados;
 - build fresco, SHA-256 combinado do conjunto de artefatos V1:
-  `56c4a24b720184b7e843fb4d84c107a48935d9f091d8848d9d6c5c73cd4696af`.
-- `dist/main.js`, SHA-256 individual:
-  `3b6f23e68dbc6103c45b3949ad8206e8e90e11dd8e71368be9c341a76ac0c4df`.
+  `3921d6684cbe13948c784a3596bd87d48fdae52f7502ed0bae1950e12dc4f8f6`.
 
 Consulte o relatorio do bloco para migrations, teardown, sanitizacao e
 limitacoes.
+
+Cobertura acrescentada no working tree do Bloco 4B:
+
+- recovery de `REQUESTED`, `LOCALLY_BLOCKED`, `REMOTE_PENDING`,
+  `REMOTE_CONFIRMED`, `CONFIRMATION_PENDING` e
+  `RECONCILIATION_REQUIRED`;
+- 5xx/timeout com efeito remoto, ambiguidade inconclusiva e falha
+  pre-fronteira comprovada;
+- attempt, lease, dois workers, restart, reset, budget e backoff;
+- destino humano alterado ou removido;
+- confirmacao idempotente e delegation ao outbound recovery;
+- feature flag OFF, bloqueio em staging/producao, no-overlap e shutdown;
+- somente quatro gaps funcionais permanecem `test.todo`.
+
+Resultado final do Bloco 4B: **APROVADO LOCALMENTE**. Consulte
+`apps/api/test/BLOCK4B_HANDOFF_RECOVERY_REPORT.md` para o gate completo.
 
 Comando principal:
 
@@ -367,13 +423,12 @@ npm run test:http-harness
 Consulte `apps/api/test/README.production-http-harness.md` para limites e
 evidencias de build.
 
-## 10. O que nao entrou no Bloco 4A
+## 10. O que nao entrou nos Blocos 4A e 4B
 
-- scheduler ou worker de recovery;
-- retry automatico ativado;
+- ativacao automatica do runner em staging ou producao;
+- scheduler independente para todo o recovery outbound;
 - prova remota de ausencia;
 - recuperacao automatica de payload historico ou resposta dividida;
-- recovery automatico de operacao parcial de handoff;
 - criacao ou alteracao de assignee, team, labels ou status;
 - configuracao administrativa de destino humano;
 - inbox tratada por presuncao como fila humana valida;
@@ -395,6 +450,8 @@ evidencias de build.
 - confirmar handoff com apenas o 2xx da mutacao, sem leitura remota;
 - assumir inbox sem assignee/team como destino humano;
 - reativar a IA automaticamente depois de falha remota de handoff;
+- tratar lease expirado como autorizacao automatica de mutation;
+- repetir mutation quando safety e `VERIFY_REMOTE_FIRST` ou `UNKNOWN`;
 - repetir mutacao de handoff parcial por duplicate do webhook;
 - permitir que outro branch volte a enviar fora do executor unico;
 - alterar controle sem incrementar `controlRevision`;
@@ -405,12 +462,12 @@ evidencias de build.
 
 O proximo bloco deve ser autorizado separadamente. Ate essa autorizacao:
 
-- nao ativar o coordinator de recovery;
-- nao iniciar o Bloco 4B;
+- manter `HANDOFF_RECOVERY_ENABLED=false`;
+- nao ativar o runner em staging ou producao;
 - nao alterar os quatro gaps funcionais restantes;
-- nao automatizar recovery de handoff parcial;
 - nao ativar Runtime V2;
-- usar os relatorios dos blocos como fonte de contrato e evidencia.
+- usar `BLOCK4B_HANDOFF_RECOVERY_REPORT.md` e os relatorios anteriores como
+  fonte de contrato e evidencia.
 
 ## Registro historico: AI-007 - logs seguros de runtime
 

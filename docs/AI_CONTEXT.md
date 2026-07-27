@@ -74,16 +74,20 @@ provider para respostas abertas. Knowledge scopes, filtro por tags, flow
 routing, RAG, autoridades comerciais, guards de preco e isolamento por
 `currentContextVersion` continuam ativos.
 
-Os blocos de estabilizacao arquitetural concluidos sao:
+Os blocos de estabilizacao arquitetural foram concluidos ate o Bloco 4A. O
+Bloco 4B esta implementado neste worktree e permanece sujeito ao gate final
+registrado em seu relatorio:
 
 - Bloco 0: harness HTTP pelo mesmo `AppModule`, bootstrap e webhook da producao;
 - Bloco 1: `turnExecutionId`, policy version e manifesto sanitizado;
 - Bloco 2: uma decisao terminal selada e um executor unico por turno;
 - Bloco 3A: `controlRevision`, snapshots, checkpoints e bloqueio de turno stale;
 - Bloco 3B.1: ledger duravel antes da fronteira outbound e claim unico;
-- Bloco 3B.2: retry safety, leases, tentativas, recovery e reconciliacao segura.
+- Bloco 3B.2: retry safety, leases, tentativas, recovery e reconciliacao segura;
 - Bloco 4A: handoff humano operacional fail-closed, com operacao persistida,
-  bloqueio local por CAS, mutacao e verificacao remotas antes da confirmacao.
+  bloqueio local por CAS, mutacao e verificacao remotas antes da confirmacao;
+- Bloco 4B: recovery de operacoes parciais de handoff com safety separado,
+  attempts duraveis, lease, GET-first e confirmacao idempotente pelo ledger.
 
 No handoff explicito, o Runtime V1 nao trata mais o texto de transferencia como
 prova da operacao. A sequencia e:
@@ -96,9 +100,19 @@ existente. Neste bloco, os unicos destinos comprovados sao o assignee existente
 e, na ausencia dele, o team existente. Inbox sem assignee ou team nao e tratada
 como fila humana comprovada.
 
+Se o processo parar no meio do handoff, o recovery continua a operacao
+existente sem criar outra decisao. `REMOTE_PENDING` e
+`RECONCILIATION_REQUIRED` sempre executam GET antes de qualquer nova mutation.
+Mutation so pode ser repetida com `HandoffRecoverySafety` igual a
+`PROVEN_SAFE`, budget, backoff, lease e controle local ainda validos. Um
+destino humano diferente pode ser aceito como intervencao externa quando
+continua valido; destino removido nao e inventado nem restaurado.
+
 Um ack do POST ao Chatwoot significa `ACKNOWLEDGED`; ele nao prova entrega final
-ao usuario. Recovery automatico nao foi ativado. O coordinator existe como
-contrato interno testavel, sem cron, worker, endpoint ou hook de startup.
+ao usuario. O runner periodico de handoff existe, mas fica OFF por padrao por
+`HANDOFF_RECOVERY_ENABLED=false` e e bloqueado mesmo com a flag ligada em
+`staging` e `production`. Nao existe endpoint publico de recovery. Em ambiente
+controlado, o runner impede sobreposicao e encerra de forma limpa.
 
 Retries so podem ocorrer quando a ausencia de efeito remoto e tecnicamente
 comprovada. `UNCERTAIN` nunca e reenviado diretamente. A reconciliacao atual
@@ -129,6 +143,7 @@ Documentos operacionais atuais:
 - `apps/api/test/README.production-http-harness.md`;
 - `apps/api/test/BLOCK3B2_OUTBOUND_RECOVERY_REPORT.md`;
 - `apps/api/test/BLOCK4A_OPERATIONAL_HANDOFF_REPORT.md`;
+- `apps/api/test/BLOCK4B_HANDOFF_RECOVERY_REPORT.md`;
 - `docs/CUBOCHAT_INTEGRATION.md`.
 
 ## 4. Objetivo do MVP
@@ -186,18 +201,20 @@ forte, mas ainda conserva limitacoes funcionais conhecidas:
 - evidencia relevante alem do preview de 250 caracteres ainda pode ser perdida;
 - resposta tecnica sobre computador lento ainda pode ficar generica;
 - divergencia remota de pausa sem atualizacao local ainda nao e detectada;
-- recovery outbound ainda nao possui ativacao automatica.
-- operacoes parciais de handoff ainda nao possuem coordinator automatico de
-  recovery e reconciliacao.
+- recovery outbound nao possui um scheduler independente;
+- o runner de handoff permanece desabilitado por padrao e proibido em
+  staging/producao neste bloco.
 
 Os quatro primeiros gaps funcionais permanecem visiveis como especificacoes
-`test.todo`. A recuperacao automatica de handoff parcial aparece separadamente
-como especificacao futura do Bloco 4B; nenhum desses itens deve ser tratado
-como comportamento correto.
+`test.todo`. A especificacao de recovery de handoff deixou de ser `todo` e
+passou a possuir cobertura executavel separada; isso nao altera os quatro gaps
+de qualidade de atendimento.
 
 O gate final do Bloco 4A passou 27 cenarios HTTP executaveis, manteve 5
 especificacoes `todo`, passou 254 testes relacionados e 7 testes unitarios do
-contrato operacional. Runtime V2 permaneceu OFF.
+contrato operacional. Os resultados finais do Bloco 4B devem ser consultados
+em `BLOCK4B_HANDOFF_RECOVERY_REPORT.md` depois da conclusao do gate. Runtime V2
+permanece OFF.
 
 ## 7. Como queremos que funcione
 

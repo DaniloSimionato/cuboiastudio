@@ -5,15 +5,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertIsolatedServiceUrls } from "./production-app-process.mjs";
 
-const BASELINE_COMMIT = "657aeb0334bb00b9a51f661fcbcf68abc95ce94b";
-const ALLOWED_BLOCK4A_RUNTIME_PATHS = new Set([
+const BASELINE_COMMIT = "670bb08cb97d386629f6fc71623018362be0992f";
+const ALLOWED_BLOCK4B_RUNTIME_PATHS = new Set([
   "apps/api/prisma/schema.prisma",
-  "apps/api/prisma/migrations/20260725220000_add_assistant_handoff_operation/migration.sql",
+  "apps/api/prisma/migrations/20260725230000_add_handoff_recovery_safety/migration.sql",
+  "apps/api/src/config/env.ts",
+  "apps/api/src/assistant-conversations/assistant-conversations.module.ts",
   "apps/api/src/assistant-conversations/assistant-conversations.service.ts",
+  "apps/api/src/assistant-conversations/handoff-recovery-coordinator.ts",
+  "apps/api/src/assistant-conversations/handoff-recovery-runner.ts",
+  "apps/api/src/assistant-conversations/handoff-recovery.ts",
   "apps/api/src/assistant-conversations/operational-handoff.ts",
   "apps/api/src/assistant-conversations/outbound-recovery-coordinator.ts",
   "apps/api/src/assistant-conversations/turn-execution-manifest.ts",
-  "apps/api/src/assistant-conversations/v1-turn-decision.ts",
 ]);
 const helperDirectory = path.dirname(fileURLToPath(import.meta.url));
 const apiDirectory = path.resolve(helperDirectory, "../..");
@@ -21,6 +25,7 @@ const repositoryDirectory = path.resolve(apiDirectory, "../..");
 const migrationsDirectory = path.join(apiDirectory, "prisma/migrations");
 const outboundRecoveryMigration = "20260725180000_add_outbound_recovery_safety";
 const operationalHandoffMigration = "20260725220000_add_assistant_handoff_operation";
+const handoffRecoveryMigration = "20260725230000_add_handoff_recovery_safety";
 const relatedRegressionTests = [
   "test/chatwoot-webhook-and-runtime.test.mjs",
   "test/canonical-inbound-message.test.mjs",
@@ -39,6 +44,9 @@ const relatedRegressionTests = [
   "test/v1-turn-decision.test.mjs",
   "test/turn-execution-manifest.test.mjs",
   "test/operational-handoff.test.mjs",
+  "test/handoff-recovery-contract.test.mjs",
+  "test/handoff-recovery-runner.test.mjs",
+  "test/handoff-recovery.test.mjs",
 ];
 const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
 const databaseName = `cubo_policy_block0_test_${suffix}`;
@@ -277,11 +285,11 @@ async function assertBaselineAndScope() {
     .map((entry) => entry.trim())
     .filter(Boolean);
   const disallowedChanges = protectedChanges.filter(
-    (entry) => !ALLOWED_BLOCK4A_RUNTIME_PATHS.has(entry),
+    (entry) => !ALLOWED_BLOCK4B_RUNTIME_PATHS.has(entry),
   );
   if (disallowedChanges.length > 0) {
     throw new Error(
-      `Harness refuses production source, schema or migration changes outside Block 4A:\n${disallowedChanges.join("\n")}`,
+      `Harness refuses production source, schema or migration changes outside Block 4B:\n${disallowedChanges.join("\n")}`,
     );
   }
   const prismaBinary = path.join(apiDirectory, "node_modules/.bin/prisma");
@@ -320,6 +328,9 @@ async function buildFresh(environment) {
     path.join(apiDirectory, "dist/assistant-conversations/conversation-control-snapshot.js"),
     path.join(apiDirectory, "dist/assistant-conversations/outbound-delivery.js"),
     path.join(apiDirectory, "dist/assistant-conversations/outbound-recovery-coordinator.js"),
+    path.join(apiDirectory, "dist/assistant-conversations/handoff-recovery-coordinator.js"),
+    path.join(apiDirectory, "dist/assistant-conversations/handoff-recovery-runner.js"),
+    path.join(apiDirectory, "dist/assistant-conversations/handoff-recovery.js"),
     path.join(apiDirectory, "dist/assistant-conversations/operational-handoff.js"),
     path.join(apiDirectory, "dist/assistant-conversations/turn-execution-manifest.js"),
     path.join(apiDirectory, "dist/assistant-conversations/v1-turn-decision.js"),
@@ -372,7 +383,9 @@ async function validateOutboundRecoveryUpgradeMigration() {
     .sort();
   const baselineMigrations = migrationEntries.filter(
     (entry) =>
-      entry !== outboundRecoveryMigration && entry !== operationalHandoffMigration,
+      entry !== outboundRecoveryMigration &&
+      entry !== operationalHandoffMigration &&
+      entry !== handoffRecoveryMigration,
   );
   for (const migration of baselineMigrations) {
     await run("docker", [
@@ -575,7 +588,8 @@ async function validateOperationalHandoffUpgradeMigration() {
     .map((entry) => entry.name)
     .sort();
   for (const migration of migrationEntries.filter(
-    (entry) => entry !== operationalHandoffMigration,
+    (entry) =>
+      entry !== operationalHandoffMigration && entry !== handoffRecoveryMigration,
   )) {
     await run("docker", [
       "exec",
@@ -736,11 +750,258 @@ async function validateOperationalHandoffUpgradeMigration() {
   );
 }
 
+async function validateHandoffRecoveryUpgradeMigration() {
+  const upgradeDatabase = `${databaseName}_handoff_recovery_upgrade`;
+  const containerMigrations = `/tmp/cubo-policy-handoff-recovery-migrations-${suffix}`;
+  await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    "postgres",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    `CREATE DATABASE "${upgradeDatabase}"`,
+  ]);
+  await run("docker", [
+    "cp",
+    `${migrationsDirectory}/.`,
+    `${postgresContainer}:${containerMigrations}`,
+  ]);
+  const migrationEntries = (await readdir(migrationsDirectory, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  for (const migration of migrationEntries.filter(
+    (entry) => entry !== handoffRecoveryMigration,
+  )) {
+    await run("docker", [
+      "exec",
+      postgresContainer,
+      "psql",
+      "-U",
+      "postgres",
+      "-d",
+      upgradeDatabase,
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-f",
+      `${containerMigrations}/${migration}/migration.sql`,
+    ]);
+  }
+  const fixtureSql = [
+    `INSERT INTO "companies" ("id", "name", "updatedAt") VALUES ('handoff-recovery-company', 'Handoff recovery migration fixture', CURRENT_TIMESTAMP)`,
+    `INSERT INTO "assistants" ("id", "companyId", "name", "updatedAt") VALUES ('handoff-recovery-assistant', 'handoff-recovery-company', 'Handoff recovery migration assistant', CURRENT_TIMESTAMP)`,
+    `INSERT INTO "assistant_conversations" ("id", "companyId", "assistantId", "updatedAt") VALUES ('handoff-recovery-conversation', 'handoff-recovery-company', 'handoff-recovery-assistant', CURRENT_TIMESTAMP)`,
+    `INSERT INTO "assistant_handoff_operations" ("id", "companyId", "assistantId", "conversationId", "turnExecutionId", "decisionId", "contextVersion", "idempotencyKey", "policyVersion", "expectedControlRevision", "reason", "updatedAt") VALUES ('handoff-recovery-operation', 'handoff-recovery-company', 'handoff-recovery-assistant', 'handoff-recovery-conversation', 'handoff-recovery-turn', 'handoff-recovery-decision', 1, 'handoff-recovery-key', 'V1_COMPATIBILITY_POLICY', 0, 'CUSTOMER_REQUESTED_HUMAN', CURRENT_TIMESTAMP)`,
+  ].join("; ");
+  await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    fixtureSql,
+  ]);
+  await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-f",
+    `${containerMigrations}/${handoffRecoveryMigration}/migration.sql`,
+  ]);
+
+  const operationDefaults = await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-At",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    `SELECT "recoverySchemaVersion" || '|' || "maxAttempts" || '|' || "recoverySafety" || '|' || "externalInterventionObserved" || '|' || "confirmationContractVersion" FROM "assistant_handoff_operations" WHERE "id" = 'handoff-recovery-operation'`,
+  ]);
+  if (
+    operationDefaults.stdout !==
+    "ASSISTANT_HANDOFF_RECOVERY_V1|3|UNKNOWN|false|OPERATIONAL_HANDOFF_CONFIRMATION_V1"
+  ) {
+    throw new Error(
+      `Handoff recovery operation defaults mismatch: ${operationDefaults.stdout}`,
+    );
+  }
+  const legacyReferences = await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-At",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    `SELECT ("userMessageId" IS NULL)::TEXT || '|' || ("runtimeLogId" IS NULL)::TEXT || '|' || ("confirmationMessageId" IS NULL)::TEXT FROM "assistant_handoff_operations" WHERE "id" = 'handoff-recovery-operation'`,
+  ]);
+  if (legacyReferences.stdout !== "true|true|true") {
+    throw new Error(
+      `Handoff recovery legacy nullable-reference compatibility mismatch: ${legacyReferences.stdout}`,
+    );
+  }
+  const nullableReferenceColumns = await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-At",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'assistant_handoff_operations' AND column_name IN ('userMessageId', 'runtimeLogId', 'confirmationMessageId') AND is_nullable = 'YES'`,
+  ]);
+  if (nullableReferenceColumns.stdout !== "3") {
+    throw new Error(
+      `Handoff recovery nullable-reference schema mismatch: ${nullableReferenceColumns.stdout}`,
+    );
+  }
+
+  const insertAttemptSql =
+    `INSERT INTO "assistant_handoff_attempts" (` +
+    `"id", "operationId", "attemptNumber", "owner", "startedAt", "leaseExpiresAt", "updatedAt") VALUES (` +
+    `'handoff-recovery-attempt', 'handoff-recovery-operation', 1, 'handoff-recovery-owner', ` +
+    `CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '1 minute', CURRENT_TIMESTAMP)`;
+  await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    insertAttemptSql,
+  ]);
+  const attemptDefaults = await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-At",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    `SELECT "result" || '|' || "recoverySafety" FROM "assistant_handoff_attempts" WHERE "id" = 'handoff-recovery-attempt'`,
+  ]);
+  if (attemptDefaults.stdout !== "CLAIMED|UNKNOWN") {
+    throw new Error(`Handoff recovery attempt defaults mismatch: ${attemptDefaults.stdout}`);
+  }
+
+  const duplicateAttemptWasAccepted = await commandSucceeds("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    insertAttemptSql.replace(
+      "'handoff-recovery-attempt'",
+      "'handoff-recovery-attempt-duplicate'",
+    ),
+  ]);
+  if (duplicateAttemptWasAccepted) {
+    throw new Error("Handoff recovery attempt operation/number uniqueness was not enforced");
+  }
+
+  const invalidAttemptForeignKeyWasAccepted = await commandSucceeds("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    insertAttemptSql
+      .replace("'handoff-recovery-attempt'", "'handoff-recovery-attempt-invalid-fk'")
+      .replace("'handoff-recovery-operation'", "'missing-handoff-operation'"),
+  ]);
+  if (invalidAttemptForeignKeyWasAccepted) {
+    throw new Error("Handoff recovery attempt operation foreign key was not enforced");
+  }
+
+  await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    `DELETE FROM "assistant_handoff_operations" WHERE "id" = 'handoff-recovery-operation'`,
+  ]);
+  const attemptsAfterOperationDelete = await run("docker", [
+    "exec",
+    postgresContainer,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    upgradeDatabase,
+    "-At",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    `SELECT COUNT(*) FROM "assistant_handoff_attempts" WHERE "id" = 'handoff-recovery-attempt'`,
+  ]);
+  if (attemptsAfterOperationDelete.stdout !== "0") {
+    throw new Error("Handoff recovery attempt cascade compatibility mismatch");
+  }
+  process.stdout.write(
+    `[http-harness] handoff recovery migration upgrade validated database=${upgradeDatabase}\n`,
+  );
+}
+
 async function main() {
   await assertBaselineAndScope();
   const services = await startServices();
   await validateOutboundRecoveryUpgradeMigration();
   await validateOperationalHandoffUpgradeMigration();
+  await validateHandoffRecoveryUpgradeMigration();
   const baseEnvironment = {
     ...process.env,
     NODE_ENV: "test",

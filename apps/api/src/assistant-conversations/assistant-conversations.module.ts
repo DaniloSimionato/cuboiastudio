@@ -36,6 +36,7 @@ import {
 import { PrismaService } from "../database/prisma.service";
 import { AssistantSecurityRulesService } from "../assistant-security-rules/assistant-security-rules.service";
 import { RuntimeV2ResponseExecutionAdministrationService } from "../runtime-v2/response-execution-administration";
+import { HandoffRecoveryRunner } from "./handoff-recovery-runner";
 
 @Module({
   imports: [
@@ -158,6 +159,7 @@ import { RuntimeV2ResponseExecutionAdministrationService } from "../runtime-v2/r
     },
     RuntimeV2ShadowIntegrationService,
     AssistantConversationsService,
+    HandoffRecoveryRunner,
   ],
   exports: [AssistantConversationsService],
 })

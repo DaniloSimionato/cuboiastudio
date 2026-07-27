@@ -215,6 +215,7 @@ function safeChildEnvironment({ databaseUrl, redisUrl, providerBaseUrl, port }) 
     CHATWOOT_URL: "",
     CHATWOOT_TOKEN: "",
     CHATWOOT_ALLOW_INSECURE_WEBHOOKS: "false",
+    HANDOFF_RECOVERY_ENABLED: "false",
     BUSINESS_HOURS_DIRECT_DETERMINISTIC_ENABLED: "true",
     BUSINESS_HOURS_DIRECT_DETERMINISTIC_BINDINGS: businessHoursBindings,
     KNOWLEDGE_SCOPE_TAG_FILTER_ASSISTANT_IDS: FIXTURE_LABELS.map(

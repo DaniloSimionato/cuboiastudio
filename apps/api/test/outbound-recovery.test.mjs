@@ -160,6 +160,7 @@ async function createDeliveryForScope(scope, input = {}) {
         turnExecutionManifest: {
           schemaVersion: "TURN_EXECUTION_MANIFEST_V1",
           turnExecutionId: plan.turnExecutionId,
+          decisionId: plan.decisionId,
           policyVersion: "V1_COMPATIBILITY_POLICY",
           outbound: {
             deliveries: [

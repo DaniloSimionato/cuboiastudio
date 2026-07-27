@@ -87,6 +87,24 @@ export type TurnExecutionHandoffSummary = {
     deliveryId: string | null;
     result: "NOT_AUTHORIZED" | "PENDING" | "ACKNOWLEDGED" | "FAILED";
   };
+  recovery?: {
+    schemaVersion: string;
+    attemptSchemaVersion: string;
+    attemptNumber: number;
+    leaseOwner: string | null;
+    leaseStartedAt: string | null;
+    leaseExpiresAt: string | null;
+    safety: "PROVEN_SAFE" | "VERIFY_REMOTE_FIRST" | "NOT_RETRYABLE" | "UNKNOWN";
+    eligibility: string;
+    nextEligibleAt: string | null;
+    reconciliationStatus: string | null;
+    reconciliationEvidenceType: string | null;
+    externalInterventionObserved: boolean;
+    confirmationCreatedOrReused: boolean;
+    deliveryId: string | null;
+    result: string;
+    blockingReason: string | null;
+  };
   blockingReason: string | null;
 };
 
@@ -530,6 +548,7 @@ export function withTurnExecutionHandoff(
           remoteMutation: { ...handoff.remoteMutation },
           remoteVerification: { ...handoff.remoteVerification },
           confirmation: { ...handoff.confirmation },
+          ...(handoff.recovery ? { recovery: { ...handoff.recovery } } : {}),
         }
       : null,
   };

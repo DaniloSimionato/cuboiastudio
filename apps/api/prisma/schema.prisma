@@ -716,6 +716,9 @@ model AssistantHandoffOperation {
   conversationId             String
   turnExecutionId            String
   decisionId                 String   @unique
+  userMessageId              String?
+  runtimeLogId               String?
+  confirmationMessageId      String?
   contextVersion             Int
   idempotencyKey             String   @unique
   policyVersion              String
@@ -749,7 +752,22 @@ model AssistantHandoffOperation {
   supersededAt               DateTime?
   status                     String   @default("REQUESTED")
   attemptCount               Int      @default(0)
+  maxAttempts                Int      @default(3)
+  recoverySchemaVersion      String   @default("ASSISTANT_HANDOFF_RECOVERY_V1")
+  recoverySafety             String   @default("UNKNOWN")
+  attemptOwner               String?
+  claimStartedAt             DateTime?
+  claimExpiresAt             DateTime?
+  nextEligibleAt             DateTime?
+  remoteBoundaryStartedAt    DateTime?
   lastAttemptAt              DateTime?
+  reconciliationStatus       String?
+  reconciliationEvidenceType String?
+  reconciledAt               DateTime?
+  recoveryBlockedReason      String?
+  externalInterventionObserved Boolean @default(false)
+  externalInterventionAt     DateTime?
+  confirmationContractVersion String  @default("OPERATIONAL_HANDOFF_CONFIRMATION_V1")
   errorClass                 String?
   errorCode                  String?
   createdAt                  DateTime @default(now())
@@ -759,13 +777,43 @@ model AssistantHandoffOperation {
   assistant          Assistant                   @relation(fields: [assistantId], references: [id], onDelete: Restrict)
   conversation       AssistantConversation       @relation(fields: [conversationId], references: [id], onDelete: Restrict)
   outboundDeliveries AssistantOutboundDelivery[]
+  attempts           AssistantHandoffAttempt[]
 
   @@index([companyId, createdAt])
   @@index([assistantId, createdAt])
   @@index([conversationId, createdAt])
   @@index([turnExecutionId])
+  @@index([status, nextEligibleAt])
   @@index([status, updatedAt])
   @@map("assistant_handoff_operations")
+}
+
+model AssistantHandoffAttempt {
+  id                       String   @id @default(cuid())
+  operationId              String
+  attemptNumber            Int
+  owner                    String
+  startedAt                DateTime
+  leaseExpiresAt           DateTime
+  boundaryStartedAt        DateTime?
+  finishedAt               DateTime?
+  result                   String   @default("CLAIMED")
+  recoverySafety           String   @default("UNKNOWN")
+  mutationResult           String?
+  verificationResult       String?
+  httpStatus               Int?
+  observedStateFingerprint String?
+  errorClass               String?
+  errorCode                String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  operation AssistantHandoffOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+
+  @@unique([operationId, attemptNumber])
+  @@index([operationId, createdAt])
+  @@index([result, updatedAt])
+  @@map("assistant_handoff_attempts")
 }
 
 model AssistantOutboundAttempt {

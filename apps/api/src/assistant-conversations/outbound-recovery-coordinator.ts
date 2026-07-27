@@ -1031,108 +1031,141 @@ export class OutboundRecoveryCoordinator {
   }
 
   private async updateManifest(delivery: OutboundRecoveryDelivery): Promise<void> {
-    const runtimeLog = await this.prisma.assistantRuntimeLog.findFirst({
+    const runtimeLogReference = await this.prisma.assistantRuntimeLog.findFirst({
       where: { assistantMessageId: delivery.assistantMessageId },
       orderBy: { createdAt: "desc" },
-      select: { id: true, metadata: true },
+      select: { id: true },
     });
-    if (!runtimeLog?.metadata || typeof runtimeLog.metadata !== "object") return;
-    const metadata = runtimeLog.metadata as Record<string, any>;
-    const manifest = metadata.turnExecutionManifest;
-    if (!manifest || typeof manifest !== "object") return;
-    const latestAttempt = delivery.attempts[0] ?? null;
-    const handoffOperation = delivery.handoffOperationId
-      ? await this.prisma.assistantHandoffOperation.findUnique({
-          where: { id: delivery.handoffOperationId },
-          select: {
-            status: true,
-            confirmationAuthorizedAt: true,
-            errorCode: true,
-          },
-        })
-      : null;
-    const handoffConfirmationAuthorized = Boolean(
-      handoffOperation?.confirmationAuthorizedAt &&
-        ["REMOTE_CONFIRMED", "CONFIRMATION_PENDING", "COMPLETED"].includes(
-          handoffOperation.status,
-        ) &&
-        delivery.status !== "CANCELLED_STALE",
-    );
-    const deliveries = Array.isArray(manifest.outbound?.deliveries)
-      ? manifest.outbound.deliveries.map((reference: Record<string, any>) =>
-          reference.deliveryId === delivery.id
-            ? {
-                ...reference,
-                status: delivery.status,
-                retrySafety: delivery.retrySafety,
-                attemptCount: delivery.attemptCount,
-                maxAttempts: delivery.maxAttempts,
-                claimStartedAt: delivery.claimStartedAt?.toISOString() ?? null,
-                claimExpiresAt: delivery.claimExpiresAt?.toISOString() ?? null,
-                nextEligibleAt: delivery.nextEligibleAt?.toISOString() ?? null,
-                externalMessageId: delivery.externalMessageId,
-                errorClass: delivery.errorClass,
-                errorCode: delivery.errorCode,
-                recovery: {
-                  schemaVersion: OUTBOUND_RECOVERY_SCHEMA_VERSION,
-                  attemptSchemaVersion: OUTBOUND_ATTEMPT_SCHEMA_VERSION,
-                  attemptNumber: latestAttempt?.attemptNumber ?? delivery.attemptCount,
-                  leaseOwner: fingerprintLeaseOwner(delivery.attemptOwner),
-                  leaseStartedAt: delivery.claimStartedAt?.toISOString() ?? null,
-                  leaseExpiresAt: delivery.claimExpiresAt?.toISOString() ?? null,
-                  retrySafety: delivery.retrySafety,
-                  eligibility: evaluateOutboundRecoveryEligibility({
-                    ...delivery,
-                    now: this.now(),
-                  }),
-                  nextEligibleAt: delivery.nextEligibleAt?.toISOString() ?? null,
-                  reconciliationStatus: delivery.reconciliationStatus,
-                  reconciliationEvidenceType: delivery.reconciliationEvidenceType,
-                  result: delivery.status,
-                  blockingReason: delivery.recoveryBlockedReason,
-                },
-              }
-            : reference,
-        )
-      : [];
-    await this.prisma.assistantRuntimeLog.update({
-      where: { id: runtimeLog.id },
-      data: {
-        metadata: {
-          ...metadata,
-          turnExecutionManifest: {
-            ...manifest,
-            ...(handoffOperation && manifest.handoff
+    if (!runtimeLogReference) return;
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`
+        SELECT id
+        FROM "assistant_runtime_logs"
+        WHERE id = ${runtimeLogReference.id}
+        FOR UPDATE
+      `;
+      const [currentDelivery, runtimeLog] = await Promise.all([
+        this.loadDelivery(delivery.id, tx),
+        tx.assistantRuntimeLog.findUnique({
+          where: { id: runtimeLogReference.id },
+          select: { id: true, assistantMessageId: true, metadata: true },
+        }),
+      ]);
+      if (
+        !runtimeLog ||
+        runtimeLog.assistantMessageId !== currentDelivery.assistantMessageId ||
+        !runtimeLog.metadata ||
+        typeof runtimeLog.metadata !== "object" ||
+        Array.isArray(runtimeLog.metadata)
+      ) {
+        return;
+      }
+      const metadata = runtimeLog.metadata as Record<string, any>;
+      const manifest = metadata.turnExecutionManifest;
+      if (
+        !manifest ||
+        typeof manifest !== "object" ||
+        Array.isArray(manifest) ||
+        manifest.turnExecutionId !== currentDelivery.turnExecutionId ||
+        manifest.decisionId !== currentDelivery.decisionId
+      ) {
+        return;
+      }
+      const latestAttempt = currentDelivery.attempts[0] ?? null;
+      const handoffOperation = currentDelivery.handoffOperation;
+      const handoffConfirmationAuthorized = Boolean(
+        handoffOperation?.confirmationAuthorizedAt &&
+          ["REMOTE_CONFIRMED", "CONFIRMATION_PENDING", "COMPLETED"].includes(
+            handoffOperation.status,
+          ) &&
+          currentDelivery.status !== "CANCELLED_STALE",
+      );
+      const deliveries = Array.isArray(manifest.outbound?.deliveries)
+        ? manifest.outbound.deliveries.map((reference: Record<string, any>) =>
+            reference.deliveryId === currentDelivery.id
               ? {
-                  handoff: {
-                    ...manifest.handoff,
-                    status: handoffOperation.status,
-                    confirmation: {
-                      ...manifest.handoff.confirmation,
-                      authorized: handoffConfirmationAuthorized,
-                      deliveryId: delivery.id,
-                      result: !handoffConfirmationAuthorized
-                        ? "NOT_AUTHORIZED"
-                        : handoffOperation.status === "COMPLETED" &&
-                            delivery.status === "ACKNOWLEDGED"
-                          ? "ACKNOWLEDGED"
-                          : delivery.status === "FAILED_RETRYABLE" ||
-                              delivery.status === "FAILED_TERMINAL" ||
-                              delivery.status === "UNCERTAIN"
-                            ? "FAILED"
-                            : "PENDING",
-                    },
-                    blockingReason: handoffOperation.errorCode,
+                  ...reference,
+                  status: currentDelivery.status,
+                  retrySafety: currentDelivery.retrySafety,
+                  attemptCount: currentDelivery.attemptCount,
+                  maxAttempts: currentDelivery.maxAttempts,
+                  claimStartedAt:
+                    currentDelivery.claimStartedAt?.toISOString() ?? null,
+                  claimExpiresAt:
+                    currentDelivery.claimExpiresAt?.toISOString() ?? null,
+                  nextEligibleAt:
+                    currentDelivery.nextEligibleAt?.toISOString() ?? null,
+                  externalMessageId: currentDelivery.externalMessageId,
+                  errorClass: currentDelivery.errorClass,
+                  errorCode: currentDelivery.errorCode,
+                  recovery: {
+                    schemaVersion: OUTBOUND_RECOVERY_SCHEMA_VERSION,
+                    attemptSchemaVersion: OUTBOUND_ATTEMPT_SCHEMA_VERSION,
+                    attemptNumber:
+                      latestAttempt?.attemptNumber ?? currentDelivery.attemptCount,
+                    leaseOwner: fingerprintLeaseOwner(
+                      currentDelivery.attemptOwner,
+                    ),
+                    leaseStartedAt:
+                      currentDelivery.claimStartedAt?.toISOString() ?? null,
+                    leaseExpiresAt:
+                      currentDelivery.claimExpiresAt?.toISOString() ?? null,
+                    retrySafety: currentDelivery.retrySafety,
+                    eligibility: evaluateOutboundRecoveryEligibility({
+                      ...currentDelivery,
+                      now: this.now(),
+                    }),
+                    nextEligibleAt:
+                      currentDelivery.nextEligibleAt?.toISOString() ?? null,
+                    reconciliationStatus: currentDelivery.reconciliationStatus,
+                    reconciliationEvidenceType:
+                      currentDelivery.reconciliationEvidenceType,
+                    result: currentDelivery.status,
+                    blockingReason: currentDelivery.recoveryBlockedReason,
                   },
                 }
-              : {}),
-            outbound: {
-              ...manifest.outbound,
-              deliveries,
+              : reference,
+          )
+        : [];
+      await tx.assistantRuntimeLog.update({
+        where: { id: runtimeLog.id },
+        data: {
+          metadata: {
+            ...metadata,
+            turnExecutionManifest: {
+              ...manifest,
+              ...(handoffOperation && manifest.handoff
+                ? {
+                    handoff: {
+                      ...manifest.handoff,
+                      status: handoffOperation.status,
+                      confirmation: {
+                        ...manifest.handoff.confirmation,
+                        authorized: handoffConfirmationAuthorized,
+                        deliveryId: currentDelivery.id,
+                        result: !handoffConfirmationAuthorized
+                          ? "NOT_AUTHORIZED"
+                          : handoffOperation.status === "COMPLETED" &&
+                              currentDelivery.status === "ACKNOWLEDGED"
+                            ? "ACKNOWLEDGED"
+                            : currentDelivery.status === "FAILED_RETRYABLE" ||
+                                currentDelivery.status === "FAILED_TERMINAL" ||
+                                currentDelivery.status === "UNCERTAIN"
+                              ? "FAILED"
+                              : "PENDING",
+                      },
+                      blockingReason: handoffOperation.errorCode,
+                    },
+                  }
+                : {}),
+              outbound: {
+                ...manifest.outbound,
+                deliveries,
+              },
             },
-          },
-        } as Prisma.InputJsonValue,
-      },
+          } as Prisma.InputJsonValue,
+        },
+      });
     });
   }
 

@@ -275,6 +275,7 @@ export async function createStatefulChatwootFake() {
         "mutation_5xx_after_effect",
         "mutation_timeout_after_effect",
         "deferred_mutation",
+        "deferred_conversation_read",
       ].includes(configured?.kind) &&
       applyConfiguredBehavior({ behavior: configured, record, response, timers })
     ) {
@@ -313,6 +314,21 @@ export async function createStatefulChatwootFake() {
     }
 
     if (method === "GET" && suffix === null) {
+      if (configured?.kind === "deferred_conversation_read") {
+        configured.markStarted?.();
+        await configured.releaseSignal;
+        const responseBody = conversationResponseBody(
+          conversation,
+          configured.snapshot ?? null,
+        );
+        record.response = {
+          kind: "deferred_conversation_read",
+          status: 200,
+          body: responseBody,
+        };
+        writeJson(response, 200, responseBody);
+        return;
+      }
       const snapshots = conversationReadSnapshots.get(key);
       const snapshot = snapshots?.shift() ?? null;
       if (snapshots?.length === 0) conversationReadSnapshots.delete(key);
@@ -474,6 +490,36 @@ export async function createStatefulChatwootFake() {
         },
       };
     },
+    deferNextConversationRead(behavior = {}) {
+      let markStarted;
+      let release;
+      let released = false;
+      const started = new Promise((resolve) => {
+        markStarted = resolve;
+      });
+      const releaseSignal = new Promise((resolve) => {
+        release = resolve;
+      });
+      behaviorQueue.push({
+        ...behavior,
+        method: "GET",
+        category: "chatwoot_read",
+        pathPattern:
+          behavior.pathPattern ??
+          /^\/api\/v1\/accounts\/[^/]+\/conversations\/[^/]+$/,
+        kind: "deferred_conversation_read",
+        markStarted,
+        releaseSignal,
+      });
+      return {
+        started,
+        release() {
+          if (released) return;
+          released = true;
+          release();
+        },
+      };
+    },
     setConversation(input) {
       const key = chatwootConversationKey(String(input.accountId), String(input.conversationId));
       conversations.set(key, {
@@ -487,6 +533,23 @@ export async function createStatefulChatwootFake() {
         labels: [...(input.labels ?? [])],
         messages: [...(input.messages ?? [])],
       });
+    },
+    updateConversation(input) {
+      const key = chatwootConversationKey(
+        String(input.accountId),
+        String(input.conversationId),
+      );
+      const conversation = conversations.get(key);
+      if (!conversation) {
+        throw new Error("Fake Chatwoot conversation does not exist");
+      }
+      if (Object.hasOwn(input, "aiActive")) conversation.ai_active = input.aiActive;
+      if (Object.hasOwn(input, "status")) conversation.status = input.status;
+      if (Object.hasOwn(input, "assignee")) conversation.assignee = input.assignee;
+      if (Object.hasOwn(input, "team")) conversation.team = input.team;
+      if (Object.hasOwn(input, "labels")) conversation.labels = [...input.labels];
+      if (Object.hasOwn(input, "messages")) conversation.messages = [...input.messages];
+      return conversation;
     },
     queueConversationReadSnapshot(input) {
       const key = chatwootConversationKey(String(input.accountId), String(input.conversationId));

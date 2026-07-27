@@ -82,6 +82,55 @@ export const environmentSchema = z.object({
     .positive()
     .optional()
     .default(15 * 1024 * 1024),
+  HANDOFF_RECOVERY_ENABLED: booleanEnv.default(false),
+  HANDOFF_RECOVERY_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(3_600_000)
+    .optional()
+    .default(60_000),
+  HANDOFF_RECOVERY_BATCH_LIMIT: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .default(25),
+  HANDOFF_RECOVERY_LEASE_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(600_000)
+    .optional()
+    .default(60_000),
+  HANDOFF_RECOVERY_MAX_MUTATION_ATTEMPTS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(10)
+    .optional()
+    .default(3),
+  HANDOFF_RECOVERY_BACKOFF_BASE_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(3_600_000)
+    .optional()
+    .default(60_000),
+  HANDOFF_RECOVERY_BACKOFF_CAP_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(86_400_000)
+    .optional()
+    .default(3_600_000),
+  HANDOFF_RECOVERY_JITTER_RATIO: z.coerce
+    .number()
+    .min(0)
+    .max(0.5)
+    .optional()
+    .default(0.1),
   CORS_ORIGIN: z.string().trim().optional(),
 });
 

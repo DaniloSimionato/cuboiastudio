@@ -463,6 +463,7 @@ function assertHandoffRemoteCallOrder(scope, {
 function assertWithheldOperationalHandoff(evidence, scope, {
   destinationType,
   operationDestinationType,
+  operationStatus = "RECONCILIATION_REQUIRED",
   remoteMutationResult,
   remoteVerificationResult,
   blockingReason,
@@ -473,14 +474,14 @@ function assertWithheldOperationalHandoff(evidence, scope, {
   assert.equal(evidence.assistantMessages.length, 0);
   assert.equal(evidence.deliveries.length, 0);
   const [operation] = evidence.operations;
-  assert.equal(operation.status, "RECONCILIATION_REQUIRED");
+  assert.equal(operation.status, operationStatus);
   assert.equal(operation.destinationType, operationDestinationType);
   assert.equal(operation.errorCode, blockingReason);
   assert.equal(evidence.runtimeLogs[0].status, "SKIPPED");
   assert.equal(evidence.runtimeLogs[0].assistantMessageId, null);
   assertOperationalHandoffDecision(evidence.manifest, scope, {
     operation,
-    status: "RECONCILIATION_REQUIRED",
+    status: operationStatus,
     destinationType,
     confirmationAuthorized: false,
     confirmationResult: "NOT_AUTHORIZED",
@@ -1327,11 +1328,13 @@ test(
     const operation = assertWithheldOperationalHandoff(evidence, scope, {
       destinationType: "ASSIGNEE",
       operationDestinationType: "EXISTING_ASSIGNEE",
+      operationStatus: "FAILED_TERMINAL",
       remoteMutationResult: "FAILED",
       remoteVerificationResult: "FAILED",
       blockingReason: "CHATWOOT_AI_ACTIVE_NOT_CONFIRMED_INACTIVE",
     });
     assert.equal(operation.attemptCount, 1);
+    assert.equal(operation.recoverySafety, "NOT_RETRYABLE");
     assert.equal(operation.remoteMutationResult, "FAILED");
     assert.equal(
       operation.remoteMutationErrorCode,
@@ -2595,6 +2598,70 @@ test.todo(
 test.todo(
   "Gap 4 — computador lento deverá qualificar ou orientar próximo passo sem diagnóstico factual ou resposta puramente genérica",
 );
-test.todo(
-  "Bloco 4B — operações parciais de handoff deverão possuir recovery e reconciliação automáticos sem duplicate como gatilho",
+test(
+  "Bloco 4B — recovery automático fica OFF e novo inbound durante handoff parcial não dispara IA",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "ax",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    setHandoffRemoteConversation(scope);
+
+    const handoff = await postWebhook(scope, {
+      content: "Quero falar com um atendente",
+      messageId: "block4b-ax-partial-handoff",
+    });
+    assert.equal(handoff.response.status, 201);
+    const beforeInbound = await loadHandoffEvidence(scope);
+    assert.equal(beforeInbound.operations.length, 1);
+    assert.equal(beforeInbound.operations[0].status, "RECONCILIATION_REQUIRED");
+    assertLocallyBlockedHandoff(beforeInbound.conversation);
+    assert.equal(beforeInbound.assistantMessages.length, 0);
+    assert.equal(beforeInbound.deliveries.length, 0);
+    const externalCallsBeforeInbound = {
+      reads: chatwoot.calls("chatwoot_read").length,
+      mutations: chatwoot.calls("chatwoot_mutation").length,
+      outbounds: chatwoot.calls("chatwoot_outbound").length,
+      provider: provider.requests.length,
+    };
+
+    const nextInbound = await postWebhook(scope, {
+      content: "Ainda estou aguardando uma pessoa",
+      messageId: "block4b-ax-inbound-during-partial",
+      aiActive: false,
+    });
+    assert.equal(nextInbound.response.status, 201);
+    assert.equal(nextInbound.body?.ignored, true);
+
+    const afterInbound = await loadHandoffEvidence(scope);
+    assertLocallyBlockedHandoff(afterInbound.conversation);
+    assert.equal(afterInbound.operations.length, 1);
+    assert.equal(afterInbound.operations[0].id, beforeInbound.operations[0].id);
+    assert.equal(afterInbound.operations[0].attemptCount, 0);
+    assert.equal(afterInbound.assistantMessages.length, 0);
+    assert.equal(afterInbound.deliveries.length, 0);
+    assert.equal(afterInbound.userMessages.length, 1);
+    const remoteConversation = chatwoot.getConversation(
+      scope.accountId,
+      scope.externalConversationId,
+    );
+    assert.equal(
+      remoteConversation.messages.filter(
+        (message) => String(message.id) === "block4b-ax-inbound-during-partial",
+      ).length,
+      1,
+    );
+    assert.deepEqual(
+      {
+        reads: chatwoot.calls("chatwoot_read").length,
+        mutations: chatwoot.calls("chatwoot_mutation").length,
+        outbounds: chatwoot.calls("chatwoot_outbound").length,
+        provider: provider.requests.length,
+      },
+      externalCallsBeforeInbound,
+    );
+    await assertRuntimeV2Absent(scope);
+  },
 );
