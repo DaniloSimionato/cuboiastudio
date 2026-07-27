@@ -5,11 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertIsolatedServiceUrls } from "./production-app-process.mjs";
 
-const BASELINE_COMMIT = "f277d81efb9d45a7b5a1423b3643187130c474f1";
-const ALLOWED_BLOCK5B_RUNTIME_PATHS = new Set([
+const BASELINE_COMMIT = "8120f3647cc7672b3b93815673c38a7acc383e15";
+const ALLOWED_BLOCK6_RUNTIME_PATHS = new Set([
   "apps/api/src/assistant-conversations/assistant-conversations.service.ts",
-  "apps/api/src/assistant-conversations/price-continuity.ts",
-  "apps/api/src/assistant-conversations/v1-turn-decision.ts",
+  "apps/api/src/assistant-conversations/business-hours-direct-deterministic.ts",
+  "apps/api/src/assistant-conversations/technical-response-completeness.ts",
 ]);
 const helperDirectory = path.dirname(fileURLToPath(import.meta.url));
 const apiDirectory = path.resolve(helperDirectory, "../..");
@@ -282,11 +282,11 @@ async function assertBaselineAndScope() {
     .map((entry) => entry.trim())
     .filter(Boolean);
   const disallowedChanges = protectedChanges.filter(
-    (entry) => !ALLOWED_BLOCK5B_RUNTIME_PATHS.has(entry),
+    (entry) => !ALLOWED_BLOCK6_RUNTIME_PATHS.has(entry),
   );
   if (disallowedChanges.length > 0) {
     throw new Error(
-      `Harness refuses production source, schema or migration changes outside Block 5B:\n${disallowedChanges.join("\n")}`,
+      `Harness refuses production source, schema or migration changes outside Block 6:\n${disallowedChanges.join("\n")}`,
     );
   }
   const prismaBinary = path.join(apiDirectory, "node_modules/.bin/prisma");
@@ -324,6 +324,7 @@ async function buildFresh(environment) {
     path.join(apiDirectory, "dist/assistant-knowledge/assistant-knowledge-retrieval.service.js"),
     path.join(apiDirectory, "dist/assistant-knowledge/knowledge-evidence.js"),
     path.join(apiDirectory, "dist/assistant-conversations/assistant-conversations.service.js"),
+    path.join(apiDirectory, "dist/assistant-conversations/business-hours-direct-deterministic.js"),
     path.join(apiDirectory, "dist/assistant-conversations/conversation-control-snapshot.js"),
     path.join(apiDirectory, "dist/assistant-conversations/outbound-delivery.js"),
     path.join(apiDirectory, "dist/assistant-conversations/outbound-recovery-coordinator.js"),
@@ -335,6 +336,7 @@ async function buildFresh(environment) {
     path.join(apiDirectory, "dist/assistant-conversations/rag-price-authority.js"),
     path.join(apiDirectory, "dist/assistant-conversations/runtime-context-manifest.js"),
     path.join(apiDirectory, "dist/assistant-conversations/turn-execution-manifest.js"),
+    path.join(apiDirectory, "dist/assistant-conversations/technical-response-completeness.js"),
     path.join(apiDirectory, "dist/assistant-conversations/v1-turn-decision.js"),
     path.join(apiDirectory, "dist/prompt-compiler/prompt-compiler.service.js"),
   ];

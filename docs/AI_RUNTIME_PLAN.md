@@ -394,10 +394,13 @@ O harness principal:
 - impede rede nao loopback;
 - encerra app, Prisma, Redis, fakes, portas e containers.
 
-Gate final do Bloco 5B:
+Gate final do Bloco 6:
 
-- harness HTTP: 35 passed, 0 failed e 2 `todo`;
-- regressao relacionada: 313 passed e 0 failed;
+- harness HTTP: 37 passed, 0 failed e 0 `todo`;
+- regressao relacionada: 319 passed e 0 failed;
+- `atendiemnto`: `BUSINESS_HOURS_DIRECT`, zero geracao final e um outbound;
+- computador lento: qualificacao objetiva e proximo passo, sem diagnostico ou
+  preco inventado;
 - placa-mae explicita apos os caracteres 250 e 800: BRL 395,
   `starting_at`, zero geracao final e um outbound;
 - provider aberto: excerpt relevante reconstruivel por offsets, dentro do
@@ -410,7 +413,7 @@ Gate final do Bloco 5B:
   BRL 395, `starting_at`, zero geracao final e um outbound;
 - nova contextVersion ou intencao explicita concorrente no follow-up: nenhuma heranca;
 - build fresco, SHA-256 combinado do conjunto de artefatos V1:
-  `13691ffbd0c44f77858c498d902d73fe223d084db48841cb90e45698edc1c33f`.
+  `d55a4ab6ec65b4dda76afe662c0b2c4590027998734406aebd9425cf4384254c`.
 
 Consulte `apps/api/test/BLOCK5A_INTEGRAL_EVIDENCE_REPORT.md` para inventario,
 sanitizacao, comandos, teardown e limitacoes.
@@ -425,7 +428,7 @@ npm run test:http-harness
 Consulte `apps/api/test/README.production-http-harness.md` para limites e
 evidencias de build.
 
-## 10. O que nao entrou ate o Bloco 5B
+## 10. O que nao entrou ate o Bloco 6
 
 - ativacao automatica do runner em staging ou producao;
 - scheduler independente para todo o recovery outbound;
@@ -436,9 +439,8 @@ evidencias de build.
 - inbox tratada por presuncao como fila humana valida;
 - polling remoto de pausa;
 - outbox para outros canais;
-- correcao de BusinessHours com erro ortografico;
 - continuidade generica alem de preco e troca de servico adjacente;
-- politica de completude comercial;
+- politica generica de completude comercial alem do caso tecnico coberto;
 - Runtime V2.
 
 ## 11. Riscos atuais
@@ -467,7 +469,8 @@ O proximo bloco deve ser autorizado separadamente. Ate essa autorizacao:
 
 - manter `HANDOFF_RECOVERY_ENABLED=false`;
 - nao ativar o runner em staging ou producao;
-- nao alterar os dois gaps funcionais restantes;
+- preservar os contratos funcionais cobertos pelo harness sem criar novos
+  caminhos concorrentes;
 - nao ativar Runtime V2;
 - usar `BLOCK5A_INTEGRAL_EVIDENCE_REPORT.md` e os relatorios anteriores como
   fonte de contrato e evidencia.

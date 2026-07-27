@@ -139,6 +139,10 @@ import {
   flowObjectiveForFlow,
 } from "../intent-router/intent-routing";
 import { ensureMultiIntentResponseCoverage } from "./multi-intent-response-coverage";
+import {
+  ensureTechnicalResponseCompleteness,
+  type TechnicalResponseCompletenessReason,
+} from "./technical-response-completeness";
 import { evaluateFlowApplicability } from "./flow-applicability-evaluator";
 import { selectV1ResponseGenerationStrategy } from "./v1-response-generation-executor";
 import { ResponseGenerationRouter } from "./response-generation-router";
@@ -526,6 +530,8 @@ export type AssistantConversationRuntime = {
     triageResponseProtected?: boolean;
     replacementReason?: string | null;
     v1AuthorityGuardApplied?: boolean;
+    technicalCompletenessGuardApplied?: boolean;
+    technicalCompletenessReason?: TechnicalResponseCompletenessReason;
     priceAuthorityGuardTelemetry?: PriceAuthorityGuardTelemetry | null;
     officialHoursEvaluated?: boolean;
     requestedDayOpen?: boolean | null;
@@ -10428,6 +10434,32 @@ export class AssistantConversationsService {
       ];
     }
 
+    const technicalCompletenessProviderStandardPath =
+      responseExecutionEnvelope.executionOwner === "V1_NORMAL" &&
+      responseExecutionEnvelope.route === "V1_DEFAULT" &&
+      responseExecutionEnvelope.strategy === "STANDARD" &&
+      responseExecutionEnvelope.providerCallCount > 0 &&
+      !runtime.fallback &&
+      (runtime.mode === "ai-runtime" || runtime.mode === "ai-runtime-rag") &&
+      multiIntentTurn.explicitRequests.length === 1 &&
+      multiIntentTurn.explicitRequests[0] === "technical_support";
+    const technicalCompleteness = ensureTechnicalResponseCompleteness({
+      answer,
+      currentMessage: customerIntentText,
+      technicalSupportIntent: multiIntentTurn.primaryIntent === "technical_support",
+      providerStandardPath: technicalCompletenessProviderStandardPath,
+    });
+    answer = technicalCompleteness.answer;
+    Object.assign(contextMetadata, {
+      technicalCompletenessGuardApplied: technicalCompleteness.applied,
+      technicalCompletenessReason: technicalCompleteness.reason,
+    });
+    contextMetadata.contextManifest = {
+      ...contextMetadata.contextManifest,
+      technicalCompletenessGuardApplied: technicalCompleteness.applied,
+      technicalCompletenessReason: technicalCompleteness.reason,
+    };
+
     // This is the last deterministic composition step before the response is
     // persisted and sent. It must run after the V1 authority guard because a
     // safe guard replacement can otherwise discard a provider-independent
@@ -10784,6 +10816,9 @@ export class AssistantConversationsService {
             triageResponseProtected: runtime.context.triageResponseProtected,
             replacementReason: runtime.context.replacementReason,
             v1AuthorityGuardApplied: runtime.context.v1AuthorityGuardApplied,
+            technicalCompletenessGuardApplied:
+              runtime.context.technicalCompletenessGuardApplied,
+            technicalCompletenessReason: runtime.context.technicalCompletenessReason,
             officialHoursEvaluated: runtime.context.officialHoursEvaluated,
             requestedDayOpen: runtime.context.requestedDayOpen,
             requestedTimeWithinHours: runtime.context.requestedTimeWithinHours,

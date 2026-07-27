@@ -84,10 +84,10 @@ separately. Responses are configurable per category. Both fakes listen only on
 
 The production-entrypoint suite currently declares 37 Node tests:
 
-- 35 executable scenarios;
-- two functional specifications marked `test.todo`.
+- 37 executable scenarios;
+- zero functional specifications marked `test.todo`.
 
-Twenty executable scenarios retain the non-handoff controls. Three Block 5A
+Twenty-two executable scenarios retain the non-handoff controls. Three Block 5A
 cases prove integral evidence, and four Block 5B cases prove both supported
 follow-up phrasings, invalidation by a new context version and invalidation by
 a competing explicit intent in the current follow-up. The Block 5A controls send
@@ -110,11 +110,11 @@ decision immutability and manifest summary. Runtime V2 OFF remains a
 transversal invariant asserted inside every executable HTTP scenario, not an
 additional executable scenario.
 
-The completed Block 5B gate executed all 37 declarations: 35 passed, none
-failed and two remained `test.todo`. The related regression suite passed all
-313 tests. The fresh artifact set used by that gate had SHA-256
-`13691ffbd0c44f77858c498d902d73fe223d084db48841cb90e45698edc1c33f`
-and timestamp `2026-07-27T13:55:35.295Z`.
+The completed Block 6 gate executed all 37 declarations: 37 passed, none
+failed and none remained `test.todo`. The related regression suite passed all
+319 tests. The fresh artifact set used by that gate had SHA-256
+`d55a4ab6ec65b4dda76afe662c0b2c4590027998734406aebd9425cf4384254c`
+and timestamp `2026-07-27T14:56:19.870Z`.
 
 A separate integration-with-database recovery suite covers the coordinator
 through real Prisma persistence and the fake HTTP boundary. It exercises
@@ -189,19 +189,15 @@ The runner:
    the two owned containers.
 
 Fresh-build hashes and final runner counts are recorded for each completed
-block in its report. The Block 5B gate used the artifact hash and timestamp
+block. The Block 6 gate used the artifact hash and timestamp
 recorded above; an older `dist` artifact or historical hash is not accepted as
 evidence for these tests.
 
-## Visible future gaps
+## Functional todo status
 
-Two functional `test.todo` specifications intentionally remain non-blocking:
-
-1. typo-tolerant deterministic BusinessHours;
-2. useful and commercially complete handling of a slow computer.
-
-They state the future contract and never assert the currently incorrect
-response as accepted behavior.
+There are no remaining functional `test.todo` specifications in the production
+HTTP harness. Block 6 made typo-tolerant deterministic BusinessHours and the
+slow-computer qualification/next-step contract executable.
 
 The former evidence-truncation specification is now represented by two
 executable HTTP scenarios, after characters 250 and 800. Operational handoff

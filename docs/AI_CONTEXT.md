@@ -209,22 +209,22 @@ O foco e atender muito bem os clientes atuais.
 O runtime atual possui uma base de controle e auditoria significativamente mais
 forte, mas ainda conserva limitacoes funcionais conhecidas:
 
-- erro ortografico `atendiemnto` ainda pode escapar de BusinessHours direto;
-- resposta tecnica sobre computador lento ainda pode ficar generica;
 - divergencia remota de pausa sem atualizacao local ainda nao e detectada;
 - recovery outbound nao possui um scheduler independente;
 - o runner de handoff permanece desabilitado por padrao e proibido em
   staging/producao neste bloco.
 
-Os dois gaps funcionais permanecem visiveis como especificacoes `test.todo`.
+Nao restam gaps funcionais marcados como `test.todo` no harness HTTP.
+`atendiemnto` agora usa BusinessHours direto e computador lento possui
+qualificacao objetiva e proximo passo sem diagnostico ou preco inventado.
 A perda de evidencia depois dos caracteres 250 e 800 deixou de ser `todo` e
 passou a possuir cobertura HTTP executavel. A continuidade de preco tambem
 passou a ser executavel para os dois follow-ups aprovados.
 
-O gate final do Bloco 5B passou 35 cenarios HTTP executaveis, manteve 2
-especificacoes `todo` e passou 313 testes relacionados. O conjunto fresco de
+O gate final do Bloco 6 passou 37 cenarios HTTP executaveis, manteve zero
+especificacoes `todo` e passou 319 testes relacionados. O conjunto fresco de
 artefatos V1 possui SHA-256
-`13691ffbd0c44f77858c498d902d73fe223d084db48841cb90e45698edc1c33f`.
+`d55a4ab6ec65b4dda76afe662c0b2c4590027998734406aebd9425cf4384254c`.
 Runtime V2 permanece OFF.
 
 ## 7. Como queremos que funcione

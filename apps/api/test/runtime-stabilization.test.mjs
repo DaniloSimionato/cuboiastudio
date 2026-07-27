@@ -16,6 +16,145 @@ import {
   formatImportedHumanHistoryMessage,
   MAX_HISTORY_MESSAGE_LENGTH,
 } from "../dist/assistant-conversations/conversation-history-format.js";
+import {
+  ensureTechnicalResponseCompleteness,
+  SLOW_COMPUTER_QUALIFICATION_RESPONSE,
+} from "../dist/assistant-conversations/technical-response-completeness.js";
+
+test("guard técnico substitui resposta genérica por qualificação e próximo passo seguros", () => {
+  const result = ensureTechnicalResponseCompleteness({
+    answer:
+      "A lentidão pode ter várias causas, como falta de espaço, problemas de software ou hardware.",
+    currentMessage: "Meu computador está muito lento.",
+    technicalSupportIntent: true,
+    providerStandardPath: true,
+  });
+
+  assert.equal(result.applied, true);
+  assert.equal(result.reason, "UNSUPPORTED_DIAGNOSIS");
+  assert.equal(result.answer, SLOW_COMPUTER_QUALIFICATION_RESPONSE);
+  assert.match(result.answer, /\?/);
+  assert.match(result.answer, /avaliação/i);
+  assert.doesNotMatch(result.answer, /R\$|preço|valor|falta de espaço|software|hardware/i);
+});
+
+test("guard técnico preserva somente a resposta canônica segura", () => {
+  const canonical = ensureTechnicalResponseCompleteness({
+    answer: SLOW_COMPUTER_QUALIFICATION_RESPONSE,
+    currentMessage: "Meu computador está muito lento.",
+    technicalSupportIntent: true,
+    providerStandardPath: true,
+  });
+  assert.deepEqual(canonical, {
+    answer: SLOW_COMPUTER_QUALIFICATION_RESPONSE,
+    applied: false,
+    reason: "ALREADY_COMPLETE",
+  });
+
+  const answer =
+    "Entendi a lentidão. Isso acontece desde que liga ou só ao abrir programas? Se necessário, fazemos uma avaliação para identificar a causa.";
+  const result = ensureTechnicalResponseCompleteness({
+    answer,
+    currentMessage: "Meu computador está muito lento.",
+    technicalSupportIntent: true,
+    providerStandardPath: true,
+  });
+
+  assert.deepEqual(result, {
+    answer: SLOW_COMPUTER_QUALIFICATION_RESPONSE,
+    applied: true,
+    reason: "NON_CANONICAL_TECHNICAL_RESPONSE",
+  });
+});
+
+test("guard técnico falha fechado para diagnóstico ou preço sem autoridade", () => {
+  for (const answer of [
+    "Com certeza é falta de memória. Desde quando acontece? Podemos fazer uma avaliação.",
+    "O reparo custa R$ 500. Desde quando acontece? Podemos fazer uma avaliação.",
+    "Pode ser causada por falta de memória. Desde quando acontece? Depois fazemos uma avaliação.",
+    "Pode estar com vírus. Desde quando acontece? Depois fazemos uma avaliação.",
+    "Entendi a lentidão. Como posso ajudar com o sistema? Depois fazemos uma avaliação.",
+    "Entendi a lentidão. Memória insuficiente causa esse problema. Desde quando acontece? Depois fazemos uma avaliação.",
+    "Entendi a lentidão. Como posso ajudar com algum programa? Depois fazemos uma avaliação.",
+  ]) {
+    const result = ensureTechnicalResponseCompleteness({
+      answer,
+      currentMessage: "Meu computador está muito lento.",
+      technicalSupportIntent: true,
+      providerStandardPath: true,
+    });
+    assert.equal(result.applied, true);
+    assert.equal(result.answer, SLOW_COMPUTER_QUALIFICATION_RESPONSE);
+  }
+});
+
+test("guard técnico não altera outros assuntos", () => {
+  const answer = "A formatação custa a partir de R$ 1.950,00.";
+  assert.deepEqual(
+    ensureTechnicalResponseCompleteness({
+      answer,
+      currentMessage: "Qual o valor para formatar um computador?",
+      technicalSupportIntent: false,
+      providerStandardPath: false,
+    }),
+    {
+      answer,
+      applied: false,
+      reason: "NOT_APPLICABLE",
+    },
+  );
+});
+
+test("guard técnico não atravessa branches fora do provider STANDARD", () => {
+  const answer = "Fallback técnico configurado.";
+  assert.deepEqual(
+    ensureTechnicalResponseCompleteness({
+      answer,
+      currentMessage: "Meu computador está muito lento.",
+      technicalSupportIntent: true,
+      providerStandardPath: false,
+    }),
+    {
+      answer,
+      applied: false,
+      reason: "NOT_APPLICABLE",
+    },
+  );
+});
+
+test("guard técnico ignora negação explícita e bloqueia pergunta genérica com diagnóstico", () => {
+  const negatedAnswer = "Entendido.";
+  for (const currentMessage of [
+    "Meu computador não está lento.",
+    "Meu computador não tem lentidão.",
+    "Meu computador não está com lentidão.",
+  ]) {
+    assert.deepEqual(
+      ensureTechnicalResponseCompleteness({
+        answer: negatedAnswer,
+        currentMessage,
+        technicalSupportIntent: true,
+        providerStandardPath: true,
+      }),
+      {
+        answer: negatedAnswer,
+        applied: false,
+        reason: "NOT_APPLICABLE",
+      },
+    );
+  }
+
+  const unsafe = ensureTechnicalResponseCompleteness({
+    answer:
+      "Entendi a lentidão no sistema. Como posso ajudar? Pode ser falta de memória; depois fazemos uma avaliação.",
+    currentMessage: "Meu computador está muito lento.",
+    technicalSupportIntent: true,
+    providerStandardPath: true,
+  });
+  assert.equal(unsafe.applied, true);
+  assert.equal(unsafe.reason, "UNSUPPORTED_DIAGNOSIS");
+  assert.equal(unsafe.answer, SLOW_COMPUTER_QUALIFICATION_RESPONSE);
+});
 
 test("PromptCompiler não inclui saudação nem fallback no prompt normal", () => {
   const compiler = new PromptCompilerService();

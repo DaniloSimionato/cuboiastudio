@@ -2923,8 +2923,76 @@ test(
   },
 );
 
-test.todo(
-  "Gap 1 — erro ortográfico “atendiemnto” deverá usar agenda oficial determinística e zero geração final",
+test(
+  "6-A — erro ortográfico “atendiemnto” usa a mesma agenda oficial determinística",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "bx",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    const inboundContent = "Qual o horário de atendiemnto?";
+    const result = await postWebhook(scope, {
+      content: inboundContent,
+      messageId: "block6-bx-business-hours-typo",
+    });
+    assert.equal(result.response.status, 201);
+
+    const conversation = await prisma.assistantConversation.findFirstOrThrow({
+      where: {
+        companyId: scope.companyId,
+        externalConversationId: scope.externalConversationId,
+      },
+    });
+    const [assistantMessage, runtimeLog, deliveries] = await Promise.all([
+      prisma.assistantConversationMessage.findFirstOrThrow({
+        where: {
+          companyId: scope.companyId,
+          conversationId: conversation.id,
+          role: "assistant",
+        },
+      }),
+      prisma.assistantRuntimeLog.findFirstOrThrow({
+        where: { companyId: scope.companyId },
+        orderBy: { createdAt: "desc" },
+      }),
+      outboundDeliveriesFor(scope),
+    ]);
+    const expectedText =
+      "Atendemos segunda-feira, das 08h às 22h; terça-feira, das 08h às 23h; quarta-feira, das 08h às 11h e das 13h às 21h; quinta-feira, das 08h às 18h; sexta-feira, das 08h às 18h; aos sábados, das 07h30 às 12h; aos domingos estamos fechados.";
+    assert.equal(assistantMessage.content, expectedText);
+    assert.equal(chatwoot.calls("chatwoot_outbound")[0]?.body?.content, expectedText);
+    assert.equal(runtimeLog.mode, "business-hours-direct-deterministic");
+
+    const metadata = metadataOf(runtimeLog);
+    assert.equal(metadata.businessHoursScope, "WEEKLY_SUMMARY");
+    assert.equal(metadata.scheduleSource, "OFFICIAL_STRUCTURED_SCHEDULE");
+    assert.equal(metadata.timezone, "America/Campo_Grande");
+    assert.equal(metadata.businessHoursRendererUsed, true);
+    const manifest = turnManifestOf(runtimeLog);
+    assertV1TurnManifest(manifest, scope);
+    assertSealedV1Decision(manifest, {
+      terminalPath: "BUSINESS_HOURS_DIRECT",
+      decisionType: "DETERMINISTIC_RESPONSE",
+    });
+    assert.equal(manifest.provider.finalGeneration.count, 0);
+    assert.equal(deliveries.length, 1);
+    assert.equal(deliveries[0].status, "ACKNOWLEDGED");
+    assertExternalCallSummary({
+      embedding: 0,
+      intentClassification: 0,
+      finalGeneration: 0,
+      memoryExtraction: 0,
+      toolCapableGeneration: 0,
+      toolCallsReturned: 0,
+      chatwootReads: 0,
+      chatwootMutations: 0,
+      outbound: 1,
+    });
+    assertSanitizedTurnManifest(manifest, { inboundContent });
+    await assertRuntimeV2Absent(scope);
+  },
 );
 test(
   "5B-A — formatação seguida de “E para placa-mãe?” substitui o serviço e preserva preço",
@@ -3218,8 +3286,77 @@ test(
     await assertRuntimeV2Absent(scope);
   },
 );
-test.todo(
-  "Gap 4 — computador lento deverá qualificar ou orientar próximo passo sem diagnóstico factual ou resposta puramente genérica",
+test(
+  "6-B — computador lento recebe qualificação objetiva e próximo passo sem diagnóstico ou preço",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "by",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    provider.setDefault("final_generation", {
+      content:
+        "A lentidão pode ter várias causas, como falta de espaço no disco, problemas de software ou até mesmo hardware.",
+    });
+    const inboundContent = "Meu computador está muito lento.";
+    const result = await postWebhook(scope, {
+      content: inboundContent,
+      messageId: "block6-by-slow-computer",
+    });
+    assert.equal(result.response.status, 201);
+
+    const conversation = await prisma.assistantConversation.findFirstOrThrow({
+      where: {
+        companyId: scope.companyId,
+        externalConversationId: scope.externalConversationId,
+      },
+    });
+    const [assistantMessages, runtimeLog, deliveries] = await Promise.all([
+      prisma.assistantConversationMessage.findMany({
+        where: {
+          companyId: scope.companyId,
+          conversationId: conversation.id,
+          role: "assistant",
+        },
+      }),
+      prisma.assistantRuntimeLog.findFirstOrThrow({
+        where: { companyId: scope.companyId },
+        orderBy: { createdAt: "desc" },
+      }),
+      outboundDeliveriesFor(scope),
+    ]);
+    assert.equal(assistantMessages.length, 1);
+    const answer = assistantMessages[0].content;
+    assert.equal(
+      answer,
+      "Entendi. Ele fica lento desde que liga ou principalmente quando você abre algum programa? Com essa informação conseguimos direcionar melhor e, se necessário, fazer uma avaliação para identificar a causa.",
+    );
+    assert.match(answer, /\?/);
+    assert.match(answer, /avaliação/i);
+    assert.doesNotMatch(
+      answer,
+      /R\$|preço|valor|falta de espaço|problemas? de software|hardware|com certeza|deve ser/i,
+    );
+    assert.equal(chatwoot.calls("chatwoot_outbound")[0]?.body?.content, answer);
+
+    const metadata = metadataOf(runtimeLog);
+    assert.equal(metadata.technicalCompletenessGuardApplied, true);
+    assert.equal(metadata.technicalCompletenessReason, "UNSUPPORTED_DIAGNOSIS");
+    const manifest = turnManifestOf(runtimeLog);
+    assertV1TurnManifest(manifest, scope);
+    assertSealedV1Decision(manifest, {
+      terminalPath: "PROVIDER_STANDARD",
+      decisionType: "PROVIDER_RESPONSE",
+    });
+    assert.equal(manifest.provider.finalGeneration.count, 1);
+    assert.equal(deliveries.length, 1);
+    assert.equal(deliveries[0].status, "ACKNOWLEDGED");
+    assert.equal(provider.calls("final_generation").length, 1);
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 1);
+    assertSanitizedTurnManifest(manifest, { inboundContent });
+    await assertRuntimeV2Absent(scope);
+  },
 );
 test(
   "Bloco 4B — recovery automático fica OFF e novo inbound durante handoff parcial não dispara IA",

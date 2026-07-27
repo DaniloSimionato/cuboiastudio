@@ -44,6 +44,7 @@ function runtimeKnowledgeItem({
 
 const positives = [
   ["Qual o horário de atendimento?", "WEEKLY_SUMMARY"],
+  ["Qual o horário de atendiemnto?", "WEEKLY_SUMMARY"],
   ["Que horas vocês funcionam?", "WEEKLY_SUMMARY"],
   ["Qual o expediente?", "WEEKLY_SUMMARY"],
   ["Qual o horário de funcionamento?", "WEEKLY_SUMMARY"],

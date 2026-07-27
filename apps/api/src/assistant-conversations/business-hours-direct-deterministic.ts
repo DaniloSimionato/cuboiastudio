@@ -91,7 +91,7 @@ export function detectDirectBusinessHours(message: string): DirectBusinessHoursS
     `\\b(?:${OPERATION_VERB})\\b[^?.!]{0,24}\\b(?:${DAYS})\\b|\\b(?:${DAYS})\\b[^?.!]{0,24}\\b(?:${OPERATION_VERB})\\b`,
   ).test(text);
   const explicitSchedule = new RegExp(
-    `\\bexpediente\\b|\\b(?:horario|horário|hrs?)\\s+(?:de|da|do|na|no|para)\\s+(?:${BUSINESS_SUBJECT}|${DAYS})\\b|\\bhorario\\s+de\\s+(?:atendimento|funcionamento|almoco|almoço)\\b`,
+    `\\bexpediente\\b|\\b(?:horario|horário|hrs?)\\s+(?:de|da|do|na|no|para)\\s+(?:${BUSINESS_SUBJECT}|${DAYS})\\b|\\bhorario\\s+de\\s+(?:atendimento|atendiemnto|funcionamento|almoco|almoço)\\b`,
   ).test(text);
   const multiDayScheduleQuestion =
     hasMultipleDays && /\b(?:qual(?:is)?\s+(?:o|os)\s+)?horarios?\b/.test(text);
