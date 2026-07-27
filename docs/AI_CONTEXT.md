@@ -74,7 +74,7 @@ provider para respostas abertas. Knowledge scopes, filtro por tags, flow
 routing, RAG, autoridades comerciais, guards de preco e isolamento por
 `currentContextVersion` continuam ativos.
 
-Os blocos de estabilizacao arquitetural foram concluidos ate o Bloco 5A. A
+Os blocos de estabilizacao arquitetural foram concluidos ate o Bloco 5B. A
 preservacao de evidencia factual integral no Runtime V1 foi validada localmente
 pelo harness real:
 
@@ -90,6 +90,8 @@ pelo harness real:
   attempts duraveis, lease, GET-first e confirmacao idempotente pelo ledger;
 - Bloco 5A: contratos separados para conteudo canonico, artefato factual,
   excerpt limitado do provider e preview exclusivamente observacional.
+- Bloco 5B: estado minimo e duravel de intencao de preco e servico ativo,
+  restrito ao turno adjacente e invalidado por contexto, revisao ou assunto.
 
 No handoff explicito, o Runtime V1 nao trata mais o texto de transferencia como
 prova da operacao. A sequencia e:
@@ -208,22 +210,21 @@ O runtime atual possui uma base de controle e auditoria significativamente mais
 forte, mas ainda conserva limitacoes funcionais conhecidas:
 
 - erro ortografico `atendiemnto` ainda pode escapar de BusinessHours direto;
-- continuidade eliptica de preco ainda nao troca corretamente para
-  `placa_mae`;
 - resposta tecnica sobre computador lento ainda pode ficar generica;
 - divergencia remota de pausa sem atualizacao local ainda nao e detectada;
 - recovery outbound nao possui um scheduler independente;
 - o runner de handoff permanece desabilitado por padrao e proibido em
   staging/producao neste bloco.
 
-Os tres gaps funcionais permanecem visiveis como especificacoes `test.todo`.
+Os dois gaps funcionais permanecem visiveis como especificacoes `test.todo`.
 A perda de evidencia depois dos caracteres 250 e 800 deixou de ser `todo` e
-passou a possuir cobertura HTTP executavel, sem implementar continuidade.
+passou a possuir cobertura HTTP executavel. A continuidade de preco tambem
+passou a ser executavel para os dois follow-ups aprovados.
 
-O gate final do Bloco 5A passou 31 cenarios HTTP executaveis, manteve 3
-especificacoes `todo` e passou 310 testes relacionados. O conjunto fresco de
+O gate final do Bloco 5B passou 35 cenarios HTTP executaveis, manteve 2
+especificacoes `todo` e passou 313 testes relacionados. O conjunto fresco de
 artefatos V1 possui SHA-256
-`abd659d950f5f2e3620d44d493424477c83de23c6d5e96c3d79d65b2041f6ef0`.
+`13691ffbd0c44f77858c498d902d73fe223d084db48841cb90e45698edc1c33f`.
 Runtime V2 permanece OFF.
 
 ## 7. Como queremos que funcione

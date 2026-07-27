@@ -160,6 +160,13 @@ import {
   type RagPriceAuthority,
 } from "./rag-price-authority";
 import {
+  createPriceContinuityState,
+  isEllipticalPriceServiceFollowUp,
+  parsePriceContinuityState,
+  resolvePriceIntent,
+  type PriceContinuityState,
+} from "./price-continuity";
+import {
   resolveRuntimeV2ResponseExecutionAssistantIds,
   resolveRuntimeV2ResponseExecutionChatwootInboxBindings,
   resolveRuntimeV2ResponseExecutionConversationIds,
@@ -1130,6 +1137,42 @@ export class AssistantConversationsService {
     return previousDirectRuntime
       ? { kind: "BUSINESS_HOURS", scope: "SPECIFIC_DAY" }
       : input.detection;
+  }
+
+  private async findAdjacentPriceContinuityState(input: {
+    assistantId: string;
+    conversation: AssistantConversationSafeRecord;
+    userMessageId: string;
+  }): Promise<PriceContinuityState | null> {
+    const recentMessages = await this.prisma.assistantConversationMessage.findMany({
+      where: {
+        companyId: input.conversation.companyId,
+        assistantId: input.assistantId,
+        conversationId: input.conversation.id,
+        contextVersion: input.conversation.currentContextVersion ?? 1,
+      },
+      select: {
+        id: true,
+        role: true,
+        externalPayload: true,
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 2,
+    });
+    const [currentMessage, previousMessage] = recentMessages;
+    if (
+      currentMessage?.id !== input.userMessageId ||
+      previousMessage?.role !== "assistant" ||
+      !previousMessage.externalPayload ||
+      typeof previousMessage.externalPayload !== "object" ||
+      Array.isArray(previousMessage.externalPayload)
+    ) {
+      return null;
+    }
+
+    const payload = previousMessage.externalPayload as Record<string, unknown>;
+    const state = parsePriceContinuityState(payload.priceContinuity);
+    return state && payload.turnExecutionId === state.sourceTurnExecutionId ? state : null;
   }
 
   private scheduleRuntimeV2Shadow(input: RuntimeV2ShadowSnapshot): void {
@@ -4956,6 +4999,9 @@ export class AssistantConversationsService {
             externalPayload: this.toSerializableJsonValue({
               turnExecutionId: input.decision.turnExecutionId,
               decisionId: input.decision.decisionId,
+              ...(persistence.priceContinuity
+                ? { priceContinuity: persistence.priceContinuity }
+                : {}),
               ...(operationalHandoffOperation
                 ? { handoffOperationId: operationalHandoffOperation.id }
                 : {}),
@@ -8241,7 +8287,27 @@ export class AssistantConversationsService {
     const customerRequestedHuman = humanHandoffSignal.requested;
     const triagePreemptionReason = getTriagePreemptionReason(customerIntentText);
     const isExplicitPriceQuery = triagePreemptionReason === "PRICE_OR_QUOTE";
+    const priceContinuityInheritanceAllowed = triagePreemptionReason === null;
     const currentContextVersion = conversation.currentContextVersion ?? 1;
+    const previousPriceContinuity =
+      !isExplicitPriceQuery &&
+      priceContinuityInheritanceAllowed &&
+      isEllipticalPriceServiceFollowUp(customerIntentText)
+        ? await this.findAdjacentPriceContinuityState({
+            assistantId: input.assistantId,
+            conversation,
+            userMessageId: userMessage.id,
+          })
+        : null;
+    const priceIntentResolution = resolvePriceIntent({
+      message: customerIntentText,
+      explicitPriceIntent: isExplicitPriceQuery,
+      inheritanceAllowed: priceContinuityInheritanceAllowed,
+      previousState: previousPriceContinuity,
+      contextVersion: currentContextVersion,
+      controlRevision: conversation.controlRevision,
+    });
+    const effectivePriceIntent = priceIntentResolution.effectivePriceIntent;
     const triageCacheKey = conversationTriageCacheKey({
       companyId: input.tenant.companyId,
       conversationId: conversation.id,
@@ -8331,7 +8397,7 @@ export class AssistantConversationsService {
     }
 
     const conversationalOutcome =
-      customerUnableToAnswer && !isExplicitPriceQuery ? "technical_evaluation" : null;
+      customerUnableToAnswer && !effectivePriceIntent ? "technical_evaluation" : null;
 
     // Routing is intentionally resolved before RAG. Knowledge must be evidence
     // for the selected domain, never an input that changes domain ownership.
@@ -9086,7 +9152,7 @@ export class AssistantConversationsService {
       priceAuthorityContext: { eligiblePriceAuthorities },
     });
     const deterministicPriceResponse = resolveDeterministicPriceResponse({
-      isExplicitPriceQuery,
+      isExplicitPriceQuery: effectivePriceIntent,
       currentMessage: customerIntentText,
       eligiblePriceAuthorities,
     });
@@ -10794,6 +10860,17 @@ export class AssistantConversationsService {
         : contextMetadata.fallbackCategory === "provider_error"
           ? "FAILED_WITH_FALLBACK"
           : "SKIPPED";
+    const priceContinuity = deterministicPriceResponse
+      ? createPriceContinuityState({
+          serviceKey: deterministicPriceResponse.serviceKey,
+          turnExecutionId: turnExecutionManifest.turnExecutionId,
+          contextVersion: conversation.currentContextVersion ?? 1,
+          controlRevision: controlTrace.expectedSnapshot.controlRevision,
+          recordedAt: new Date().toISOString(),
+          source: priceIntentResolution.source,
+          previousState: priceIntentResolution.previousState,
+        })
+      : null;
     const decision = decisionSealer.seal({
       turnExecutionId: turnExecutionManifest.turnExecutionId,
       contextVersion: conversation.currentContextVersion ?? 1,
@@ -10816,6 +10893,7 @@ export class AssistantConversationsService {
           mode: runtime.mode,
           contextVersion: conversation.currentContextVersion ?? 1,
           sources,
+          ...(priceContinuity ? { priceContinuity } : {}),
         },
       },
       provider: {

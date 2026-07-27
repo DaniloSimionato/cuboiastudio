@@ -6,8 +6,8 @@ Este documento define a evolucao do runtime mantendo autoridade deterministica,
 seguranca de secrets e separacao clara entre provider, assistant, knowledge,
 pipeline, logs, tools, controle de conversa e canais.
 
-> Estado de referencia: Runtime V1 instrumentado ate o Bloco 5A, com evidencia
-> factual integral separada do preview e do excerpt destinado ao provider.
+> Estado de referencia: Runtime V1 instrumentado ate o Bloco 5B, com evidencia
+> factual integral e continuidade minima de preco entre turnos adjacentes.
 > Runtime V2 permanece OFF. As secoes AI-000 a AI-007 abaixo registram marcos
 > historicos e nao substituem os contratos atuais dos relatorios de
 > estabilizacao.
@@ -53,6 +53,9 @@ pipeline, logs, tools, controle de conversa e canais.
   evidencia usada por autoridades e guards.
 - O provider recebe no maximo 5 excerpts, 1.600 caracteres por excerpt e 4.800
   caracteres no total. Offsets, anchors e coverage sao rastreaveis.
+- A continuidade minima persiste `activeIntent=price`, um unico
+  `activeService`, turno de origem, contexto, revisao e timestamp na resposta
+  anterior; o servico do turno atual sempre substitui o anterior.
 - O smoke e o harness HTTP nao dependem de provider ou servico real.
 
 ## 2. Problema atual
@@ -63,8 +66,8 @@ autoridade, estado e entrega.
 
 Os principais limites ainda abertos sao:
 
-- entendimento e continuidade multi-turno ainda nao possuem estado estruturado
-  completo;
+- continuidade generica continua fora do escopo; somente preco e troca de
+  servico no follow-up adjacente possuem estado estruturado;
 - consultas abertas podem resultar em respostas genericas;
 - PostgreSQL e a autoridade local, mas divergencia remota de pausa sem
   sincronizacao ainda nao e detectada;
@@ -296,7 +299,7 @@ AI-004 FIX 2 melhorou o diagnostico seguro de `POST /settings/ai/test`: erros do
 AI-005 agora foi entregue como Runtime Pipeline v1: o Assistant ganhou `initialMessage`, a conversa nova pode iniciar com essa mensagem, o runtime retorna `outcome` e `summary`, e `/testes` mostra as 7 partes do assistente sem expor prompts completos gigantes nem secrets.
 AI-005 FIX estabilizou o laboratorio `/testes`: conversas sao sempre carregadas por assistant, `Conversation not found` vira orientacao amigavel, assistants tecnicos de smoke ficam ocultos na UI padrao, e o smoke inativa o assistant criado ao final.
 
-Sequencia de estabilizacao arquitetural concluida ate o Bloco 5A:
+Sequencia de estabilizacao arquitetural concluida ate o Bloco 5B:
 
 1. Fase 1 - auditoria forense read-only;
 2. Fase 2 - arquitetura incremental da politica de atendimento;
@@ -309,10 +312,11 @@ Sequencia de estabilizacao arquitetural concluida ate o Bloco 5A:
 9. Bloco 4A - handoff humano operacional fail-closed;
 10. Bloco 4B - recovery e reconciliacao segura de handoff;
 11. Bloco 5A - evidencia factual integral e separacao de preview/excerpt.
+12. Bloco 5B - continuidade minima de preco e substituicao do servico ativo.
 
 O Bloco 4B adiciona os contratos e testes de recovery. Seu runner permanece OFF
 por padrao e bloqueado em staging/producao; isso nao constitui ativacao remota.
-O Bloco 5A nao muda lifecycle, schema, modelo, temperatura, flows ou thresholds.
+O Bloco 5B nao muda schema, modelo, temperatura, flows ou thresholds.
 Runtime V2 nao deve ser ativado como atalho para as etapas seguintes.
 
 ## 6. Variaveis de ambiente
@@ -390,10 +394,10 @@ O harness principal:
 - impede rede nao loopback;
 - encerra app, Prisma, Redis, fakes, portas e containers.
 
-Gate final do Bloco 5A:
+Gate final do Bloco 5B:
 
-- harness HTTP: 31 passed, 0 failed e 3 `todo`;
-- regressao relacionada: 310 passed e 0 failed;
+- harness HTTP: 35 passed, 0 failed e 2 `todo`;
+- regressao relacionada: 313 passed e 0 failed;
 - placa-mae explicita apos os caracteres 250 e 800: BRL 395,
   `starting_at`, zero geracao final e um outbound;
 - provider aberto: excerpt relevante reconstruivel por offsets, dentro do
@@ -402,8 +406,11 @@ Gate final do Bloco 5A:
 - formatação, BusinessHours, handoff, controle, ledger e recoveries: paridade;
 - migrations: nenhuma nova ou modificada;
 - Runtime V2 OFF como invariante transversal;
+- follow-ups `E para placa-mãe?` e `E para consertar minha placa-mãe?`:
+  BRL 395, `starting_at`, zero geracao final e um outbound;
+- nova contextVersion ou intencao explicita concorrente no follow-up: nenhuma heranca;
 - build fresco, SHA-256 combinado do conjunto de artefatos V1:
-  `abd659d950f5f2e3620d44d493424477c83de23c6d5e96c3d79d65b2041f6ef0`.
+  `13691ffbd0c44f77858c498d902d73fe223d084db48841cb90e45698edc1c33f`.
 
 Consulte `apps/api/test/BLOCK5A_INTEGRAL_EVIDENCE_REPORT.md` para inventario,
 sanitizacao, comandos, teardown e limitacoes.
@@ -418,7 +425,7 @@ npm run test:http-harness
 Consulte `apps/api/test/README.production-http-harness.md` para limites e
 evidencias de build.
 
-## 10. O que nao entrou ate o Bloco 5A
+## 10. O que nao entrou ate o Bloco 5B
 
 - ativacao automatica do runner em staging ou producao;
 - scheduler independente para todo o recovery outbound;
@@ -430,7 +437,7 @@ evidencias de build.
 - polling remoto de pausa;
 - outbox para outros canais;
 - correcao de BusinessHours com erro ortografico;
-- continuidade de preco;
+- continuidade generica alem de preco e troca de servico adjacente;
 - politica de completude comercial;
 - Runtime V2.
 
@@ -460,7 +467,7 @@ O proximo bloco deve ser autorizado separadamente. Ate essa autorizacao:
 
 - manter `HANDOFF_RECOVERY_ENABLED=false`;
 - nao ativar o runner em staging ou producao;
-- nao alterar os tres gaps funcionais restantes;
+- nao alterar os dois gaps funcionais restantes;
 - nao ativar Runtime V2;
 - usar `BLOCK5A_INTEGRAL_EVIDENCE_REPORT.md` e os relatorios anteriores como
   fonte de contrato e evidencia.

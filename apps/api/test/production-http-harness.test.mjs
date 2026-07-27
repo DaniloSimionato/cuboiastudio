@@ -734,6 +734,124 @@ async function assertExplicitMotherboardAuthorityResponse(
   });
 }
 
+async function assertPriceServiceFollowUp(scope, { followUpContent, messagePrefix }) {
+  const first = await postWebhook(scope, {
+    content: "Qual o valor para formatar um computador?",
+    messageId: `${messagePrefix}-formatacao`,
+  });
+  assert.equal(first.response.status, 201);
+
+  const second = await postWebhook(scope, {
+    content: followUpContent,
+    messageId: `${messagePrefix}-placa-mae`,
+  });
+  assert.equal(second.response.status, 201);
+
+  const conversation = await prisma.assistantConversation.findFirstOrThrow({
+    where: {
+      companyId: scope.companyId,
+      externalConversationId: scope.externalConversationId,
+    },
+  });
+  const [messages, runtimeLogs, deliveries] = await Promise.all([
+    prisma.assistantConversationMessage.findMany({
+      where: {
+        companyId: scope.companyId,
+        conversationId: conversation.id,
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    }),
+    prisma.assistantRuntimeLog.findMany({
+      where: {
+        companyId: scope.companyId,
+        conversationId: conversation.id,
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    }),
+    outboundDeliveriesFor(scope),
+  ]);
+  const assistantMessages = messages.filter((message) => message.role === "assistant");
+  assert.equal(assistantMessages.length, 2);
+  assert.deepEqual(
+    assistantMessages.map((message) => message.content),
+    [
+      "A formatação custa a partir de R$ 1.950,00.",
+      "O reparo de placa-mãe custa a partir de R$ 395,00.",
+    ],
+  );
+
+  const firstState = assistantMessages[0].externalPayload?.priceContinuity;
+  const secondState = assistantMessages[1].externalPayload?.priceContinuity;
+  assert.deepEqual(
+    {
+      activeIntent: firstState?.activeIntent,
+      activeService: firstState?.activeService,
+      contextVersion: firstState?.contextVersion,
+      controlRevision: firstState?.controlRevision,
+      establishedBy: firstState?.establishedBy,
+    },
+    {
+      activeIntent: "price",
+      activeService: "formatacao",
+      contextVersion: 1,
+      controlRevision: 0,
+      establishedBy: "EXPLICIT_PRICE_REQUEST",
+    },
+  );
+  assert.deepEqual(
+    {
+      activeIntent: secondState?.activeIntent,
+      activeService: secondState?.activeService,
+      contextVersion: secondState?.contextVersion,
+      controlRevision: secondState?.controlRevision,
+      establishedBy: secondState?.establishedBy,
+      inheritedFromTurnExecutionId: secondState?.inheritedFromTurnExecutionId,
+    },
+    {
+      activeIntent: "price",
+      activeService: "placa_mae",
+      contextVersion: 1,
+      controlRevision: 0,
+      establishedBy: "INHERITED_PRICE_SERVICE_FOLLOW_UP",
+      inheritedFromTurnExecutionId: firstState?.sourceTurnExecutionId,
+    },
+  );
+  assert.notEqual(secondState?.sourceTurnExecutionId, firstState?.sourceTurnExecutionId);
+
+  assert.equal(runtimeLogs.length, 2);
+  for (const runtimeLog of runtimeLogs) {
+    const manifest = turnManifestOf(runtimeLog);
+    assertV1TurnManifest(manifest, scope);
+    assertSealedV1Decision(manifest, {
+      terminalPath: "DETERMINISTIC_PRICE_AUTHORITY",
+      decisionType: "DETERMINISTIC_RESPONSE",
+    });
+    assert.equal(manifest.provider.finalGeneration.count, 0);
+  }
+  const secondManifest = turnManifestOf(runtimeLogs[1]);
+  assert.deepEqual(secondManifest.routing.identifiedServices, ["placa_mae"]);
+  assert.deepEqual(secondManifest.routing.selectedAuthority, {
+    id: scope.motherboardChunkId,
+    serviceKey: "placa_mae",
+    currency: "BRL",
+    amount: 395,
+    qualifier: "starting_at",
+  });
+
+  assert.equal(provider.calls("final_generation").length, 0);
+  assert.equal(deliveries.length, 2);
+  assert.equal(deliveries.every((delivery) => delivery.status === "ACKNOWLEDGED"), true);
+  assert.equal(chatwoot.calls("chatwoot_outbound").length, 2);
+  assert.deepEqual(
+    chatwoot.calls("chatwoot_outbound").map((call) => call.body?.content),
+    [
+      "A formatação custa a partir de R$ 1.950,00.",
+      "O reparo de placa-mãe custa a partir de R$ 395,00.",
+    ],
+  );
+  await assertRuntimeV2Absent(scope);
+}
+
 before(async () => {
   prisma = new PrismaClient({
     datasources: {
@@ -2808,8 +2926,170 @@ test(
 test.todo(
   "Gap 1 — erro ortográfico “atendiemnto” deverá usar agenda oficial determinística e zero geração final",
 );
-test.todo(
-  "Gap 2 — “E para consertar minha placa mae?” deverá herdar pricing, substituir o serviço ativo e usar BRL 395 starting_at",
+test(
+  "5B-A — formatação seguida de “E para placa-mãe?” substitui o serviço e preserva preço",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "bt",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    await assertPriceServiceFollowUp(scope, {
+      followUpContent: "E para placa-mãe?",
+      messagePrefix: "block5b-bt",
+    });
+  },
+);
+test(
+  "5B-B — formatação seguida de “E para consertar minha placa-mãe?” herda somente price",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "bu",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    await assertPriceServiceFollowUp(scope, {
+      followUpContent: "E para consertar minha placa-mãe?",
+      messagePrefix: "block5b-bu",
+    });
+  },
+);
+test(
+  "5B-C — nova contextVersion invalida a continuidade de preço",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "bv",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    const first = await postWebhook(scope, {
+      content: "Qual o valor para formatar um computador?",
+      messageId: "block5b-bv-formatacao",
+    });
+    assert.equal(first.response.status, 201);
+
+    const conversation = await prisma.assistantConversation.findFirstOrThrow({
+      where: {
+        companyId: scope.companyId,
+        externalConversationId: scope.externalConversationId,
+      },
+    });
+    const reset = await prisma.assistantConversation.updateMany({
+      where: {
+        id: conversation.id,
+        currentContextVersion: 1,
+        controlRevision: 0,
+        aiActive: true,
+        pausedByHuman: false,
+      },
+      data: {
+        currentContextVersion: { increment: 1 },
+        controlRevision: { increment: 1 },
+      },
+    });
+    assert.equal(reset.count, 1);
+    provider.setDefault("final_generation", {
+      content: "Posso ajudar com uma avaliação técnica da placa-mãe.",
+    });
+
+    const followUp = await postWebhook(scope, {
+      content: "E para placa-mãe?",
+      messageId: "block5b-bv-follow-up-after-context-change",
+    });
+    assert.equal(followUp.response.status, 201);
+
+    const currentMessages = await prisma.assistantConversationMessage.findMany({
+      where: {
+        companyId: scope.companyId,
+        conversationId: conversation.id,
+        contextVersion: 2,
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    const currentAssistant = currentMessages.find((message) => message.role === "assistant");
+    assert.ok(currentAssistant);
+    assert.doesNotMatch(currentAssistant.content, /R\$\s*395/u);
+    assert.equal(currentAssistant.externalPayload?.priceContinuity, undefined);
+    const currentInbound = currentMessages.find((message) => message.role === "user");
+    const currentRuntime = await prisma.assistantRuntimeLog.findFirstOrThrow({
+      where: {
+        companyId: scope.companyId,
+        conversationId: conversation.id,
+        userMessageId: currentInbound?.id,
+      },
+    });
+    const manifest = turnManifestOf(currentRuntime);
+    assert.equal(manifest.identity.contextVersion, 2);
+    assert.equal(manifest.terminal.path, "PROVIDER_STANDARD");
+    assert.equal(manifest.provider.finalGeneration.count, 1);
+    assert.equal(provider.calls("final_generation").length, 1);
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 2);
+    await assertRuntimeV2Absent(scope);
+  },
+);
+test(
+  "5B-D — intenção explícita concorrente no follow-up tem precedência sobre preço",
+  { concurrency: false },
+  async () => {
+    const scope = await seedProductionHttpFixture(prisma, {
+      label: "bw",
+      chatwootBaseUrl: chatwoot.baseUrl,
+      providerBaseUrl: `${provider.baseUrl}/v1`,
+    });
+    const first = await postWebhook(scope, {
+      content: "Qual o valor para formatar um computador?",
+      messageId: "block5b-bw-formatacao",
+    });
+    assert.equal(first.response.status, 201);
+    provider.setDefault("final_generation", {
+      content: "Vou orientar sobre a garantia aplicável ao serviço.",
+    });
+    const followUp = await postWebhook(scope, {
+      content: "E para placa-mãe, e a garantia?",
+      messageId: "block5b-bw-explicit-warranty-follow-up",
+    });
+    assert.equal(followUp.response.status, 201);
+
+    const conversation = await prisma.assistantConversation.findFirstOrThrow({
+      where: {
+        companyId: scope.companyId,
+        externalConversationId: scope.externalConversationId,
+      },
+    });
+    const messages = await prisma.assistantConversationMessage.findMany({
+      where: {
+        companyId: scope.companyId,
+        conversationId: conversation.id,
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    const assistantMessages = messages.filter((message) => message.role === "assistant");
+    assert.equal(assistantMessages.length, 2);
+    assert.equal(assistantMessages[1].externalPayload?.priceContinuity, undefined);
+    assert.doesNotMatch(assistantMessages[1].content, /R\$\s*395/u);
+
+    const secondInbound = messages.find(
+      (message) =>
+        message.role === "user" &&
+        message.externalMessageId === "block5b-bw-explicit-warranty-follow-up",
+    );
+    const secondRuntime = await prisma.assistantRuntimeLog.findFirstOrThrow({
+      where: {
+        companyId: scope.companyId,
+        conversationId: conversation.id,
+        userMessageId: secondInbound?.id,
+      },
+    });
+    const manifest = turnManifestOf(secondRuntime);
+    assert.equal(manifest.terminal.path, "PROVIDER_STANDARD");
+    assert.equal(manifest.provider.finalGeneration.count, 1);
+    assert.equal(provider.calls("final_generation").length, 1);
+    assert.equal(chatwoot.calls("chatwoot_outbound").length, 2);
+    await assertRuntimeV2Absent(scope);
+  },
 );
 test(
   "5A-A — preço explícito de placa-mãe após o caractere 250 usa evidência integral e zero geração final",

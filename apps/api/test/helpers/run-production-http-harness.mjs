@@ -5,17 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertIsolatedServiceUrls } from "./production-app-process.mjs";
 
-const BASELINE_COMMIT = "59dd68d574560ca208615a4a8edbadf90fc3c58b";
-const ALLOWED_BLOCK5A_RUNTIME_PATHS = new Set([
-  "apps/api/src/assistant-knowledge/assistant-knowledge-retrieval.service.ts",
-  "apps/api/src/assistant-knowledge/knowledge-evidence.ts",
+const BASELINE_COMMIT = "f277d81efb9d45a7b5a1423b3643187130c474f1";
+const ALLOWED_BLOCK5B_RUNTIME_PATHS = new Set([
   "apps/api/src/assistant-conversations/assistant-conversations.service.ts",
-  "apps/api/src/assistant-conversations/rag-price-authority.ts",
-  "apps/api/src/assistant-conversations/runtime-authority-guard.ts",
-  "apps/api/src/assistant-conversations/runtime-context-manifest.ts",
-  "apps/api/src/assistant-conversations/turn-execution-manifest.ts",
-  "apps/api/src/assistants/assistants.service.ts",
-  "apps/api/src/prompt-compiler/prompt-compiler.service.ts",
+  "apps/api/src/assistant-conversations/price-continuity.ts",
+  "apps/api/src/assistant-conversations/v1-turn-decision.ts",
 ]);
 const helperDirectory = path.dirname(fileURLToPath(import.meta.url));
 const apiDirectory = path.resolve(helperDirectory, "../..");
@@ -30,6 +24,7 @@ const relatedRegressionTests = [
   "test/flow-scoped-rag-retrieval.test.mjs",
   "test/flow-scoped-rag-retrieval-postgres.test.mjs",
   "test/integral-knowledge-evidence.test.mjs",
+  "test/price-continuity.test.mjs",
   "test/rag-price-authority.test.mjs",
   "test/assistant-behavior-prompt.test.mjs",
   "test/business-hours-direct-deterministic.test.mjs",
@@ -287,11 +282,11 @@ async function assertBaselineAndScope() {
     .map((entry) => entry.trim())
     .filter(Boolean);
   const disallowedChanges = protectedChanges.filter(
-    (entry) => !ALLOWED_BLOCK5A_RUNTIME_PATHS.has(entry),
+    (entry) => !ALLOWED_BLOCK5B_RUNTIME_PATHS.has(entry),
   );
   if (disallowedChanges.length > 0) {
     throw new Error(
-      `Harness refuses production source, schema or migration changes outside Block 5A:\n${disallowedChanges.join("\n")}`,
+      `Harness refuses production source, schema or migration changes outside Block 5B:\n${disallowedChanges.join("\n")}`,
     );
   }
   const prismaBinary = path.join(apiDirectory, "node_modules/.bin/prisma");
@@ -336,6 +331,7 @@ async function buildFresh(environment) {
     path.join(apiDirectory, "dist/assistant-conversations/handoff-recovery-runner.js"),
     path.join(apiDirectory, "dist/assistant-conversations/handoff-recovery.js"),
     path.join(apiDirectory, "dist/assistant-conversations/operational-handoff.js"),
+    path.join(apiDirectory, "dist/assistant-conversations/price-continuity.js"),
     path.join(apiDirectory, "dist/assistant-conversations/rag-price-authority.js"),
     path.join(apiDirectory, "dist/assistant-conversations/runtime-context-manifest.js"),
     path.join(apiDirectory, "dist/assistant-conversations/turn-execution-manifest.js"),

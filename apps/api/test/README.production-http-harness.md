@@ -1,15 +1,15 @@
-# Production HTTP harness — policy blocks 0–5A
+# Production HTTP harness — policy blocks 0–5B
 
 This harness originated against deployed baseline
-`02f3ccc61f320f87c06ff50d2f7ba809e08cc4ad`. Its current Block 5A scope is
-anchored at the approved Block 4B baseline
-`59dd68d574560ca208615a4a8edbadf90fc3c58b`.
+`02f3ccc61f320f87c06ff50d2f7ba809e08cc4ad`. Its current Block 5B scope is
+anchored at the approved Block 5A baseline
+`f277d81efb9d45a7b5a1423b3643187130c474f1`.
 
-Block 5A changes only factual-evidence transport in Runtime V1. It preserves
-canonical chunk content for factual decisions, keeps observability previews
-non-authoritative and limits the excerpt sent to the provider. It does not
-authorize multi-turn price continuity, typo-tolerant BusinessHours, commercial
-completion for technical answers, a model change or Runtime V2.
+Block 5B adds only adjacent-turn price continuity in Runtime V1. It persists
+the active price intent and one active service on the assistant response, then
+requires the same conversation, `contextVersion` and `controlRevision` before
+an elliptical `E para...` follow-up may inherit the intent. It does not change
+BusinessHours, technical-answer completeness, model, prompt or Runtime V2.
 
 ## Production-equivalent path
 
@@ -49,13 +49,13 @@ attempt uniqueness.
 
 A third isolated upgrade check validates the additive Block 4A operation
 schema. A fourth validates the additive Block 4B recovery fields and attempt
-history over the approved predecessor. Block 5A adds no schema or migration.
+history over the approved predecessor. Block 5B adds no schema or migration.
 No migration is applied to staging.
 
 The runner fails closed if either URL is non-loopback, if a database name is
-outside the harness namespace, if the approved Block 4B baseline is not an
+outside the harness namespace, if the approved Block 5A baseline is not an
 ancestor of `HEAD`, or if production source changes exceed the explicit Block
-5A allowlist. Schema and migration changes are not in that allowlist. Teardown
+5B allowlist. Schema and migration changes are not in that allowlist. Teardown
 removes only containers created by that runner invocation.
 
 ## Stateful boundaries
@@ -82,13 +82,15 @@ separately. Responses are configurable per category. Both fakes listen only on
 
 ## Executable coverage
 
-The production-entrypoint suite currently declares 34 Node tests:
+The production-entrypoint suite currently declares 37 Node tests:
 
-- 31 executable scenarios;
-- three functional specifications marked `test.todo`.
+- 35 executable scenarios;
+- two functional specifications marked `test.todo`.
 
-Sixteen executable scenarios retain the non-handoff controls and include three
-new Block 5A cases. Two send the explicit, self-contained question
+Twenty executable scenarios retain the non-handoff controls. Three Block 5A
+cases prove integral evidence, and four Block 5B cases prove both supported
+follow-up phrasings, invalidation by a new context version and invalidation by
+a competing explicit intent in the current follow-up. The Block 5A controls send
 `Qual o valor para consertar minha placa-mãe?` with the official price placed
 first after character 250 and then after character 800. Both require the same
 single deterministic authority, zero final generation and one acknowledged
@@ -108,11 +110,11 @@ decision immutability and manifest summary. Runtime V2 OFF remains a
 transversal invariant asserted inside every executable HTTP scenario, not an
 additional executable scenario.
 
-The completed Block 5A gate executed all 34 declarations: 31 passed, none
-failed and three remained `test.todo`. The related regression suite passed all
-310 tests. The fresh artifact set used by that gate had SHA-256
-`abd659d950f5f2e3620d44d493424477c83de23c6d5e96c3d79d65b2041f6ef0`
-and timestamp `2026-07-27T13:23:49.942Z`.
+The completed Block 5B gate executed all 37 declarations: 35 passed, none
+failed and two remained `test.todo`. The related regression suite passed all
+313 tests. The fresh artifact set used by that gate had SHA-256
+`13691ffbd0c44f77858c498d902d73fe223d084db48841cb90e45698edc1c33f`
+and timestamp `2026-07-27T13:55:35.295Z`.
 
 A separate integration-with-database recovery suite covers the coordinator
 through real Prisma persistence and the fake HTTP boundary. It exercises
@@ -187,17 +189,16 @@ The runner:
    the two owned containers.
 
 Fresh-build hashes and final runner counts are recorded for each completed
-block in its report. The Block 5A gate used the artifact hash and timestamp
+block in its report. The Block 5B gate used the artifact hash and timestamp
 recorded above; an older `dist` artifact or historical hash is not accepted as
 evidence for these tests.
 
 ## Visible future gaps
 
-Three functional `test.todo` specifications intentionally remain non-blocking:
+Two functional `test.todo` specifications intentionally remain non-blocking:
 
 1. typo-tolerant deterministic BusinessHours;
-2. multi-turn price continuity from formatting to motherboard repair;
-3. useful and commercially complete handling of a slow computer.
+2. useful and commercially complete handling of a slow computer.
 
 They state the future contract and never assert the currently incorrect
 response as accepted behavior.
@@ -221,9 +222,11 @@ the first 250 characters did not govern factual resolution. Provider evidence
 is a separate, bounded excerpt; the fake records its request so related tests
 can verify size and content without adding provider calls.
 
-The explicit motherboard controls do not exercise continuity. Each inbound
-contains its own price intent and service. The separate `E para...` specification
-remains `todo` for Block 5B.
+The explicit motherboard controls remain independent controls. Block 5B now
+adds executable sequences for `E para placa-mãe?` and
+`E para consertar minha placa-mãe?`; both reuse `price`, replace the active
+service with `placa_mae`, call no final generation and produce one outbound for
+the follow-up.
 
 ## Current delivery contract
 

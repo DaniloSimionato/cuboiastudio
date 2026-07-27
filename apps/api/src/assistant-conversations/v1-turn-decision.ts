@@ -8,6 +8,7 @@ import {
   CONVERSATION_CONTROL_SNAPSHOT_SCHEMA_VERSION,
   type ConversationControlSnapshot,
 } from "./conversation-control-snapshot";
+import type { PriceContinuityState } from "./price-continuity";
 
 export const V1_TURN_DECISION_SCHEMA_VERSION = "V1_TURN_DECISION_V1";
 export const V1_TURN_DECISION_ID_ALGORITHM = "sha256/v1-turn-decision-v1";
@@ -91,6 +92,7 @@ export type V1TurnDecision = Readonly<{
       mode: string;
       contextVersion: number;
       sources: unknown;
+      priceContinuity?: PriceContinuityState | null;
     }> | null;
   }>;
   provider: Readonly<{
@@ -242,6 +244,13 @@ function freezeDecision(draft: V1TurnDecisionDraft): V1TurnDecision {
         ? Object.freeze({
             ...draft.response.persistence,
             sources: cloneAndFreezeJsonLike(draft.response.persistence.sources),
+            ...(draft.response.persistence.priceContinuity
+              ? {
+                  priceContinuity: Object.freeze({
+                    ...draft.response.persistence.priceContinuity,
+                  }),
+                }
+              : {}),
           })
         : null,
     }),
