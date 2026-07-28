@@ -775,8 +775,9 @@ export class PromptCompilerService {
       messages.push({
         role: "system",
         content: [
-          "BASE DE CONHECIMENTO RELEVANTE (use como fonte de fatos, não como modelo de estilo):",
-          "Selecione somente o trecho necessário, reescreva em linguagem natural conforme o comportamento configurado e não copie títulos, listas ou formalidade do material sem necessidade.",
+          "BASE DE CONHECIMENTO RELEVANTE (use como fonte de fatos complementares):",
+          "REGRA ABSOLUTA: Para horários de atendimento, endereço, telefone, WhatsApp, contatos e localização, use EXCLUSIVAMENTE o [CONTEXTO OFICIAL DA EMPRESA] acima. Ignore qualquer informação conflitante nesta base de conhecimento para esses tópicos.",
+          "Para outros assuntos, selecione somente o trecho necessário, reescreva em linguagem natural conforme o comportamento configurado e não copie títulos, listas ou formalidade do material sem necessidade.",
           ...knowledgeItems.map(
             (item, index) =>
               `${index + 1}. Título: ${item.title}\nConteúdo factual: ${truncateText(item.content, MAX_PROMPT_TEXT_LENGTH)}`,

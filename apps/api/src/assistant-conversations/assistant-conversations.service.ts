@@ -41,6 +41,7 @@ import {
   buildDeterministicBusinessHoursResponse,
   buildOutsideBusinessHoursReply,
   resolveOfficialTimezoneResolution,
+  buildStructuredBusinessAnswer,
   type OfficialBusinessContext,
 } from "../assistants/official-business-context";
 import {
@@ -813,6 +814,52 @@ function toConversationMessageItem(
       : {}),
     createdAt: message.createdAt,
   };
+}
+
+function containsOfficialDataConflict(
+  chunkContent: string,
+  question: string,
+): boolean {
+  const normalizedChunk = chunkContent
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+  const normalizedQuestion = question
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+
+  // Se a pergunta é sobre horários, filtrar chunks que tenham padrões de horário e dias
+  const isAboutHours = [
+    "horario", "atendimento", "aberto", "funciona", "abre", "fecha",
+    "almoco", "intervalo", "que horas", "expediente"
+  ].some((term) => normalizedQuestion.includes(term));
+
+  if (isAboutHours) {
+    const hasTimePattern = /\b\d{1,2}[h:]\d{0,2}\b/.test(normalizedChunk);
+    const hasDayWord = /\b(segunda|terca|quarta|quinta|sexta|sabado|domingo|semana)\b/.test(normalizedChunk);
+    return hasTimePattern || hasDayWord;
+  }
+
+  // Se a pergunta é sobre endereço/localização, filtrar chunks com termos de endereço/localização
+  const isAboutAddress = [
+    "endereco", "localizacao", "onde fica", "como chegar", "maps", "google maps", "onde e"
+  ].some((term) => normalizedQuestion.includes(term));
+
+  if (isAboutAddress) {
+    return /\b(rua|avenida|av\b|bairro|cep\b|cidade|estado|numero|frente|esquina|endereco|localizacao)\b/.test(normalizedChunk);
+  }
+
+  // Se a pergunta é sobre contatos (telefone, whatsapp), filtrar chunks com números de telefone/contatos
+  const isAboutContact = [
+    "telefone", "whatsapp", "contato", "numero", "celular"
+  ].some((term) => normalizedQuestion.includes(term));
+
+  if (isAboutContact) {
+    return /\b(\d{4,5}[-\s]?\d{4}|whatsapp|telefone|contato|suporte)\b/.test(normalizedChunk);
+  }
+
+  return false;
 }
 
 @Injectable()
@@ -4094,6 +4141,32 @@ export class AssistantConversationsService {
         }
       : officialBusinessContext;
 
+    // Suprimir chunks que conflitem com dados oficiais estruturados
+    // quando a pergunta é sobre dados oficiais e o officialBusinessContext existe
+    let structuredAnswerForPriority: { answer: string; sourceTitle: string } | null = null;
+    const structuredAnswer = buildStructuredBusinessAnswer(
+      interpretedMessage,
+      officialBusinessContext,
+    );
+    if (structuredAnswer) {
+      structuredAnswerForPriority = structuredAnswer;
+      if (knowledgeItems.length > 0) {
+        const originalCount = knowledgeItems.length;
+        knowledgeItems = knowledgeItems.filter(
+          (item) => !containsOfficialDataConflict(item.content, interpretedMessage),
+        );
+        if (knowledgeItems.length < originalCount) {
+          this.logger.log({
+            message: "Knowledge chunks filtered due to official data priority",
+            originalCount,
+            filteredCount: knowledgeItems.length,
+            removedCount: originalCount - knowledgeItems.length,
+            structuredSource: structuredAnswer.sourceTitle,
+          });
+        }
+      }
+    }
+
     const promptInstructions = assistant.instructions || "";
     const safetyInstructionBlock = [
       assistant.safetyInstruction?.trim()
@@ -4969,7 +5042,10 @@ export class AssistantConversationsService {
                 triageExitReason
                   ? "O cliente não consegue fornecer o detalhe técnico solicitado. Não repita a pergunta; reconheça os dados já informados e indique que a avaliação técnica poderá verificar o detalhe pendente."
                   : "Não reutilize respostas antigas de fallback quando elas não responderem à intenção atual.",
-              ].join("\n"),
+                structuredAnswerForPriority
+                  ? `PARA ESTA PERGUNTA ESPECÍFICA: Use EXCLUSIVAMENTE os dados do [CONTEXTO OFICIAL DA EMPRESA]. A resposta correta baseada nos dados oficiais é: "${structuredAnswerForPriority.answer}". Não use informações da base de conhecimento para horários, endereço ou contatos.`
+                  : null,
+              ].filter(Boolean).join("\n"),
             });
 
             const promptSectionManifest = buildPromptSectionManifest(promptMessages);

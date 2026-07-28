@@ -2479,7 +2479,8 @@ test("encerra triagem técnica e mantém preço como intenção atual", async ()
   assert.equal(manifest.finalSafeResponseCategory, "price");
   assert.equal(manifest.authorityCategorySource, "explicit_intent");
   assert.equal(manifest.triageFlowIncluded, false);
-  assert.deepEqual(cacheWrites.at(-1), null);
+  assert.equal(cacheWrites.at(-1)?.active, false);
+  assert.equal(cacheWrites.at(-1)?.resolved, true);
   assert.equal(calls.providerPayloads.length, 1);
   assert.equal(
     calls.providerPayloads[0].messages.at(-1).content,

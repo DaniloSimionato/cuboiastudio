@@ -764,6 +764,8 @@ export function buildOfficialBusinessContext(
     `Próxima abertura: ${nextOpeningLabel}`,
     `Horário de hoje: ${businessStatus.todaySummary}`,
     `A empresa fecha para almoço hoje? ${businessStatus.lunchBreakSummary}`,
+    `Horário de funcionamento da semana completo:`,
+    ...businessStatus.weeklySummary.map((line) => `  - ${line}`),
     `IA responde fora do horário: ${input.aiAlwaysAvailable === false ? "Não" : "Sim"}`,
     `Endereço oficial: ${normalizeString(input.businessAddress) ?? "não informado"}`,
     `Cidade/estado oficial: ${localityLabel ?? "não informado"}`,
@@ -824,7 +826,7 @@ function normalizeQuestion(question: string): string {
 
 function isHoursQuestion(question: string): boolean {
   const normalized = normalizeQuestion(question);
-  return [
+  const hasExplicitKeyword = [
     "horario",
     "atendimento",
     "aberto",
@@ -841,6 +843,14 @@ function isHoursQuestion(question: string): boolean {
     "ate que horas",
     "que horas",
   ].some((term) => normalized.includes(term));
+  if (hasExplicitKeyword) return true;
+
+  // Mensagens curtas que mencionam um dia da semana são perguntas implícitas
+  // de horário (ex: "Na terça tbm?", "E no sábado?", "segunda?").
+  const mentionsWeekday = findRequestedBusinessDays(normalized).length > 0;
+  if (mentionsWeekday && normalized.length < 60) return true;
+
+  return false;
 }
 
 function isAddressQuestion(question: string): boolean {
