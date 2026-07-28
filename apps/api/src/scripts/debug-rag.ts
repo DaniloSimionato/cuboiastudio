@@ -10,7 +10,7 @@ async function main() {
   const app = await NestFactory.createApplicationContext(AppModule, { logger: ["error", "warn"] });
   const retrievalService = app.get(AssistantKnowledgeRetrievalService);
 
-  const query = "Voces formatam PC ai? Qual valor?";
+  const query = "Qual o valor pra arrumar?";
   const mockTenant = { companyId: COMPANY_ID } as any;
 
   try {
