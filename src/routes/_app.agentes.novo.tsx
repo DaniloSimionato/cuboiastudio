@@ -38,6 +38,16 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -204,6 +214,8 @@ function NovoAgente() {
   const [aiAlwaysAvailable, setAiAlwaysAvailable] = useState(true);
   const [initialMessage, setInitialMessage] = useState("");
   const [ragEnabled, setRagEnabled] = useState(false);
+  const [ragScoreThreshold, setRagScoreThreshold] = useState(0.30);
+  const [knowledgeToDeleteId, setKnowledgeToDeleteId] = useState<string | null>(null);
   const [memoryEnabled, setMemoryEnabled] = useState(false);
   const [memoryPrePromptEnabled, setMemoryPrePromptEnabled] = useState(true);
   const [memoryExtractionEnabled, setMemoryExtractionEnabled] = useState(true);
@@ -779,6 +791,7 @@ function NovoAgente() {
         setNoAnswerMessage(assistant.fallbackMessage ?? "");
         setSecurityInstructions(assistant.safetyInstruction ?? "");
         setRagEnabled(assistant.ragEnabled ?? false);
+        setRagScoreThreshold(assistant.ragScoreThreshold ?? 0.30);
         setMemoryEnabled(assistant.memoryEnabled ?? false);
         setMemoryPrePromptEnabled(assistant.memoryPrePromptEnabled ?? true);
         setMemoryExtractionEnabled(assistant.memoryExtractionEnabled ?? true);
@@ -1217,6 +1230,7 @@ function NovoAgente() {
           fallbackMessage: noAnswerMessage.trim() || null,
           safetyInstruction: securityInstructions.trim() || null,
           ragEnabled,
+          ragScoreThreshold,
           memoryEnabled,
           memoryPrePromptEnabled,
           memoryExtractionEnabled,
@@ -1426,6 +1440,7 @@ function NovoAgente() {
           fallbackMessage: noAnswerMessage.trim() || null,
           safetyInstruction: securityInstructions.trim() || null,
           ragEnabled,
+          ragScoreThreshold,
           memoryEnabled,
           memoryPrePromptEnabled,
           memoryExtractionEnabled,
@@ -1747,6 +1762,18 @@ function NovoAgente() {
       await loadKnowledge(selectedAssistantId); // Recarrega para mostrar o status de ERRO
     } finally {
       setPreparingKnowledgeId(null);
+    }
+  };
+
+  const handleConfirmDeleteKnowledge = async () => {
+    if (!selectedAssistantId || !knowledgeToDeleteId) return;
+    try {
+      await backendAssistantsService.knowledgeDelete(selectedAssistantId, knowledgeToDeleteId);
+      toast.success("Conhecimento excluído com sucesso!");
+      setKnowledgeToDeleteId(null);
+      await loadKnowledge(selectedAssistantId);
+    } catch (err) {
+      toast.error("Erro ao excluir conhecimento: " + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -2580,6 +2607,36 @@ function NovoAgente() {
                       onCheckedChange={setRagEnabled}
                     />
                   </div>
+
+                  {ragEnabled && (
+                    <div className="bg-muted/40 p-4 rounded-lg border space-y-3 mt-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <Label className="text-sm font-medium">
+                            Régua de Certeza da Busca (RAG Score Threshold)
+                          </Label>
+                          <p className="text-xs text-muted-foreground">
+                            Define o grau mínimo de similaridade para a IA considerar um trecho da base de conhecimento.
+                          </p>
+                        </div>
+                        <span className="text-sm font-mono font-bold px-2 py-1 bg-background border rounded">
+                          {Math.round(ragScoreThreshold * 100)}% ({ragScoreThreshold.toFixed(2)})
+                        </span>
+                      </div>
+                      <Slider
+                        value={[ragScoreThreshold]}
+                        min={0.10}
+                        max={0.90}
+                        step={0.05}
+                        onValueChange={(val) => setRagScoreThreshold(val[0])}
+                      />
+                      <div className="flex justify-between text-[10px] text-muted-foreground">
+                        <span>Mais Flexível (10%)</span>
+                        <span>Recomendado (30%)</span>
+                        <span>Mais Rígido (90%)</span>
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>
@@ -2817,6 +2874,15 @@ function NovoAgente() {
                           >
                             Editar
                           </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-destructive hover:bg-destructive/10"
+                            onClick={() => setKnowledgeToDeleteId(item.id)}
+                            title="Excluir conhecimento"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
                         </div>
                       </div>
                     ))
@@ -2830,6 +2896,26 @@ function NovoAgente() {
                   </div>
                 </CardContent>
               </Card>
+
+              <AlertDialog open={!!knowledgeToDeleteId} onOpenChange={(open) => !open && setKnowledgeToDeleteId(null)}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Excluir conhecimento</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Tem certeza que deseja excluir este item de conhecimento? Ele será removido permanentemente da base deste agente.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                    <AlertDialogAction
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      onClick={handleConfirmDeleteKnowledge}
+                    >
+                      Excluir
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
 
               {/* RAG Test Area */}
               <Card className="mt-4">

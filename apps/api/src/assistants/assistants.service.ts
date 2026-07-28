@@ -382,6 +382,7 @@ function toAssistantResponse(assistant: AssistantSafeRecord): AssistantListItem 
     fallbackMessage: assistant.fallbackMessage,
     safetyInstruction: assistant.safetyInstruction,
     ragEnabled: assistant.ragEnabled,
+    ragScoreThreshold: assistant.ragScoreThreshold ?? 0.30,
     conversationResetEnabled: assistant.conversationResetEnabled,
     conversationResetKeywords: assistant.conversationResetKeywords,
     conversationResetConfirmationMessage: assistant.conversationResetConfirmationMessage,
@@ -765,6 +766,7 @@ export class AssistantsService {
     const hasFallbackMessage = hasField("fallbackMessage");
     const hasSafetyInstruction = hasField("safetyInstruction");
     const hasRagEnabled = hasField("ragEnabled");
+    const hasRagScoreThreshold = hasField("ragScoreThreshold");
     const hasConversationResetEnabled = hasField("conversationResetEnabled");
     const hasConversationResetKeywords = hasField("conversationResetKeywords");
     const hasConversationResetConfirmationMessage = hasField("conversationResetConfirmationMessage");
@@ -920,6 +922,7 @@ export class AssistantsService {
         ...(hasFallbackMessage ? { fallbackMessage: input.dto.fallbackMessage ?? null } : {}),
         ...(hasSafetyInstruction ? { safetyInstruction: input.dto.safetyInstruction ?? null } : {}),
         ...(hasRagEnabled ? { ragEnabled: input.dto.ragEnabled ?? false } : {}),
+        ...(hasRagScoreThreshold ? { ragScoreThreshold: input.dto.ragScoreThreshold ?? 0.30 } : {}),
         ...(hasMemoryEnabled ? { memoryEnabled: input.dto.memoryEnabled ?? false } : {}),
         ...(hasMemoryPrePromptEnabled
           ? { memoryPrePromptEnabled: input.dto.memoryPrePromptEnabled ?? true }

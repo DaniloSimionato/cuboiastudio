@@ -91,6 +91,12 @@ export class CreateAssistantDto {
   ragEnabled?: boolean;
 
   @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  ragScoreThreshold?: number;
+
+  @IsOptional()
   @IsBoolean()
   memoryEnabled?: boolean;
 

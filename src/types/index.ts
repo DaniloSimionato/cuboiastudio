@@ -530,6 +530,7 @@ export interface BackendAssistantListItem {
   fallbackMessage: string | null;
   safetyInstruction: string | null;
   ragEnabled: boolean;
+  ragScoreThreshold?: number;
   conversationResetEnabled: boolean;
   conversationResetKeywords: string[];
   conversationResetConfirmationMessage: string | null;
@@ -724,6 +725,7 @@ export interface BackendAssistantPreviewResponse {
     contentPreview: string;
   }>;
   ragEnabled?: boolean;
+  ragScoreThreshold?: number;
   totalChunksScanned?: number;
 }
 

@@ -22,6 +22,16 @@ import type {
 } from "../../types/assistant-flow.types";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 interface AssistantFlowsTabProps {
   assistantId: string | null;
@@ -199,17 +209,19 @@ export function AssistantFlowsTab({ assistantId }: AssistantFlowsTabProps) {
     setIsEditingMode(true);
   };
 
+  const [flowToDeleteId, setFlowToDeleteId] = useState<string | null>(null);
+
   const handleCancel = () => {
     setIsEditingMode(false);
     setEditingFlow(null);
   };
 
-  const handleDelete = async (flowId: string) => {
-    if (!assistantId) return;
-    if (!confirm("Tem certeza que deseja excluir este fluxo?")) return;
+  const confirmDelete = async () => {
+    if (!assistantId || !flowToDeleteId) return;
     try {
-      await assistantFlowsService.delete(assistantId, flowId);
+      await assistantFlowsService.delete(assistantId, flowToDeleteId);
       toast.success("Fluxo excluído");
+      setFlowToDeleteId(null);
       loadFlows();
     } catch (error) {
       toast.error("Erro ao excluir fluxo");
@@ -633,8 +645,8 @@ export function AssistantFlowsTab({ assistantId }: AssistantFlowsTabProps) {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="text-destructive"
-                    onClick={() => handleDelete(flow.id)}
+                    className="text-destructive hover:bg-destructive/10"
+                    onClick={() => setFlowToDeleteId(flow.id)}
                   >
                     <Trash className="h-4 w-4" />
                   </Button>
@@ -644,6 +656,26 @@ export function AssistantFlowsTab({ assistantId }: AssistantFlowsTabProps) {
           ))}
         </div>
       )}
+
+      <AlertDialog open={!!flowToDeleteId} onOpenChange={(open) => !open && setFlowToDeleteId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir fluxo</AlertDialogTitle>
+            <AlertDialogDescription>
+              Tem certeza que deseja excluir este fluxo? Esta ação não poderá ser desfeita.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmDelete}
+            >
+              Excluir
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

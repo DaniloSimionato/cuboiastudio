@@ -467,6 +467,7 @@ model Assistant {
   fallbackMessage   String?
   safetyInstruction String?
   ragEnabled        Boolean @default(false)
+  ragScoreThreshold Float?   @default(0.30)
 
   conversationResetEnabled             Boolean  @default(false)
   conversationResetKeywords            String[] @default(["reset"])

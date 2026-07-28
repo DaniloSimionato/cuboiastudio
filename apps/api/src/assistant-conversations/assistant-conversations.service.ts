@@ -3956,6 +3956,7 @@ export class AssistantConversationsService {
     let eligiblePriceAuthorities: EligiblePriceAuthority[] = [];
     const ragThresholdConfig = resolveAssistantKnowledgeScoreThreshold({
       assistantId: input.assistantId,
+      explicitValue: (assistant as any).ragScoreThreshold,
     });
     let ragLogData: any = {
       ragEnabled: Boolean(assistant.ragEnabled),
