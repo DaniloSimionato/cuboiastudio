@@ -1738,7 +1738,7 @@ function NovoAgente() {
       await loadKnowledge(selectedAssistantId);
       setIsAddingKnowledge(false);
     } catch (err) {
-      alert("Erro ao salvar conhecimento: " + (err instanceof Error ? err.message : String(err)));
+      toast.error("Erro ao salvar conhecimento: " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setKnowledgeSaving(false);
     }
@@ -1748,7 +1748,7 @@ function NovoAgente() {
     if (!selectedAssistantId) return;
 
     if (item.status === "INACTIVE") {
-      alert("Ative este conhecimento antes de prepará-lo para a IA.");
+      toast.warning("Ative este conhecimento antes de prepará-lo para a IA.");
       return;
     }
 
@@ -1756,9 +1756,9 @@ function NovoAgente() {
     try {
       await backendAssistantsService.knowledgePrepare(selectedAssistantId, item.id);
       await loadKnowledge(selectedAssistantId);
-      // alert("Conhecimento preparado com sucesso!");
+      toast.success("Conhecimento preparado com sucesso!");
     } catch (err) {
-      alert("Erro ao preparar conhecimento: " + (err instanceof Error ? err.message : String(err)));
+      toast.error("Erro ao preparar conhecimento: " + (err instanceof Error ? err.message : String(err)));
       await loadKnowledge(selectedAssistantId); // Recarrega para mostrar o status de ERRO
     } finally {
       setPreparingKnowledgeId(null);
@@ -1791,7 +1791,7 @@ function NovoAgente() {
   const handleSearchKnowledge = async () => {
     if (!selectedAssistantId) return;
     if (!searchQuery.trim()) {
-      alert("Digite uma pergunta para testar.");
+      toast.warning("Digite uma pergunta para testar.");
       return;
     }
 
