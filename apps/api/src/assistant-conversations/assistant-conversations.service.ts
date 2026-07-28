@@ -3990,10 +3990,40 @@ export class AssistantConversationsService {
     });
 
     if (assistant.ragEnabled && this.assistantKnowledgeRetrievalService) {
+      let ragQuery = interpretedMessage;
+
+      // Contextualize short or pricing-related queries with recent message history.
+      const isShortQuery = interpretedMessage.length < 50;
+      const isPricingOrGenericQuery = /(?:quanto|valor|pre[cç]o|or[cç]amento|custa|arrumar|consert|garantia|busc)/i.test(interpretedMessage);
+
+      if (isShortQuery || isPricingOrGenericQuery) {
+        try {
+          const prevMessages = await this.prisma.assistantConversationMessage.findMany({
+            where: {
+              conversationId: conversation.id,
+              role: "user",
+              id: { not: userMessage.id },
+            },
+            orderBy: { createdAt: "desc" },
+            take: 2,
+            select: { content: true },
+          });
+          if (prevMessages.length > 0) {
+            const contextText = prevMessages
+              .map((m) => m.content)
+              .reverse()
+              .join(" ");
+            ragQuery = `${contextText} ${interpretedMessage}`;
+          }
+        } catch (err: any) {
+          this.logger.warn(`Failed to enrich RAG query with conversation history: ${err.message}`);
+        }
+      }
+
       const searchResult = await this.assistantKnowledgeRetrievalService.searchRelevantKnowledge({
         tenant: input.tenant,
         assistantId: input.assistantId,
-        query: interpretedMessage,
+        query: ragQuery,
         topK: knowledgeLimit,
         ...(knowledgeScopeTagFilterEnabled && !flowKnowledgeScope.knowledgeScopeMissing
           ? { knowledgeScopeTags: flowKnowledgeScope.scopeTags }

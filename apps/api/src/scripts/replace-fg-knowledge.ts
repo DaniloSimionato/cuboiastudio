@@ -8,7 +8,7 @@ const COMPANY_ID = "cmrcu4hdl008yrq01noholvvd";
 
 const newKnowledgeItems = [
   {
-    title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
+    title: "Formatação, Sistemas, Placa-Mãe e Vírus",
     tags: ["formatacao", "placa_mae", "remocao_virus"],
     content: `FORMATAÇÃO, SISTEMAS E REMOÇÃO DE VÍRUS
 
@@ -30,7 +30,7 @@ Diretrizes para a IA:
 3. Não garanta a recuperação de arquivos ou viabilidade de reparo em placa-mãe sem antes passar pela avaliação dos técnicos.`
   },
   {
-    title: "FG - Serviços de Notebook e Upgrades",
+    title: "Serviços de Notebook e Upgrades",
     tags: ["notebooks", "upgrades_notebook", "componentes_notebook"],
     content: `SERVIÇOS DE NOTEBOOK E UPGRADES
 
@@ -56,7 +56,7 @@ Diretrizes para a IA:
 3. Oriente o cliente a trazer o carregador antigo quando for comprar uma fonte nova para garantir a voltagem correta.`
   },
   {
-    title: "FG - Coleta, Entrega e Formas de Pagamento",
+    title: "Coleta, Entrega e Formas de Pagamento",
     tags: ["coleta", "entrega", "empresa", "endereco", "horario", "contato"],
     content: `COLETA, ENTREGA E FORMAS DE PAGAMENTO
 
@@ -73,7 +73,7 @@ Diretrizes para a IA:
 2. Para agendar a coleta, solicite: Endereço completo, Nome do responsável, WhatsApp, Tipo de equipamento e Breve descrição do problema.`
   },
   {
-    title: "FG - Garantia dos Serviços",
+    title: "Garantia dos Serviços",
     tags: ["garantia", "pos_servico"],
     content: `GARANTIA DA ASSISTÊNCIA TÉCNICA
 
@@ -87,7 +87,7 @@ Diretrizes para a IA:
 2. Explique de forma amigável que a equipe precisa avaliar o aparelho fisicamente no balcão para certificar a origem do problema.`
   },
   {
-    title: "FG - Impressoras, Cupom, Etiquetas e Garantia de Impressoras",
+    title: "Impressoras, Cupom, Etiquetas e Garantia de Impressoras",
     tags: ["impressoras", "impressora_cupom", "etiquetas", "garantia_impressoras"],
     content: `MANUTENÇÃO E REPARO DE IMPRESSORAS
 
@@ -107,7 +107,7 @@ Diretrizes para a IA:
 3. Se o cliente relatar falhas de impressão, pergunte a marca/modelo e há quanto tempo o equipamento está parado.`
   },
   {
-    title: "FG - Relógio Ponto e Software de Controle de Ponto",
+    title: "Relógio Ponto e Software de Controle de Ponto",
     tags: ["relogio_ponto", "controle_ponto"],
     content: `RELÓGIO PONTO E SOFTWARE DE CONTROLE DE PONTO
 
@@ -133,7 +133,7 @@ Diretrizes para a IA:
 1. Nunca passe preços de relógios de ponto ou mensalidades de software. O Técnico Douglas cuida de toda a negociação.`
   },
   {
-    title: "FG - Visita Técnica Externa, Redes e Wi-Fi",
+    title: "Visita Técnica Externa, Redes e Wi-Fi",
     tags: ["visita_tecnica", "redes", "wifi"],
     content: `VISITA TÉCNICA EXTERNA E REDES
 
@@ -146,7 +146,7 @@ Diretrizes para a IA:
 2. Para agendar a visita, solicite: Endereço completo, Nome do responsável, Celular/WhatsApp de contato e Qual problema/serviço precisa de solução.`
   },
   {
-    title: "FG - Nobreaks, Projetores e Eletrônicos Diversos",
+    title: "Nobreaks, Projetores e Eletrônicos Diversos",
     tags: ["nobreaks", "projetores", "eletronicos_diversos"],
     content: `NOBREAKS, PROJETORES E OUTROS ELETRÔNICOS
 
@@ -160,7 +160,7 @@ Diretrizes para a IA:
 2. Para projetores, utilize a referência inicial de R$ 395,00.`
   },
   {
-    title: "FG - MacBook, iMac, Videogames, Monitores e TVs",
+    title: "MacBook, iMac, Videogames, Monitores e TVs",
     tags: ["macbook_imac", "videogames", "monitores_tvs"],
     content: `LINHA APPLE, VIDEOGAMES, MONITORES E TVS
 
@@ -178,7 +178,7 @@ Diretrizes para a IA:
 1. Explique que esses aparelhos exigem componentes específicos, por isso os valores e prazos são passados logo após o diagnóstico em nosso laboratório.`
   },
   {
-    title: "FG - Recuperação de Dados e Montagem de Computadores",
+    title: "Recuperação de Dados e Montagem de Computadores",
     tags: ["recuperacao_dados"],
     content: `RECUPERAÇÃO DE DADOS E MONTAGEM DE COMPUTADORES
 
@@ -197,7 +197,7 @@ Diretrizes para a IA:
 2. Informar o valor inicial de R$ 195,00 para a montagem e configuração de máquinas novas.`
   },
   {
-    title: "FG - Vendas, Comercial e Equipamentos Seminovos",
+    title: "Vendas, Comercial e Equipamentos Seminovos",
     tags: ["seminovos", "vendas_comercial", "empresa", "endereco", "horario", "contato"],
     content: `CONTATOS DO SETOR DE VENDAS (MÓVEIS E TI)
 
@@ -215,7 +215,7 @@ Venda de Equipamentos Seminovos:
 - Consulte a disponibilidade do estoque de seminovos no dia do atendimento.`
   },
   {
-    title: "FG - Objeção de Preço e Custo-benefício do Reparo",
+    title: "Objeção de Preço e Custo-benefício do Reparo",
     tags: ["custo_beneficio", "preco", "objecao"],
     content: `CONTORNO DE OBJEÇÕES E EMPATIA
 
