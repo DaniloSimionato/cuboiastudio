@@ -59,6 +59,7 @@ export type AssistantListItem = {
   fallbackMessage: string | null;
   safetyInstruction: string | null;
   ragEnabled: boolean;
+  ragScoreThreshold?: number;
   conversationResetEnabled: boolean;
   conversationResetKeywords: string[];
   conversationResetConfirmationMessage: string | null;
@@ -382,7 +383,7 @@ function toAssistantResponse(assistant: AssistantSafeRecord): AssistantListItem 
     fallbackMessage: assistant.fallbackMessage,
     safetyInstruction: assistant.safetyInstruction,
     ragEnabled: assistant.ragEnabled,
-    ragScoreThreshold: assistant.ragScoreThreshold ?? 0.30,
+    ragScoreThreshold: (assistant as any).ragScoreThreshold ?? 0.30,
     conversationResetEnabled: assistant.conversationResetEnabled,
     conversationResetKeywords: assistant.conversationResetKeywords,
     conversationResetConfirmationMessage: assistant.conversationResetConfirmationMessage,
