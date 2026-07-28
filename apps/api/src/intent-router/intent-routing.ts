@@ -438,16 +438,16 @@ export function hasExternalVisitEvidence(text: string): boolean {
     return true;
   }
 
-  const hasActorOrAttendance = /\b(?:tecnico|alguem|equipe|voces|profissional|atendimento)\b/.test(
+  const hasActorOrAttendance = /\b(?:tecnico|alguem|equipe|voces|profissional|atendimento)\b/u.test(
     text,
   );
-  const hasTravelOrPresence = /\b(?:ir|vir|comparecer|deslocar|atender|mandar|enviar)\b/.test(text);
+  const hasTravelOrPresence = /\b(?:ir|va|vou|vão|indo|vir|vem|vêm|viesse|venha|vindo|comparecer|deslocar|atender|mandar|envie|enviar)\b/u.test(text);
   const hasCustomerDestination =
-    /\b(?:meu|minha)\s+(?:endereco|casa|empresa|loja|escritorio)\b/.test(text) ||
-    /\b(?:ao|ate|no|na)\s+(?:(?:meu|minha)\s+)?(?:endereco|casa|empresa|loja|escritorio|local)\b/.test(
+    /\b(?:meu|minha)\s+(?:endereco|casa|empresa|loja|escritorio)\b/u.test(text) ||
+    /\b(?:ao|ate|no|na)\s+(?:(?:meu|minha)\s+)?(?:endereco|casa|empresa|loja|escritorio|local)\b/u.test(
       text,
     ) ||
-    /\b(?:aqui|ate mim)\b/.test(text);
+    /\b(?:aqui|ate mim)\b/u.test(text);
   if (hasActorOrAttendance && hasTravelOrPresence && hasCustomerDestination) {
     return true;
   }
@@ -471,7 +471,16 @@ export function hasExternalVisitEvidence(text: string): boolean {
     "no escritorio",
   ].some((alias) => containsAlias(text, alias));
 
-  return hasNetworkEvidence && hasOnSiteEvidence;
+  if (hasNetworkEvidence && hasOnSiteEvidence) {
+    return true;
+  }
+
+  // Network evidence combined with explicit technical/presence intent
+  if (hasNetworkEvidence && (hasActorOrAttendance || hasTravelOrPresence)) {
+    return true;
+  }
+
+  return false;
 }
 
 function hasSpecificEquipmentEvidence(text: string): boolean {

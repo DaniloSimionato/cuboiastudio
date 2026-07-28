@@ -585,7 +585,7 @@ export function validateV1AnswerAuthority(input: {
     !availabilityExplicitlyUnconfirmed &&
     !pickupExplicitlyUnconfirmed &&
     !/(?:telefone|whatsapp|contato|numero)/.test(normalizedAnswer) &&
-    /(?:disponivel|temos horario|posso te atender|atendimento hoje|atendimento amanha|agendar|confirmar o agendamento|vaga)/.test(
+    /(?:horario\s+disponivel|dia\s+disponivel|data\s+disponivel|disponivel\s+hoje|disponivel\s+amanha|disponivel\s+as\b|disponibilidade\s+de\s+horario|temos horario|posso te atender|atendimento hoje|atendimento amanha|agendar|confirmar o agendamento|vaga)/.test(
       normalizedAnswer,
     );
   const exceptionClaim =
