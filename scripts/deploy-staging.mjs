@@ -13,7 +13,7 @@ const sshCommand = `
   git reset --hard origin/main && 
   echo "🏗️ Reconstruindo e reiniciando a API e Frontend..." &&
   docker compose -f docker-compose.staging.yml up -d --build &&
-  docker compose -f docker-compose.staging.yml restart api frontend
+  docker compose -f docker-compose.staging.yml restart api frontend auth-proxy caddy
 `;
 
 const result = spawnSync("ssh", ["root@" + SERVER_IP, sshCommand], {

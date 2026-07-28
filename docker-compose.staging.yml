@@ -43,6 +43,7 @@ services:
     command: >
       sh -lc "npm install &&
       npx prisma generate --schema prisma/schema.prisma &&
+      npx prisma migrate deploy &&
       npm run build &&
       node dist/main.js"
     depends_on:
