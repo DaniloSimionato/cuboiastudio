@@ -255,6 +255,7 @@ export interface AiSettings {
   baseUrl: string | null;
   model: string | null;
   apiKeyConfigured: boolean;
+  openAiProjectId: string | null;
   requestTimeoutMs: number;
   lastTestAt: string | null;
   lastTestStatus: string | null;
@@ -281,6 +282,7 @@ export interface UpdateAiSettingsPayload {
   baseUrl?: string | null;
   model?: string | null;
   apiKey?: string;
+  openAiProjectId?: string | null;
   requestTimeoutMs?: number;
 }
 

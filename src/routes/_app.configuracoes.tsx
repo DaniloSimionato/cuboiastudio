@@ -94,6 +94,7 @@ type AiSettingsFormState = {
   baseUrl: string;
   model: string;
   apiKey: string;
+  openAiProjectId: string;
   requestTimeoutMs: string;
 };
 
@@ -103,6 +104,7 @@ const DEFAULT_FORM_STATE: AiSettingsFormState = {
   baseUrl: "",
   model: "",
   apiKey: "",
+  openAiProjectId: "",
   requestTimeoutMs: "30000",
 };
 
@@ -297,6 +299,7 @@ function mapSettingsToForm(
     baseUrl: settings.baseUrl ?? provider?.baseUrl ?? "",
     model: settings.model ?? provider?.models[0] ?? "",
     apiKey: "",
+    openAiProjectId: settings.openAiProjectId ?? "",
     requestTimeoutMs: String(settings.requestTimeoutMs ?? 30000),
   };
 }
@@ -484,6 +487,7 @@ function ConfigPage() {
             ? timeoutValue
             : undefined,
         ...(form.apiKey.trim().length > 0 ? { apiKey: form.apiKey.trim() } : {}),
+        openAiProjectId: form.openAiProjectId.trim() || null,
       };
 
       const saved = await aiSettingsService.save(payload);
@@ -692,6 +696,15 @@ function ConfigPage() {
                     ))}
                   </SelectContent>
                 </Select>
+              </Field>
+
+              <Field label="Projeto OpenAI (custos reais)">
+                <Input
+                  value={form.openAiProjectId}
+                  onChange={(event) => updateField("openAiProjectId", event.target.value)}
+                  placeholder="proj_..."
+                  autoComplete="off"
+                />
               </Field>
             </div>
 

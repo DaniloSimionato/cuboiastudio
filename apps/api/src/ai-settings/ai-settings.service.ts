@@ -26,6 +26,7 @@ const companyAiSettingsSelect = {
   encryptedApiKey: true,
   apiKeyIv: true,
   apiKeyAuthTag: true,
+  openAiProjectId: true,
   requestTimeoutMs: true,
   status: true,
   lastTestAt: true,
@@ -47,6 +48,7 @@ export type SafeAiSettings = {
   baseUrl: string | null;
   model: string | null;
   apiKeyConfigured: boolean;
+  openAiProjectId: string | null;
   requestTimeoutMs: number;
   lastTestAt: Date | null;
   lastTestStatus: string | null;
@@ -122,6 +124,7 @@ export class AiSettingsService {
     const provider = this.resolveProviderInput(dto.provider);
     const baseUrl = this.resolveNullableTextInput(dto.baseUrl);
     const model = this.resolveNullableTextInput(dto.model);
+    const openAiProjectId = this.resolveNullableTextInput(dto.openAiProjectId);
 
     await this.prisma.companyAiSettings.upsert({
       where: { companyId },
@@ -130,6 +133,8 @@ export class AiSettingsService {
         provider: provider ?? existing?.provider ?? "openai-compatible",
         baseUrl: baseUrl !== undefined ? baseUrl : (existing?.baseUrl ?? null),
         model: model !== undefined ? model : (existing?.model ?? null),
+        openAiProjectId:
+          openAiProjectId !== undefined ? openAiProjectId : (existing?.openAiProjectId ?? null),
         ...(encryptedApiKey
           ? encryptedApiKey
           : {
@@ -145,6 +150,7 @@ export class AiSettingsService {
         provider: provider ?? "openai-compatible",
         baseUrl: baseUrl ?? null,
         model: model ?? null,
+        openAiProjectId: openAiProjectId ?? null,
         ...(encryptedApiKey
           ? encryptedApiKey
           : {
@@ -338,6 +344,7 @@ export class AiSettingsService {
       baseUrl: runtime.baseUrl.length > 0 ? runtime.baseUrl : null,
       model: runtime.model.length > 0 ? runtime.model : null,
       apiKeyConfigured: Boolean(settings?.encryptedApiKey),
+      openAiProjectId: settings?.openAiProjectId ?? null,
       requestTimeoutMs: runtime.requestTimeoutMs,
       lastTestAt: settings?.lastTestAt ?? null,
       lastTestStatus: settings?.lastTestStatus ?? null,

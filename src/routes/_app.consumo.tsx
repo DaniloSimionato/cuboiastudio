@@ -1,6 +1,8 @@
+import { useEffect, useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import {
   Coins,
   Activity,
@@ -9,203 +11,222 @@ import {
   MessageCircle,
   UserCheck,
   Sparkles,
-  TrendingDown,
+  RefreshCw,
 } from "lucide-react";
+import { ApiError } from "@/services/apiClient";
+import { usageService, type UsageSummary } from "@/services/usageService";
 
 export const Route = createFileRoute("/_app/consumo")({
   head: () => ({ meta: [{ title: "Consumo IA · Cubo AI Studio" }] }),
   component: ConsumoPage,
 });
 
-const kpis = [
-  { label: "Tokens utilizados (mês)", value: "0", icon: Coins, delta: "vs R$ 0,00 mês anterior" },
-  { label: "Requests à IA", value: "0", icon: Activity, delta: "últimos 30d" },
-  {
-    label: "Custo estimado",
-    value: "R$ 0,00",
-    icon: DollarSign,
-    delta: "vs R$ 0,00 mês anterior",
-  },
-  { label: "Tempo médio de resposta", value: "0,00 s", icon: Timer, delta: "0 s" },
-  {
-    label: "Conversas resolvidas pela IA",
-    value: "0",
-    icon: MessageCircle,
-    delta: "0% das conversas",
-  },
-  { label: "Transferências para humano", value: "0", icon: UserCheck, delta: "0%" },
-];
+const numberFormatter = new Intl.NumberFormat("pt-BR");
+const usdFormatter = new Intl.NumberFormat("pt-BR", {
+  style: "currency",
+  currency: "USD",
+  currencyDisplay: "symbol",
+});
 
-const custoDia: number[] = [];
-const porAssistente: { l: string; v: number; c: string }[] = [];
-const porCanal: { l: string; v: number }[] = [];
-const porModelo: { l: string; v: number }[] = [];
+function formatDateLabel(date: string): string {
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: "UTC",
+  }).format(new Date(`${date}T00:00:00Z`));
+}
 
 function ConsumoPage() {
+  const [summary, setSummary] = useState<UsageSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setSummary(await usageService.getSummary());
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : "Não foi possível carregar o consumo de IA. Tente novamente.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const maxDailyCost = useMemo(
+    () => Math.max(...(summary?.dailyCosts.map((item) => item.cost) ?? [0]), 0),
+    [summary],
+  );
+  const month = summary?.month;
+  const runtime = summary?.runtime;
+  const costDelta = (month?.actualCost ?? 0) - (month?.previousActualCost ?? 0);
+  const kpis = [
+    {
+      label: "Tokens utilizados (mês)",
+      value: numberFormatter.format(month?.totalTokens ?? 0),
+      icon: Coins,
+      delta: "dados oficiais da OpenAI",
+    },
+    {
+      label: "Requests à IA",
+      value: numberFormatter.format(month?.requests ?? 0),
+      icon: Activity,
+      delta: "mês atual",
+    },
+    {
+      label: "Custo real da OpenAI",
+      value: usdFormatter.format(month?.actualCost ?? 0),
+      icon: DollarSign,
+      delta: `${costDelta >= 0 ? "+" : ""}${usdFormatter.format(costDelta)} vs. mês anterior`,
+    },
+    {
+      label: "Tempo médio de resposta",
+      value: `${((runtime?.averageResponseMs ?? 0) / 1000).toLocaleString("pt-BR", {
+        maximumFractionDigits: 2,
+      })} s`,
+      icon: Timer,
+      delta: "medido pelo runtime",
+    },
+    {
+      label: "Conversas resolvidas pela IA",
+      value: numberFormatter.format(runtime?.resolvedConversations ?? 0),
+      icon: MessageCircle,
+      delta: "mês atual",
+    },
+    {
+      label: "Transferências para humano",
+      value: numberFormatter.format(runtime?.handoffs ?? 0),
+      icon: UserCheck,
+      delta: "mês atual",
+    },
+  ];
+
   return (
     <div>
       <PageHeader
         title="Consumo IA"
-        description="Acompanhe utilização, custos e desempenho dos Assistentes IA do Cubo.Chat."
+        description="Acompanhe o uso e o custo real faturável da OpenAI por empresa."
+        actions={
+          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Atualizar
+          </Button>
+        }
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+      {(summary?.message || error) && (
+        <Card className="mb-6 border-amber-500/30 bg-amber-500/5">
+          <CardContent className="p-4 text-sm text-muted-foreground">
+            {error ?? summary?.message}
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="grid grid-cols-1 gap-4 mb-6 sm:grid-cols-2 lg:grid-cols-3">
         {kpis.map((k) => {
           const Icon = k.icon;
           return (
             <Card key={k.label}>
               <CardContent className="p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     {k.label}
                   </div>
-                  <div className="h-9 w-9 rounded-lg bg-primary/10 grid place-items-center">
+                  <div className="grid h-9 w-9 place-items-center rounded-lg bg-primary/10">
                     <Icon className="h-4 w-4 text-primary" />
                   </div>
                 </div>
-                <div className="text-2xl font-bold">{k.value}</div>
-                <div className="text-xs text-muted-foreground mt-1">{k.delta}</div>
+                <div className="text-2xl font-bold">{loading ? "—" : k.value}</div>
+                <div className="mt-1 text-xs text-muted-foreground">{k.delta}</div>
               </CardContent>
             </Card>
           );
         })}
       </div>
 
-      <Card className="mb-6 border-emerald-500/30 bg-emerald-500/5">
-        <CardContent className="p-5 flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
-          <div className="flex items-start gap-3">
-            <div className="h-10 w-10 rounded-lg bg-emerald-500/15 text-emerald-600 grid place-items-center">
-              <TrendingDown className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="text-sm font-semibold">Economia gerada pela IA</div>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Estimativa baseada em conversas resolvidas sem intervenção humana.
-              </p>
-            </div>
-          </div>
-          <div className="grid grid-cols-3 gap-6 text-sm">
-            <div>
-              <div className="text-xs text-muted-foreground">Conversas resolvidas</div>
-              <div className="text-lg font-bold">0</div>
-            </div>
-            <div>
-              <div className="text-xs text-muted-foreground">Tempo economizado</div>
-              <div className="text-lg font-bold">0h</div>
-            </div>
-            <div>
-              <div className="text-xs text-muted-foreground">Economia estimada</div>
-              <div className="text-lg font-bold text-emerald-600">R$ 0,00</div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 gap-4 mb-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-primary" /> Custo por dia (últimos 14 dias)
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Sparkles className="h-4 w-4 text-primary" /> Custo real por dia (últimos 14 dias)
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {custoDia.length === 0 ? (
-              <div className="h-48 grid place-items-center text-xs text-muted-foreground border border-dashed rounded-lg">
-                Nenhum dado de custo disponível para o período.
-              </div>
-            ) : (
-              <>
-                <div className="h-48 flex items-end gap-1.5">
-                  {custoDia.map((v, i) => (
-                    <div key={i} className="flex-1 bg-primary/15 rounded-t-md relative">
-                      <div
-                        className="absolute inset-x-0 bottom-0 bg-primary rounded-t-md"
-                        style={{ height: `${v}%` }}
-                      />
+            <div className="flex h-48 items-end gap-1.5">
+              {(summary?.dailyCosts ?? []).map((item) => {
+                const height = maxDailyCost > 0 ? Math.max((item.cost / maxDailyCost) * 100, 2) : 0;
+                return (
+                  <div
+                    key={item.date}
+                    className="group relative flex h-full flex-1 items-end rounded-t-md bg-primary/10"
+                  >
+                    <div
+                      className="w-full rounded-t-md bg-primary"
+                      style={{ height: `${height}%` }}
+                    />
+                    <div className="pointer-events-none absolute -top-8 left-1/2 z-10 hidden -translate-x-1/2 whitespace-nowrap rounded bg-foreground px-2 py-1 text-[10px] text-background group-hover:block">
+                      {formatDateLabel(item.date)} · {usdFormatter.format(item.cost)}
                     </div>
-                  ))}
-                </div>
-                <div className="flex justify-between text-[10px] text-muted-foreground mt-2">
-                  {custoDia.map((_, i) => (
-                    <span key={i}>d{i + 1}</span>
-                  ))}
-                </div>
-              </>
-            )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-2 flex justify-between text-[10px] text-muted-foreground">
+              {(summary?.dailyCosts ?? []).map((item) => (
+                <span key={item.date}>{formatDateLabel(item.date)}</span>
+              ))}
+            </div>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Custo por Assistente</CardTitle>
+            <CardTitle className="text-base">Uso por modelo</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {porAssistente.length === 0 ? (
-              <p className="text-xs text-muted-foreground py-4 text-center">Nenhum custo registrado.</p>
-            ) : (
-              porAssistente.map((i) => (
-                <div key={i.l}>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="truncate">{i.l}</span>
-                    <span className="text-muted-foreground">{i.c}</span>
+            {summary?.byModel.length ? (
+              summary.byModel.map((item) => (
+                <div key={item.model}>
+                  <div className="mb-1 flex justify-between gap-3 text-xs">
+                    <span className="truncate">{item.model}</span>
+                    <span className="shrink-0 text-muted-foreground">
+                      {numberFormatter.format(item.tokens)} tokens
+                    </span>
                   </div>
-                  <div className="h-2 bg-muted rounded-full">
-                    <div className="h-2 bg-primary rounded-full" style={{ width: `${i.v * 2}%` }} />
+                  <div className="h-2 rounded-full bg-muted">
+                    <div
+                      className="h-2 rounded-full bg-primary"
+                      style={{ width: `${item.share}%` }}
+                    />
                   </div>
                 </div>
               ))
+            ) : (
+              <p className="py-4 text-center text-xs text-muted-foreground">
+                Nenhum uso registrado no período.
+              </p>
             )}
           </CardContent>
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Custo por Canal</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {porCanal.length === 0 ? (
-              <p className="text-xs text-muted-foreground py-4 text-center">Nenhum custo registrado.</p>
-            ) : (
-              porCanal.map((i) => (
-                <div key={i.l}>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span>{i.l}</span>
-                    <span className="text-muted-foreground">{i.v}%</span>
-                  </div>
-                  <div className="h-2 bg-muted rounded-full">
-                    <div className="h-2 bg-primary rounded-full" style={{ width: `${i.v}%` }} />
-                  </div>
-                </div>
-              ))
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Custo por Modelo</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {porModelo.length === 0 ? (
-              <p className="text-xs text-muted-foreground py-4 text-center">Nenhum custo registrado.</p>
-            ) : (
-              porModelo.map((i) => (
-                <div key={i.l}>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span>{i.l}</span>
-                    <span className="text-muted-foreground">{i.v}%</span>
-                  </div>
-                  <div className="h-2 bg-muted rounded-full">
-                    <div className="h-2 bg-primary rounded-full" style={{ width: `${i.v}%` }} />
-                  </div>
-                </div>
-              ))
-            )}
-          </CardContent>
-        </Card>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Como o custo é apurado</CardTitle>
+        </CardHeader>
+        <CardContent className="text-sm text-muted-foreground">
+          O valor exibido vem do endpoint oficial <code>Costs</code> da OpenAI, filtrado pelo
+          projeto desta empresa e em USD. A OpenAI informa que esse dado é o apropriado para
+          conciliação com a fatura; tokens e requisições vêm do endpoint oficial <code>Usage</code>.
+        </CardContent>
+      </Card>
     </div>
   );
 }

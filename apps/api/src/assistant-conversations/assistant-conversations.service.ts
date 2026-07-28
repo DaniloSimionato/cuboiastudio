@@ -42,6 +42,9 @@ import {
   buildOutsideBusinessHoursReply,
   resolveOfficialTimezoneResolution,
   buildStructuredBusinessAnswer,
+  isHoursQuestion,
+  isAddressQuestion,
+  isContactQuestion,
   type OfficialBusinessContext,
 } from "../assistants/official-business-context";
 import {
@@ -824,39 +827,22 @@ function containsOfficialDataConflict(
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
     .toLowerCase();
-  const normalizedQuestion = question
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .toLowerCase();
 
   // Se a pergunta é sobre horários, filtrar chunks que tenham padrões de horário e dias
-  const isAboutHours = [
-    "horario", "atendimento", "aberto", "funciona", "abre", "fecha",
-    "almoco", "intervalo", "que horas", "expediente"
-  ].some((term) => normalizedQuestion.includes(term));
-
-  if (isAboutHours) {
+  if (isHoursQuestion(question)) {
     const hasTimePattern = /\b\d{1,2}[h:]\d{0,2}\b/.test(normalizedChunk);
     const hasDayWord = /\b(segunda|terca|quarta|quinta|sexta|sabado|domingo|semana)\b/.test(normalizedChunk);
     return hasTimePattern || hasDayWord;
   }
 
   // Se a pergunta é sobre endereço/localização, filtrar chunks com termos de endereço/localização
-  const isAboutAddress = [
-    "endereco", "localizacao", "onde fica", "como chegar", "maps", "google maps", "onde e"
-  ].some((term) => normalizedQuestion.includes(term));
-
-  if (isAboutAddress) {
+  if (isAddressQuestion(question)) {
     return /\b(rua|avenida|av\b|bairro|cep\b|cidade|estado|numero|frente|esquina|endereco|localizacao)\b/.test(normalizedChunk);
   }
 
-  // Se a pergunta é sobre contatos (telefone, whatsapp), filtrar chunks com números de telefone/contatos
-  const isAboutContact = [
-    "telefone", "whatsapp", "contato", "numero", "celular"
-  ].some((term) => normalizedQuestion.includes(term));
-
-  if (isAboutContact) {
-    return /\b(\d{4,5}[-\s]?\d{4}|whatsapp|telefone|contato|suporte)\b/.test(normalizedChunk);
+  // Se a pergunta é sobre contatos, filtrar chunks com termos de contato
+  if (isContactQuestion(question)) {
+    return /\b(telefone|whatsapp|wpp|whats|celular|numero|ligar|contato)\b/.test(normalizedChunk);
   }
 
   return false;

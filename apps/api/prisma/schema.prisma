@@ -255,6 +255,7 @@ model CompanyAiSettings {
   encryptedApiKey  String?
   apiKeyIv         String?
   apiKeyAuthTag    String?
+  openAiProjectId  String?
   requestTimeoutMs Int       @default(30000)
   status           Status    @default(ACTIVE)
   lastTestAt       DateTime?

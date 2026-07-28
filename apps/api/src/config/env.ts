@@ -45,6 +45,8 @@ export const environmentSchema = z.object({
   REDIS_URL: optionalText,
   JWT_SECRET: optionalText,
   OPENAI_API_KEY: optionalText,
+  // Organization Owner key used only by the server to read official Usage/Costs data.
+  OPENAI_ADMIN_API_KEY: optionalText,
   ANTHROPIC_API_KEY: optionalText,
   GOOGLE_CLIENT_ID: optionalText,
   GOOGLE_CLIENT_SECRET: optionalText,

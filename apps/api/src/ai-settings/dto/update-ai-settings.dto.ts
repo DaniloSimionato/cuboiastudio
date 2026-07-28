@@ -48,6 +48,12 @@ export class UpdateAiSettingsDto {
   @MaxLength(4000, { message: "apiKey must be at most 4000 characters." })
   apiKey?: string;
 
+  @Transform(({ value }) => trimString(value))
+  @IsOptional()
+  @IsString()
+  @MaxLength(200, { message: "openAiProjectId must be at most 200 characters." })
+  openAiProjectId?: string;
+
   @Transform(({ value }) =>
     typeof value === "string" && value.trim() !== "" ? Number(value) : value,
   )

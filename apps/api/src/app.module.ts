@@ -24,6 +24,7 @@ import { CompaniesModule } from "./companies/companies.module";
 import { WebhooksModule } from "./webhooks/webhooks.module";
 import { validateEnvironment } from "./config/env";
 import { StudioUsersModule } from "./studio-users/studio-users.module";
+import { UsageModule } from "./usage/usage.module";
 
 @Module({
   imports: [
@@ -77,6 +78,7 @@ import { StudioUsersModule } from "./studio-users/studio-users.module";
     IntentRouterModule,
     CompaniesModule,
     StudioUsersModule,
+    UsageModule,
     DiagnosticsModule,
     HealthModule,
     WebhooksModule,
