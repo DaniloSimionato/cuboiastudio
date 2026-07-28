@@ -5029,7 +5029,7 @@ export class AssistantConversationsService {
                   ? "O cliente não consegue fornecer o detalhe técnico solicitado. Não repita a pergunta; reconheça os dados já informados e indique que a avaliação técnica poderá verificar o detalhe pendente."
                   : "Não reutilize respostas antigas de fallback quando elas não responderem à intenção atual.",
                 structuredAnswerForPriority
-                  ? `PARA ESTA PERGUNTA ESPECÍFICA: Use EXCLUSIVAMENTE os dados do [CONTEXTO OFICIAL DA EMPRESA]. A resposta correta baseada nos dados oficiais é: "${structuredAnswerForPriority.answer}". Não use informações da base de conhecimento para horários, endereço ou contatos.`
+                  ? `PARA ESTA PERGUNTA ESPECÍFICA: Use EXCLUSIVAMENTE os dados do [CONTEXTO OFICIAL DA EMPRESA]. A resposta correta baseada nos dados oficiais é: "${structuredAnswerForPriority.answer}". Não use informações da base de conhecimento para horários, endereço ou contatos. IMPORTANTE: Não adicione informações sobre os horários de outros dias a menos que o usuário tenha perguntado explicitamente sobre eles.`
                   : null,
               ].filter(Boolean).join("\n"),
             });

@@ -146,6 +146,11 @@ export function detectDirectBusinessHours(message: string): DirectBusinessHoursS
     return "SPECIFIC_DAY";
   if (explicitSchedule || questionWithBusinessSubject || subjectAndOperation)
     return "WEEKLY_SUMMARY";
+    
+  if (hasDay && text.length < 60) {
+    return hasMultipleDays ? "WEEKLY_SUMMARY" : "SPECIFIC_DAY";
+  }
+
   return null;
 }
 
