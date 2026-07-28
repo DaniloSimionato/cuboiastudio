@@ -824,7 +824,7 @@ function normalizeQuestion(question: string): string {
     .toLowerCase();
 }
 
-function isHoursQuestion(question: string): boolean {
+export function isHoursQuestion(question: string): boolean {
   const normalized = normalizeQuestion(question);
   const hasExplicitKeyword = [
     "horario",
@@ -853,26 +853,26 @@ function isHoursQuestion(question: string): boolean {
   return false;
 }
 
-function isAddressQuestion(question: string): boolean {
+export function isAddressQuestion(question: string): boolean {
   const normalized = normalizeQuestion(question);
   return ["endereco", "localizacao", "onde fica", "como chegar", "maps", "google maps"].some(
     (term) => normalized.includes(term),
   );
 }
 
-function isWebsiteQuestion(question: string): boolean {
+export function isWebsiteQuestion(question: string): boolean {
   const normalized = normalizeQuestion(question);
   return ["site", "website", "pagina", "link"].some((term) => normalized.includes(term));
 }
 
-function isContactQuestion(question: string): boolean {
+export function isContactQuestion(question: string): boolean {
   const normalized = normalizeQuestion(question);
   return ["telefone", "whatsapp", "contato", "numero", "número", "celular"].some((term) =>
     normalized.includes(term),
   );
 }
 
-function isSpecificPersonContactQuestion(question: string): boolean {
+export function isSpecificPersonContactQuestion(question: string): boolean {
   const normalized = normalizeQuestion(question);
   const referencesSpecificOwner =
     /\b(whatsapp|telefone|numero|número|contato)\s+d[oa]s?\s+[a-z]/i.test(normalized);
