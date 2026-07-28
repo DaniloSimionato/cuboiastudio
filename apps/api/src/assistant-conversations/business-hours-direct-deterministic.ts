@@ -31,17 +31,23 @@ const NON_BUSINESS_TEMPORAL_ANCHOR =
 function detectNonBusinessTemporalCategory(
   text: string,
 ): DirectBusinessHoursBlockedCategory | null {
-  const hasTemporalAnchor = new RegExp(`\\b(?:${NON_BUSINESS_TEMPORAL_ANCHOR})\\b`).test(text);
-  const hasLegacyTemporalStatus = /\b(?:aberto|fechado)\b/.test(text);
+  // Strip common greetings so that "boa tarde", "bom dia", "boa noite" do not
+  // produce false-positive temporal anchors (tarde, manha, noite).
+  const textWithoutGreetings = text
+    .replace(/\bbo[am]\s+(?:tarde|noite|dia|madrugada)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const hasTemporalAnchor = new RegExp(`\\b(?:${NON_BUSINESS_TEMPORAL_ANCHOR})\\b`).test(textWithoutGreetings);
+  const hasLegacyTemporalStatus = /\b(?:aberto|fechado)\b/.test(textWithoutGreetings);
   if (!hasTemporalAnchor && !hasLegacyTemporalStatus) {
     return null;
   }
-  if (/\b(?:tecnico|instalador|instalacao|manutencao|visita)\b/.test(text)) return "TECHNICIAN";
-  if (/\b(?:pedido|encomenda)\b/.test(text)) return "ORDER";
-  if (/\b(?:entrega|coleta|motorista|carga|transporte)\b/.test(text)) return "DELIVERY";
-  if (/\b(?:agendamento|consulta|reuniao|chamada)\b/.test(text)) return "APPOINTMENT";
-  if (/\b(?:sistema|caixa|suporte|chamado)\b/.test(text)) return "SYSTEM";
-  if (new RegExp("\\b(?:" + NON_BUSINESS_CONTEXT + ")\\b").test(text)) return "OTHER";
+  if (/\b(?:tecnico|instalador|instalacao|manutencao|visita)\b/.test(textWithoutGreetings)) return "TECHNICIAN";
+  if (/\b(?:pedido|encomenda)\b/.test(textWithoutGreetings)) return "ORDER";
+  if (/\b(?:entrega|coleta|motorista|carga|transporte)\b/.test(textWithoutGreetings)) return "DELIVERY";
+  if (/\b(?:agendamento|consulta|reuniao|chamada)\b/.test(textWithoutGreetings)) return "APPOINTMENT";
+  if (/\b(?:sistema|caixa|suporte|chamado)\b/.test(textWithoutGreetings)) return "SYSTEM";
+  if (new RegExp("\\b(?:" + NON_BUSINESS_CONTEXT + ")\\b").test(textWithoutGreetings)) return "OTHER";
   return null;
 }
 
