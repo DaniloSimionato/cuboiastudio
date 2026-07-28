@@ -9,6 +9,7 @@ const COMPANY_ID = "cmrcu4hdl008yrq01noholvvd";
 const newKnowledgeItems = [
   {
     title: "FG - Formatação, Sistemas, Placa-Mãe e Vírus",
+    tags: ["formatacao", "placa_mae", "remocao_virus"],
     content: `FORMATAÇÃO, SISTEMAS E REMOÇÃO DE VÍRUS
 
 A FG Informática realiza serviços de software em computadores desktop, notebooks e All in One:
@@ -30,6 +31,7 @@ Diretrizes para a IA:
   },
   {
     title: "FG - Serviços de Notebook e Upgrades",
+    tags: ["notebooks", "upgrades_notebook", "componentes_notebook"],
     content: `SERVIÇOS DE NOTEBOOK E UPGRADES
 
 A FG Informática realiza manutenções físicas e upgrades em notebooks de todas as marcas:
@@ -55,6 +57,7 @@ Diretrizes para a IA:
   },
   {
     title: "FG - Coleta, Entrega e Formas de Pagamento",
+    tags: ["coleta", "entrega", "empresa", "endereco", "horario", "contato"],
     content: `COLETA, ENTREGA E FORMAS DE PAGAMENTO
 
 Serviço de Busca e Entrega (Leva e Traz):
@@ -71,6 +74,7 @@ Diretrizes para a IA:
   },
   {
     title: "FG - Garantia dos Serviços",
+    tags: ["garantia", "pos_servico"],
     content: `GARANTIA DA ASSISTÊNCIA TÉCNICA
 
 - Todos os serviços efetuados pela FG Informática possuem garantia legal de 3 meses (90 dias) a partir da data de entrega do equipamento.
@@ -84,6 +88,7 @@ Diretrizes para a IA:
   },
   {
     title: "FG - Impressoras, Cupom, Etiquetas e Garantia de Impressoras",
+    tags: ["impressoras", "impressora_cupom", "etiquetas", "garantia_impressoras"],
     content: `MANUTENÇÃO E REPARO DE IMPRESSORAS
 
 A FG realiza manutenção preventiva e corretiva em impressoras domésticas, empresariais e industriais:
@@ -103,6 +108,7 @@ Diretrizes para a IA:
   },
   {
     title: "FG - Relógio Ponto e Software de Controle de Ponto",
+    tags: ["relogio_ponto", "controle_ponto"],
     content: `RELÓGIO PONTO E SOFTWARE DE CONTROLE DE PONTO
 
 Soluções ControliD e Secullum (Banco de horas, relatórios de ponto, etc.).
@@ -128,6 +134,7 @@ Diretrizes para a IA:
   },
   {
     title: "FG - Visita Técnica Externa, Redes e Wi-Fi",
+    tags: ["visita_tecnica", "redes", "wifi"],
     content: `VISITA TÉCNICA EXTERNA E REDES
 
 - Realizamos atendimento no local para residências e empresas (infraestrutura de rede, Wi-Fi lento, configuração de roteadores, cabeamento de rede, etc.).
@@ -135,11 +142,12 @@ Diretrizes para a IA:
 - Dependendo da complexidade ou necessidade de cabos/roteadores adicionais, o técnico passará o orçamento complementar no local.
 
 Diretrizes para a IA:
-1. Se o cliente solicitar a presença de um técnico no local, informe que a visita custa a partir de R$ 250,00.
+1. Se o cliente solicitar a presença de um técnico no local, info que a visita custa a partir de R$ 250,00.
 2. Para agendar a visita, solicite: Endereço completo, Nome do responsável, Celular/WhatsApp de contato e Qual problema/serviço precisa de solução.`
   },
   {
     title: "FG - Nobreaks, Projetores e Eletrônicos Diversos",
+    tags: ["nobreaks", "projetores", "eletronicos_diversos"],
     content: `NOBREAKS, PROJETORES E OUTROS ELETRÔNICOS
 
 Manutenção especializada em eletrônicos:
@@ -153,6 +161,7 @@ Diretrizes para a IA:
   },
   {
     title: "FG - MacBook, iMac, Videogames, Monitores e TVs",
+    tags: ["macbook_imac", "videogames", "monitores_tvs"],
     content: `LINHA APPLE, VIDEOGAMES, MONITORES E TVS
 
 1. MacBook e iMac:
@@ -170,6 +179,7 @@ Diretrizes para a IA:
   },
   {
     title: "FG - Recuperação de Dados e Montagem de Computadores",
+    tags: ["recuperacao_dados"],
     content: `RECUPERAÇÃO DE DADOS E MONTAGEM DE COMPUTADORES
 
 1. Recuperação de Dados:
@@ -188,6 +198,7 @@ Diretrizes para a IA:
   },
   {
     title: "FG - Vendas, Comercial e Equipamentos Seminovos",
+    tags: ["seminovos", "vendas_comercial", "empresa", "endereco", "horario", "contato"],
     content: `CONTATOS DO SETOR DE VENDAS (MÓVEIS E TI)
 
 Se o cliente deseja comprar computadores novos, notebooks, impressoras, móveis corporativos, cadeiras de escritório, toners ou cartuchos novos, passe o contato do nosso setor de vendas comercial:
@@ -205,6 +216,7 @@ Venda de Equipamentos Seminovos:
   },
   {
     title: "FG - Objeção de Preço e Custo-benefício do Reparo",
+    tags: ["custo_beneficio", "preco", "objecao"],
     content: `CONTORNO DE OBJEÇÕES E EMPATIA
 
 Caso o cliente sinta que o orçamento do reparo ficou acima do esperado ou mencione que "não sabe se vale a pena consertar", a IA deve acolher o sentimento de forma extremamente empática:
@@ -224,7 +236,7 @@ Se mesmo assim o cliente preferir não fazer o serviço, seja cordial e coloque 
 ];
 
 async function main() {
-  console.log("🚀 Starting knowledge base replacement script...");
+  console.log("🚀 Starting knowledge base replacement script with tags...");
   const app = await NestFactory.createApplicationContext(AppModule, { logger: ["error", "warn"] });
   const prisma = app.get(PrismaService);
   const knowledgeService = app.get(AssistantKnowledgeService);
@@ -258,7 +270,7 @@ async function main() {
     const mockUser = { id: "system-reset", companyId: COMPANY_ID } as any;
     const mockTenant = { companyId: COMPANY_ID } as any;
 
-    console.log("📥 Inserting and preparing new knowledge items...");
+    console.log("📥 Inserting and preparing new knowledge items with metadata tags...");
     for (const item of newKnowledgeItems) {
       console.log(`   - Creating: "${item.title}"`);
       const created = await prisma.assistantKnowledge.create({
@@ -269,6 +281,10 @@ async function main() {
           content: item.content,
           status: "ACTIVE",
           processingStatus: "PENDING",
+          metadata: {
+            tags: item.tags,
+            type: "TEXT",
+          },
         },
       });
 
