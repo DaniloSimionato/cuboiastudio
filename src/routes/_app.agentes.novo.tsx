@@ -2578,7 +2578,14 @@ function NovoAgente() {
                     </Accordion>
                   </div>
 
-                  <div className="flex items-center justify-between bg-primary/5 p-4 rounded-lg border border-primary/10 mt-6">
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="conhecimento">
+              <Card className="mb-4">
+                <CardContent className="pt-6 space-y-4">
+                  <div className="flex items-center justify-between">
                     <div className="space-y-0.5 max-w-[80%]">
                       <Label
                         htmlFor="use-rag-production"
@@ -2587,8 +2594,7 @@ function NovoAgente() {
                         Usar conhecimento preparado no atendimento real
                       </Label>
                       <p className="text-sm text-muted-foreground">
-                        Busca respostas baseadas nos arquivos de conhecimento antes de responder ao
-                        cliente.
+                        Busca respostas baseadas nos arquivos de conhecimento antes de responder ao cliente.
                       </p>
                       {ragEnabled &&
                         knowledge.filter(
@@ -2639,9 +2645,7 @@ function NovoAgente() {
                   )}
                 </CardContent>
               </Card>
-            </TabsContent>
 
-            <TabsContent value="conhecimento">
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
                   <CardTitle className="text-base">Conhecimentos do agente</CardTitle>

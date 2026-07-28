@@ -222,42 +222,27 @@ export class AssistantKnowledgeService {
         id: input.knowledgeId,
         assistantId: input.assistantId,
         companyId: input.tenant.companyId,
-        status: Status.ACTIVE,
       },
-      select: {
-        id: true,
-      },
+      select: assistantKnowledgeSafeSelect,
     });
 
     if (!knowledge) {
       throw new NotFoundException("Knowledge item not found.");
     }
 
-    await this.prisma.assistantKnowledge.updateMany({
+    await this.prisma.assistantKnowledgeChunk.deleteMany({
+      where: { knowledgeId: input.knowledgeId },
+    });
+
+    await this.prisma.assistantKnowledge.deleteMany({
       where: {
         id: input.knowledgeId,
         assistantId: input.assistantId,
         companyId: input.tenant.companyId,
       },
-      data: {
-        status: Status.INACTIVE,
-      },
     });
 
-    const deletedKnowledge = await this.prisma.assistantKnowledge.findFirst({
-      where: {
-        id: input.knowledgeId,
-        assistantId: input.assistantId,
-        companyId: input.tenant.companyId,
-      },
-      select: assistantKnowledgeSafeSelect,
-    });
-
-    if (!deletedKnowledge) {
-      throw new NotFoundException("Knowledge item not found.");
-    }
-
-    return toAssistantKnowledgeItem(deletedKnowledge);
+    return toAssistantKnowledgeItem(knowledge);
   }
 
   private chunkText(text: string, chunkSize: number = 1200, overlap: number = 100): string[] {
