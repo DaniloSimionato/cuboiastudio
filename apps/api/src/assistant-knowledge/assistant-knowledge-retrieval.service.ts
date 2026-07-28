@@ -52,6 +52,7 @@ export interface AssistantKnowledgeSearchResult {
     knowledgeTitle: string;
     chunkId: string;
     chunkIndex: number;
+    content: string;
     contentPreview: string;
     score: number;
     metadata?: unknown;
@@ -298,11 +299,12 @@ export class AssistantKnowledgeRetrievalService {
       knowledgeScopeNoMatch,
       scopedCandidateCount: scopedChunks.length,
       rejectedOutOfScopeChunkCount,
-      results: topResults.map((res) => ({
+        results: topResults.map((res) => ({
         knowledgeId: res.chunk.knowledgeId,
         knowledgeTitle: res.chunk.knowledge.title,
         chunkId: res.chunk.id,
         chunkIndex: res.chunk.chunkIndex,
+        content: res.chunk.content,
         // Preview de até 250 chars para não saturar resposta JSON (o frontend é só p/ debug)
         contentPreview:
           res.chunk.content.substring(0, 250) + (res.chunk.content.length > 250 ? "..." : ""),

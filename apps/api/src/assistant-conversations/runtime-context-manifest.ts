@@ -13,6 +13,7 @@ export type RuntimeKnowledgeSearchResult = {
   knowledgeId: string;
   knowledgeTitle: string;
   chunkId: string;
+  content: string;
   contentPreview: string;
   score?: number | null;
 };
@@ -103,7 +104,7 @@ export function selectRuntimeKnowledgeItems(input: {
       id: result.chunkId,
       knowledgeItemId: result.knowledgeId,
       title: result.knowledgeTitle,
-      content: result.contentPreview,
+      content: result.content,
       ragAuthorityEligible: true as const,
     })),
     manifest: {
